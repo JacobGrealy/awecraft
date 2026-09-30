@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0311 piece 2 — the sphere-domain port: state, the inertness baseline, and the executable spec</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.45 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.pend{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.ok{background:#eef7ee;border-left:4px solid #3ba03b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.bad{background:#fdecec;border-left:4px solid #c0392b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}</style></head><body>
+<h1>AC-0311 piece 2 — the sphere-domain port: state, the inertness baseline, and the executable spec</h1>
+<p class="note">Bounded piece 2: port the fields for real, behind nothing. Read sources: the piece-1 results page (<code>AC-0311-piece1-results.html</code>, the design + per-construct verdicts + the two owed items), the AC-0311 registry notes, and the shipped <code>gdext/src/gen.cpp</code> / <code>godot/world/generator.gd</code> / <code>godot/core/sphere_math.gd</code> (grepped, not read whole). This page is the builder's self-contained record of what this run did, what it did not, and exactly what the finishing run must do.</p>
+
+<div class="bad"><b>STATE OF THE BUILD — read this first.</b> The sphere-domain path is <b>NOT enabled</b>. The shipped path is <b>bit-identical to HEAD</b>: the working-tree <code>gen.cpp</code> is unmodified (<code>git status</code> shows no <code>gdext/</code>/<code>godot/</code> code change), the staged <code>godot/bin/libchunkio.so</code> + <code>libchunkio.windows…dll</code> are the HEAD build, and the 25 <code>genhash</code> values below are byte-identical to the post-AC-0367 standing reference. <b>No half-ported generation path is left enabled.</b> The port was not flipped on in this run because its full verification (the Linux <i>and</i> Windows native rebuilds, the complete standing gate set including the ~418 s <code>r16</code>, the inertness comparison, and the deliberate genhash rebase) is the coordinator's heavy-gate set and does not fit inside this run's hard context budget. Per the ticket's own failure-mode clause, the safe state is <b>path OFF + the work listed</b>, which is what this run delivers — plus the inertness baseline and the executable spec that make the finishing run mechanical.</div>
+
+<h2>1. The inertness baseline (owed from piece 1 — closed)</h2>
+<div class="ok"><b>Done.</b> Built the current binary from HEAD's <code>gen.cpp</code> (working tree = HEAD, <code>8d53179</code>, piece 1's addition provably inert: env-gated, never called in the genhash path) and took its 25 <code>genhash</code> values. These are the <b>"HEAD-built"</b> side of the inertness comparison piece 1 owed.</div>
+<p>Run: <code>HOME=/tmp/dsh_home bash -c "ulimit -v 8388608; AWECRAFT_LOGIC=genhash timeout 240 /home/angrygiant/tools/godot/godot --headless --path godot"</code> → <code>rc 0</code>, <code>GENMS 125</code>, 25/25 <code>GENHASH</code> lines, zero SCRIPT ERROR. Full log: <code>.scratch/AC-0311-gates/genhash_head_baseline.log</code>.</p>
+<pre>GENHASH -2 -2 a12ec566f2b53e9c4843509dabce81bc   GENHASH -2 -1 775868039e6ebc2ec7d5e0cbe51f019b
+GENHASH -2 0  46e1a46bd225f877b14790e17c562cd9   GENHASH -2 1  b9784dddff05f62cca30c53d5f210fa7
+GENHASH -2 2  3825d00eca5368c9ecf243266210e432   GENHASH -1 -2 6c2c0906c771413dc56dc11314a83314
+GENHASH -1 -1 7085d848443106647bfe6d1a46c3a47b   GENHASH -1 0  818ad9bcb74d89b9be1824b5ce2f8497
+GENHASH -1 1  1bdd7a8c990a9671486d40daa5807286   GENHASH -1 2  12331ecb7735015fdfaeb4ce7da80c32
+GENHASH 0 -2  de2514e339e5c7cc0ba46e9be4e0f395   GENHASH 0 -1  3e9c86725dfaefb7ec29d8f478bf3115
+GENHASH 0 0   a4d0cab21bb9ac858dd53f9af8429300   GENHASH 0 1   d67afebca57b5e483479fc9ad4b8b436
+GENHASH 0 2   b76f12f8507432e9e47ee6ab089d26e7   GENHASH 1 -2  d791a24ecfaf48b529391145da0ec2f5
+GENHASH 1 -1  c14a7da03baa733ef407a3464128afba   GENHASH 1 0   4c9cf16e1f5daf36820ee47edd88aae1
+GENHASH 1 1   9cede814673b5f6366bf3f568475050a   GENHASH 1 2   4cb54323bf2498abe462d2e4c948e1a6
+GENHASH 2 -2  5b6908ce148178f3493407f68b5d4879   GENHASH 2 -1  9f75597b491337504ec30f0963da2fc8
+GENHASH 2 0   be7c4f7d07c5a22a1419529857f49bd4   GENHASH 2 1   7ec5163af8541df40ea5dd576c2f30ce
+GENHASH 2 2   3fbb09a4063caeade9964557b003e317</pre>
+<h3>1.1 Relationship to the standing row (the "missing tip")</h3>
+<p><b>Verified:</b> this 25-set is <b>byte-identical</b> to the post-AC-0367 standing reference <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code> (<code>diff</code> empty; chunk (0,0) <code>a4d0cab2…</code> present in it). So the <i>reference file</i> already carries the post-AC-0367 values. What was missing was the <b>row's <code>established_by</code> chain</b>, whose arrow chain stopped at <code>… → AC-0292 (… GENMS 118→147)</code> — i.e. it recorded a chain that stops before the AC-0360 and AC-0367 re-bases. <b>Recorded now</b> in <code>tasks/harness_data.yaml</code> (the genhash <code>established_by</code> chain is extended through <code>AC-0360 → AC-0367</code> (the post-AC-0367 tip, reference confirmed above) and carries the note that <b>AC-0311 piece 2 rebases again deliberately</b> — the intentional 25/25 rebase lands with the flip-on, §5). No <code>fresh:</code> gate value moved (the shipped path is unchanged), so no re-render value change was owed; the doc was re-rendered + <code>--check</code>-clean after the chain edit.</p>
+
+<h2>2. What is ported, what is not</h2>
+<table>
+<tr><th>Item</th><th>This run</th></tr>
+<tr><td>Inertness baseline (HEAD-built 25 genhash)</td><td><b>Done</b> (§1). The "HEAD-built" side of the owed comparison.</td></tr>
+<tr><td>Row's missing tip (post-AC-0367 chain)</td><td><b>Done</b> in <code>harness_data.yaml</code> + the "rebase again deliberately" note (§1.1).</td></tr>
+<tr><td>Executable port spec (all constructs, every call site, signature + caller changes, the aquifer re-tile, the per-cell hash re-keying, the dense-source lockstep)</td><td><b>Done</b> (§3) — the finishing run executes it mechanically.</td></tr>
+<tr><td>Surface / cheese / ore <b>lattice fields</b> to sphere-domain</td><td><b>Not ported</b> (the code is specified, §3.3; not written/verified). Shipped path unchanged.</td></tr>
+<tr><td><b>Aquifer</b> cell grid re-tile + global hash keys</td><td><b>Not ported</b> (specified, §3.5; the biggest structural move). Shipped path unchanged.</td></tr>
+<tr><td>Cave biomes / pillars / veins fields + per-cell hashes</td><td><b>Not ported</b> (specified, §3.3/§3.6). Shipped path unchanged.</td></tr>
+<tr><td>Dense H reference (<code>aqu_surface_h_dense</code>) + dense genprobe refs</td><td><b>Not ported</b> (specified, §3.4). Shipped path unchanged.</td></tr>
+<tr><td>Carvers</td><td><b>NO CHANGE required</b> (piece 1's verdict, restated §3.7). Nothing to port.</td></tr>
+<tr><td>Deliberate genhash rebase + V-crack measurement + full gate set + Windows DLL</td><td><b>Owed</b> with the flip-on (§5–§7). Not run here — that is the coordinator's heavy-gate set.</td></tr>
+<tr><td>Blend band</td><td><b>NOT deleted</b> (piece 3; §8 states what must be true first). Unchanged.</td></tr>
+</table>
+
+<h2>3. The executable port spec (the finishing run's checklist)</h2>
+<p class="note">The substitution is centralized: <b>every</b> field build goes through five builder functions in <code>gen.cpp</code> (<code>build_field</code> / <code>build_field_vn</code> / <code>build_field_c</code> / <code>build_field_vn_c</code> / <code>build_field_eval_c</code>, lines 645–738). Applying the (d, δ) substitution <i>there</i> moves all 16 lattice fields at once — it is not scattered across 16 call sites. The only scattered sites are the per-cell hashes (§3.6), the dense sources (§3.4), and the aquifer cell grid (§3.5). The carvers have no field (§3.7).</p>
+
+<h3>3.1 The (d, δ) precompute — one table per chunk, shared by all 16 fields</h3>
+<p>For a chunk with face-local flat corner <code>(bx, bz) = (cx·16, cz·16)</code>, precompute per C48 lattice point <code>(ix, iy, iz)</code> (the 2,401-pt grid, <code>GFN_C</code>) at flat <code>(px, py, pz) = (bx+ix·4, iy·ystep_cave, bz+iz·4)</code>:</p>
+<pre>// home (face 0): the column's placed facet frame (sphere_math.gd column_transform, :332)
+P_world = column_transform(cx, cz, R) * (px - cx*16, py, pz - cz*16)      // world frame
+P_planet = P_world + (0, R, 0)                                            // planet frame
+d  = normalize(P_planet);  delta = |P_planet| - R
+// face N (2..11): face_chunk_transform(face, ccx, ccz, R) (:508) in place of column_transform
+dx[N] = d.x;  dz[N] = d.z;  delta[N] = delta     // 2,401 × (dx, dz, delta), one vector per axis</pre>
+<ul>
+<li><b>The coarse 441-pt points sit on the C48 rows</b> (coarse y rows = C48 rows × 6, since 48-block = 6×8-block): coarse <code>(ix, iy, iz)</code> → C48 <code>(ix, iy·6, iz)</code>. So the 2,401-point table covers all 16 fields (10 C48 + 6 coarse). Piece 1's "+1.5% / 29.7 ns per point" is exactly this table (2 chart evals + a normalise per point).</li>
+<li><b>δ ≈ local y</b>: over a 16-m facet the radial offset differs from the facet-local height by ≤ the sagitta d²/2R ≈ 0.02 m (piece 1 §1.1) — far below the 4/8-block lattice quantisation. The substitution's <code>y → δ</code> is therefore <code>y → (local y)</code> to lattice precision; store the exact <code>|P|−R</code> for the dense H twin if bit-parity with the prototype is wanted, but the lattice may use local y.</li>
+<li><b>Validate the C++ transform against the GD one</b> (the genprobe-lockstep pattern): a scratch probe that samples <code>home_point</code>/<code>column_transform</code>/<code>face_chunk_transform</code> on a grid and compares to the C++ <code>(dx, dz, delta)</code> must agree to &lt;1e-6 before the flip-on. This is the guard against a silently-wrong re-implementation.</li>
+<li><b>Cost fallback:</b> if re-implementing the <code>Transform3D</code> in C++ proves fiddly, compute the table in GD (<code>generator.gd</code>, where <code>SphereMath</code> is available) and pass a <code>PackedFloat64Array</code> (2,401×3) into <code>generate_flat</code>. Correct, but a few× the C++ precompute cost — the C++ form is preferred to hold the +1.5% budget.</li>
+</ul>
+
+<h3>3.2 Entry-point signature changes + the caller set</h3>
+<p>Thread <code>(int face, double R)</code> into the seven field-building entry points in <code>gen.cpp</code> (the <code>AweGen</code> class, ~:3708+), with <b>defaults <code>face=0, R=4000.0</code></b> so the home-window callers are untouched:</p>
+<table>
+<tr><th>Entry point (gen.cpp)</th><th>Adds</th><th>Why</th></tr>
+<tr><td><code>generate_flat</code> (:3708)</td><td><code>face, R</code></td><td>full path: all 16 fields + aquifer + per-cell hashes</td></tr>
+<tr><td><code>generate_slabs</code>, <code>generate_resl</code></td><td><code>face, R</code></td><td>same full path, slab form (workers)</td></tr>
+<tr><td><code>generate_far</code> (:3776)</td><td><code>face, R</code></td><td>the far/h-only lane (piece 1: +14% predicted here — the 3 surface fields + a 441-pt (d,δ) table)</td></tr>
+<tr><td><code>column_heights</code>, <code>column_heights16</code></td><td><code>face, R</code></td><td>the H pass (shared <code>col_heights_pass</code> — the 3 surface fields at the same lattice)</td></tr>
+<tr><td><code>veg_cells</code></td><td><code>face, R</code></td><td>the tree hash <code>hash2i(tx,tz,seed+55)</code> + the veg cells (per-column, §3.8)</td></tr>
+<tr><td><code>stone_ore_slab</code></td><td><code>face, R</code></td><td>the ore fields (f_ore1/2/3) + the ore-band reads</td></tr>
+</table>
+<p><b>Callers (all in the grep, §3.9):</b> the home-window arms (<code>genhash</code>, <code>farab</code>, <code>ladder</code>, <code>meshprobe</code>, <code>halo</code>, <code>lightstate</code>, <code>r16</code>, <code>oceansurface</code>, <code>drypit</code>, …) run on the home patch → <b>face 0 default, unchanged</b>. The face 2–11 path flows through <code>generator.gd generate_face</code> (:228) → update it to pass <code>(face, R)</code> to <code>generate_args</code> → <code>generate_flat</code>; the <code>world.gd</code> slab workers (:5622, :6023) and the <code>crossface</code>/<code>boundary</code> arms walk face 2–11 via <code>generate_face</code> → they inherit the correct face. <b>No home-window caller changes</b> — the diff is confined to the C++ signatures (with defaults), <code>generate_face</code>, and the worker sites that know the chunk's face.</p>
+
+<h3>3.3 The 16 lattice fields — the substitution at the builder</h3>
+<p>Inside each builder, replace the noise-input coordinate <code>(px, py, pz)</code> with <code>(R·dx, py, R·dz)</code> using the precomputed <code>(dx, dz)</code> for that lattice point (δ = local y = <code>py</code>, unchanged). Per family:</p>
+<table>
+<tr><th>Field</th><th>Builder / call site</th><th>Old noise input</th><th>New noise input</th></tr>
+<tr><td>Surface <code>f_sc/f_sh/f_sr</code> (coarse, fbm3)</td><td><code>build_field</code> :645; called :2327-2329 (full) and :2379-2381 (H pass)</td><td><code>(px/fx + ox, py/SURF_YSCALE + oy, pz/fz + oz)</code></td><td><code>((R·dx)/fx + ox, py/64 + oy, (R·dz)/fz + oz)</code> — same seeds/offsets/octaves/sea-slice; the affine calibration (<code>cc/hc/rc</code>, :809-811) is re-measured once on the new domain (piece 1 §1.3.1: the slice statistics shift slightly)</td></tr>
+<tr><td>Ore <code>f_ore1/2/3</code> (coarse, fbm3, scale 7/9/6, seed+77/88/99)</td><td><code>build_field</code> :645 (in the full path)</td><td><code>(px/fx, py/fy, pz/fz)</code></td><td><code>((R·dx)/fx, py/fy, (R·dz)/fz)</code> — per-block <code>stone_ore</code> thresholds (y&lt;16/42/60) untouched</td></tr>
+<tr><td>Cheese <code>f_cheese</code> (C48, vn3, seed+301)</td><td><code>build_field_vn_c</code> :705; :2583</td><td><code>(px·1.0, py·0.6667, pz·1.0)</code></td><td><code>(R·dx·1.0, py·0.6667, R·dz·1.0)</code></td></tr>
+<tr><td>Tunnel family <code>f_s2d/f_s3d/f_spr/f_nod</code> (C48, the AC-0367 vanilla expressions)</td><td><code>build_field_eval_c</code> :727; :2600-2612</td><td>expr over <code>(px, py, pz)</code></td><td>expr over <code>(R·dx, py, R·dz)</code> — the <code>build_field_eval_c</code> lambda signature gains <code>(dx, dz)</code> (or the precomputed inputs)</td></tr>
+<tr><td>Layer <code>f_layer</code> / Entrance <code>f_entr</code> (C48, vn3, +302/+306)</td><td><code>build_field_vn_c</code> :705; :2620-2623</td><td><code>(px·sx, py·sy, pz·sx)</code></td><td><code>(R·dx·sx, py·sy, R·dz·sx)</code></td></tr>
+<tr><td>Pillar <code>f_pillar</code> (C48, 3 vn3, +320/321/322, xz 25.0)</td><td><code>build_field_eval_c</code> :727; :2631 (expr :2067-2069)</td><td><code>vn3(px·25, py·0.3, pz·25)</code> etc.</td><td><code>vn3((R·25)·dx, py·0.3, (R·25)·dz)</code> etc. — vanilla wavelengths survive</td></tr>
+<tr><td>Vein <code>f_vein</code> (C48, vn3, +323) / Biome <code>f_biome</code> (C48, vn3, +319)</td><td><code>build_field_vn_c</code> / expr; :2637 / the biome build</td><td><code>(px·s, py·s, pz·s)</code></td><td><code>((R·s)·dx, py·s, (R·s)·dz)</code></td></tr>
+</table>
+<p>The scan / fill per-block reads (<code>tril</code>/<code>tril_c</code>) are <b>untouched</b> — they read local lattice values and local y, frame-independent by construction once the lattice is sphere-domain (piece 1 §1.4). The density router (<code>dens_at</code>) and every y-band / y-gradient (biome bands, deepslate/bedrock, ore bands, entrance gradient, noodle band, K_CUT, suppressor, ramp, aquifer levels/quantisation, lava y≤10, drip pass) are <b>already frame-independent</b> — no change.</p>
+
+<h3>3.4 The dense sources</h3>
+<table>
+<tr><th>Source</th><th>Call site</th><th>Action</th></tr>
+<tr><td><code>aqu_surface_h_dense</code> (the aquifer's H reference — the 3 fbm3 at the sea slice)</td><td>:1510-1513; sampled :1695 in the 7×5 window</td><td><b>MUST move</b> (it is in the aquifer path, not genprobe-only): the 3 <code>fbm3</code> inputs <code>(x/220, 126/64, z/220)</code> → <code>((R·dx)/220, 126/64, (R·dz)/220)</code> with <code>(dx,dz)</code> the chart at the sample's flat <code>(x,z)</code>. It and the lattice surface field stay the same dense/lattice twins.</td></tr>
+<tr><td><code>density_cave/layer/entrance/pillar/vein/biome</code> (the bound genprobe-lockstep references)</td><td>:840-877, :2067-2088</td><td>These are the <i>dense twins</i> of the (now sphere-domain) lattice. To keep the <b>genprobe lockstep</b> green they must take the same substitution <i>and</i> the <code>genprobe</code> arm (<code>harness.gd</code>) must compute its expected values on the sphere domain. <code>genprobe</code> is <b>not</b> in the standing gate set, so this can land as a documented known-red pending re-baseline, or be re-based in the same run. The <code>genprobe</code> lockstep is the strongest correctness tool — prefer re-basing it in the finishing run.</td></tr>
+</table>
+
+<h3>3.5 The aquifer cell grid re-tile (the biggest structural move — piece 1 §1.3.4)</h3>
+<p>The Voronoi cell grid is currently keyed on <b>flat-frame</b> cell indices (16×12×16, centre = corner + (5,5,1) + jitter <code>hash3i</code> +316/317/318 at :1580-1582). A per-face lattice would re-introduce exactly the seam this ticket removes, so it re-tiles per face with <b>GLOBAL hash keys</b>:</p>
+<ol>
+<li><b>Cell keys go global.</b> A cell is keyed by the global sphere integers at its centre: <code>(⌊R·dx⌋, ⌊δ⌋, ⌊R·dz⌋)</code> — identical for the same physical cell read from either face (d is identical at the boundary). The jitter hashes <code>hash3i(ix, iy, iz, seed+316/317/318)</code> (:1580-1582) re-key on those global integers.</li>
+<li><b>Cell-centre noise inputs take the substitution.</b> <code>aquifer_floodedness</code> <code>vn3(x, y·0.67, z)</code> → <code>vn3(R·dx, δ·0.67, R·dz)</code> (same for <code>spread</code>/+312, <code>barrier</code>/+313, <code>lava</code>/+314); <code>erosion</code> is 2-D: <code>vn3(x·0.25, 0, z·0.25)</code> → <code>vn3((R·0.25)·dx, 0, (R·0.25)·dz)</code> (call sites :1487-1501).</li>
+<li><b>The 13-sample dense-H window re-keys</b> from the 7×5 <i>flat-chunk</i> window to a 7×5 <i>global-key</i> window (<code>SphereMath.neighbor_key</code>, sphere_math.gd :230), so an edge cell's H window legitimately includes the neighbour face's columns (sampled :1695).</li>
+<li><b>The quantisation regions re-key</b> on the same global cell coordinates (partial level <code>40·⌊cy/40⌋+20+spread</code>, the 64×40×64 lava region, the 16×40×16 spread region).</li>
+<li><b>The per-block 12-candidate / 4-nearest / 25-squared-distance barrier search is untouched math</b> (local frame, integer d²) — except an edge cell's candidate window now crosses the neighbour face's cell grid; the chart's gapless edge arithmetic supplies those centres. Cell status stays a single function of (d, δ, seed) → adjacent faces share edge-cell status.</li>
+</ol>
+<p><b>Preserve the AC-0291 census</b> (lakes, rims, waterfalls, land open water 0) and the AC-0342 land-dry rule + the <code>oceansurface</code> arm's <code>dry_zero_water 0</code> — re-measure after the flip-on (the water contracts, §7).</p>
+
+<h3>3.6 The per-cell hashes (the scattered sites)</h3>
+<p>Today <code>hash3i(x, y, z, seed+k)</code> / <code>hash2i(x, z, seed+k)</code> use <b>flat</b> integers — global on the home pair but face-local on 2–11, so the rolls would <i>not</i> agree across a boundary. Move them to the global sphere integers at the cell position: <code>hash3i(⌊R·dx⌋, ⌊δ⌋, ⌊R·dz⌋, seed+k)</code> (and the 2-D ones to <code>hash2i(⌊R·dx⌋, ⌊R·dz⌋, seed+k)</code>). The exact sites (grepped):</p>
+<pre>deepslate blend   +326  hash3i(x,y,z,s+326)      :2301
+obsidian          +333  hash3i(x,y,z,seed+333)   :2694  (and the far path :3850)
+sculk             +327  hash3i(x,y,z,s+327)      :2954
+moss              +328  hash3i(x,y,z,s+328)      :2958
+dripstone stalet  +330/+332  hash3i/hash2i        :3039-3040
+dripstone stalag  +331/+335  hash3i/hash2i        :3054-3055
+clay pool         +329  hash2i(x,z,s+329)        :3067
+clay depth        +334/+336  hash2i               :3076-3077</pre>
+<div class="pend"><b>Cost flag (measure, don't assume).</b> Piece 1's price list priced the <i>fill</i> at 0 (it reads local lattice values + local y). But these per-cell rolls need <code>(dx, dz)</code> at the cell (2 chart evals + a normalise per hash-cell), a real per-block cost for the deepslate (y&lt;64, up to ~16 k cells/chunk) / sculk / moss / obsidian / dripstone / clay rules. The ticket's own signal applies: <b>an unexpected cost jump means a call site was missed or a precompute was duplicated</b> — re-measure <code>GENMS</code> after the port and compare to piece 1's +1.5% prediction. If the per-cell term pushes it over budget, key the rolls on the <i>lattice-cell</i> <code>(dx, dz)</code> (the 4-block cell) instead of per-block, which is a deliberate, countable re-baseline.</div>
+
+<h3>3.7 The carvers — NO CHANGE (piece 1's explicit verdict, restated so it is not needlessly rewritten)</h3>
+<p>The Bezier trunks / rooms / canyons and <code>build_carver_plan</code> (:1193) are per-chunk local geometry in the chunk's own x/z plane with vertical = local Y (which the placement makes radial), keyed by the global chunk seed (<code>face*64+cx</code>). The world-Y clamps (8..240, canyon 74..131) read as radial-depth clamps with zero code change. <b>Do not rewrite the carvers.</b></p>
+
+<h3>3.8 Trees / veg (same class, small)</h3>
+<p>The tree hash <code>hash2i(tx, tz, seed+55)</code> (:2398, :3101) + tree-thickness <code>seed+66</code> (:2425, :3187) re-key on the global arc integers <code>(⌊R·dx⌋, ⌊R·dz⌋)</code> at the tree cell. The flower hashes <code>hash2i(bx+lx, bz+lz, seed+777/778)</code> (:2481, :3236-3237) re-key the same way. The veg <i>cells</i> (log/leaf writes) are per-column local — no change.</p>
+
+<h3>3.9 Caller grep (the complete set to update, for the finishing run)</h3>
+<pre># gen.cpp entry points (add face, R — defaults face=0, R=4000):
+  generate_flat :3708 | generate_slabs | generate_resl | generate_far :3776
+  column_heights | column_heights16 | veg_cells | stone_ore_slab
+# generator.gd:
+  generate_face :228  (pass face, R)  →  generate_args :119  (add face, R, default 0)
+# world.gd workers (the chunk knows its face):
+  :5622 g.generate_resl(a[0..5], keep) | :6023 mg.generate_resl(...)
+  :2549 column_heights | :5968 stone_ore_slab | :5978 veg_cells
+# harness.gd arms (home window = face 0 default, UNCHANGED; face 2-11 via generate_face):
+  genhash :24319-24320, :24424-24425 | farab/far :11428, :11454-11455, :11493, :11550
+  resl :11456, :11511, :11519, :11551-11552 | column_heights16 :25147, :11434
+  veg :15433, :15439, :27290 | stone_ore_slab :9779, :10909, :11131, :11461</pre>
+
+<h2>4. The substitution, stated once (the prototype's form, applied to every flat-frame call site)</h2>
+<pre>d  = normalize(P_planet)          // P_planet = the chart image of the flat point (+ (0,R,0))
+δ  = |P_planet| − R               // ≈ local y (sagitta ≤ 0.02 m over a 16-m facet)
+x_flat → R·d.x     z_flat → R·d.z     y_flat → δ (≈ local y)</pre>
+<p>Same seeds, same octaves, same lattice shape, same per-block reads — only the coordinate fed to each noise call moves. A missed call site or a duplicated precompute shows up as an unexpected <code>GENMS</code> jump (the cost is a meter for completeness).</p>
+
+<h2>5. The deliberate genhash rebase (owed with the flip-on)</h2>
+<p>The fields are now functions of (d, δ), so every chunk's terrain is regenerated from a face-independent parametrisation — <b>the rebase is the point, not an accident</b>. Plan for the finishing run:</p>
+<ol>
+<li>Flip the port on (remove the env gate — it is <i>the</i> shipped path, no flag). Rebuild <b>both</b> the Linux <code>.so</code> <i>and</i> the Windows <code>.dll</code> (OPS §2; the product is Windows-only).</li>
+<li>Run <code>genhash</code> ×2 → two runs byte-identical to each other; the count of changed hashes vs the §1 baseline (expect 25/25 new — the surface fields touch every chunk) is <b>the deliberate rebase count</b>. Record the new reference set under <code>.scratch/AC-0311-gates/</code>.</li>
+<li>Update <code>tasks/harness_data.yaml</code> genhash row: the <code>fresh:</code> reference to the new set + the <code>established_by</code> chain gains <code>→ AC-0311 piece 2 (sphere-domain — intentional, N/25 new, H re-derived)</code>. <b>H must not move unexpectedly</b> — the surface fields <i>do</i> move (that is the rebase); if the <i>far</i> H payload or the <code>thash</code>/farab <code>h_mismatch</code> moves beyond the surface-field class, that is a FINDING, not a number to accept.</li>
+<li>Re-render: <code>python3 tasks/scripts/harness_doc.py --render</code> then <code>--check</code>.</li>
+<li><b>State plainly what a player sees change:</b> the shape of terrain near face edges (the flat-field's coordinates were re-derived on the sphere — second-order drift concentrated at the patch edge, piece 1 §1.3.1) and whether the 4.69 m V-crack at the patch boundary is reduced or gone (§6).</li>
+</ol>
+
+<h2>6. The patch-boundary V-crack — measure it, don't assert it</h2>
+<p>Measuring the <b>ported</b> world's V-crack requires the port to be on (a regenerated world), so it is owed with the flip-on. The instrument is the same one AC-0368 and AC-0309 used: a 1 m path across the home/face-4 edge, reading the <i>shipped pipeline's own</i> per-column H (<code>column_heights16</code>) on both sides and measuring the value step + the along-seam gradient kink at the crossing. Piece 1's prototype (the sphere-domain <i>form</i>, dense) measured a <b>crossing step of 0</b> with a max adjacent step of 1 over 96 steps and no special edge kink (0.25/m) against the current world's raw 7-m seam cliff — that is the design's expectation, <b>not</b> a measurement of the ported lattice world. The finishing run re-measures on the lattice form (which adds the 4/8-block quantisation, a domain-wide residual, not a boundary artifact) and reports the number.</p>
+
+<h2>7. The aquifer / water / H contracts (must hold after the flip-on)</h2>
+<table>
+<tr><th>Contract</th><th>Instrument</th><th>Standing value</th></tr>
+<tr><td>H not moved unexpectedly</td><td><code>thash</code> + <code>farab</code> <code>h_mismatch</code></td><td>h_mismatch 0 (a height change beyond the surface-field rebase is a FINDING)</td></tr>
+<tr><td>Water contracts</td><td><code>oceansurface</code> arm (<code>dry_zero_water 0</code>) + AC-0342 land rule (land open water above the tables 0, ocean surface at sea)</td><td>dry_zero_water 0</td></tr>
+<tr><td>Aquifer behaviour preserved</td><td>AC-0291 census (lakes, rims, waterfalls, land open water 0)</td><td>the AC-0291/AC-0375 census totals</td></tr>
+<tr><td>Standing set green</td><td>G0 (0 SCRIPT ERROR), <code>ladder</code> 20/20, <code>meshprobe</code> 1.0, <code>halo</code> ok, <code>lightstate</code> 0/0, <code>r16</code> all sub-flags + <code>far_holes</code> 0/0 both bands, <code>boundary r4</code> in band (re-run/re-establish — the ticket allows "unchanged or better"), the battery at 16 GB</td><td>see <code>godot/HARNESS.md</code> §3</td></tr>
+</table>
+<p>The native rebuild + re-stage is <b>mandatory including the Windows DLL</b>.</p>
+
+<h2>8. What must still be true before the blend band can be deleted (piece 3)</h2>
+<p>Not deleted in this run (piece 3). The band is the C1 interim; it is deleted only once <b>both sides of every boundary read the same (d, δ) field</b> — i.e. the §3 port has landed <i>and</i> the 24-segment data-level continuity assertion passes. Concretely, before the band goes:</p>
+<ol>
+<li>The §3 port is on and the <b>24-segment boundary assertion</b> (for each shared edge, the two faces' edge columns' (d, δ) samples agree and their generated H / cell content agree) passes headlessly.</li>
+<li>The §6 V-crack is measured (reduced or gone) on the lattice world, and the §7 contracts hold.</li>
+<li>The deletion itself (all in <code>generator.gd</code> unless noted): <code>FACE_BLEND_BAND</code>, <code>_home_h_cache</code>/<code>_home_h_order</code>/<code>_HOME_H_CACHE_CAP</code>, <code>_home_ext_height()</code>, <code>_col_top()</code>, <code>_blend_column()</code>, <code>_blend_face_chunk()</code>, the <code>if R>0 and face>=4</code> branch in <code>generate_face()</code>; in <code>sphere_math.gd</code> <code>face_cell_band()</code> — <b>check consumers first</b> (<code>world.gd</code> ~:12874/:12969/:13118, <code>harness.gd</code> crossface arm ~:29226/:30234/:30255/:30324/:30335); re-base the <code>crossface</code> arm's blend assertions to the no-band (field's-own-continuity) values.</li>
+<li>A <b>SAVE_VERSION bump</b> (the sphere-domain re-baseline already forces it — do it once, there): old worlds rejected cleanly with a log line and a fresh start (ARCHITECTURE.md §5). No edit migration owed (user, 2026-09-17).</li>
+</ol>
+
+<h2>9. The lightstate <code>ab</code> fixture (the fifth stale-arm case — owed, attributed)</h2>
+<p>The row's <code>ab</code> fixture expectations are stale from the AC-0360/AC-0367 re-bases. Piece 1's deterministic read: <code>cell [0,141,0], vc_diff 1, arr_diff_cells 1, demoted 1, stragglers 3</code> where the row (harness_data.yaml :533, last re-based at AC-0361) expects <code>arr_diff_cells 1 (fixture [0,123,0]), vc_diff 1, demoted 41, stragglers 0</code>. <b>What the re-base needs</b> (it is small, but it moves <i>again</i> with the sphere-domain re-carve, so the correct order is to re-measure it <i>at</i> the port's rebase, not now on the flat-frame build): run <code>AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16</code> on the <b>ported</b> build, read the <code>ab</code> block (<code>arr_diff_cells</code>/<code>vc_diff</code>/<code>demoted</code>/<code>stragglers</code> + the fixture cell), and re-base <code>harness_data.yaml</code> :533 <i>with attribution</i> to the AC-0311 sphere-domain re-carve (the same "spawn-adjacent re-carve moved the fixture column's topmost non-zero cell" class as AC-0357/AC-0361). The canary (double-LOD 0/0, wash false, leaks 0) is the real gate; the <code>ab</code> fixture is a fixture expectation. Not re-based in this run (the shipped path is unchanged; re-basing it now would be immediately undone by the port's re-carve).</p>
+
+<h2>10. Gates run this run</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Standing value</th></tr>
+<tr><td><code>genhash</code> (HEAD build = the inertness baseline)</td><td><b>25/25</b>, byte-identical to the post-AC-0367 reference; <code>GENMS 125</code>; 0 SCRIPT ERROR</td><td>25/25, byte-identical (unchanged — the port is off)</td></tr>
+<tr><td><code>harness_doc</code> <code>--render</code> + <code>--check</code> (after the chain-tip edit)</td><td>rendered + check clean</td><td>clean</td></tr>
+<tr><td>The rest of the standing set (G0 / farab / ladder / meshprobe / halo / lightstate / r16 / boundary r4 / battery)</td><td><b>Not run</b> — the port is off, so they would read the (unchanged) HEAD world; running them is the finishing run's verification of the <i>ported</i> world (§7)</td><td>all green (HEAD)</td></tr>
+</table>
+<p class="note">Scope of this run: the inertness baseline (<code>.scratch/AC-0311-gates/genhash_head_baseline.log</code>), the <code>harness_data.yaml</code> genhash chain-tip + "rebase again deliberately" note, and this results page. No <code>gdext/</code>/<code>godot/</code> code change (the shipped path is bit-identical to HEAD), no commits (closeout is the coordinator's).</p>
+</body></html>
