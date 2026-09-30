@@ -1,11 +1,12 @@
 meta:
-  updated_at: 2026-09-30T04:07
+  updated_at: 2026-09-30T04:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0311
 - AC-0381
+- AC-0382
 - AC-0093
 - AC-0038
 - AC-0039
