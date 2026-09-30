@@ -40,6 +40,16 @@ machine reason behind them.
   torn down the moment the tool call returns (a heavy gate script silently died after one arm,
   AC-0313). The managed job (the tool's background mode) survives and can be collected; a script
   that must outlive a call has to be started that way.
+- **A generated IMAGE needs a structural variance check, not just data and mapping checks** (found by
+  AC-0310, 2026-09-29): a satellite bake passed its planet census, its colour-correlation check, its limb
+  and solid-angle geometry, its great-circle edge check and its seam-gaplessness check, and was still a
+  ONE-DIMENSIONAL SLICE repeated down every row - because `np.tile(arr, (NPIX, 1))` replicates into ROWS,
+  so an array indexed by the row coordinate silently became a function of the column index. The guard that
+  belongs with any composite visual artifact asserts, ON THE WRITTEN FILE DECODED BACK FROM DISK, that the
+  image varies along BOTH axes (distinct rows and columns against a floor the real data clears) plus a
+  spread on each channel, and it must be negative-tested against a deliberately degenerate replica. When
+  3-D renders are unavailable (degraded llvmpipe, as on this box) a data-driven PNG is a legitimate visual
+  gate for the coordinator to inspect by eye - the numeric checks cannot see a smear.
 - **GDScript's literal parser can MIS-ROUND a long decimal literal** (found by AC-0367 piece A,
   2026-09-27): the value `0.011499999999999996` parsed 4 ulp LOW, which showed up as an 8-sample
   1-ulp drift between the GDScript and C++ lanes of a ported noise. The fix is to spell an exact

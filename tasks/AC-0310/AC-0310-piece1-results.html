@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0310 PIECE 1 — satellite far-payload bake (results)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#1a7f37;font-weight:600}.warn{color:#9a6700;font-weight:600}.bad{color:#cf222e;font-weight:600}.note{font-size:13px;color:#555}.meta{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0310 PIECE 1 — bake the per-face satellite textures from the far column payload</h1>
+<p class="meta">Bounded piece: the BAKE ONLY. No render tier, no streaming/blend-path changes, no product behaviour change. Evidence is numeric by construction (the builder does not open images; the coordinator views the 12 PNGs and checks them against the stated expectations in §4). Seed 44 (the project canonical seed), R = 4000, SEA = 126, HMAX = 384.</p>
+<p class="bad"><strong>REPAIRED 2026-09-29 (piece 1):</strong> the first bake's textures were <em>smeared along one axis</em> — the bake's <code>v</code> index was tiled along the <code>u</code> axis, so every row repeated the same one-dimensional slice (distinct rows measured 1/256, §6.1). The sampling was fixed, the mapping machine-diffed against the shipped <code>SphereMath</code>, a permanent per-face <strong>variance guard</strong> was added to the bake, and the textures were re-baked. <strong>The per-face tables and expectations in §2.3 and §4 are SUPERSEDED by §6.</strong> The planet-wide census (§2.1–2.2), the roundness/limb proofs (§2.5) and the cost finding (§3) are unchanged and remain valid — the DATA was always right; only the sampling was wrong.</p>
+
+<h2>1. What was baked, and from what</h2>
+<p>Twelve 1024×1024 per-face satellite textures (<code>satellite_face00.png</code> … <code>satellite_face11.png</code>, RGB8 PNG, one file per face) were baked from <strong>the far column payload exactly as the streaming pipeline already produces it</strong>: a godot tool (<code>.scratch/AC-0310/ac0310_far_dump.gd</code>, run headless, 8 GB cap) instantiated <code>AweGen</code> via ClassDB and called <code>generate_far(cx, cz, seed, 384, 126)</code> for all 196,196 chunks — the same call the demotion path makes in <code>world.gd:_demote_to_far</code> — and wrote every 1024-byte payload to <code>.scratch/AC-0310/far_dump.bin</code> (203,259,100 bytes). The python bake (<code>tasks/AC-0310/ac0310_bake_satellite.py</code>) reads that dump; no generation logic lives in the bake itself.</p>
+<p>Per chunk the payload is <code>[H u16×256 LE][biome x256][top x256]</code> (slot = lz·16+lx). The bake maps each texture pixel to one surface column and writes:</p>
+<ul>
+<li><strong>ocean</strong> (H &lt; SEA): flat, unshaded water colour (the water surface is the plane S = max(H, sea), so no gradient shading);</li>
+<li><strong>land</strong> (H ≥ SEA): <code>fcc top colour × lambert</code>, where the colour is the far tier's own per-block top-face colour (the <code>_lod_fcc_get</code> convention: sRGB atlas-tile average → <code>srgb_to_linear</code>, dir = top; the atlas already carries the data.gd web tints for grass/water) and lambert = <code>0.45 + 0.55·max(0, N·L)</code> with N = normalize(−∂H/∂u, 1, −∂H/∂v) (clamped central differences, 1 m spacing on the home pair, s·(1, ½ or ½, 1) on faces 2–11) and fixed sun L = normalize(0.4, 1.0, 0.2) in the (u, radial, v) frame. The stored PNG is <code>linear_to_srgb(colour)</code> — an unlit bake the later render tier modulates.</li>
+</ul>
+<p><strong>Pixel convention</strong> (the render tier maps a face's chart point here 1:1): pixel (i, j) = chart point ((i+0.5)/1024, (j+0.5)/1024); faces 2–11 have exactly one 16-cell face chunk per 16×16 pixel block (cell (iu, iv) = pixel (i, j), with the <code>face_mirror_x</code> lx flip on faces 2–5 and 8–9); faces 0/1 (the home pair, 1 m columns) sample the column whose centre lies at the pixel centre's flat position (floor of the SphereMath home inverse). Face 0: i-axis = flat +x (left = midline x=0, right = +3141 m), j-axis = flat z (top = −3141, bottom = +3141); spawn (0,0) sits at the left edge mid-height. Face 1: i = x from −3141 (left) to 0 (right).</p>
+<p>Also emitted: <code>ac0310_bake_stats.json</code> (all numbers below), and — as a prerequisite probe — <code>ac0310_fcc_probe.json</code> (the fcc top colours the bake uses, measured from the real atlas, plus the flat data.gd palette for comparison).</p>
+
+<h2>2. Numeric evidence</h2>
+<h3>2.1 Coverage / census (50,226,176 columns planet-wide = 196,196 chunks × 256)</h3>
+<table>
+<tr><th>quantity</th><th>value</th></tr>
+<tr><td>ocean columns (H &lt; 126)</td><td><strong>536,862 (1.069 %)</strong> — home pair 1.102 %, faces 2–11 0.942 %</td></tr>
+<tr><td>land columns (H ≥ 126)</td><td>49,689,314 (98.931 %)</td></tr>
+<tr><td>H min / max / mean</td><td>102 / 220 / 158.7 (home pair mean 158.6, faces 2–11 158.8)</td></tr>
+<tr><td>biome counts (all / land): 0 snow, 1 desert, 2 forest, 3 plains</td><td>11,747,420 / 11,613,102; 4,088,494 / 4,013,083; 7,821,647 / 7,766,003; 26,568,615 / 26,297,126</td></tr>
+<tr><td>top counts: 1 grass, 4 sand, 12 snow-grass, 32 deepslate</td><td>33,884,615 / 4,794,322 / 11,547,239 / <strong>0</strong> (deepslate unreachable: H never dips below 102 &gt; 64)</td></tr>
+<tr><td>top-formula consistency (recomputed from (biome, H) via the gen_far formula vs stored top bytes)</td><td class="ok">0 mismatches over 50,226,176 columns</td></tr>
+</table>
+<p><span class="warn">This planet is 99 % land.</span> This is real, not a read bug: the standing harness evidence says the same — the 5×5 genhash window is "100 % land on seed 44 (6,400 land cols, 0 ocean, oceansurface arm half=2)" (harness_data.yaml, genhash note) and the light arm found "277 surface_ok ocean columns in the ±4 window". A satellite view of seed 44 is a near-solid landmass with thin ocean veins, <em>not</em> a blue marble.</p>
+
+<h3>2.2 Head-to-head vs the <code>oceansurface</code> arm (the census the pipeline already produces)</h3>
+<pre>arm (godot, full path generate_flat + column_heights16, seed 44, half 5):
+  chunks 121, cols 30,976, land.cols 29,895, ocean.cols 1,081, ok:true
+bake (far-payload H, same ±5 chunk window around the spawn chunk):
+  cols 30,976, land (H ≥ 126) 29,895, ocean (H &lt; 126) 1,081
+→ EXACT MATCH (bit-exact H promotion contract confirmed on 30,976 columns)</pre>
+
+<h3>2.3 Per-face coverage (1,048,576 px each; land class pixel counts, ocean fraction)</h3>
+<table>
+<tr><th>face</th><th>ocean frac</th><th>grass px</th><th>sand px</th><th>snow px</th><th>land H mean</th><th>png B</th></tr>
+<tr><td>0 (+Y even, home)</td><td>0.0000</td><td>706,560</td><td>133,120</td><td>208,896</td><td>156.3</td><td>23,866</td></tr>
+<tr><td>1 (+Y odd, home)</td><td>0.0146</td><td>711,680</td><td>87,040</td><td>234,496</td><td>159.7</td><td>25,183</td></tr>
+<tr><td>2 (−Y even)</td><td>0.0303</td><td>770,048</td><td>8,192</td><td>238,592</td><td>165.4</td><td>52,383</td></tr>
+<tr><td>3 (−Y odd)</td><td>0.0000</td><td>468,992</td><td>18,432</td><td>561,152</td><td>155.9</td><td>57,485</td></tr>
+<tr><td>4 (+X even)</td><td>0.0127</td><td>753,664</td><td>3,072</td><td>278,528</td><td>154.7</td><td>34,534</td></tr>
+<tr><td>5 (+X odd)</td><td>0.0254</td><td>570,368</td><td>6,144</td><td>445,440</td><td>155.3</td><td>39,786</td></tr>
+<tr><td>6 (−X even)</td><td>0.0176</td><td>676,864</td><td>55,296</td><td>297,984</td><td>152.8</td><td>25,456</td></tr>
+<tr><td>7 (−X odd)</td><td>0.0400</td><td>855,040</td><td>28,672</td><td>122,880</td><td>155.5</td><td>78,708</td></tr>
+<tr><td>8 (+Z even)</td><td>0.0000</td><td>1,006,592</td><td>14,336</td><td>27,648</td><td>155.4</td><td>45,964</td></tr>
+<tr><td>9 (+Z odd)</td><td>0.0459</td><td>806,912</td><td>174,080</td><td>19,456</td><td>154.6</td><td>45,432</td></tr>
+<tr><td>10 (−Z even)</td><td>0.0000</td><td>1,048,576</td><td>0</td><td>0</td><td>164.5</td><td>72,624</td></tr>
+<tr><td>11 (−Z odd)</td><td>0.0000</td><td>974,848</td><td>73,728</td><td>0</td><td>168.0</td><td>65,136</td></tr>
+</table>
+<p class="note">Ocean is patchy (0–4.6 % per face), concentrated on faces 1, 9, 7, 5, 2. Snow (top id 12) clusters on the −Y side (faces 2, 3, 5, 6: 238k/561k/445k/298k px) and is absent on faces 8, 10, 11. Face 10 is 100 % grass. Sand is rarest (4.79 M columns total; face 9 is the sandiest at 174k px).</p>
+
+<h3>2.4 Colour ↔ class correlation (baked mean stored sRGB ×255 vs the fcc source colour)</h3>
+<table>
+<tr><th>class (top id)</th><th>fcc top colour → sRGB×255</th><th>baked mean stored ×255 (all land px of that class)</th><th>px</th><th>reading</th></tr>
+<tr><td>grass (1)</td><td>(57, 106, 35)</td><td>(55, 103, 33)</td><td>9,350,144</td><td>diff = mean lambert 0.91 ✓</td></tr>
+<tr><td>sand (4)</td><td>(222, 210, 166)</td><td>(215, 203, 160)</td><td>602,112</td><td>same ✓</td></tr>
+<tr><td>snow-grass (12)</td><td>(251, 257, 257)</td><td>(244, 250, 250)</td><td>2,435,072</td><td>same ✓ (257 clamps at 255)</td></tr>
+<tr><td>deepslate (32)</td><td>(81, 81, 83)</td><td>— (0 px)</td><td>0</td><td>unreachable on this world (§2.1)</td></tr>
+</table>
+<p class="note">Water pixels are the flat fcc water colour (linear 0.0148, 0.0684, 0.3633 → sRGB ≈ (35, 76, 165)), stored unshaded, 536,862 px planet-wide. Every land pixel's colour is exactly fcc(top) × brightness — the correlation is structural, and the small offsets above are the measured mean brightness (0.91 grass), confirming the shade term behaves as specified.</p>
+
+<h3>2.5 Roundness / limb (SphereMath mirrored in numpy; all values below are from the mirror, cross-checked in §2.6)</h3>
+<table>
+<tr><th>check</th><th>result</th></tr>
+<tr><td>(a) 4,000,000 random unit directions → face_for_dir → world_to_face → forward uv_to_world round-trip</td><td class="ok">max residual 4.7×10⁻¹⁶ (machine epsilon), mean 1.2×10⁻¹⁶, 0 samples &gt; 10⁻⁶; u,v all inside the unit square</td></tr>
+<tr><td>(b) per-face solid angle: MC count (4e6) vs analytic ∫|∂P/∂u×∂P/∂v|·P̂/ R³ over the 1024² grid</td><td class="ok">integral = 1.0472 sr per face = 4π/12 exactly (all 12); per-face area 16,755,161 m² each; MC agrees within 0.005–0.37 % (pure sampling noise); total area 201,061,934 m² vs 4πR² = 201,061,930 (rel 2×10⁻⁷)</td></tr>
+<tr><td>(c) equator limb (view +Y, 100,000 samples of the great circle d·ŷ=0)</td><td class="ok">faces 4–11 45.0° each within one 100k-sample (±0.004°; 8 × 45 = 360); faces 0–3 (the ±Y pairs) 0° — the equator is 90° from those poles, touching only measure-zero corner points. Each axis face's 90° equator arc is split by its midline into two 45° sectors.</td></tr>
+<tr><td>(d) generic limb, view (1,1,1)/√3 (100,000 samples)</td><td class="ok">100 % of the great circle is painted (no empty-space gaps); arcs = 6 faces × exactly 60.0° (faces 1, 2, 5, 6, 9, 10) — the three corner-adjacent faces (0, 4, 8) and the three opposite-corner faces (3, 7, 11) are untouched, by 3-fold symmetry</td></tr>
+<tr><td>(e) every face boundary curve great-circle-or-not (257 samples/edge, plane-through-origin fit, all 48 face edges)</td><td class="ok"><strong>all 48 are great-circle arcs</strong> — max |P·n̂| deviation 2.8×10⁻¹⁷·R. Midlines lie in the x=0 / z=0 planes; the cube edges (x=±y, y=±z, z=±x class planes) stay planar under the per-coordinate pre-warp because tan(t) is monotone in each coordinate. This is a real property of the partition: the 12-face chart is a <em>great-circle partition</em> of the sphere, so the limb at any view is a clean circular arc and the painted terminator follows the expected great circle exactly.</td></tr>
+<tr><td>(f) gapless shared-edge invariant (the <code>_EDGES</code> table, both faces of every shared edge evaluated independently, 884 samples)</td><td class="ok">max |P_A − P_B| = 6.8×10⁻¹³ m (float64 epsilon × R). Zero gaps on all 24 shared edges.</td></tr>
+</table>
+
+<h3>2.6 Independent cross-checks</h3>
+<ul>
+<li>The <code>_EDGES</code> table transcribed into the python checker was <strong>machine-diffed against <code>godot/core/sphere_math.gd</code></strong> (bracket-parsed, 12 faces × 4 edges, 52 segments): 0 mismatches. (First transcription had 2 wrong rows — face 5 edge 2 and face 6 edge 1 — which the gapless check caught as 3,061 m / 2,423 m gaps; AC-0362's commit message records the same hazard from a prior broken transcription.)</li>
+<li>The ocean/land census cross-check in §2.2 runs the <strong>independent full-path</strong> generator (<code>generate_flat</code> + <code>column_heights16</code>) through the game's own <code>oceansurface</code> arm — not a re-implementation — and it matches the far payload bit-for-bit.</li>
+</ul>
+
+<h2>3. Bake cost vs the ticket's 4.5 s claim</h2>
+<table>
+<tr><th>stage</th><th>measured</th><th>note</th></tr>
+<tr><td>ticket claim</td><td>"~12.6 M samples ≈ 4.5 s CPU at ~92 µs/chunk, one-time per seed"</td><td>implies 12 × 4096 = <strong>49,152 chunks</strong></td></tr>
+<tr><td>actual chunk count</td><td><strong>196,196</strong> = 155,236 home (394×394) + 40,960 (10 × 64×64)</td><td>the home pair's 1 m columns need 19× the assumed per-face chunk count — the claim's blind spot</td></tr>
+<tr><td>far generation (C++, <code>generate_far</code>)</td><td><strong>17.89 s</strong> CPU (17.9 M µs), 91.2 µs/chunk; process wall 19.42 s; RSS 121 MB</td><td>per-chunk cost matches the standing ~92 µs figure; the 4× miss is the <em>chunk count</em>, not the cost</td></tr>
+<tr><td>colour bake + 12 PNGs (numpy)</td><td>3.1 s wall; full python process 11.5 s (of which 7.6 s is the roundness/limb verification, 0.7 s the census)</td><td>RSS 2.76 GB (the home H grid + padded gradients)</td></tr>
+</table>
+<p><span class="warn">Verdict: the generation side is ~4× the ticket's 4.5 s (17.9 s measured), still one-time per seed, but a 19-second synchronous main-thread bake would be a noticeable stall.</span> The colour bake itself is cheap (3.1 s); the cost is re-running <code>generate_far</code> for the chunks. <strong>Design note for the render-tier piece:</strong> generate far payloads for the satellite tier asynchronously (worker-thread or per-frame slice), keyed (planet_id, R, seed) as the ticket requires; never on the main thread at once. Memory is a non-issue (121 MB for the generation process; the textures are 12 × 1024² × 3 B ≈ 37 MB raw, 550 KB as PNG).</p>
+
+<h2>4. Texture files and what a viewer should see</h2>
+<p>All in <code>tasks/AC-0310/</code>, predictable per-face names: <code>satellite_face00.png</code> … <code>satellite_face11.png</code> (1024×1024 RGB8, verified: correct PNG signature, IHDR 1024×1024, 8-bit colour type 2, 23.9–78.7 KB each). Expectations, from the stats above (a viewer checking the images should see exactly this — the builder did not open them):</p>
+<ul>
+<li><strong>All 12 faces:</strong> dominated by muted green (grass, mean stored ≈ (55,103,33) sRGB) with soft grey-scale hillshading (brightest toward the lower-right of each texture, the +u/+v sun side; mean land brightness ≈ 0.91–0.95 of the unshaded colour), a bright white-to-cream snow component, occasional tan sand (≈ (222,210,166)), and — the surprise — <strong>almost no blue</strong>: ocean is only 0–4.6 % of each face, appearing as thin flat blue veins/pools (flat unshaded water, no specular), not as deep seas. Nothing is a blue marble; it reads as a highland world with scattered lakes/estuaries.</li>
+<li><strong>face 0 (home, +Y even):</strong> left edge = the x=0 midline (spawn at left edge, mid-height), i-axis running to +x; 100 % land (0.0000 ocean), 209k snow px in the upper band (negative-z side is the j-top), a 133k sand speckle, strong hillshading from the 1 m resolution — this is the finest-grained face (256×256 columns across 6.28 km → visibly textured, not smooth).</li>
+<li><strong>face 1 (home, +Y odd):</strong> mirror of face 0 across the left edge (x from −3141 to 0); 1.5 % ocean appears as thin veins; 234k snow px.</li>
+<li><strong>faces 2–3 (−Y, the "south" side):</strong> the snowiest pair — 239k/561k snow px, the polar cap; face 3 shows the cap as a broad bright band, face 2 at 165 mean H is the highest land mass of the pole pair.</li>
+<li><strong>faces 4–7 (±X equatorial band):</strong> mixed green/snow with the most ocean variety (faces 5, 7 at 2.5–4 %); hillshading is coarser (16 m cells) — reads as a lower-resolution sibling of the home pair. Near the home-patch edge (the strip facing face 0/1) the terrain is <em>un-blended</em> (the AC-0309 C1 blend band is a streaming post-process, not part of the far payload — see §5).</li>
+<li><strong>faces 8–11 (±Z equatorial band):</strong> face 8 mostly green with a little sand; face 9 the sandiest (174k px) with 4.6 % ocean; face 10 100 % uniform green (a flat 164.5 mean-H grass plain — the most "plain" face, minimal shading relief); face 11 green + a 74k sand deposit, no snow.</li>
+<li><strong>Orientation reference:</strong> on every face, brighter = sun-facing (sun at +u, +radial, slightly +v); the limb of any face is a great circle, so if the 12 textures are pasted back onto the cube chart and the chart is warped by <code>uv_to_world</code>, the sphere closes with zero gaps (proven numerically in §2.5 — the viewer will see the faces match at their borders if overlaid).</li>
+</ul>
+
+<h2>5. Findings that change the design</h2>
+<ol>
+<li><strong>Chunk count, not chunk cost, breaks the 4.5 s claim.</strong> The estimate assumed 4,096 chunks per face; the home pair's 1 m columns need 155,236 (394×394). Measured: 17.9 s C++ for the far payloads at the standing 91.2 µs/chunk. The bake is fine as a one-time job, but the render tier must generate far payloads off the main thread (worker/sliced), keyed (planet_id, R, seed). (§3)</li>
+<li><strong>Use the fcc colours, not the flat palette.</strong> The far tier's actual per-block top colours (atlas-tile averages with the data.gd web tints, linearized) differ materially from the data.gd flat C_* palette for the two most common surface classes: grass fcc (57,106,35) vs flat (109,173,67) — the fcc is markedly darker because the atlas grass tile's grey-average is ~34 % bright, and water fcc (35,76,165) vs flat (43,112,223). A bake from the flat palette would be visibly brighter/greener than the band the far tier actually draws. The fcc values are in <code>ac0310_fcc_probe.json</code> (and baked in). The flat palette is only the no-atlas fallback. (§2.4, §1)</li>
+<li><strong>The home-edge blend band is not in the far payload.</strong> AC-0309 C1's blend band (<code>generator.gd:_blend_face_chunk</code>) is a GDScript post-process on faces 4–11 near the home-patch edge during streaming; <code>generate_far</code> is the canonical no-cave form without it. The satellite bake is therefore <em>un-blended</em> at those four strips — the far band (which draws from the same far payload) is equally un-blended, so the bake is consistent with what the far tier shows, but if the later piece blends the far band for the near-mid transition, the baked strip should match the <em>blended</em> look. Flag for the render-tier piece: decide blend-or-not for the satellite strip at the patch edge. (§1, §4)</li>
+<li><strong>Seed 44 is a 99 %-land planet.</strong> 1.069 % ocean planet-wide (0–4.6 % per face, patchy veins), 0 deepslate surface anywhere (H ≥ 102 always &gt; the 64 deepslate threshold), snow concentrated on the −Y faces. Whatever the render tier draws, the "satellite view" of the home world will be a green-white highland with sparse lakes — the ticket's framing should not promise a blue marble. Also worth a one-liner in the epic §6.3 context: ocean is a minority class on the current generator (post-AC-0288…AC-0360 re-bases), per the standing genhash/light-arm census notes. (§2.1)</li>
+<li><strong>The 12-face chart is a great-circle partition.</strong> All 48 face edges are great-circle arcs (max plane deviation 2.8×10⁻¹⁷ R), the shared edges are gapless to 6.8×10⁻¹³ m, per-face solid angles are exactly 4π/12, and the round-trip map is exact to machine epsilon. Consequences for the render tier: (a) the visible limb at any camera distance is a perfect circle and the painted/empty terminator coincides with it — no "flat-square edge" artifact is possible at orbit view; (b) if the tier draws per-face quads and then warps vertices, edge vertices from both sides already coincide, so no seam-fixing pass is needed at the chart level; (c) any mip/LOD blend across an edge can be done in chart space without distortion worries. (§2.5)</li>
+<li><strong>Per-face pixel counts are not equal-area in the naive sense.</strong> Each face is exactly 4πR²/12 in true surface area (the pre-warp makes the partition equal-area: 16,755,161 m² per face to 2×10⁻⁷), so a uniform 1024² texture gives a uniform m²/px = 16.0 m²/px on every face — the home pair's 1 m columns are simply supersampled 16× over that (256 columns per 16 m chunk). No per-face density correction is needed for the render tier; nearest-neighbour sampling of the textures is area-fair. (§2.5)</li>
+</ol>
+
+<h2>6. REPAIR — the v-invariant bake (piece 1, 2026-09-29)</h2>
+
+<h3>6.1 Root cause — the <code>v</code> index was tiled along the <code>u</code> axis</h3>
+<p>Every row of every baked face was byte-identical to row 0 (coordinator's independent PNG decode: distinct rows = 1/256 on faces 00/03/05/10; face 10 read as a uniform green plain, face 3 as vertical bands). The cause, in <code>ac0310_bake_satellite.py</code>: a <strong>numpy row/column pattern error</strong>. The pixel index grids are built by tiling 1-D arrays: a <em>u-axis</em> (column <code>i</code>) array like <code>cxi</code> is a <em>row</em> pattern — each image row = the i-array — and <code>np.tile(a_1d, (NPIX, 1))</code> makes exactly that (result <code>[j, i] = a[i]</code>). But the <em>v-axis</em> (row <code>j</code>) arrays — <code>czj</code>/<code>lzj</code> on the home pair, <code>iv &gt;&gt; 4</code>/<code>iv &amp; 15</code> on faces 2–11 — were also built with <code>np.tile(arr, (NPIX, 1))</code>, which puts <code>arr[i]</code> at <code>[j, i]</code> for <em>every</em> row. The sample therefore became a function of <code>i</code> only: faces 2–11 walked the chunk grid along the <strong>diagonal</strong> (<code>ccz = ccx</code>, local <code>lz = lx</code>-correlated) and the home pair along <code>cz = cx</code> of the flat grid — a one-dimensional slice repeated down all 1024 rows. The <code>u</code> arrays were correct by the same coincidence. No numeric check in the original run could see it: coverage, census, biome/colour correlation, limb and gaplessness all test the <em>payload and the chart</em>, not whether the image varies in two dimensions — and a machine diff of the dump data confirmed the far payload is fully 2-D (all 64 <code>ccz</code> rows distinct per face, all 64 <code>ccx</code> rows distinct), so the data was never the problem.</p>
+<p>Fix: the v-axis arrays are now built as column patterns (<code>np.broadcast_to(arr[:, None], (NPIX, NPIX))</code>) in both the home-pair and faces-2–11 branches. The index rule is documented in the script header, and the guard in §6.3 makes the failure mode impossible to ship again.</p>
+<p><strong>Second defect found and fixed in the same code</strong> (would have survived the variance guard — it is not a variance defect): the lambert gradient terms were computed along the <em>swapped axes</em>. On the home pair <code>dHdx</code>/<code>dHdz</code> each differentiated along the other axis (the 4-D gradient grid is <code>[cx, cz, lz, lx]</code>, so axis-2 differences are ∂/∂z); on faces 2–11 <code>gx</code>/`gz` took row/column differences the wrong way round <em>and</em> divided by the wrong spacing (<code>du_m</code> vs <code>dv_m</code> — a 2× scale error on the anisotropic faces 4–11). The shade was therefore lit as if the sun's in-plane direction were mirrored and the terrain stretched. Fixed: <code>gx</code> = column differences / <code>du_m</code>, <code>gz</code> = row differences / <code>dv_m</code> (home pair: <code>dHdx</code> = axis-3 differences). Effect: per-class mean brightness redistributed slightly between faces (0.91–0.95, was ~0.91 everywhere); planet-wide colour means unchanged to the displayed precision (§6.5).</p>
+
+<h3>6.2 The mapping was diffed against the shipped function — not re-transcribed</h3>
+<p>Because the first run's hand-transcribed <code>_EDGES</code> table had two wrong rows (caught only by a machine diff, §2.6), this repair did not trust any transcription: the probe <code>.scratch/AC-0310/ac0310_mapdiff.gd</code> ran headless (8 GB cap, one godot at a time) and compared the bake's claimed mapping against the <em>shipped executable code</em> itself:</p>
+<table>
+<tr><th>check (against shipped SphereMath)</th><th>result</th></tr>
+<tr><td>faces 2–11, 23,040 cells: local (lx,lz) of chunk (ccx,ccz) → the bake's cell (iu = ccx·16 + (15−lx if <code>face_mirror_x</code> else lx), iv = ccz·16+lz) → chart ((iu+0.5)/1024, (iv+0.5)/1024), vs the placed point <code>face_chunk_transform(…)·(lx+0.5, 0, lz+0.5)</code> sent through the shipped <code>world_to_face</code></td><td class="ok">worst |Δu|+|Δv| = 1.09×10⁻⁴ (≈ 0.44 m — exactly the documented least-squares affine-fit residual of <code>face_chunk_transform</code>); 0 face mismatches</td></tr>
+<tr><td>CONTROL, un-mirrored reading (iu′ = ccx·16+lx) on mirror faces / plain faces</td><td class="ok">0.0147 (15 cells off — the mirror is real and load-bearing) / 8.3×10⁻⁵ (plain faces agree either way)</td></tr>
+<tr><td>the bake's literal mirror set {(2..5),(8,9)} vs shipped <code>face_mirror_x(f)</code> for all 12 faces</td><td class="ok">match</td></tr>
+<tr><td>home pair, 4,096 pixel samples: <code>uv_to_world</code> → <code>world_to_face</code> round-trip; bake's flat inverse (x = hw·u / hw·(u−1), z = hw·(2v−1)) vs shipped <code>home_uv</code></td><td class="ok">1.7×10⁻⁷ (float) / 1.7×10⁻¹⁶ (machine epsilon) — 0 face mismatches</td></tr>
+<tr><td>baked floor-chunking (cx = floor(x/16), lx = x−16cx) vs the shipped consumer inverse <code>world_to_flat</code> (containing-column snap)</td><td class="ok">worst 4.27 m; 232/4096 samples land in the neighbouring 16 m column — the documented facet-overlap / spacing-stretch region at the patch corners (up to ~2 m in-plane overlap), i.e. the placement inverse, not the data chunking; negative-value floor convention checked against <code>floorf</code> (−3138.4 → cx = −197, lx = 13.6 — python <code>//</code> agrees)</td></tr>
+</table>
+<p>The mapping used by the re-bake is therefore the shipped one: <code>face_chunk_transform</code>'s layout (<code>face_local_x</code> mirror class) for faces 2–11 and the <code>home_uv</code>/<code>flat_to_world</code> floor convention for the home pair — the same mapping the streaming pipeline uses, not a re-derivation.</p>
+
+<h3>6.3 The permanent check — per-face variance guard in the bake</h3>
+<p>The bake now asserts, <strong>for every face, on the bytes actually on disk</strong> (the written PNG is decoded back with a minimal filter-0 decoder in the script — not the in-memory array):</p>
+<ul>
+<li><strong>distinct rows and distinct columns</strong> — 256 sampled lines (every 4th) each, counted against the first; floors <strong>64/64</strong> of 256. The smear measured <strong>1</strong>; the fixed faces measure <strong>256</strong> (4× floor margin, and a whole-axis smear can never be anywhere near the floor).</li>
+<li><strong>H-channel min/max spread</strong> over the face, floor <strong>8 m</strong> (measured 74–110 m);</li>
+<li><strong>colour-channel min/max spread</strong> (stored bytes, per R/G/B, worst channel), floor <strong>8</strong> (measured 179–233).</li>
+</ul>
+<p>Any floor failure prints the per-face table and <code>sys.exit(1)</code> — a smeared or constant bake can no longer pass. What each part catches: the distinct-row/column counts catch a <em>dropped/fixed axis index</em> (one-dim slice repeated — this defect), a constant/uniform face, and a degenerate PNG; the H spread catches a height-channel dropout or a face sampled from a single flat chunk; the RGB spread catches a dead colour channel or an all-ocean/all-land misclass. It is the same class of instrument as the four this project has already had to repair: a check that everything passes is worse than no check, because it looks like coverage. Negative test (run at repair time): the guard's counting logic applied to a rebuilt v-invariant replica of fixed face 00 returns rows = 1, cols = 230 → <strong>FAIL</strong>; the fixed face returns 256/256 → pass. Per-face output (re-bake, seed 44):</p>
+<table>
+<tr><th>face</th><th>distinct rows</th><th>distinct cols</th><th>H min</th><th>H max</th><th>H spread (m)</th><th>RGB spread (R,G,B)</th><th>result</th></tr>
+<tr><td>0</td><td>256/256</td><td>256/256</td><td>109</td><td>212</td><td>103</td><td>215, 179, 231</td><td class="ok">pass</td></tr>
+<tr><td>1</td><td>256/256</td><td>256/256</td><td>102</td><td>212</td><td>110</td><td>215, 179, 231</td><td class="ok">pass</td></tr>
+<tr><td>2</td><td>256/256</td><td>256/256</td><td>116</td><td>199</td><td>83</td><td>216, 182, 233</td><td class="ok">pass</td></tr>
+<tr><td>3</td><td>256/256</td><td>256/256</td><td>109</td><td>195</td><td>86</td><td>216, 182, 233</td><td class="ok">pass</td></tr>
+<tr><td>4</td><td>256/256</td><td>256/256</td><td>120</td><td>203</td><td>83</td><td>216, 179, 231</td><td class="ok">pass</td></tr>
+<tr><td>5</td><td>256/256</td><td>256/256</td><td>118</td><td>220</td><td>102</td><td>216, 179, 232</td><td class="ok">pass</td></tr>
+<tr><td>6</td><td>256/256</td><td>256/256</td><td>122</td><td>196</td><td>74</td><td>216, 179, 223</td><td class="ok">pass</td></tr>
+<tr><td>7</td><td>256/256</td><td>256/256</td><td>114</td><td>205</td><td>91</td><td>215, 179, 223</td><td class="ok">pass</td></tr>
+<tr><td>8</td><td>256/256</td><td>256/256</td><td>119</td><td>200</td><td>81</td><td>216, 182, 233</td><td class="ok">pass</td></tr>
+<tr><td>9</td><td>256/256</td><td>256/256</td><td>113</td><td>204</td><td>91</td><td>216, 182, 233</td><td class="ok">pass</td></tr>
+<tr><td>10</td><td>256/256</td><td>256/256</td><td>118</td><td>199</td><td>81</td><td>216, 179, 224</td><td class="ok">pass</td></tr>
+<tr><td>11</td><td>256/256</td><td>256/256</td><td>119</td><td>204</td><td>85</td><td>216, 179, 224</td><td class="ok">pass</td></tr>
+</table>
+
+<h3>6.4 Re-bake — numbers that should not have moved, and the per-face table that should have</h3>
+<ul>
+<li><strong>Planet-wide census (§2.1) — unchanged, bit-exact</strong>: 50,226,176 columns; ocean 536,862 (1.0689 %); land 49,689,314; H 102/220/158.67; biomes 11,747,420/4,088,494/7,821,647/26,568,615 (all); tops 33,884,615/4,794,322/11,547,239/0; top-formula mismatches 0; ±5-chunk dry-pit window 1,081 ocean / 29,895 land (still matches the <code>oceansurface</code> arm, §2.2). The data was always right.</li>
+<li><strong>Colour ↔ class correlation (§2.4) — unchanged to displayed precision</strong>: baked planet-wide means grass (55,103,33), sand (215,203,160), snow-grass (244,249,249) [was (244,250,250) — a 1-byte rounding shift from the brightness redistribution, §6.1], vs fcc source (57,106,35)/(222,210,166)/(251,257,257→255) — still "mean lambert 0.91–0.95 × fcc". Per-class pixel counts <em>do</em> move, because the old ones were slice artifacts: grass 9,350,144 → <strong>8,750,205</strong>, sand 602,112 → <strong>884,275</strong>, snow 2,435,072 → <strong>2,826,677</strong> (of 12,461,157 land pixels — 121,755 ocean px; the old counts were each face's 1-D slice tallied ×1024 rows). The re-bake's per-face ocean split reproduces the census split exactly (home pair 1.10 %, faces 2–11 0.942 % — faces 2–11 are 1:1 cell-per-pixel, so their texture ocean fraction <em>is</em> the census fraction).</li>
+<li><strong>Per-face table — SUPERSEDES §2.3</strong> (the old one was the diagonal slice, e.g. "face 10 100 % grass" was a slice through a grass band):</li>
+</ul>
+<table>
+<tr><th>face</th><th>ocean frac</th><th>grass px</th><th>sand px</th><th>snow px</th><th>land H mean</th><th>png B</th></tr>
+<tr><td>0 (+Y even, home)</td><td>0.0124</td><td>672,403</td><td>94,555</td><td>268,617</td><td>158.6</td><td>449,383</td></tr>
+<tr><td>1 (+Y odd, home)</td><td>0.0095</td><td>727,505</td><td>93,069</td><td>217,990</td><td>159.6</td><td>444,766</td></tr>
+<tr><td>2 (−Y even)</td><td>0.0058</td><td>740,033</td><td>15,144</td><td>287,362</td><td>161.8</td><td>398,864</td></tr>
+<tr><td>3 (−Y odd)</td><td>0.0176</td><td>544,360</td><td>74,855</td><td>410,872</td><td>156.9</td><td>426,579</td></tr>
+<tr><td>4 (+X even)</td><td>0.0049</td><td>814,319</td><td>8,619</td><td>220,507</td><td>159.1</td><td>389,842</td></tr>
+<tr><td>5 (+X odd)</td><td>0.0125</td><td>668,643</td><td>118,674</td><td>248,199</td><td>156.1</td><td>424,702</td></tr>
+<tr><td>6 (−X even)</td><td>0.0041</td><td>670,289</td><td>68,157</td><td>305,793</td><td>157.8</td><td>271,400</td></tr>
+<tr><td>7 (−X odd)</td><td>0.0186</td><td>889,965</td><td>72,395</td><td>66,673</td><td>159.6</td><td>252,775</td></tr>
+<tr><td>8 (+Z even)</td><td>0.0041</td><td>800,315</td><td>52,773</td><td>191,225</td><td>161.7</td><td>401,454</td></tr>
+<tr><td>9 (+Z odd)</td><td>0.0183</td><td>725,405</td><td>119,442</td><td>184,567</td><td>157.4</td><td>398,955</td></tr>
+<tr><td>10 (−Z even)</td><td>0.0041</td><td>843,369</td><td>81,160</td><td>119,707</td><td>161.4</td><td>252,144</td></tr>
+<tr><td>11 (−Z odd)</td><td>0.0042</td><td>653,599</td><td>85,432</td><td>305,165</td><td>159.5</td><td>261,242</td></tr>
+</table>
+<p class="note">Ocean is now uniform-ish (0.4–1.9 % per face, mean 1.07 % = the census), no longer 0–4.6 %: the old extremes were slices through veins (face 9) or through a dry band (faces 0, 3, 8, 10, 11). Snow is still heaviest on the −Y pair (faces 2, 3: 287k/411k px) and the −X/−Z side (6, 11: 306k/305k); face 7 is the least snowy (67k). The PNGs grew 3–10× (252–449 KB vs 24–79 KB) because a real 2-D texture is far less compressible than a repeated slice — an independent fingerprint of the fix.</p>
+
+<h3>6.5 Cost — re-measured where relevant, carried where not</h3>
+<table>
+<tr><th>stage</th><th>measured</th><th>note</th></tr>
+<tr><td>far generation (<code>generate_far</code>)</td><td><strong>17.89 s</strong> CPU, 91.2 µs/chunk, 196,196 chunks — <em>carried, not re-run</em></td><td>the dump was not re-generated (its data was proven 2-D, §6.1); the §3 finding stands: the ticket's 4.5 s assumed 49,152 chunks, the real count is 196,196 (the home pair's 1 m columns need 19× the assumed per-face chunk count). The render tier must generate far payloads off the main thread, keyed (planet_id, R, seed).</td></tr>
+<tr><td>re-bake (python, numpy)</td><td><strong>13.0 s</strong> wall (load 0.08 s, bake + variance guard 4.65 s, census 5.36 s, roundness/limb re-verification 12.9 s — script total is dominated by the 4×10⁶-sample roundness MC, which re-ran and still passes: gapless 6.8×10⁻¹³ m, great-circle deviation 2.8×10⁻¹⁷)</td><td>the guard adds ~0.2 s (12 PNG decodes). One-time per seed.</td></tr>
+</table>
+
+<h3>6.6 What a viewer should now expect on each face (SUPERSEDES §4's expectations)</h3>
+<ul>
+<li><strong>All 12 faces:</strong> genuine two-dimensional terrain — texture now varies along BOTH axes (256/256 distinct rows and columns each, §6.3): muted green grass dominant with full hillshading in both directions (brightest toward the +u/+v sun corner — previously the shading ran in vertical strips only), white/cream snow fields, tan sand speckle, and thin flat-blue ocean veins at 0.4–1.9 % (still not a blue marble — seed 44 is a 99 %-land planet, §2.1/§5.4 unchanged). No face is a flat plain or a set of bands.</li>
+<li><strong>face 0 (home, +Y even):</strong> left edge = the x = 0 midline (spawn at left edge, mid-height), finest 1 m texture; 1.2 % ocean veins, 269k snow px (upper/negative-z side), 95k sand px; H 109–212.</li>
+<li><strong>face 1 (home, +Y odd):</strong> mirror across the left edge; 1.0 % ocean, 218k snow px; H 102–212 (the only face touching the global H floor 102).</li>
+<li><strong>faces 2–3 (−Y pair):</strong> the snowiest pair — face 3 is the snowiest face of the planet (411k px, 42 % of its land), face 2 a 161.8 mean-H highland with 287k snow px; 0.6–1.8 % ocean.</li>
+<li><strong>faces 4–7 (±X band):</strong> mixed green/snow at 16 m cells (coarser shading than the home pair); face 6 carries 306k snow px, face 7 the least snow (67k) with the most ocean (1.9 %); 0.5–1.9 % ocean.</li>
+<li><strong>faces 8–11 (±Z band):</strong> face 9 the sandiest (119k px, 1.8 % ocean); face 10 is <em>no longer</em> a uniform green plain — 81 m of H spread, 81k sand px, 120k snow px, 0.4 % ocean; face 11 a 305k snow px shoulder. The four home-edge strips remain un-blended (the AC-0309 C1 band is not in the far payload — §5.3 stands).</li>
+<li><strong>Orientation/limb:</strong> unchanged — the chart is a great-circle partition (§2.5, re-verified in the re-bake run), so the 12 textures close the sphere with zero gaps at their borders.</li>
+</ul>
+
+<h2>Appendix A — provenance and method</h2>
+<ul>
+<li><strong>Tools (scratch, no product change):</strong> <code>.scratch/AC-0310/ac0310_far_dump.gd</code> (godot 4.7.1 headless, <code>ulimit -v 8388608</code>, one process at a time; ClassDB-instantiated <code>AweGen</code>, the same object the demotion path uses; log <code>.scratch/AC-0310/dump_run44.log</code>), <code>.scratch/AC-0310/far_dump.bin</code> (44-byte header + 196,196 × 1036-byte records: cx, cz, face, 1024-byte payload; home chunks cx,cz ∈ [−197, 196]² with face 0 if cx ≥ 0 else 1, then faces 2–11 as <code>generate_far(face·64+ccx, face·64+ccz, seed^(face·1000003), 384, 126)</code> — the exact keying of <code>world.gd:13335-39</code>), <code>tasks/AC-0310/ac0310_bake_satellite.py</code> (numpy 2.5.3 from <code>.scratch/pylib</code>; minimal RGB8 PNG encoder, no image I/O anywhere in the pipeline).</li>
+<li><strong>Colours:</strong> <code>.scratch/AC-0310/ac0310_fcc_probe.gd</code> mirrors <code>world.gd:_lod_fcc_get</code> (atlas tile sRGB average → <code>srgb_to_linear</code>, dir 2 = top) including the <code>data.gd:_bake_atlas_tints</code> multiplication (the raw atlas tiles for grass/water are grey placeholders — the tint is what makes them green/blue); output <code>tasks/AC-0310/ac0310_fcc_probe.json</code>. Baked linear values: grass (0.0373, 0.1382, 0.0145), sand (0.7102, 0.6250, 0.3666), water (0.0148, 0.0684, 0.3633), snow (0.9447, 0.9928, 0.9928), deepslate (0.0766, 0.0766, 0.0818).</li>
+<li><strong>Shade:</strong> fixed sun L = normalize(0.4, 1.0, 0.2) in the face (u, radial, v) frame; N from clamped central differences of H (1 m on the home pair; s, s/2 or s/2, s on faces 2–11 per <code>face_cell_scale</code>); brightness = 0.45 + 0.55·max(0, N·L); ocean unshaded (water surface is the plane S = max(H, sea)). Stored = linear_to_srgb(colour) — the bake is the unlit appearance; the later tier modulates day/night through the existing atmosphere shaders.</li>
+<li><strong>Roundness mirror:</strong> the numpy functions in the bake script are a line-for-line mirror of <code>godot/core/sphere_math.gd</code> (face maps, per-coordinate <code>tan(cπ/4)</code>/<code>atan</code> pre-warp, face_for_dir sign-order tie-breaks +X,−X,+Y,−Y,+Z,−Z); the <code>_EDGES</code> table machine-diffed against the source (0 mismatches, §2.6). The gapless check reproduces the harness sphere arm's dual-face evaluation (884 samples — the same count the arm reports).</li>
+<li><strong>Arms run (permitted, headless, no render):</strong> <code>AWECRAFT_LOGIC=oceansurface</code> (seed 44 default, half 5 default) — the §2.2 census; log <code>.scratch/AC-0310/oceansurface44.log</code>. No R50, no <code>load</code> arm, no 3D renders (llvmpipe degraded on this box).</li>
+<li><strong>REPAIR 2026-09-29 (piece 1):</strong> <code>.scratch/AC-0310/ac0310_mapdiff.gd</code> (headless godot, 8 GB cap — the §6.2 machine diff of the bake's mapping against the shipped <code>SphereMath</code> functions; pure SphereMath, no AweGen, no arms), the fixed <code>tasks/AC-0310/ac0310_bake_satellite.py</code> (v-index column patterns, gradient axes, the §6.3 variance guard with its filter-0 PNG decode), and the re-baked <code>satellite_face00..11.png</code> + <code>ac0310_bake_stats.json</code> (per-face <code>variance</code> blocks). The dump (<code>far_dump.bin</code>) was proven 2-D and was not re-generated.</li>
+<li><strong>Durable outputs:</strong> <code>tasks/AC-0310/satellite_face00.png</code> … <code>satellite_face11.png</code>, <code>tasks/AC-0310/ac0310_bake_stats.json</code>, <code>tasks/AC-0310/ac0310_fcc_probe.json</code>. No commits (ticket stays in-progress; closeout is the coordinator's). No TASKS.yaml edits.</li>
+</ul>
+</body></html>
