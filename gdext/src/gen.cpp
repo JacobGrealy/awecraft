@@ -303,6 +303,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib> // AC-0311 piece 1: the sphere_h env gate
 #include <cstring>
 #include <functional> // AC-0292: build_field_eval_c's per-point expression
 #include <vector>
@@ -1510,6 +1511,41 @@ static inline int aqu_surface_h_dense(int x, int z, int64_t seed) {
 	double c = fbm3((double)x / 220.0, 126.0 / 64.0, (double)z / 220.0, seed, 2);
 	double h = fbm3((double)x / 70.0 + 333.0, 126.0 / 64.0, (double)z / 70.0 + 333.0, seed + 7, 2);
 	double r = fbm3((double)x / 300.0 + 500.0, 126.0 / 64.0, (double)z / 300.0 + 500.0, seed + 13, 2);
+	double cc = 0.4219 + (c - 0.3681) * (0.1280 / 0.0467);
+	double hc = 0.4964 + (h - 0.5112) * (0.1361 / 0.1107);
+	double rc = 0.4292 + (r - 0.5743) * (0.1366 / 0.1443);
+	double y = 105.2 + cc * 36.4 + hc * 52.0;
+	if (rc > 0.62)
+		y += (rc - 0.62) * 390.0;
+	return clampi((int)std::floor(y), 3, TERRAIN_H_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// AC-0311 piece 1 (DESIGN PROTOTYPE ONLY — nothing in the shipped generation
+// calls this; the bound method is inert unless the AWECRAFT_SPHEREH env flag
+// is set). The surface height field re-derived on the GLOBAL coordinate pair
+// — the ticket's seam end-state: the surface is a function of (d, δ), d = the
+// direction unit vector (face-independent, continuous everywhere on the
+// sphere), δ = the radial depth above R. The three 2-octave fbm3 surface
+// fields (same seeds/offsets/sea slice/calibration/H formula as
+// aqu_surface_h_dense above) are evaluated DENSE at the sea slice with the
+// tangential noise inputs (R/S)·d.x / (R/S)·d.z — the shipped field's
+// (x/S, z/S) in the home-centre limit, and a single function of position
+// with no face and no lattice, hence C⁰ across every face boundary by
+// construction. The direction is the home-hemisphere chart: the exact
+// inverse of the grid-lock midline arc law x = hw·atan(d.x/d.y) (see
+// SphereMath.home_flat_ext) — d = normalize(tan(x/R), 1, tan(z/R)).
+// ---------------------------------------------------------------------------
+static inline int surface_h_sphere_home(double x, double z, double R, int64_t seed) {
+	double tx = std::tan(x / R);
+	double tz = std::tan(z / R);
+	double inv = 1.0 / std::sqrt(tx * tx + 1.0 + tz * tz);
+	double dx = tx * inv;
+	double dz = tz * inv;
+	const double Y = 126.0 / 64.0; // the sea slice (δ = SEA), exactly as today
+	double c = fbm3((R / 220.0) * dx, Y, (R / 220.0) * dz, seed, 2);
+	double h = fbm3((R / 70.0) * dx + 333.0, Y, (R / 70.0) * dz + 333.0, seed + 7, 2);
+	double r = fbm3((R / 300.0) * dx + 500.0, Y, (R / 300.0) * dz + 500.0, seed + 13, 2);
 	double cc = 0.4219 + (c - 0.3681) * (0.1280 / 0.0467);
 	double hc = 0.4964 + (h - 0.5112) * (0.1361 / 0.1107);
 	double rc = 0.4292 + (r - 0.5743) * (0.1366 / 0.1443);
@@ -3420,6 +3456,10 @@ public:
 		// AC-0283 P3: the halo band's heightmap sky source (the heights
 		// pass only — see column_heights above).
 		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h"), &AweGen::column_heights);
+		// AC-0311 piece 1: the sphere-domain surface-height prototype
+		// (env-gated, inert — see the method).
+		ClassDB::bind_method(D_METHOD("sphere_h", "x", "z", "r", "s"), &AweGen::sphere_h);
+		ClassDB::bind_method(D_METHOD("sphere_h_bench", "n", "s"), &AweGen::sphere_h_bench);
 		// AC-0284b: the far (h-only) column — the 1024-byte far payload
 		// (256 H u16 LE + 256 biome + 256 top-block id; see gen_far).
 		// generate_resl with skip == 2 returns it as resl[2] too.
@@ -3838,6 +3878,44 @@ public:
 		out.resize(256);
 		std::memcpy(out.ptrw(), h.data(), h.size());
 		return out;
+	}
+
+	// AC-0311 piece 1: the sphere-domain surface-height PROTOTYPE — the dense
+	// H at flat (x, z) of the home-hemisphere chart in the (d, δ) domain
+	// (see surface_h_sphere_home above). INERT unless the AWECRAFT_SPHEREH
+	// env flag is set (returns -1 otherwise); no shipped generation path
+	// calls it — the AC-0311 piece-1 probe (the face-boundary continuity
+	// measurement) is its only consumer.
+	int sphere_h(double p_x, double p_z, double p_r, int p_s) const {
+		if (std::getenv("AWECRAFT_SPHEREH") == nullptr)
+			return -1;
+		return surface_h_sphere_home(p_x, p_z, p_r, (int64_t)p_s);
+	}
+
+	// AC-0311 piece 1: the prototype cost bench — N dense sphere-domain H
+	// evaluations in a tight C++ loop (the (d, δ) precompute + 3 fields × 2
+	// octaves = 6 vnoise3 + the H formula), averaged in ns/eval. Same env
+	// gate as sphere_h (-1 when off); the AC-0311 piece-1 probe's only
+	// consumer.
+	double sphere_h_bench(int p_n, int p_s) const {
+		if (std::getenv("AWECRAFT_SPHEREH") == nullptr)
+			return -1.0;
+		const double R = 4000.0;
+		const double hw = R * (3.14159265358979323846 / 4.0);
+		const double z0 = hw * 0.5;
+		int64_t seed = p_s;
+		auto t0 = std::chrono::steady_clock::now();
+		int acc = 0;
+		for (int i = 0; i < p_n; i++) {
+			double x = hw + (double)((i % 97) - 48);
+			double z = z0 + (double)(i % 7);
+			acc += surface_h_sphere_home(x, z, R, seed);
+		}
+		auto t1 = std::chrono::steady_clock::now();
+		if (acc < -1000000) // unreachable; keeps the loop from being elided
+			return -2.0;
+		return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()
+				/ (double)p_n;
 	}
 
 	// AC-0216: cumulative lazy-skip counters (process-wide, all threads).
