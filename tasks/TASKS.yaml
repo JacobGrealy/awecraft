@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-29T20:50
+  updated_at: 2026-09-30T04:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0310
 - AC-0311
 - AC-0381
 - AC-0093
@@ -14861,11 +14860,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:42
-  completed_at: null
+  updated_at: 2026-09-30T04:07
+  completed_at: 2026-09-30T04:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want the planet to look round from orbit - a whole-body view that
@@ -14945,7 +14944,72 @@ intake:
 
     LADDER AFTER AC-0299(b): sim (4 chunks - real slabs + AweStarlight) -> high-LOD textured far band
     (cave-free slabs materialised from H+biome+top) out to the medium start -> 4x4x4 avg out to render_dist
-    -> satellite body beyond. The inner edge is still render_dist.'
+    -> satellite body beyond. The inner edge is still render_dist.
+
+
+    PIECE 1 REPAIRED AND VERIFIED BY THE COORDINATOR''S EYES, WHICH IS THE PART WORTH RECORDING (2026-09-29).
+    The first bake passed every numeric check it had - planet census, biome/colour correlation, limb and
+    solid angle, all 48 face edges as great circles, seams gapless to 6.8e-13 m - and was still WRONG:
+    the textures were smeared along one axis, a one-dimensional slice repeated 1024 times. I found it
+    by looking at face 10 and face 3 with vision (they looked like a uniform green plain and like implausible
+    vertical bands) and then confirming numerically by decoding the PNGs directly with a dependency-free
+    zlib decoder, because numpy is not in the default interpreter on this box: every face read ONE distinct
+    row out of 256 sampled while columns varied 4-36. THE CAUSE was np.tile(arr, (NPIX, 1)), which replicates
+    into ROWS, so every array indexed by the row coordinate became a function of the column index instead
+    - the data was proven fully 2-D (all 64 ccz rows distinct per face) and only the sampling was wrong.
+    THE REPAIR also found a SECOND defect the eyes could not have: the Lambert gradient was differentiated
+    along swapped axes (du_m/dv_m swapped on faces 2-11, a 2x scale error on the anisotropic faces) and
+    the shade was lit as if the sun''s in-plane direction were mirrored. THE DURABLE OUTCOME is a permanent
+    guard that runs on the WRITTEN PNG BYTES, decoded back from disk: per face it asserts distinct rows
+    and distinct columns against a 64/64 floor, an H min/max spread against a floor of 8 m, and a per-channel
+    RGB spread against a floor of 8, with a hard exit on failure - and it was NEGATIVE-TESTED against
+    a rebuilt v-invariant replica (rows=1, cols=230 -> FAIL), so it is a check that has been seen to fail
+    rather than a check that everything passes. Verified after the repair: all 12 faces read 256/256 distinct
+    rows AND columns, H spread 74-110 m, RGB spread 179-233 bytes, PNGs grew 3-10x to 252-449 KB because
+    a real 2-D texture is far less compressible, and the planet census is bit-identical to before (50,226,176
+    cols, ocean 536,862 = 1.0689%, H 102/220/158.67, zero top mismatches) - which is the right shape:
+    the DATA never changed, only the sampling. The ticket also kept its cost finding: far-gen measures
+    17.89 s at 91.2 us/chunk over 196,196 chunks against the ticket''s 4.5 s claim, because the claim
+    assumed 49,152 chunks and the home pair''s 1 m columns need 19x that count - so the render tier must
+    generate far payloads off the main thread. AND THE METHOD LESSON, which generalises past this ticket:
+    when renders are infeasible (llvmpipe is degraded on this box) a data-driven PNG plus the coordinator''s
+    eyes is a legitimate visual gate, and any composite visual artifact needs a STRUCTURAL variance assertion
+    on both axes in addition to its data and mapping checks, because data and mapping checks cannot see
+    a smear - this is the fifth instrument this session to need that treatment, after the crossing-sweep
+    max, the spherewalk flag, the mobs pair and the three blind light/fluid rows.
+
+
+    CLOSED - the planet draws as a body from orbit and dissolves into voxels on the way down, and the
+    no-pop claim rests on geometry rather than on taste. COORDINATOR VERIFICATION on my own capped stage
+    of commit 4f64cf4 (every arm rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs, which
+    is the right proof that a render tier touched no generation; farab h_mismatch 0; ladder 20/20; meshprobe
+    1.0; halo ok; lightstate leaks 0/20 with wash false; r16 no reds with far_holes 0/0 in both bands;
+    boundary r4 ok at 13/38; the R24 walk inside every gated value (sweep p50 6.5, crossing frame p95
+    61, storm p99 93); and the battery complete. The satellite arm as I ran it reads ok:true with the
+    full ladder - hidden at nadir_op 0.0, rim at rim_op 1.0, DISSOLVE at nadir_op 0.5, then full - and
+    with the structural invariant visible in the numbers: texel_m 4.0 against chunk_m 16.0, ratio 0.25,
+    and the screen-space pair 0.057471 against 0.229885 rad at the fog wall. The bake guard I asked for
+    in piece 1 is live in the arm and passing per face. WHY 0.25 IS THE WHOLE NO-POP ARGUMENT: a satellite
+    texel is 16 square metres and a chunk is 16 m on a side, so the body''s resolution is a FIXED QUARTER
+    of the voxels'' at every altitude - it cannot out-resolve the terrain it dissolves into, so the transition
+    cannot pop in the resolution sense no matter where the player is. On top of that the thresholds are
+    derived per frame from the actual render distance rather than being constants (at R50 fog_far 709.92,
+    edge 816, h_first 186.63, h_full 942.0; at r4 69.6, 80, 126.59, 206.0), which is what lets the same
+    arm pass at two very different radii. THREE DEFECTS WERE FOUND IN THIS ONE TICKET, all by checks that
+    looked at the ARTIFACT rather than at the intent, and the third is the one I could not have caught
+    by eye: the bake was a one-dimensional smear (caught by looking at the images - face 10 read as a
+    uniform green plain, face 3 as impossible vertical bands - then confirmed by decoding the PNGs: one
+    distinct row out of 256 on every face); the Lambert gradient was differentiated along swapped axes
+    on the anisotropic faces, a 2x scale error; and the SHIPPED home-pair textures were being shaded from
+    offset numpy axes where negative indices silently wrap, putting a wrong chunk''s slope on about 69%
+    of those pixels. That last one matters methodologically: the repaired script and the in-engine bake
+    now agree at ZERO diff out of 1,048,576 pixels, and the engine''s textures are the canonical ones
+    - so the check that found it was a comparison between two implementations, not a look at one of them.
+    OWED AND FILED rather than implied: off-thread baking (the sliced main-thread path measures step mean
+    9.54 ms with a 171 ms PNG-deflate spike, and a full-frame max of 229 ms under R50 headless streaming),
+    sun-tracking day/night (brightness only today, so the terminator does not move), a sub-pixel disc
+    cull at altitude (a visual no-op because the disc is fully fogged above the band), and the render-gate
+    substitution whose numerical criterion is stated in the results page.'
   comments: []
 - id: AC-0311
   title: planet-sphere-domain-generation
@@ -22223,6 +22287,73 @@ intake:
     no native ports, no reverting. Each hotspot becomes its own ticket with its own gates (the AC-0366
     -> AC-0369/0370/0371 pattern is the model: one review, then one ticket per finding). Where a fix would
     change generated output, it needs the full genhash/genprobe/farab/ladder/thash set and `H` byte-exact.
+
+    '
+  comments: []
+- id: AC-0382
+  title: satellite-body-off-thread-bake-and-sun-tracking
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-09-30T04:07
+  updated_at: 2026-09-30T04:07
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The planet looks round from orbit now, but the first view of a new world can
+    hitch while its surface image is prepared, and the day/night line never moves across it - the body
+    is lit as if the sun stood still.
+
+
+    2) Technical Details:
+
+    REMAINDER OF AC-0310, measured by its piece 2 and deliberately left for this ticket (2026-09-30):
+    the whole-body satellite tier works (12 per-face 1024-square textures, a per-fragment dissolve, and
+    a FIXED 0.25 texel-to-chunk ratio at every altitude, so the transition cannot pop in the resolution
+    sense), but two things are owed and one is a no-op worth recording.
+
+    (a) OFF-THREAD OR SLICED BAKING: a non-canonical seed bakes at runtime, currently sliced on the main
+    thread at 6 ms/frame, and the measured cost of that path is step mean 9.54 ms with a max of 171 ms
+    (a PNG-deflate spike) against a full-frame max of 229 ms under R50 headless streaming. The shipped
+    seed path is 360 ms wall. Far-generation was measured in piece 1 at 17.89 s over 196,196 chunks (the
+    ticket''s own 4.5 s estimate assumed 49,152 chunks - the home pair''s 1 m columns need 19x that count),
+    so the bake cannot be made fast, only made not-to-hitch. Move it off the main thread: the thread-generation
+    and thread-mesh lanes already exist and the thread-gen pool measured 1-2 inflight against 545/s capacity
+    during streaming work, so there is room; the builder notes this needs a C++ task type rather than
+    a GDScript tweak. Measure the main-thread stall before and after, since the hitch is the failure mode,
+    not the wall time.
+
+    (b) SUN-TRACKING DAY/NIGHT: the bake carries a fixed-sun lambert and the body is unlit, so brightness
+    never changes and the terminator never moves across the planet. Make the shading follow the world''s
+    actual sun direction (the day/night system exists - check how the existing `daynight` arm and the
+    world''s sun drive the flat world''s lighting, and reuse that convention rather than inventing a second
+    one). This changes the bake''s contract: either re-bake per sun position (expensive), bake the slope/normal
+    channel and light it in the shader (cheap, and the shader already exists), or find a third way - say
+    which and why.
+
+    (c) RECORD, DO NOT IMPLEMENT: a sub-pixel disc cull at altitude is a visual no-op because the disc
+    is fully fogged above the band - so write that down where the next reader will find it rather than
+    "fixing" it.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (a render tier must not touch generation); the satellite
+    arm stays green at both r4 and R50 with its ladder (hidden / rim / dissolve at nadir_op 0.5 / full)
+    and the 0.25 ratio invariant intact; the standing set green (G0 zero SCRIPT ERROR, farab h_mismatch
+    0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both
+    bands, boundary r4 in band, the battery); and the piece-1 texture guard (two-axis variance on the
+    written PNG bytes, negative-tested) must keep passing, because it exists precisely because a smear
+    shipped once.
+
+    SAFETY: `export HOME=/tmp/dsh_home; mkdir -p $HOME`; every godot run memory-capped via `bash -c "ulimit
+    -v 8388608; AWECRAFT_LOGIC=... timeout N /home/angrygiant/tools/godot/godot --headless --path godot"`;
+    ONE godot at a time; never R50 or the `load` arm; no renders and never open an image; if the native
+    lane changes, OPS.md''s rebuild + re-stage is mandatory including the Windows DLL; no commits.
+
+    CONTEXT: read tasks/AC-0310/AC-0310-results.html (the tier, the thresholds, the measured stall and
+    the owed list) and tasks/AC-0310/AC-0310-piece1-results.html (the bake, its cost and its guard).
 
     '
   comments: []
