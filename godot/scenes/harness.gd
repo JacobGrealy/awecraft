@@ -522,9 +522,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _hunger_toggle_test(spawn)
 			return
 		if logic == "light":
+			# AC-0380: the arm recenters itself on its census-derived pocket.
 			world.collision_enabled = false
-			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
-			_light_test(spawn)
+			await _light_test(spawn)
 			get_tree().quit()
 			return
 		if logic == "lightprobe":
@@ -710,9 +710,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _tint_test()
 			return
 		if logic == "fluids":
+			# AC-0380: the arm recenters itself on its census-derived sea column.
 			world.collision_enabled = false
-			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
-			_fluids_test(spawn)
+			await _fluids_test(spawn)
 			get_tree().quit()
 			return
 		if logic == "fluidprobe":
@@ -1366,13 +1366,13 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			player = main._spawn_player()
 			await _interact_test_body()
 		"light":
+			# AC-0380: the arm recenters itself on its census-derived pocket.
 			world.collision_enabled = false
-			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
-			_light_test(spawn)
+			await _light_test(spawn)
 		"fluids":
+			# AC-0380: the arm recenters itself on its census-derived sea column.
 			world.collision_enabled = false
-			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
-			_fluids_test(spawn)
+			await _fluids_test(spawn)
 		"buckets":
 			world.collision_enabled = false
 			world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
@@ -7487,9 +7487,35 @@ func _logic_check() -> Dictionary:
 func _light_test(spawn: Vector3) -> void:
 	var sx := int(spawn.x)
 	var sz := int(spawn.z)
-	var top: int = world.surface_top(sx, sz)
-
+	# AC-0380: the cave/torch scan is RE-POINTED. The old fixed ±16 spawn
+	# window carried ZERO pocket candidates after the AC-0288…AC-0360
+	# re-bases (census-proven) — the arm read -1 = measurement failure. The
+	# pockets now come from the standing pure-gen census (±4 chunks, re-
+	# derived every run — drift-proof), and the world recenters on the
+	# midpoint chunk between the spawn chunk and the candidate chunk so
+	# BOTH stay inside the taxi-<=-4 sim band (full data, no far columns).
+	# The pocket predicate is the original one (air cell + solid ceiling,
+	# depth 6-29 below the column's own topmost solid); the live walk keeps
+	# the original preconditions (dark far point, lava clearance) and the
+	# original measurements (cave eff, torch placed in the pocket).
+	var cen := _ac0380_feature_census(4)
+	var cands: Array = cen["cands"]
 	var surface_eff := -1
+	var cave_recenter: Array = []
+	var mid_center: Array = []
+	if cands.is_empty():
+		# No pocket in the window — fall back to the spawn (honest -1s).
+		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), false)
+		await main._await_sim_band(Vector3(float(WorldGen.SPAWN_X), 0.0, float(WorldGen.SPAWN_Z)), 3000)
+		cave_recenter = [0, 0]
+	else:
+		var c0: Array = cands[0]
+		var p0x := int(floorf(float(int(c0[1])) / 16.0))
+		var p0z := int(floorf(float(int(c0[3])) / 16.0))
+		mid_center = [int(roundf(float(p0x) / 2.0)), int(roundf(float(p0z) / 2.0))]
+		cave_recenter = mid_center.duplicate()
+		world.recenter(float(int(mid_center[0]) * 16 + 8), float(int(mid_center[1]) * 16 + 8), false)
+		await main._await_sim_band(Vector3(float(int(mid_center[0]) * 16 + 8), 0.0, float(int(mid_center[1]) * 16 + 8)), 3000)
 	for dx in range(-6, 7, 3):
 		for dz in range(-6, 7, 3):
 			var t: int = world.surface_top(sx + dx, sz + dz)
@@ -7503,60 +7529,80 @@ func _light_test(spawn: Vector3) -> void:
 		if surface_eff >= 0:
 			break
 
-	var lavas: Array[Vector3i] = []
-	for lx in range(sx - 36, sx + 37):
-		for lz in range(sz - 36, sz + 37):
-			for ly in range(0, 8):
-				if world.get_block(lx, ly, lz) == WorldGen.B_LAVA:
-					lavas.append(Vector3i(lx, ly, lz))
-
 	var cave_eff := -1
 	var torch_eff := -1
 	var far_before := -1
 	var far_after := -1
-	var depth := 6
-	while depth < 30 and cave_eff < 0:
-		var cy: int = top - depth
-		if cy >= 5:
-			for dx in range(-16, 17):
-				if cave_eff >= 0:
+	var cave_pocket: Array = []
+	var attempts := 0
+	for cd in cands:
+		if cave_eff >= 0:
+			break
+		if attempts >= 24:
+			break
+		attempts += 1
+		var cx := int(cd[1])
+		var cy := int(cd[2])
+		var cz := int(cd[3])
+		# live re-check (gen == live by genhash — a miss is an integrity red flag)
+		if world.get_block(cx, cy, cz) != 0:
+			continue
+		if not _is_solid(cx, cy + 1, cz):
+			continue
+		# the pocket's chunk moved — recenter so it (and the spawn) are in-band
+		var pcx := int(floorf(float(cx) / 16.0))
+		var pcz := int(floorf(float(cz) / 16.0))
+		var ccx := int(roundf(float(pcx) / 2.0))
+		var ccz := int(roundf(float(pcz) / 2.0))
+		if [ccx, ccz] != mid_center:
+			mid_center = [ccx, ccz]
+			cave_recenter = mid_center.duplicate()
+			world.recenter(float(ccx * 16 + 8), float(ccz * 16 + 8), false)
+			await main._await_sim_band(Vector3(float(ccx * 16 + 8), 0.0, float(ccz * 16 + 8)), 3000)
+		if cy < 23:
+			# lava clearance (original semantics, measured around the pocket)
+			var farx := cx + 5
+			var clear := true
+			for lx in range(cx - 36, cx + 37):
+				if not clear:
 					break
-				for dz in range(-16, 17):
-					var cx := sx + dx
-					var cz := sz + dz
-					if world.get_block(cx, cy, cz) != 0:
-						continue
-					if not _is_solid(cx, cy + 1, cz):
-						continue
-					if cy < 23:
-						var farx := cx + 5
-						var clear := true
-						for lav in lavas:
-							if absi(lav.x - cx) + absi(lav.y - cy) + absi(lav.z - cz) < 15 \
-									or absi(lav.x - farx) + absi(lav.y - cy) + absi(lav.z - cz) < 15:
+				for lz in range(cz - 36, cz + 37):
+					if not clear:
+						break
+					for ly in range(0, 8):
+						if world.get_block(lx, ly, lz) == WorldGen.B_LAVA:
+							if absi(lx - cx) + absi(ly - cy) + absi(lz - cz) < 15 \
+									or absi(lx - farx) + absi(ly - cy) + absi(lz - cz) < 15:
 								clear = false
 								break
-						if not clear:
-							continue
-					var pocket := Vector3i(cx, cy, cz)
-					var far := pocket + Vector3i(5, 0, 0)
-					for i in range(1, 6):
-						var c := pocket + Vector3i(i, 0, 0)
-						if world.get_block(c.x, c.y, c.z) != 0:
-							world.set_block(c.x, c.y, c.z, 0)
-					var lb: Dictionary = world.light_at(far.x, far.y, far.z)
-					if int(lb.eff) > 5:
-						continue
-					var l0: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
-					cave_eff = int(l0.eff)
-					far_before = int(lb.eff)
-					world.set_block(pocket.x, pocket.y, pocket.z, 22)
-					var lt: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
-					var la: Dictionary = world.light_at(far.x, far.y, far.z)
-					torch_eff = int(lt.eff)
-					far_after = int(la.eff)
-					break
-		depth += 1
+			if not clear:
+				continue
+		var pocket := Vector3i(cx, cy, cz)
+		var far := pocket + Vector3i(5, 0, 0)
+		var saved: Array = []
+		for i in range(1, 6):
+			var c := pocket + Vector3i(i, 0, 0)
+			var ob: int = world.get_block(c.x, c.y, c.z)
+			saved.append(ob)
+			if ob != 0:
+				world.set_block(c.x, c.y, c.z, 0)
+		var lb: Dictionary = world.light_at(far.x, far.y, far.z)
+		if int(lb.eff) > 5:
+			# lit pocket — restore the corridor and try the next candidate
+			for i in range(1, 6):
+				var c := pocket + Vector3i(i, 0, 0)
+				if int(saved[i - 1]) != 0:
+					world.set_block(c.x, c.y, c.z, int(saved[i - 1]))
+			continue
+		var l0: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
+		cave_eff = int(l0.eff)
+		far_before = int(lb.eff)
+		world.set_block(pocket.x, pocket.y, pocket.z, 22)
+		var lt: Dictionary = world.light_at(pocket.x, pocket.y, pocket.z)
+		var la: Dictionary = world.light_at(far.x, far.y, far.z)
+		torch_eff = int(lt.eff)
+		far_after = int(la.eff)
+		cave_pocket = [cx, cy, cz]
 
 	Debug.result({
 		"surface_eff": surface_eff,
@@ -7564,6 +7610,10 @@ func _light_test(spawn: Vector3) -> void:
 		"torch_level": torch_eff,
 		"torch_far_before": far_before,
 		"torch_far_after": far_after,
+		"cave_pocket": cave_pocket,
+		"cave_census_cands": int(cands.size()),
+		"cave_census_ms": int(cen["ms"]),
+		"cave_recenter": cave_recenter,
 	})
 
 
@@ -18529,6 +18579,26 @@ func _webfall_test(spawn: Vector3) -> void:
 
 
 func _fluids_test(spawn: Vector3) -> void:
+	# AC-0380: the sea count is RE-POINTED. The old count rode the spawn
+	# resident set, which the AC-0288…AC-0360 re-bases emptied of ocean
+	# (zero y==126 water — the row read 0 = measurement failure). The sea
+	# column now comes from the standing pure-gen census: the NEAREST
+	# genuine ocean column (H < SEA, water at SEA, open above — the
+	# oceansurface arm's surface_ok predicate) in the ±4-chunk window, and
+	# the world recenters there. The spawn column (the fixture's anchor)
+	# stays at taxi 4 — inside the sim band — so the local fixture below
+	# keeps its spawn-relative position and its values are untouched.
+	var cen := _ac0380_feature_census(4)
+	var oce: Array = cen["ocean"]
+	var sea_col: Array = []
+	if not oce.is_empty():
+		sea_col = [int(oce[1]), int(oce[2])]
+		world.recenter(float(int(oce[1])), float(int(oce[2])), false)
+		await main._await_sim_band(Vector3(float(int(oce[1])), 0.0, float(int(oce[2]))), 3000)
+	else:
+		# no ocean in the window — fall back to the spawn (honest 0s)
+		world.recenter(spawn.x, spawn.z, false)
+		await main._await_sim_band(spawn, 3000)
 	var cx0 := int(floorf(spawn.x / 16.0))
 	var cz0 := int(floorf(spawn.z / 16.0))
 	var x0 := cx0 * 16
@@ -18638,6 +18708,9 @@ func _fluids_test(spawn: Vector3) -> void:
 		"sea_surface_final": sea_final,
 		"sea_backed_before": sea_backed_before,
 		"sea_backed_final": sea_backed_final,
+		"sea_col": sea_col,
+		"sea_census_cols": int(cen["ocean_cols"]),
+		"sea_census_ms": int(cen["ms"]),
 	})
 
 
@@ -24083,6 +24156,82 @@ func _oceansurface_test(seed_env: String) -> void:
 			and int(res["land"]["open_wet_in_he_plus_1_to_sea"]) == 0
 	Debug.result(res)
 	get_tree().quit()
+
+
+# AC-0380: the pure-gen feature census the light arm (cave pockets) and the
+# fluids arm (the sea column) re-point at. Runs the SAME generation path the
+# oceansurface arm uses (generate_flat + column_heights16 — no live world,
+# no settle), so a census-derived coordinate is live-valid by the genhash
+# byte-identity, and re-deriving it every run is what keeps it from drifting
+# again when generation moves (the fixed-window failure mode this replaces).
+# Window: ±half chunks around the spawn chunk (0,0); half <= 4 is REQUIRED by
+# the caller's midpoint recenter rule (a candidate chunk at taxi <= 2h keeps
+# BOTH the spawn chunk and the candidate chunk inside the taxi-<=-4 sim band
+# around the midpoint). Pocket predicate = the light arm's original one
+# (air cell with a solid ceiling, depth 6-29 below the column's OWN topmost
+# solid, y >= 5). Ocean predicate = the oceansurface arm's surface_ok one
+# (H < SEA, water at SEA, open above). Returns:
+#   {"cands": [[d, x, y, z, he], …] sorted by (d, x, y, z),
+#    "ocean": [d, x, z, H] the NEAREST surface_ok ocean column (or []),
+#    "ocean_cols": count of surface_ok ocean columns in the window,
+#    "chunks": chunks generated, "ms": wall}
+func _ac0380_feature_census(half: int) -> Dictionary:
+	var seed := int(Game.world_seed)
+	var G: Variant = WorldGen.gen_cpp()
+	var HMAX := Data.HEIGHT
+	var SEA := Data.SEA
+	var SOLID := PackedByteArray()
+	SOLID.resize(64)
+	for i in 64:
+		var b = Data.block(i)
+		if b != null and bool(b.solid):
+			SOLID[i] = 1
+	var sx := 8
+	var sz := 8
+	var cands: Array = []
+	var res: Dictionary = {
+		"cands": [], "ocean": [], "ocean_cols": 0, "chunks": 0, "ms": 0}
+	var t0 := Time.get_ticks_msec()
+	for cx in range(-half, half + 1):
+		for cz in range(-half, half + 1):
+			res["chunks"] += 1
+			var flat: PackedByteArray = G.generate_flat(cx, cz, seed, HMAX, SEA, 0, [])
+			var hs: PackedByteArray = G.column_heights16(cx, cz, seed, HMAX)
+			for i in 256:
+				var H := int(hs[2 * i]) | (int(hs[2 * i + 1]) << 8)
+				var iu := i % 16
+				var iv := (i - iu) / 16
+				var bx := cx * 16 + iu
+				var bz := cz * 16 + iv
+				var he := -1
+				for y in range(H, -1, -1):
+					if SOLID[flat[y * 256 + i]] > 0:
+						he = y
+						break
+				if H < SEA:
+					var srow := SEA * 256 + i
+					if int(flat[srow]) == 5 and int(flat[srow + 256]) == 0:
+						res["ocean_cols"] += 1
+						var dn := absi(bx - sx) + absi(bz - sz)
+						var pn: Array = res["ocean"]
+						if pn.is_empty() or dn < int(pn[0]):
+							res["ocean"] = [dn, bx, bz, H]
+				if he < 0:
+					continue
+				var lo := maxi(5, he - 29)
+				var hi := he - 6
+				for y in range(lo, hi + 1):
+					var idx := y * 256 + i
+					if int(flat[idx]) != 0:
+						continue
+					if SOLID[flat[idx + 256]] == 0:
+						continue
+					var d := absi(bx - sx) + absi(bz - sz)
+					cands.append([d, bx, y, bz, he])
+	cands.sort()
+	res["cands"] = cands
+	res["ms"] = Time.get_ticks_msec() - t0
+	return res
 
 
 func _is_solid(x: int, y: int, z: int) -> bool:

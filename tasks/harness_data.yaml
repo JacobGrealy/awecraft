@@ -115,15 +115,15 @@ modes:
     wall: ~20–40 s (not re-run 08-24)
     notes: AC-0063 gate; AC-0314 resume - builds its own 5x5 flat stone fixture via set_block (spawn pad gone; the old inline search bailed); full assertion set re-run on seeds 44/1/7
   light:
-    entry: '`_light_test`'
+    entry: '`_light_test` (AC-0380 re-point: census-derived pocket)'
     tests: |-
-      sky light bake: surface 15, cave 0, torch level 14, BFS reach
+      sky light bake: surface 15, cave 0, torch level 14, BFS reach (AC-0380: the pocket is census-derived, not the fixed ±16 spawn window)
     result_fields: |-
-      `surface_eff` (15), `cave_eff` (-1 STALE), `torch_level` (-1 STALE), `torch_far_before` (-1 STALE), `torch_far_after` (-1 STALE)
+      `surface_eff` (15), `cave_eff` (0), `torch_level` (14), `torch_far_before` (0), `torch_far_after` (9), `cave_pocket` ([x,y,z] census-derived, [] on failure), `cave_census_cands` (415 @ seed 44), `cave_census_ms` (~0.45 s), `cave_recenter` ([cx,cz] midpoint chunk)
     envs: —
-    wall: 4 s (standalone) / 2.9 s battery
+    wall: ~5 s (standalone — census + recenter + sim-band await) / ~2.7 s battery
     notes: |-
-      AC-0368 re-baseline (2026-09-29, current tree, standalone + 7-mode battery): `surface_eff` 15 STILL holds (sky light — discriminating); the cave/torch fields now read -1 = MEASUREMENT FAILURE, not a baseline — the arm finds its cave/torch by scanning for an air pocket with a solid cell above at depth top-6..top-29 within ±16 of the spawn column, and the AC-0288…AC-0360 generation re-bases (cave series + re-carved spawn) MOVED that feature, so the scan resolves nothing. NON-DISCRIMINATING (AC-0357 lesson: a gate that "passes" on -1 is worse than none). The rows are recorded as stale-arm, NOT re-baselined to a passing -1. Owed (arm-side, follow-up): re-point the cave/torch scan at the re-based terrain (or seed a fixture, the way the hunger arm does) so the row discriminates again. World integrity confirmed by genhash 25/25 + battery ok:true (this is a stale ARM, not a product regression).
+      AC-0380 (2026-09-29): the fixed ±16 spawn window carried ZERO pocket candidates (census-proven: 0 of the 415 window candidates inside it — the AC-0288…AC-0360 re-bases moved the caves away). The pocket is now derived from the standing pure-gen census `_ac0380_feature_census(4)` (±4 chunks around the spawn chunk; the same generate_flat path + predicate the oceansurface arm uses; re-derived every run = drift-proof). The world recenters on the MIDPOINT chunk between the spawn chunk and the candidate chunk (both stay inside the taxi-<=-4 sim band — full data, no far columns), awaits the sim band, then walks the candidates in deterministic order under the ORIGINAL preconditions (air + solid ceiling, dark far point <=5, lava clearance) and original measurements. seed 44: pocket [64,122,-2], recenter [2,-1], 415 candidates — values back at the pre-rebase standings (cave 0 / torch 14 / far 0->9). DISCRIMINATION PROVEN (scratch perturbations, removed at exit): a glowstone 2 blocks behind the pocket -> cave_eff 10 (the light-leak class); a non-lighting block in place of the torch -> torch_level/far_after 0/0 (the torch-source class). NO LONGER STALE.
   daynight:
     entry: '`_daynight_test`'
     tests: |-
@@ -152,15 +152,15 @@ modes:
     notes: |-
       dispatched at main.gd:576 BEFORE game nodes (works standalone + in battery). AC-0313: SIM_MIN 1→4 (the tier-0 set went, the real band taxi ≤ sim is the footing guarantee) — the apply dist expectation rebased [7,48]→[7,64] (sim 3 → floor 4) and the new `sim_floor` field round-trips the floor through the load path. AC-0332 (2026-09-19): the far-tier mesh floor pair (yfloor_enabled + yfloor_chunks_below_sea) is covered — the apply step rides set_value (Settings.apply_yfloor -> the world's note_yfloor, stub-counted) and the dev-row presence instantiates scenes/menu.tscn (synchronous _ready; the arm stays await-free by contract). AC-0376 (2026-09-29): the AC-0263 `medium_start` clamp is RE-DEFAULT, not edge-clamp — an out-of-band value (band (sim, render]) re-defaults to `clampi(8, lo, hi)` (8 itself band-clamped: the degenerate sim 10 / render 20 band lands on the floor 11), an in-band value is untouched; the arm's `default_8` reads after `reset_defaults()` (the flight-knob steps above legitimately leave it in-band at 5). `ms_clamp` {default_8, oob_lo_redef_8, oob_hi_redef_8, set_mid, redef_band_floor_11}
   fluids:
-    entry: '`_fluids_test`'
+    entry: '`_fluids_test` (AC-0380 re-point: census-derived sea column)'
     tests: |-
-      source stability, level-7 sideways spread, water+lava reactions, sea zero-write invariant
+      source stability, level-7 sideways spread, water+lava reactions, sea zero-write invariant (AC-0380: the sea column is census-derived, not the spawn resident set)
     result_fields: |-
-      `shore_after` ([0,0] STALE), `source_after` ([0,0] STALE), `water_delta` (0 STALE), `water_on_lava_result` (24), `sideways_lava_result` (24), `sea_stable` (false STALE), `sea_surface_before`/`_final` (0 STALE), `sea_backed_before`/`_final` (0 STALE); prints `FLUIDSTAT` line
+      `shore_after` ([5,7]), `source_after` ([5,8]), `water_delta` (1), `water_on_lava_result` (25), `sideways_lava_result` (9), `sea_stable` (true), `sea_surface_before`/`_final` (1717), `sea_backed_before`/`_final` (308), `sea_col` ([x,z] census-derived ocean column, [] on failure), `sea_census_cols` (277 @ seed 44), `sea_census_ms` (~0.45 s); prints `FLUIDSTAT` line
     envs: —
-    wall: 5 s (standalone) / 3.8 s battery
+    wall: ~9 s (standalone — census + recenter + sim-band await) / ~6 s battery
     notes: |-
-      AC-0368 re-baseline (2026-09-29, current tree, standalone + 7-mode battery): the sea/shore/source/`water_delta`/`sea_stable` fields now read 0/[0,0]/false = MEASUREMENT FAILURE — the arm counts sea water over the resident chunk set, and the AC-0288…AC-0360 generation re-bases MOVED the sea off the scan area, so it counts nothing. NON-DISCRIMINATING (AC-0357 lesson: a gate that "passes" on 0 is worse than none); recorded as stale-arm, NOT re-baselined to a passing 0. The two lava-reaction values (`water_on_lava_result` 25→24, `sideways_lava_result` 9→24) DO resolve (local edit-based) but moved with the terrain — weakly discriminating. The old 2756/914 sea baseline (set at AC-0152/0160) is the pre-rebase value AC-0309 flagged stale. Owed (arm-side, follow-up): re-point the sea scan at the re-based terrain so the row discriminates again. World integrity confirmed by genhash 25/25 + battery ok:true (stale ARM, not a product regression).
+      AC-0380 (2026-09-29): the sea count rode the spawn resident set, which the AC-0288…AC-0360 re-bases emptied of ocean (zero y==126 water — the row read 0 = MEASUREMENT FAILURE, recorded stale by AC-0368). The sea column is now derived from the SAME pure-gen census as the light arm: the NEAREST genuine ocean column (H < 126, water at 126, open above — the oceansurface arm's surface_ok predicate) in the ±4-chunk window, and the world recenters there (seed 44: [8,73]; 277 surface_ok ocean columns in the window; sea 1717 cells / 308 solid-backed at y=126). The spawn column (the local fixture's anchor) stays at taxi 4 — inside the sim band — so the fixture keeps its position and values. DISCRIMINATION PROVEN (scratch perturbation, removed at exit): destroying one natural sea-surface cell -> sea_final 1716 != 1717, sea_backed 307, sea_stable false. NOTE: the recenter also restored the pre-rebase lava readings (25/9 — the reactions COMPLETE; AC-0368's 24/24 were an artifact of the old fixture's band position). NO LONGER STALE.
   fluidprobe:
     entry: '`_fluidprobe_test`'
     tests: probes water column positions (debug scout)
