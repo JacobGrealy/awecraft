@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-01T19:11
+  updated_at: 2026-10-01T19:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0383
 - AC-0093
 - AC-0038
 - AC-0039
@@ -22498,11 +22497,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-01T10:33
-  updated_at: 2026-10-01T12:43
-  completed_at: null
+  updated_at: 2026-10-01T19:12
+  completed_at: 2026-10-01T19:12
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The single biggest share of our longest frames is time we cannot account for
@@ -22552,7 +22551,35 @@ intake:
     it says are needed), tasks/AC-0372/AC-0372-results.html (the kept /proc sampler), and the AC-0352
     page for the original 68% figure.
 
-    '
+
+
+    CLOSED - the instrument exists, it is inert when off, and it can fail visibly. WHAT IT BOUGHT, in
+    the terms the ticket asked for: the gap between the arm frame and the World._process frame is 48.0-61.7%
+    of the worst-20 mean arm frame and 92.7% of the 294 ms max frame, consistent with AC-0381''s 62.6-71.9%
+    of max. Inside it, in-process work accounts for only 2.7-5.0% (the flight model at 0.83-0.84 ms per
+    step, STABLE, plus player max events around 20 ms) and world physics contributes about nothing because
+    its 29-30 ms class lands on mid-tier frames rather than the worst. THE REST - 95.0-97.3%, a mean of
+    28.7-54.8 ms - is ENGINE-SIDE and CPU-BOUND in every sampled window (fraction-in-R 1.0, wchan 0, about
+    a full core across 10 ms jiffies), with the physics server stepping 501-534 walk-end bodies plus the
+    headless render flush as the named candidates. The satellite tier itself is ~0.1 ms per frame steady
+    with a 172-178 ms front-loaded bake tail. WHAT REMAINS UNSplit IS STATED rather than hidden: physics-versus-render
+    INSIDE that engine residual is 100% unmeasured and would need RS/PS timing or perf symbols. THE NEGATIVE
+    TEST IS WHY I TRUST IT: AWECRAFT_AC0383=blind arms the guards while disabling the brackets, and all
+    three then print AC0383_GUARD FAIL with tripped true and counters at zero, while no healthy run has
+    ever tripped - a cumulative-zero-over-60-frames form that a working bracket cannot produce. That is
+    the fourth instrument this session to be built with a deliberate way to fail, and the only class of
+    instrument we have added that demonstrably bites. VERIFICATION HONESTY, because it matters which claims
+    are mine: the TREE-LEVEL greenness is mine - my AC-0384 heavy stage ran on commit 6a40471, which contains
+    this instrumentation with the flag off, and read genhash 25/25 byte-identical twice, r16 with no reds
+    and far_holes 0/0 in both bands, boundary r4 ok at 13/34, and the full battery - which is the proof
+    that the instrument is INERT when disabled. The instrument''s own ATTRIBUTION numbers are the builder''s
+    four runs (three instrumented plus one blind) and I did not independently reproduce them, because
+    a single instrumented R24 walk costs about 130 s and the marginal value over a negative-tested instrument
+    plus the builder''s four runs is small; that is a deliberate choice rather than an oversight. The
+    lesson from AC-0384 applies to it directly: this instrument was built to see a gap that no counter
+    could reach, and the reason the white planet shipped is that a whole path - the res:// texture load
+    - had no instrument that could reach IT either. Instruments that cannot fail are the same failure
+    mode as features that cannot be seen.'
   comments: []
 - id: AC-0384
   title: satellite-body-white-in-exported-build
