@@ -1,0 +1,1448 @@
+{
+ "ticket": "AC-0311 re-bake (re-ship of the AC-0310 bake, post-port world)",
+ "seed": 44,
+ "R": 4000.0,
+ "W_face": 6283.185307179586,
+ "hw": 3141.592653589793,
+ "sea": 126,
+ "hmax": 384,
+ "n_pixels_per_face": 1048576,
+ "n_faces": 12,
+ "total_texture_pixels": 12582912,
+ "pixel_convention": "pixel (i,j) = chart point ((i+0.5)/1024, (j+0.5)/1024); faces 2-11 one cell per pixel; faces 0/1 the 1 m column at the pixel centre's flat position",
+ "colour_source": "fcc top-face linear (ac0310_fcc_probe.json); flat data.gd palette in 'flat_linear' for reference",
+ "shade": "fixed-sun lambert L=normalize(0.4,1,0.2), brightness=0.45+0.55*max(0,N.L), land only; ocean flat at sea",
+ "faces": {
+  "0": {
+   "file": "satellite_face00.png",
+   "png_bytes": 425880,
+   "pixels": 1048576,
+   "ocean_pixels": 10519,
+   "land_pixels": 1038057,
+   "ocean_frac": 0.010031700134277344,
+   "H_mean_all": 159.01452159881592,
+   "H_min": 109,
+   "H_max": 212,
+   "land_H_mean": 159.3951912081899,
+   "class_pixels": {
+    "1": {
+     "pixels": 674780,
+     "frac_of_land": 0.6500413753772674,
+     "mean_brightness": 0.9149400393194229,
+     "mean_stored_srgb": [
+      0.21295159991264917,
+      0.4003107723306128,
+      0.12919103994574124
+     ]
+    },
+    "4": {
+     "pixels": 94324,
+     "frac_of_land": 0.09086591584084497,
+     "mean_brightness": 0.9163152235727129,
+     "mean_stored_srgb": [
+      0.8363825501181127,
+      0.7906836951025014,
+      0.6241348712891727
+     ]
+    },
+    "12": {
+     "pixels": 268953,
+     "frac_of_land": 0.2590927087818877,
+     "mean_brightness": 0.9162350385821026,
+     "mean_stored_srgb": [
+      0.9476288700802228,
+      0.9683838113097725,
+      0.9683838113097725
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 272442,
+    "1": 91086,
+    "2": 132198,
+    "3": 552850
+   },
+   "du_m": 1.0,
+   "dv_m": 1.0,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 109,
+    "h_max": 212,
+    "h_spread": 103,
+    "rgb_min": [
+     35,
+     76,
+     25
+    ],
+    "rgb_max": [
+     250,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     215,
+     179,
+     230
+    ],
+    "pass": true
+   }
+  },
+  "1": {
+   "file": "satellite_face01.png",
+   "png_bytes": 418966,
+   "pixels": 1048576,
+   "ocean_pixels": 10307,
+   "land_pixels": 1038269,
+   "ocean_frac": 0.009829521179199219,
+   "H_mean_all": 159.2597532272339,
+   "H_min": 102,
+   "H_max": 212,
+   "land_H_mean": 159.6364342959291,
+   "class_pixels": {
+    "1": {
+     "pixels": 727745,
+     "frac_of_land": 0.7009214375080061,
+     "mean_brightness": 0.9156952934647489,
+     "mean_stored_srgb": [
+      0.21304606935118206,
+      0.400473858192011,
+      0.12925483381148745
+     ]
+    },
+    "4": {
+     "pixels": 93108,
+     "frac_of_land": 0.08967618218400049,
+     "mean_brightness": 0.917200152027315,
+     "mean_stored_srgb": [
+      0.8367616523303982,
+      0.7910431412224285,
+      0.6244226810603353
+     ]
+    },
+    "12": {
+     "pixels": 217416,
+     "frac_of_land": 0.2094023803079934,
+     "mean_brightness": 0.9150116784406278,
+     "mean_stored_srgb": [
+      0.947059704488343,
+      0.9678027449993568,
+      0.9678027449993568
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 221558,
+    "1": 89899,
+    "2": 161523,
+    "3": 575596
+   },
+   "du_m": 1.0,
+   "dv_m": 1.0,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 102,
+    "h_max": 212,
+    "h_spread": 110,
+    "rgb_min": [
+     35,
+     76,
+     25
+    ],
+    "rgb_max": [
+     250,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     215,
+     179,
+     230
+    ],
+    "pass": true
+   }
+  },
+  "2": {
+   "file": "satellite_face02.png",
+   "png_bytes": 539699,
+   "pixels": 1048576,
+   "ocean_pixels": 9545,
+   "land_pixels": 1039031,
+   "ocean_frac": 0.009102821350097656,
+   "H_mean_all": 159.01267433166504,
+   "H_min": 109,
+   "H_max": 212,
+   "land_H_mean": 159.35691716609034,
+   "class_pixels": {
+    "1": {
+     "pixels": 811168,
+     "frac_of_land": 0.7806966298406881,
+     "mean_brightness": 0.9284397372052237,
+     "mean_stored_srgb": [
+      0.2146256217497876,
+      0.4032006941535919,
+      0.13032148304054017
+     ]
+    },
+    "4": {
+     "pixels": 33472,
+     "frac_of_land": 0.032214630747302055,
+     "mean_brightness": 0.9285620134079661,
+     "mean_stored_srgb": [
+      0.8416466602738754,
+      0.7956748661052421,
+      0.6281313194495923
+     ]
+    },
+    "12": {
+     "pixels": 194391,
+     "frac_of_land": 0.18708873941200985,
+     "mean_brightness": 0.9295607303933463,
+     "mean_stored_srgb": [
+      0.9539376681139979,
+      0.9748245204130274,
+      0.9748245204130274
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 199251,
+    "1": 29543,
+    "2": 230070,
+    "3": 589712
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 109,
+    "h_max": 212,
+    "h_spread": 103,
+    "rgb_min": [
+     35,
+     76,
+     26
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     229
+    ],
+    "pass": true
+   }
+  },
+  "3": {
+   "file": "satellite_face03.png",
+   "png_bytes": 568034,
+   "pixels": 1048576,
+   "ocean_pixels": 9382,
+   "land_pixels": 1039194,
+   "ocean_frac": 0.008947372436523438,
+   "H_mean_all": 159.25988006591797,
+   "H_min": 102,
+   "H_max": 212,
+   "land_H_mean": 159.60075597049251,
+   "class_pixels": {
+    "1": {
+     "pixels": 678850,
+     "frac_of_land": 0.6532466507697312,
+     "mean_brightness": 0.9298263924214093,
+     "mean_stored_srgb": [
+      0.21478755981781772,
+      0.4034802534431505,
+      0.13043083751052173
+     ]
+    },
+    "4": {
+     "pixels": 112071,
+     "frac_of_land": 0.10784415614408858,
+     "mean_brightness": 0.9284549732110974,
+     "mean_stored_srgb": [
+      0.8415779033850526,
+      0.7956096741959383,
+      0.6280791200590045
+     ]
+    },
+    "12": {
+     "pixels": 248273,
+     "frac_of_land": 0.23890919308618025,
+     "mean_brightness": 0.9274289792639443,
+     "mean_stored_srgb": [
+      0.9530257514077656,
+      0.9738935363808413,
+      0.9738935363808413
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 253477,
+    "1": 108790,
+    "2": 102934,
+    "3": 583375
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 102,
+    "h_max": 212,
+    "h_spread": 110,
+    "rgb_min": [
+     35,
+     76,
+     26
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     229
+    ],
+    "pass": true
+   }
+  },
+  "4": {
+   "file": "satellite_face04.png",
+   "png_bytes": 445197,
+   "pixels": 1048576,
+   "ocean_pixels": 17858,
+   "land_pixels": 1030718,
+   "ocean_frac": 0.017030715942382812,
+   "H_mean_all": 156.6589593887329,
+   "H_min": 113,
+   "H_max": 208,
+   "land_H_mean": 157.25684910906767,
+   "class_pixels": {
+    "1": {
+     "pixels": 760999,
+     "frac_of_land": 0.7383193075118509,
+     "mean_brightness": 0.9335479698873643,
+     "mean_stored_srgb": [
+      0.2152718083344131,
+      0.4043162284135597,
+      0.13075784363414178
+     ]
+    },
+    "4": {
+     "pixels": 44890,
+     "frac_of_land": 0.04355216460758423,
+     "mean_brightness": 0.9302508223309323,
+     "mean_stored_srgb": [
+      0.8424410066110302,
+      0.7964280263331528,
+      0.628734377490791
+     ]
+    },
+    "12": {
+     "pixels": 224829,
+     "frac_of_land": 0.2181285278805648,
+     "mean_brightness": 0.9356785039786222,
+     "mean_stored_srgb": [
+      0.9569180571043479,
+      0.9778672265481596,
+      0.9778672265481596
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 231900,
+    "1": 40513,
+    "2": 91076,
+    "3": 685087
+   },
+   "du_m": 6.135923151542564,
+   "dv_m": 3.067961575771282,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 113,
+    "h_max": 208,
+    "h_spread": 95,
+    "rgb_min": [
+     35,
+     76,
+     28
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     227
+    ],
+    "pass": true
+   }
+  },
+  "5": {
+   "file": "satellite_face05.png",
+   "png_bytes": 452787,
+   "pixels": 1048576,
+   "ocean_pixels": 10031,
+   "land_pixels": 1038545,
+   "ocean_frac": 0.009566307067871094,
+   "H_mean_all": 156.5648317337036,
+   "H_min": 113,
+   "H_max": 203,
+   "land_H_mean": 156.90205239060415,
+   "class_pixels": {
+    "1": {
+     "pixels": 709544,
+     "frac_of_land": 0.6832096827773472,
+     "mean_brightness": 0.9355355365322763,
+     "mean_stored_srgb": [
+      0.21551064306545198,
+      0.4047285370732457,
+      0.13091912532466493
+     ]
+    },
+    "4": {
+     "pixels": 99454,
+     "frac_of_land": 0.09576282202504466,
+     "mean_brightness": 0.9358037399026922,
+     "mean_stored_srgb": [
+      0.8446515644922987,
+      0.7985239688698803,
+      0.6304126060453505
+     ]
+    },
+    "12": {
+     "pixels": 229547,
+     "frac_of_land": 0.2210274951976082,
+     "mean_brightness": 0.9338021284536664,
+     "mean_stored_srgb": [
+      0.9560683263572991,
+      0.9769997287261626,
+      0.9769997287261626
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 231323,
+    "1": 96665,
+    "2": 172904,
+    "3": 547684
+   },
+   "du_m": 6.135923151542564,
+   "dv_m": 3.067961575771282,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 113,
+    "h_max": 203,
+    "h_spread": 90,
+    "rgb_min": [
+     35,
+     76,
+     27
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     228
+    ],
+    "pass": true
+   }
+  },
+  "6": {
+   "file": "satellite_face06.png",
+   "png_bytes": 436617,
+   "pixels": 1048576,
+   "ocean_pixels": 24777,
+   "land_pixels": 1023799,
+   "ocean_frac": 0.023629188537597656,
+   "H_mean_all": 156.64201641082764,
+   "H_min": 111,
+   "H_max": 207,
+   "land_H_mean": 157.54900229439568,
+   "class_pixels": {
+    "1": {
+     "pixels": 718187,
+     "frac_of_land": 0.701492187431322,
+     "mean_brightness": 0.9342478445501847,
+     "mean_stored_srgb": [
+      0.21535631736174923,
+      0.404462119270785,
+      0.1308149113758095
+     ]
+    },
+    "4": {
+     "pixels": 88219,
+     "frac_of_land": 0.08616828107861016,
+     "mean_brightness": 0.9365035253748036,
+     "mean_stored_srgb": [
+      0.8449621497229843,
+      0.7988184505495719,
+      0.6306483985610878
+     ]
+    },
+    "12": {
+     "pixels": 217393,
+     "frac_of_land": 0.21233953149006787,
+     "mean_brightness": 0.9346934595273103,
+     "mean_stored_srgb": [
+      0.9564648805097532,
+      0.9774045744552508,
+      0.9774045744552508
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 227632,
+    "1": 81785,
+    "2": 92317,
+    "3": 646842
+   },
+   "du_m": 6.135923151542564,
+   "dv_m": 3.067961575771282,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 111,
+    "h_max": 207,
+    "h_spread": 96,
+    "rgb_min": [
+     35,
+     76,
+     28
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     227
+    ],
+    "pass": true
+   }
+  },
+  "7": {
+   "file": "satellite_face07.png",
+   "png_bytes": 440699,
+   "pixels": 1048576,
+   "ocean_pixels": 10389,
+   "land_pixels": 1038187,
+   "ocean_frac": 0.009907722473144531,
+   "H_mean_all": 156.0968770980835,
+   "H_min": 111,
+   "H_max": 208,
+   "land_H_mean": 156.43546779144796,
+   "class_pixels": {
+    "1": {
+     "pixels": 658361,
+     "frac_of_land": 0.6341449083835571,
+     "mean_brightness": 0.9353147439516883,
+     "mean_stored_srgb": [
+      0.2154809527966171,
+      0.4046772817342916,
+      0.13089907590911667
+     ]
+    },
+    "4": {
+     "pixels": 15263,
+     "frac_of_land": 0.014701590368594482,
+     "mean_brightness": 0.9343285171832236,
+     "mean_stored_srgb": [
+      0.8440607182626022,
+      0.7979637574611218,
+      0.6299640428014801
+     ]
+    },
+    "12": {
+     "pixels": 364563,
+     "frac_of_land": 0.3511535012478484,
+     "mean_brightness": 0.9348061857600233,
+     "mean_stored_srgb": [
+      0.9565194653916183,
+      0.9774603006564125,
+      0.9774603006564125
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 374616,
+    "1": 8727,
+    "2": 42199,
+    "3": 623034
+   },
+   "du_m": 6.135923151542564,
+   "dv_m": 3.067961575771282,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 111,
+    "h_max": 208,
+    "h_spread": 97,
+    "rgb_min": [
+     35,
+     76,
+     28
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     227
+    ],
+    "pass": true
+   }
+  },
+  "8": {
+   "file": "satellite_face08.png",
+   "png_bytes": 450105,
+   "pixels": 1048576,
+   "ocean_pixels": 28737,
+   "land_pixels": 1019839,
+   "ocean_frac": 0.027405738830566406,
+   "H_mean_all": 156.67753219604492,
+   "H_min": 110,
+   "H_max": 207,
+   "land_H_mean": 157.68990693629092,
+   "class_pixels": {
+    "1": {
+     "pixels": 801378,
+     "frac_of_land": 0.7857887372418587,
+     "mean_brightness": 0.9328155501578067,
+     "mean_stored_srgb": [
+      0.21513358743832287,
+      0.40407761289710165,
+      0.13066450503177102
+     ]
+    },
+    "4": {
+     "pixels": 29809,
+     "frac_of_land": 0.029229123420461463,
+     "mean_brightness": 0.93115291378867,
+     "mean_stored_srgb": [
+      0.8424146773362406,
+      0.796403062206473,
+      0.6287143886266863
+     ]
+    },
+    "12": {
+     "pixels": 188652,
+     "frac_of_land": 0.18498213933767976,
+     "mean_brightness": 0.93592680065112,
+     "mean_stored_srgb": [
+      0.9567987534493978,
+      0.9777454283662366,
+      0.9777454283662366
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 190044,
+    "1": 25481,
+    "2": 203460,
+    "3": 629591
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 110,
+    "h_max": 207,
+    "h_spread": 97,
+    "rgb_min": [
+     35,
+     76,
+     26
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     229
+    ],
+    "pass": true
+   }
+  },
+  "9": {
+   "file": "satellite_face09.png",
+   "png_bytes": 470706,
+   "pixels": 1048576,
+   "ocean_pixels": 26334,
+   "land_pixels": 1022242,
+   "ocean_frac": 0.025114059448242188,
+   "H_mean_all": 157.20098209381104,
+   "H_min": 114,
+   "H_max": 205,
+   "land_H_mean": 158.11058046920397,
+   "class_pixels": {
+    "1": {
+     "pixels": 605160,
+     "frac_of_land": 0.5919928940505281,
+     "mean_brightness": 0.9344563525708561,
+     "mean_stored_srgb": [
+      0.21531506512447762,
+      0.4043909041050424,
+      0.13078705432765633
+     ]
+    },
+    "4": {
+     "pixels": 46827,
+     "frac_of_land": 0.04580813545129236,
+     "mean_brightness": 0.93584317352602,
+     "mean_stored_srgb": [
+      0.8445420343795158,
+      0.7984201177907403,
+      0.6303294521211724
+     ]
+    },
+    "12": {
+     "pixels": 370255,
+     "frac_of_land": 0.3621989704981795,
+     "mean_brightness": 0.9360624191333508,
+     "mean_stored_srgb": [
+      0.9568707113516872,
+      0.9778188908415878,
+      0.9778188908415878
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 381317,
+    "1": 35045,
+    "2": 201330,
+    "3": 430884
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 114,
+    "h_max": 205,
+    "h_spread": 91,
+    "rgb_min": [
+     35,
+     76,
+     26
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     229
+    ],
+    "pass": true
+   }
+  },
+  "10": {
+   "file": "satellite_face10.png",
+   "png_bytes": 477138,
+   "pixels": 1048576,
+   "ocean_pixels": 20647,
+   "land_pixels": 1027929,
+   "ocean_frac": 0.019690513610839844,
+   "H_mean_all": 159.0339765548706,
+   "H_min": 110,
+   "H_max": 210,
+   "land_H_mean": 159.82028817165389,
+   "class_pixels": {
+    "1": {
+     "pixels": 515492,
+     "frac_of_land": 0.5014859975737624,
+     "mean_brightness": 0.9314867650490124,
+     "mean_stored_srgb": [
+      0.214952282305827,
+      0.4037646195724374,
+      0.130542072259586
+     ]
+    },
+    "4": {
+     "pixels": 107331,
+     "frac_of_land": 0.10441479907658992,
+     "mean_brightness": 0.9377089403076755,
+     "mean_stored_srgb": [
+      0.845238842040563,
+      0.7990807966308338,
+      0.6308584599902958
+     ]
+    },
+    "12": {
+     "pixels": 405106,
+     "frac_of_land": 0.3940992033496477,
+     "mean_brightness": 0.9316735534815485,
+     "mean_stored_srgb": [
+      0.9547851701112037,
+      0.9756897428844072,
+      0.9756897428844072
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 410548,
+    "1": 104904,
+    "2": 158865,
+    "3": 374259
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 110,
+    "h_max": 210,
+    "h_spread": 100,
+    "rgb_min": [
+     35,
+     76,
+     25
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     230
+    ],
+    "pass": true
+   }
+  },
+  "11": {
+   "file": "satellite_face11.png",
+   "png_bytes": 455954,
+   "pixels": 1048576,
+   "ocean_pixels": 9230,
+   "land_pixels": 1039346,
+   "ocean_frac": 0.008802413940429688,
+   "H_mean_all": 160.81890296936035,
+   "H_min": 115,
+   "H_max": 205,
+   "land_H_mean": 161.1680912804783,
+   "class_pixels": {
+    "1": {
+     "pixels": 759577,
+     "frac_of_land": 0.73082207465079,
+     "mean_brightness": 0.9359065430272602,
+     "mean_stored_srgb": [
+      0.21549393730839528,
+      0.40469969734609207,
+      0.13090784416462645
+     ]
+    },
+    "4": {
+     "pixels": 39240,
+     "frac_of_land": 0.03775451100980809,
+     "mean_brightness": 0.9312582816469699,
+     "mean_stored_srgb": [
+      0.8426249639620018,
+      0.7966024456686241,
+      0.62887403566562
+     ]
+    },
+    "12": {
+     "pixels": 240529,
+     "frac_of_land": 0.2314234143394019,
+     "mean_brightness": 0.9339070677330065,
+     "mean_stored_srgb": [
+      0.9558894382957586,
+      0.9768171002833741,
+      0.9768171002833741
+     ]
+    },
+    "32": {
+     "pixels": 0,
+     "frac_of_land": 0.0,
+     "mean_brightness": null,
+     "mean_stored_srgb": null
+    }
+   },
+   "biome_pixels_sampled": {
+    "0": 246352,
+    "1": 35363,
+    "2": 285949,
+    "3": 480912
+   },
+   "du_m": 3.067961575771282,
+   "dv_m": 6.135923151542564,
+   "variance": {
+    "distinct_rows": 256,
+    "distinct_cols": 256,
+    "h_min": 115,
+    "h_max": 205,
+    "h_spread": 90,
+    "rgb_min": [
+     35,
+     76,
+     26
+    ],
+    "rgb_max": [
+     251,
+     255,
+     255
+    ],
+    "rgb_spread": [
+     216,
+     179,
+     229
+    ],
+    "pass": true
+   }
+  }
+ },
+ "census": {
+  "columns_total": 50226176,
+  "ocean_cols_H_lt_sea": 560350,
+  "land_cols_H_ge_sea": 49665826,
+  "ocean_frac": 0.011156533198943913,
+  "H_min": 102,
+  "H_max": 212,
+  "H_mean": 158.84879854281562,
+  "biome_counts_all": {
+   "0": 12092247,
+   "1": 4003757,
+   "2": 7166468,
+   "3": 26963704
+  },
+  "biome_counts_land": {
+   "0": 11943931,
+   "1": 3951674,
+   "2": 7078575,
+   "3": 26691646
+  },
+  "top_counts_all": {
+   "1": 33605187,
+   "4": 4735891,
+   "12": 11885098,
+   "32": 0
+  },
+  "top_counts_land": {
+   "1": 33605187,
+   "4": 4175541,
+   "12": 11885098,
+   "32": 0
+  },
+  "top_formula_mismatches": 0,
+  "seed": 44,
+  "home_pair": {
+   "columns": 39740416,
+   "ocean_frac": 0.009899745387667809,
+   "land_frac": 0.9901002546123322,
+   "H_mean": 159.12641108236008
+  },
+  "faces_2_11": {
+   "columns": 10485760,
+   "ocean_frac": 0.01591968536376953,
+   "land_frac": 0.9840803146362305,
+   "H_mean": 157.79666328430176
+  },
+  "drypit_window_pm5": {
+   "chunks": 121,
+   "columns": 30976,
+   "ocean_cols_H_lt_sea": 1080,
+   "land_cols_H_ge_sea": 29896,
+   "note": "compare against the oceansurface arm (AWECRAFT_SEED=44, half=5); AC-0311 post-port run: land 29896 / ocean 1080 (pre-port was 29895/1081)"
+  }
+ },
+ "roundness": {
+  "solid_angle_sr_MC": [
+   1.049084601183854,
+   1.0471273889606676,
+   1.0479284950873329,
+   1.0472499110741575,
+   1.0482206632041167,
+   1.0467818137687726,
+   1.0496218135276179,
+   1.046235176647048,
+   1.047406990706837,
+   1.0433763273322814,
+   1.0457953536755453,
+   1.0475420791909413
+  ],
+  "solid_angle_sr_int": [
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302,
+   1.0471975711712302
+  ],
+  "area_m2_int": [
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713,
+   16755161.138739713
+  ],
+  "rel_err_area": [
+   0.0018019808912592846,
+   6.701907309062782e-05,
+   0.0006979809123173732,
+   4.998092467762475e-05,
+   0.000976980906995563,
+   0.00039701906679624375,
+   0.0023149808814741917,
+   0.0009190190568394451,
+   0.00019998092181650252,
+   0.003649019004766257,
+   0.001339019048828218,
+   0.00032898091935581444
+  ],
+  "total_area_m2_int": 201061933.66487652,
+  "sphere_area_4piR2": 201061929.82974675,
+  "total_rel_err": 1.9074370622543013e-08,
+  "roundtrip": {
+   "N": 4000000,
+   "max_residual": 4.723037537524465e-16,
+   "mean_residual": 1.1657887219619825e-16,
+   "over_1e-6": 0,
+   "u_range": [
+    8.484218810989511e-08,
+    0.9999997991704498
+   ],
+   "v_range": [
+    4.5482282429176735e-07,
+    0.9999999508373002
+   ],
+   "uv_in_unit_square": true
+  },
+  "equator_arcs_deg": {
+   "0": 0.0,
+   "1": 0.0,
+   "2": 0.0,
+   "3": 0.0,
+   "4": 45.003600000000006,
+   "5": 44.9964,
+   "6": 45.0,
+   "7": 45.0,
+   "8": 45.0,
+   "9": 45.0,
+   "10": 45.0,
+   "11": 45.0
+  },
+  "limb_111_arcs_deg": {
+   "0": 0.0,
+   "1": 60.001200000000004,
+   "2": 59.9976,
+   "3": 0.0,
+   "4": 0.0036000000000000003,
+   "5": 59.9976,
+   "6": 59.9976,
+   "7": 0.0,
+   "8": 0.0,
+   "9": 60.001200000000004,
+   "10": 60.001200000000004,
+   "11": 0.0
+  },
+  "limb_111_all_painted": true,
+  "edge_great_circle": {
+   "0": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "1": {
+    "u1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "2": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "3": {
+    "u1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "4": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 0.0
+    }
+   },
+   "5": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    }
+   },
+   "6": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 0.0
+    }
+   },
+   "7": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    }
+   },
+   "8": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "9": {
+    "u1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "10": {
+    "u1": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   },
+   "11": {
+    "u1": {
+     "great": true,
+     "dev_rel": 0.0
+    },
+    "u0": {
+     "great": true,
+     "dev_rel": 2.8093058789545056e-17
+    },
+    "v1": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    },
+    "v0": {
+     "great": true,
+     "dev_rel": 2.830953250359616e-17
+    }
+   }
+  },
+  "gapless_max_m": 6.821210263296962e-13,
+  "gapless_samples": 884,
+  "gapless_per_edge_max_m": {
+   "f0e0": 0.0,
+   "f0e1": 0.0,
+   "f0e2": 0.0,
+   "f0e3": 0.0,
+   "f1e0": 0.0,
+   "f1e1": 0.0,
+   "f1e2": 0.0,
+   "f1e3": 0.0,
+   "f2e0": 0.0,
+   "f2e1": 0.0,
+   "f2e2": 0.0,
+   "f2e3": 0.0,
+   "f3e0": 0.0,
+   "f3e1": 0.0,
+   "f3e2": 0.0,
+   "f3e3": 0.0,
+   "f4e0": 6.821210263296962e-13,
+   "f4e1": 6.821210263296962e-13,
+   "f4e2": 0.0,
+   "f4e3": 0.0,
+   "f5e0": 0.0,
+   "f5e1": 0.0,
+   "f5e2": 0.0,
+   "f5e3": 0.0,
+   "f6e0": 6.821210263296962e-13,
+   "f6e1": 6.821210263296962e-13,
+   "f6e2": 0.0,
+   "f6e3": 0.0,
+   "f7e0": 0.0,
+   "f7e1": 0.0,
+   "f7e2": 0.0,
+   "f7e3": 0.0,
+   "f8e0": 0.0,
+   "f8e1": 0.0,
+   "f8e2": 0.0,
+   "f8e3": 0.0,
+   "f9e0": 0.0,
+   "f9e1": 0.0,
+   "f9e2": 0.0,
+   "f9e3": 0.0,
+   "f10e0": 0.0,
+   "f10e1": 0.0,
+   "f10e2": 0.0,
+   "f10e3": 0.0,
+   "f11e0": 0.0,
+   "f11e1": 0.0,
+   "f11e2": 0.0,
+   "f11e3": 0.0
+  }
+ },
+ "cost": {
+  "ticket_claim": "1024^2 per face ~ 12.6M samples ~ 4.5 s CPU at ~92 us/chunk, one-time per seed",
+  "assumed_chunks_in_claim": 49152,
+  "actual_chunks": 196196,
+  "chunks_per_face_actual": {
+   "home_pair_each": 155236,
+   "faces_2_11_each": 4096
+  },
+  "far_us_per_chunk_measured": 96.5851495443332,
+  "far_us_total_c": 18949620,
+  "c_plus_plus_gen_wall_s": 19.417,
+  "dump_process_wall_s": null,
+  "dump_max_rss_kbytes": null,
+  "python_bake_wall_s": 7.191672762972303,
+  "python_bake_phases_s": {
+   "load_dump": 0.07776978297624737,
+   "bake+png": 7.113902979996055,
+   "census": 0.8567113770404831,
+   "roundness": 7.688960465951823
+  },
+  "python_max_rss_kbytes": 2753700,
+  "note": "the claim's 4.5 s assumed 49,152 chunks (12 faces x 4096); the home pair's 1 m columns need 155,236 chunks (394x394, 19x the assumed per-face count) \u2014 the real chunk count is 196,196."
+ },
+ "phases_s": {
+  "t_load": 0.07776978297624737,
+  "t_bake": 7.191672762972303,
+  "t_census": 8.048384140012786,
+  "t_round": 15.737344605964608,
+  "total": 15.737344605964608
+ }
+}
