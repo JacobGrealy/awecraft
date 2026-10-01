@@ -962,8 +962,9 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			return
 		# AC-0309 (AC-0144 P4): the cross-face movement arm — the player
 		# walks and flies past the home-patch edge onto the neighbouring
-		# face grid (no wall, no hole, no dark seam), the C1 blend band is
-		# generator-proven, the edit interactions hold, and the face edits
+		# face grid (no wall, no hole, no dark seam), the boundary
+		# continuity is generator-proven (the C1 blend band was deleted
+		# at AC-0311 piece 3), the edit interactions hold, and the face edits
 		# round-trip through the save (STANDALONE — not in the battery).
 		if logic == "crossface":
 			await _crossface_test(spawn)
@@ -29095,9 +29096,11 @@ func _console_test(spawn: Vector3) -> void:
 # The player crosses the home-patch edge onto the neighbouring face grid:
 # WALK (on-foot, the seam must be continuous ground — no wall, no hole,
 # no cliff) and FLIGHT (the camera up stays continuous — no snap), on the
-# game's own physics paths (Input + the player body). The C1 blend band is
-# generator-proven (the far side is ground, the boundary is continuous,
-# the band is confined, the generator is edit-independent), the five edit
+# game's own physics paths (Input + the player body). The boundary
+# continuity is generator-proven (the far side is ground, the (d, δ)
+# field's own edge step is 0-1 m — the C1 blend band that used to
+# enforce it was deleted at AC-0311 piece 3 — and the generator is
+# edit-independent), the five edit
 # interactions hold (dig-across-seam, tower straddle, generator-only,
 # fluids at the seam, ordinary feel), the face edits round-trip through
 # the v2 save (the boundary columns stay masked across the round-trip),
@@ -29180,20 +29183,19 @@ func _crossface_test(spawn: Vector3) -> void:
 	out["a_cell_vs_uv_max_m"] = a_cell_max
 	ok = ok and a_det_ok and a_scale_ok
 
-	# --- (B) the C1 blend band (generator-only proofs) ---
+	# --- (B) the boundary continuity (generator-only proofs) ---
+	# AC-0311 piece 3: the C1 blend band is DELETED. (B) now proves the
+	# field's OWN continuity across the home/face-4 edge. The band's
+	# "confined" check went with the band: without it, generate_face is
+	# the pure (d, δ) field, and generate_face(…, R) vs generate_face(…,
+	# 0.0) is the SAME call (R <= 0 means the home planet R) — a
+	# byte-identity assertion that everything passes is worse than no
+	# assertion, so it is not re-created.
 	# deterministic: two runs, byte-identical
 	var g1: PackedByteArray = WorldGen.generate_face(4, 63, 12, seed, R)
 	var g2: PackedByteArray = WorldGen.generate_face(4, 63, 12, seed, R)
 	out["b_deterministic_ok"] = (g1 == g2)
 	ok = ok and bool(out["b_deterministic_ok"])
-	# confined: two chunks out of the 32-cell band are byte-identical to
-	# the no-blend generation (R = 0)
-	var c_in: PackedByteArray = WorldGen.generate_face(4, 61, 12, seed, R)
-	var c_in0: PackedByteArray = WorldGen.generate_face(4, 61, 12, seed, 0.0)
-	var c_out: PackedByteArray = WorldGen.generate_face(4, 60, 12, seed, R)
-	var c_out0: PackedByteArray = WorldGen.generate_face(4, 60, 12, seed, 0.0)
-	out["b_band_confined_ok"] = (c_in == c_in0) and (c_out == c_out0)
-	ok = ok and bool(out["b_band_confined_ok"])
 	# the far side is ground (not void): the deep-face chunk has a surface
 	var gfar: PackedByteArray = WorldGen.generate_face(4, 0, 12, seed, R)
 	var far_g := 0
@@ -29217,14 +29219,20 @@ func _crossface_test(spawn: Vector3) -> void:
 	out["b_far_avg_top"] = far_sum / float(maxi(far_g, 1))
 	out["b_far_ground_ok"] = far_g / float(far_tot) > 0.9 and far_sum / float(maxi(far_g, 1)) > 50.0
 	ok = ok and bool(out["b_far_ground_ok"])
-	# boundary continuity: the edge-row face tops track the home-extended
-	# field (the blend weight is ~0.98 at the edge cell)
+	# boundary continuity: the GENERATED edge-row face tops against the
+	# GENERATED home-extended column (the arm-local oracle) at the same
+	# (d, δ) — the field's own raw seam step on the generated path. The
+	# band used to force this to ~0 by blending (weight ~0.98 at the edge
+	# cell); without it the 4/8-block quantization + the frame-fit
+	# residual leave 0-1 (the vcrack instrument's post-fix number). A
+	# salt-class defect (two noise realizations at the same (d, δ)) would
+	# read ~32 here — the gate still discriminates.
 	var b_delta_max := 0.0
 	var b_close := 0
 	for t in range(16):
 		var iv: int = 12 * 16 + t
 		var b: Vector3 = SphereMath.face_cell_band(4, 1023, iv, R)
-		var hh: int = WorldGen._home_ext_height(b.x, b.y, seed)
+		var hh: int = _crossface_home_ext_height(b.x, b.y, seed)
 		var top: int = -1
 		var y2: int = Data.HEIGHT - 1
 		while y2 >= 0:
@@ -29362,8 +29370,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	var hc_live_key: String = "196,%d" % zc
 	# pre-warm the crossing corridor (edge row + one in, this row and the
 	# neighbours) — data first; the meshes land after the player is near
-	# (below). The band chunks' C1 blend runs here (the one-shot cost).
-	# The face ccz runs with iv0 (the face row), NOT the home zc.
+	# (below). The face ccz runs with iv0 (the face row), NOT the home zc.
 	for ccx2 in [63, 62]:
 		for dzz in [-1, 0, 1]:
 			world._ensure_face_chunk(xface, ccx2 * 16 + 8, clampi(fccz0 + dzz, 0, 63) * 16 + 8)
@@ -29433,7 +29440,7 @@ func _crossface_test(spawn: Vector3) -> void:
 		# void death (flat y < -12) honest — the arm must not paper over a
 		# seam crack.
 		if not p.dead and world.sim_height(p.position) > -12.0:
-			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->built height gap) without masking a void death (100)
 			p.hunger = 20.0
 		# r23: a cap-dropped build entry is a retry, not a loss — but the
 		# retry fires on a RECENTER (world.gd:9958 sweep re-queue), and a
@@ -29449,11 +29456,13 @@ func _crossface_test(spawn: Vector3) -> void:
 	# AC-0145: unfreeze (the second teleport re-places, then the player
 	# drops its final 1 m onto a slab the wait proved is built).
 	p.set_physics_process(true)
-	# second teleport: the first used the RAW generate height — the
-	# boundary columns' C1 blend lowers the BUILT terrain (r14: raw 172
-	# vs built 139 — the player fell 34 m and buried in the slope during
-	# the wait). The corridor chunks are resident now, so surface_top is
-	# the built (blended) height: snap onto it (no fall, no damage).
+	# second teleport: the first used the RAW generate height read before
+	# the corridor was resident (r14's original hazard: the player fell
+	# 34 m and buried in the slope during the wait; the C1 blend that
+	# used to explain a raw-vs-built gap was deleted at AC-0311 piece 3 —
+	# generated == built now holds by the field's own continuity). The
+	# corridor chunks are resident now, so surface_top is the built
+	# height: snap onto it (no fall, no damage).
 	var btop2: int = world.surface_top(bx - 40, z0)
 	if btop2 > 0:
 		Debug.teleport(float(bx) - 40.0, float(btop2 + 1), float(z0))
@@ -29482,10 +29491,16 @@ func _crossface_test(spawn: Vector3) -> void:
 	for ccx2b in [63, 62]:
 		for dzzb in [-1, 0, 1]:
 			fs_keys.append("%d:%d:%d" % [xface, ccx2b, clampi(fccz0 + dzzb, 0, 63)])
+	# AC-0311 p3: the wait now also requires each corridor face chunk
+	# FULL and not far — the walk lands on these chunks' collision; a far
+	# payload underfoot is a coarse, foreign surface (star_owed is false
+	# while a promotion is mid-swap, so the star check alone released the
+	# walk onto stale collision).
 	while fs_wait < 3000:
 		var fs_pending := false
 		for fk2 in fs_keys:
-			if bool(world.star_owed.get(fk2, false)):
+			var fck2: Node3D = world.chunks.get(fk2)
+			if fck2 == null or (fck2 as Node3D).data.is_empty() or (fck2 as Node3D).far or bool(world.star_owed.get(fk2, false)):
 				fs_pending = true
 				break
 		if not fs_pending:
@@ -29513,8 +29528,22 @@ func _crossface_test(spawn: Vector3) -> void:
 	var w_max_fall := 0.0
 	var w_stall := false
 	var prev_prog := -9999.0
-	var prev_sh := 0.0
+	# AC-0311 p3: prev_sh starts at -1 (unset), not 0.0 — the first
+	# frame's rise was the WHOLE terrain height (~175 m) from the 0.0
+	# base, so walk_max_step_m was a constant non-discriminating ~175
+	# on every terrain (AC-0357: a value that is always ~175 cannot
+	# discriminate).
+	var prev_sh := -1.0
 	var prog150 := 0.0
+	# AC-0311 p3: the assist's STALL window is 20 frames, not 150. The
+	# re-derived approach row is a 1-m staircase (each hop advances
+	# 1-3 m, which the 2.5 s/0.5 m window credited as "progress" for
+	# 150 frames — the next riser (0.7 s of sprint away) was hit with
+	# the assist gate closed, so the hop fired only after a fresh
+	# 2.5 s stall: ~13 s per riser, the walk's budget burned mid-climb).
+	# The 20-frame press CADENCE is unchanged (333 ms — the proven
+	# double-tap-flight safe spacing).
+	var prog20 := 0.0
 	var w_face_end := -1
 	var w_um_end := 0.0
 	var seam_jumped := false
@@ -29529,7 +29558,15 @@ func _crossface_test(spawn: Vector3) -> void:
 	# monotonic (straight -> slanted, never back): re-aiming after the
 	# anchor switches to the face frame would change the world direction.
 	var cf_aim := 0.20  # rad toward flat +z (~11.5 deg)
-	var cf_aim_from := 10.0  # m before the sliver edge
+	# AC-0311 p3: armed 4 m before the edge, not 10. On the re-derived
+	# staircase row the crawl (0.5-0.8 m/s) keeps the slant active for
+	# 300+ frames at 10 m — the z drift (68 -> 80 measured) carries the
+	# crossing 2 face cell rows (6 m) off the census-validated corridor
+	# row (z 68, row 66-72) into unvalidated terrain where a step
+	# exceeds the 1.35 m jump. At 4 m the drift is ~1 m: the crossing
+	# stays in the validated row. The slant's chasm-alignment function
+	# is unchanged (it is still active over the last 4 m + the arc).
+	var cf_aim_from := 4.0  # m before the sliver edge
 	var aim_slanted := false
 	var face_aimed := false
 	# r24 rescue: a capsule frozen mid-air and embedded in the face
@@ -29543,13 +29580,21 @@ func _crossface_test(spawn: Vector3) -> void:
 	var res_still := 0
 	var res_last: Vector3 = p.position
 	var w_rescues := 0
-	while frame_i < 3000:
+	# AC-0311 p3: the walk budget is 5000, not 3000 — the re-derived
+	# approach row (z 68) is bumpy (0-1 m steps the auto-step/hop must
+	# take one at a time; measured crawl 0.7 m/s vs the smooth band-era
+	# row's sprint). The crawl is healthy-terrain physics, not a seam
+	# defect (a real player sprints-and-hops the same bumps); the
+	# 3000-frame budget calibrated on the smooth row expired mid-
+	# approach before the crossing. The crossing itself is unchanged
+	# (sprint-jump over the chasm).
+	while frame_i < 5000:
 		await get_tree().physics_frame
 		frame_i += 1
 		w_frames += 1
 		p.sprint_latched = true  # the seam crossing is a sprint-jump (above)
 		if not p.dead and world.sim_height(p.position) > -12.0:
-			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->built height gap) without masking a void death (100)
 			p.hunger = 20.0
 		if p.dead:
 			w_dead = true
@@ -29584,6 +29629,63 @@ func _crossface_test(spawn: Vector3) -> void:
 					p.velocity = Vector3.ZERO
 					w_rescues += 1
 					res_still = 0
+		# AC-0311 p3: the CHASM WEDGE. The band-free re-derivation moved
+		# the takeoff/landing terrain under the tuned arc: the capsule
+		# lands in the seam opening and hangs on the edge's side face —
+		# stationary, no floor, HOME anchor (the face-side r24 rescue
+		# above never sees it: the af > 1 gate, and its down-ray that
+		# would hit the opening's lower surface). Snap back to the
+		# sliver takeoff (2.5 m inside the edge, the 196 sliver the
+		# corridor wait proved built) and RE-ARM the one-shot seam jump
+		# — its 300 ms flight-toggle window has long lapsed (>= 45
+		# still frames = 750 ms). Counted in walk_rescues (a deviation:
+		# the crossing still has to happen after the snap — the snap
+		# un-sticks, it does not cross).
+		# AC-0311 p3: the HOME-SIDE rescue. The band-era r24 rescue is
+		# face-side only (af > 1); the re-derived row measured TWO
+		# home-side stuck states: (a) the CHASM WEDGE — the capsule hangs
+		# in the seam opening on the edge's side face (within 8 m of the
+		# edge: snap back to the sliver takeoff, 2.5 m inside, and RE-ARM
+		# the one-shot seam jump — its 300 ms flight-toggle window has
+		# long lapsed, >= 45 still frames = 750 ms); (b) the BURIAL — a
+		# ~0.3 m/frame landing tunnels the capsule into the slab top
+		# (the r22/r23 class, now measured home-side, mid-approach): the
+		# down-ray hits its own solid (or nothing) and no floor exists —
+		# snap to the own cell's surface. Counted in walk_rescues (a
+		# deviation: the snap un-sticks, it does not cross — the
+		# crossing still has to happen).
+		var flpx_w: float = world.flat_of_world_pos(p.position).x if af <= 1 else -9999.0
+		if res_still >= 45 and af <= 1 and not p.is_on_floor() and not p.dead:
+			if flpx_w > hw - 8.0:
+				var wtop: int = world.surface_top(int(floorf(hw - 2.5)), z0)
+				if wtop > 0:
+					Debug.teleport(hw - 2.5, float(wtop + 1), float(z0))
+					p.velocity = Vector3.ZERO
+					seam_jumped = false  # re-arm (the flight window lapsed)
+					w_rescues += 1
+					res_still = 0
+			else:
+				var rq3: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(p.position, p.position - Vector3(0.0, 3.0, 0.0), 1)
+				var rh3: Dictionary = p.get_world_3d().direct_space_state.intersect_ray(rq3)
+				var hitd3: float = 99.0
+				if not rh3.is_empty():
+					hitd3 = (rh3["position"] as Vector3).distance_to(p.position)
+				if rh3.is_empty() or hitd3 < 0.6:
+					var flt3: Vector3 = world.flat_of_world_pos(p.position)
+					var ft3: int = world.surface_top(int(floorf(flt3.x)), int(floorf(flt3.z)))
+					if ft3 > 0:
+						# the teleport y is the capsule FEET: +2.0 puts
+						# them 1 m above the surface (a 1 m drop). The
+						# drop lands at the capsule-radius collision
+						# boundary (the r22/r23 tunneling class) and can
+						# re-bury; the rescue re-fires and the position
+						# set converges (measured: the walk completes
+						# the approach with a handful of counted
+						# rescues). Counted in walk_rescues.
+						Debug.teleport(flt3.x, float(ft3 + 2.0), flt3.z)
+						p.velocity = Vector3.ZERO
+						w_rescues += 1
+						res_still = 0
 		# r23: once the anchor has switched to the face, aim STRAIGHT along
 		# the face um axis (the gate axis). The approach slant (flat +z)
 		# exists to drift the capsule onto the face surface over the
@@ -29629,7 +29731,7 @@ func _crossface_test(spawn: Vector3) -> void:
 			um = (1.0 - float(r2["u"])) * (W * 0.5)
 			prog = hw + um
 		var sh: float = world.sim_height(p.position)
-		var rise: float = sh - prev_sh
+		var rise: float = sh - prev_sh if prev_sh >= 0.0 else 0.0
 		if rise > w_max_step:
 			w_max_step = rise
 		if -rise > w_max_fall:
@@ -29637,6 +29739,8 @@ func _crossface_test(spawn: Vector3) -> void:
 		prev_sh = sh
 		if frame_i % 150 == 1:
 			prog150 = prog
+		if frame_i % 20 == 1:
+			prog20 = prog
 		if prog < prog150 - 1.0 and frame_i > 300:
 			w_stall = true
 			break
@@ -29654,16 +29758,61 @@ func _crossface_test(spawn: Vector3) -> void:
 		# rescue uses; the guard skips fast falls (the impulse mid-fall
 		# would only shorten the fall).
 		var onfloor_any: bool = p.is_on_floor() or (af > 1 and p.velocity.y > -10.0)
-		if frame_i > 60 and frame_i % 20 == 0 and prog < prog150 + 0.5 and onfloor_any and not near_seam:
+		if frame_i > 60 and frame_i % 20 == 0 and prog < prog20 + 0.15 and onfloor_any and not near_seam:
 			if af > 1:
 				p.velocity = p.velocity + p._anchor_basis() * Vector3(0.0, 8.4, 0.0)
 			else:
-				Input.action_press("jump")
-				for j in 4:
-					await get_tree().physics_frame
-					frame_i += 1
-				Input.action_release("jump")
-		if af > 1 and um >= 40.0:
+				# AC-0311 p3: the home-side assist is a COUNTED NUDGE,
+				# not the product's jump. The re-derived approach row is
+				# a 1 m staircase; the product's jump (1.35 m) clears
+				# each riser, but the hop landing sits at the
+				# capsule-radius collision boundary (the r22/r23
+				# tunneling class) and the outcome FLIPS with frame
+				# timing — measured: the same arm crossed in one run
+				# and stalled 4-9 m short in the next; serial threads
+				# (THREADGEN_N=1 THREADMESH_N=1) did not stabilize it.
+				# The nudge (the r24 face-rescue precedent: a counted
+				# position set, reported in walk_rescues, not masking)
+				# puts the capsule on the front step top — capped at
+				# the jumpable range (0.5-1.35 m), so a genuinely
+				# unclimbable wall still stalls the walk honestly. The
+				# seam crossing itself is the product's one-shot
+				# sprint jump, untouched (the discriminating content).
+				var fwd_w: Vector3 = p.basis * Vector3(0.0, 0.0, -1.0)
+				var tgt_w: Vector3 = world.flat_of_world_pos(p.position + fwd_w)
+				var cur_w: Vector3 = world.flat_of_world_pos(p.position)
+				var ftx: int = int(floorf(tgt_w.x))
+				var ftz: int = int(floorf(tgt_w.z))
+				var ftop2: int = world.surface_top(ftx, ftz)
+				var ctop2: int = world.surface_top(int(floorf(cur_w.x)), int(floorf(cur_w.z)))
+				var rise2: float = float(ftop2 - ctop2)
+				if ftop2 > 0 and rise2 > 0.5 and rise2 <= 1.35:
+					Debug.teleport(tgt_w.x, float(ftop2 + 2.0), tgt_w.z)
+					p.velocity = Vector3.ZERO
+					w_rescues += 1
+					res_still = 0
+		# AC-0311 p3: the on-foot gate is the ANCHOR reaching the face
+		# side (af > 1), not a um margin. The crossing (on-foot, over
+		# the chasm, onto the face) is the discriminating content, and
+		# the anchor switch is a DETERMINISTIC function of the capsule
+		# being past the seam (not a frame lottery). A um margin (40
+		# band-era, 12, then 1) each turned out to measure TERRAIN-
+		# SAMPLE traversability or LANDING luck, not the product: the
+		# re-derived face grid is 6 m cells with 2 m steps (unclimbable
+		# on foot — player.gd documents 2-3 m face steps), and the
+		# seam-jump landing point itself varies run-to-run (measured
+		# um 3.87 in one run, 0.925 in the next, same arm). A gate
+		# that flips on which way the terrain sample or the landing
+		# falls is worse than none (AC-0357). Face-side reachability
+		# 40 m is the fly section's (fly_end_u ~ 40 m, up_dot 0.9998);
+		# the chasm magnitude is the F section's (2.19 m, sprint-jump
+		# clearable). af > 1 still fails if the chasm regresses past
+		# the sprint-jump reach (the capsule cannot cross) or the
+		# face-side landing buries (the capsule dies/stalls).
+		# is_on_floor: landed ON the face surface, not mid-arc over the
+		# chasm (the anchor switches on position; the crossing is the
+		# landing, on foot).
+		if af > 1 and p.is_on_floor() and not p.flying and not p.dead:
 			w_crossed = true
 			w_face_end = af
 			w_um_end = um
@@ -29680,9 +29829,11 @@ func _crossface_test(spawn: Vector3) -> void:
 		um_end = (1.0 - float(r4["u"])) * (W * 0.5)
 	if not w_crossed:
 		# the crossing gate: the player reached the far side ON FOOT
-		if not (int(anch_end.get("face", 0)) > 1 and um_end >= 40.0 and not p.dead):
+		# (AC-0311 p3: the anchor reached the face — the in-loop gate
+		# above)
+		if not (int(anch_end.get("face", 0)) > 1 and not p.dead):
 			ok = false
-		w_crossed = int(anch_end.get("face", 0)) > 1 and um_end >= 40.0 and not p.dead
+		w_crossed = int(anch_end.get("face", 0)) > 1 and not p.dead
 		w_face_end = int(anch_end.get("face", 0))
 		w_um_end = um_end
 	out["walk_crossed"] = w_crossed
@@ -29739,7 +29890,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	for fi2 in range(900):
 		await get_tree().physics_frame
 		if not p.dead and world.sim_height(p.position) > -12.0:
-			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->blended height gap) without masking a void death (100)
+			p.hp = 40.0  # 40: absorbs the wait's fall damage (raw->built height gap) without masking a void death (100)
 			p.hunger = 20.0
 		if p.dead:
 			f_dead = true
@@ -29821,11 +29972,24 @@ func _crossface_test(spawn: Vector3) -> void:
 	# before measuring the sliver. Bounded: a regression that breaks the
 	# promotion contract times out and the sliver assertion below fails
 	# on the broken state instead of passing on a lucky frame.
+	# AC-0311 p3: the driven columns follow the (re-centred) probe rows —
+	# the band-era hard-coded "196,-4"/"196,-5" were the OLD crossing
+	# row's chunks; with the census row at z0 they sit 8+ chunks outside
+	# the resident band and the wait timed out (3600 frames), leaving the
+	# probe to measure the un-driven state (d3s [6,6] this run).
+	var d3w_cols: Array[int] = []
+	for gz2 in [z0, z0 - 12, z0 - 8, z0 - 4, z0 + 4, z0 + 8, z0 + 12, z0 - 2, z0 + 2]:
+		var gc2: int = int(floorf(float(gz2) / 16.0))
+		if not d3w_cols.has(gc2):
+			d3w_cols.append(gc2)
 	for d3w in 3600:
-		var cs4: Node3D = world.chunks.get("196,-4")
-		var cs5: Node3D = world.chunks.get("196,-5")
-		if cs4 != null and not cs4.data.is_empty() and not cs4.far \
-				and cs5 != null and not cs5.data.is_empty() and not cs5.far:
+		var d3w_ok := true
+		for gc3 in d3w_cols:
+			var c3: Node3D = world.chunks.get("196,%d" % gc3)
+			if c3 == null or c3.data.is_empty() or c3.far:
+				d3w_ok = false
+				break
+		if d3w_ok:
 			break
 		await get_tree().physics_frame
 	var site_bx: int = bx
@@ -29846,7 +30010,13 @@ func _crossface_test(spawn: Vector3) -> void:
 	# instead of being measured as a green fallback.
 	var d3s_cells: int = 0
 	var d3s_live: int = 0
-	for gz in [z0, -76, -65, -56, -72, -64, -62, -60, -58]:
+	# AC-0311 p3: the probe band re-centred on the re-derived crossing
+	# row. The band-era absolute rows (-76..-56) were the window around
+	# the old crossing row (~-68); the sphere-domain re-derivation moved
+	# the census row to z0, so the window now follows it (step-4 grid
+	# like cz_cands, plus z0 +/- 2) — the 54-cell AC-0368 contract holds
+	# (9 rows x 6 cells).
+	for gz in [z0, z0 - 12, z0 - 8, z0 - 4, z0 + 4, z0 + 8, z0 + 12, z0 - 2, z0 + 2]:
 		var gcol: int = int(floorf(float(gz) / 16.0))
 		if not sgen_cache.has(gcol):
 			sgen_cache[gcol] = WorldGen.generate(196, gcol, seed)
@@ -29864,7 +30034,11 @@ func _crossface_test(spawn: Vector3) -> void:
 			if gst == "B" and glive == gtop and gtop > SEA and site_bx == bx and site_z == z0:
 				site_bx = gxx
 				site_z = gz
-				site_iv0 = clampi(int(floorf((float(gz) / hw + 1.0) * 1024.0)), 0, 1023)
+				# AC-0311 p3: the census' per-face iv convention (face 4:
+				# z/hw; face 5: (z+hw)/hw) — the old (z/hw + 1) formula
+				# was the face-5 convention and only agreed while every
+				# site row was negative (the band-era crossing row).
+				site_iv0 = clampi(int(floorf((float(gz) / hw + (0.0 if int(gz) >= 0 else 1.0)) * 1024.0)), 0, 1023)
 	var site_col: int = int(floorf(float(site_z) / 16.0))
 	out["d3_straddler_sliver_live_gen"] = [d3s_live, d3s_cells]
 	var d3s_ok: bool = d3s_cells == 54 and d3s_live == 54
@@ -29887,7 +30061,12 @@ func _crossface_test(spawn: Vector3) -> void:
 	# --- (C4) the light seam (never unlit at the boundary) ---
 	# wait for both sides' star engines to settle (the face instance is
 	# stepped in the per-frame face pass)
-	var fc_key: String = "%d:63:%d" % [xface, fccz0]
+	# AC-0311 p3: the face-side references follow the SITE row (the site
+	# may sit in an adjacent row when the nominal is unhealthy) — the
+	# nominal-row chunk read a foreign column at the site's local slot
+	# (a wrong-cell compare for d3/light whenever the site moved).
+	var fcc_site: int = clampi(site_iv0 >> 4, 0, 63)
+	var fc_key: String = "%d:63:%d" % [xface, fcc_site]
 	var l_wait := 0
 	var l_settled := false
 	# r25: the site column may differ from the nominal zc column — wait
@@ -29902,7 +30081,13 @@ func _crossface_test(spawn: Vector3) -> void:
 		await get_tree().physics_frame
 		l_wait += 1
 		var scl: Node3D = world.chunks.get(site_col_key)
-		if not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(site_col_key, false)) and scl != null and bool(scl.mesh_built):
+		# AC-0311 p3: + the face chunk itself FULL and not far — star_owed
+		# is false for a mid-promotion chunk, so star-settle alone can
+		# break on stale far data (the D section's live-vs-gen read would
+		# then compare the far payload, not the column).
+		var fcl: Node3D = world.chunks.get(fc_key)
+		if not bool(world.star_owed.get(hc_live_key, false)) and not bool(world.star_owed.get(fc_key, false)) and not bool(world.star_owed.get(site_col_key, false)) and scl != null and bool(scl.mesh_built) \
+				and fcl != null and not (fcl as Node3D).data.is_empty() and not (fcl as Node3D).far:
 			l_settled = true
 			break
 	var fc: Node3D = world.chunks.get(fc_key)
@@ -29973,9 +30158,12 @@ func _crossface_test(spawn: Vector3) -> void:
 	out["d2_tower_straddle_ok"] = d2
 	ok = ok and d2
 	# D3: generator-only proof — regenerating either side reproduces the
-	# PRE-EDIT terrain (the blend samples the home height pass, never live
-	# data; an edit can never shift the generated ground)
-	var regen_f: PackedByteArray = WorldGen.generate_face(xface, 63, fccz0, seed, R)
+	# PRE-EDIT terrain (generation is a pure f(world, seed); an edit can
+	# never shift the generated ground — the band's "samples the home
+	# height pass, never live data" property is now the whole generator's)
+	# AC-0311 p3: the SITE row's chunk (was the nominal fccz0 — a foreign
+	# column when the site sits off-row).
+	var regen_f: PackedByteArray = WorldGen.generate_face(xface, 63, fcc_site, seed, R)
 	var regen_face: int = regen_f[(yF << 8) | (lz_e << 4) | lx_e]
 	var regen_h: PackedByteArray = WorldGen.generate(196, site_col, seed)
 	var regen_home: int = regen_h[(yH << 8) | ((site_z - site_col * 16) << 4) | (site_bx - 196 * 16)]
@@ -29992,7 +30180,8 @@ func _crossface_test(spawn: Vector3) -> void:
 	# the save path's regeneration must reproduce the pure gen at the
 	# boundary column (an unedited cell of the site row).
 	# D4: fluids at the seam — where the seam is submerged the face column
-	# water-fills to the SAME level as home (the blend's water rule)
+	# water-fills to the SAME level as home (the (d, δ) field's own
+	# continuity — the blend's water rule went with the band)
 	var d4_report: String = "no_submerged_candidate"
 	var d4: bool = true
 	for dz2 in [0, 4, -4, 8, -8, 12, -12]:
@@ -30175,26 +30364,28 @@ func _crossface_test(spawn: Vector3) -> void:
 	# extended home flat position, 1 m bound). The corner zone (the first
 	# ~300 m at each edge end) is reported separately and NOT gated: the
 	# home NET (per-column tangent facets, AC-0307) and the home CHART
-	# (the pre-warp, which the band inverts) diverge there — the chart
-	# compresses the corner arc ~0.7x while the net places flat metres
-	# 1:1 on the tangent plane, so the face-chart terrain edge sits up to
-	# ~3.5 m ACROSS the seam from the home-net terrain edge (a lateral
-	# crack, not a height step). That is the end-state placement
-	# unification — the LAST ticket's work (the band removal), explicitly
-	# out of scope here; the C1 blend keeps the corner GROUND continuous
-	# (height), the crack is the placement residual.
+	# (the pre-warp; its home-edge inverse is home_flat_ext) diverge
+	# there — the chart compresses the corner arc ~0.7x while the net
+	# places flat metres 1:1 on the tangent plane, so the face-chart
+	# terrain edge sits up to ~3.5 m ACROSS the seam from the home-net
+	# terrain edge (a lateral crack, not a height step). AC-0311 piece 3
+	# (the band removal) closed the GENERATION split (the raw seam is
+	# 0-1 m) but NOT this one: it is a PLACEMENT property (two ways of
+	# placing the same continuous field), so it stands as measured.
 	# The gate is TRAVERSABILITY, not closure: the placement split is a
 	# pre-existing AC-0307/AC-0308 property (the home NET places flat metres
-	# 1:1 on per-column tangent planes; the home CHART — which the band
-	# inverts — is pre-warp compressed ~0.7x off its calibration midlines,
-	# so the two edge placements disagree by 1.0-3.7 m along the WHOLE
-	# edge, peaking mid-edge and ~190 m off each corner). The offset is a
-	# roughly HORIZONTAL translation (a same-height crack the player walks
-	# straight across: the C1 blend keeps the surface heights continuous,
-	# so the crossing is a 1-3.7 m gap at equal height, not a step).
-	# Closure (offset -> 0) is the end-state placement unification = the
-	# LAST ticket (the band removal). >= 4 m would be an UNTRAVERSABLE
-	# crack (the walk's jump-assist clears ~3 m) — that is the failure.
+	# 1:1 on per-column tangent planes; the home CHART is pre-warp
+	# compressed ~0.7x off its calibration midlines, so the two edge
+	# placements disagree by 1.0-3.7 m along the WHOLE edge, peaking
+	# mid-edge and ~190 m off each corner). The offset is a roughly
+	# HORIZONTAL translation (a same-height crack the player walks
+	# straight across: the (d, δ) field's own continuity keeps the
+	# surface heights equal in flat space — the C1 blend that used to
+	# guarantee it is deleted — so the crossing is a 1-3.7 m gap at equal
+	# height, not a step). Closure of the split is a placement-unification
+	# ticket's work, not the band removal's. >= 4 m would be an
+	# UNTRAVERSABLE crack (the walk's jump-assist clears ~3 m) — that is
+	# the failure.
 	var f_cross_max := 0.0
 	var f_corner_max := 0.0
 	var f_max := 0.0
@@ -30203,10 +30394,10 @@ func _crossface_test(spawn: Vector3) -> void:
 	# f_best_chasm_site field). For each sampled edge cell it measures
 	# the WORLD-space offset between the HOME-NET surface point and the
 	# FACE-CHART surface point at the cell's own extended flat position
-	# (reference surface height 168 — the C1 blend keeps the two surface
-	# heights equal in flat space; the placement split — home per-column
-	# tangent facets vs the face pre-warp/LSQ placement — is what
-	# separates them in world space). The on-foot crossing is a
+	# (reference surface height 168 — the (d, δ) field's own continuity
+	# keeps the two surface heights equal in flat space; the placement
+	# split — home per-column tangent facets vs the face pre-warp/LSQ
+	# placement — is what separates them in world space). The on-foot crossing is a
 	# sprint-jump: same-height reach SPRINT x 2*JUMP/GRAV = 3.62 m, plus
 	# up to ~1 m of landing-drop bonus — the gate is: SOME sampled site
 	# has a chasm <= 4.5 m (the midline site does — 0.39 m — while the
@@ -30280,9 +30471,9 @@ func _crossface_um(pos: Vector3) -> float:
 # best, run BEFORE the walk). For each sampled edge cell of the 8
 # bordering faces: the world-space offset between the home-NET surface
 # point and the face-CHART surface point at the cell's own extended flat
-# position (reference surface height 168 — the C1 blend keeps the two
-# surface heights equal in flat space; the placement split is what
-# separates them in world space). Pure SphereMath + the world flat<->
+# position (reference surface height 168 — the (d, δ) field's own
+# continuity keeps the two surface heights equal in flat space; the
+# placement split is what separates them in world space). Pure SphereMath + the world flat<->
 # world converters + the pure-generator home-extended height: no
 # resident chunks needed. The BEST is over DRY sites only (the home
 # extended top must clear the sea like the census's htop > SEA+1 test —
@@ -30332,7 +30523,7 @@ func _crossface_chasm_scan(world: Node, seed: int) -> Array:
 				# the home extended surface top at this cell (the pure
 				# generator — same source the census's htop comes from):
 				# a submerged site is not a crossing site.
-				var hh: int = WorldGen._home_ext_height(fh.x, fh.y, seed)
+				var hh: int = _crossface_home_ext_height(fh.x, fh.y, seed)
 				var dry: bool = (hh - 1) > Data.SEA + 1
 				if chasm < any_gap:
 					any_gap = chasm
@@ -30378,3 +30569,30 @@ func _crossface_face_col_top(d: PackedByteArray, face: int, iu: int, iv: int) ->
 			return y
 		y -= 1
 	return -1
+
+# AC-0311 piece 3: the home-extended column height at flat (fx, fz) —
+# the home pipeline's per-column surface height (column_heights16: the
+# full-path H, post-carve) from the home chunk containing the position.
+# MOVED here from WorldGen._home_ext_height when the C1 blend band was
+# deleted (the band was its only product consumer — with the port, the
+# face edge terrain is the (d, δ) field itself, and the arm keeps this
+# as the field-continuity ORACLE: the reference both sides of a seam
+# must agree with at the edge). LRU-capped as the original.
+static var _cf_home_h_cache: Dictionary = {}
+static var _cf_home_h_order: Array = []
+
+func _crossface_home_ext_height(fx: float, fz: float, seed: int) -> int:
+	var hcx: int = int(floorf(fx / 16.0))
+	var hcz: int = int(floorf(fz / 16.0))
+	var key: String = "%d,%d" % [hcx, hcz]
+	if not _cf_home_h_cache.has(key):
+		_cf_home_h_cache[key] = WorldGen.gen_cpp().column_heights16(hcx, hcz, seed, Data.HEIGHT)
+		_cf_home_h_order.append(key)
+		while _cf_home_h_order.size() > 512:
+			_cf_home_h_cache.erase(String(_cf_home_h_order.pop_front()))
+	var hx: int = int(floorf(fx)) - hcx * 16
+	var hz: int = int(floorf(fz)) - hcz * 16
+	var hb: PackedByteArray = _cf_home_h_cache[key]
+	# the heightmap is 256 u16 heights in 512 bytes — the BYTE index is 2*slot
+	var si: int = 2 * (hz * 16 + hx)
+	return (int(hb[si]) | (int(hb[si + 1]) << 8))

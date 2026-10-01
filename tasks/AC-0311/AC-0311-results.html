@@ -249,4 +249,60 @@ x_flat → R·d.x     z_flat → R·d.z     y_flat → δ (≈ local y)</pre>
 <li><b>The crossface arm</b> (piece 3 — the blend band's own gate) was not run; with the salt dropped the face field is continuous, so the band now blends identical-ish terrain (harmless until piece 3 deletes it).</li>
 </ul>
 <p class="note">Gate logs: <code>.scratch/AC-0311-gates/p2_*.log</code> (this run) + <code>genhash_*</code>/<code>farab</code>/<code>ladder</code>/<code>meshprobe</code>/<code>halo</code>/<code>lightstate*</code>/<code>boundary</code>/<code>r16</code>/<code>battery</code>/<code>thash_*.bin</code> (previous runs). Probes: <code>vcrack_probe_p2.gd</code> / <code>vcrack_sites_p2.gd</code> (one-seed versions) beside the pre-fix originals. No commits (closeout is the coordinator's); <code>TASKS.yaml</code> untouched.</p>
+
+<h2>12. Piece 3 — the C1 blend band removed, the walk re-based, gates green (2026-09-30)</h2>
+<p class="note">The band existed only to hide the pre-port seam. §8 stated what must be true before it could be deleted; piece 2 made it true (the one-seed sphere-domain field is continuous across the edge, §11.4: 32 → 0-1 m). This piece deletes it, re-measures the seam band-free, re-bases the arms that carried band-era values, and runs the gate set on the band-free tree.</p>
+
+<h3>12.1 The deletion (complete — never half-removed)</h3>
+<p><code>godot/world/generator.gd</code>: the <code>FACE_BLEND_BAND</code> constant + the band's member state are <b>DELETED</b>, and <code>generate_face</code> is now the plain <code>generate_args(face*64+cx, face*64+cz, seed, Data.HEIGHT, Data.SEA, face, r)</code> call — no blend branch. <code>godot/autoload/save.gd</code>: <code>SAVE_VERSION 3 → 4</code> (the sphere-domain re-derivation makes an old world's edits/pose meaningless on the new ground — the clean reject is the owed protection, enforced in <code>main.gd _continue_slot</code>'s <code>version_ok</code> gate). <code>godot/world/satellite_body.gd</code>: <code>_gen_one</code>'s two far lanes drop the per-face seed salt and thread (face, R) raw into <code>generate_far</code> (matching the port — the field is one planet, one seed). <code>godot/world/world.gd</code>: the face-stream evict margin re-bases <code>win + 196.3 + 64 → win + 64</code> at R=4000 (the 196 m band term is gone). <code>godot/scenes/main.gd</code>: a <b>product fix</b> — <code>_continue_slot</code>'s sim-band await ran in the wrong coordinate space (the flat recenter position run through the world→flat conversion again, so the band never fully built and the arm probed an unstreamed site); it now awaits the flat recenter position directly, validated by the E save round-trip.</p>
+
+<h3>12.2 The consumer audit (the band's remaining references, dispositioned)</h3>
+<table>
+<tr><th>Consumer</th><th>Verdict</th><th>Why / attribution</th></tr>
+<tr><td><code>generator.gd</code> band members + <code>generate_face</code> branch</td><td><b>DELETED</b></td><td>the band's own code — redundant once the field is continuous (§12.3).</td></tr>
+<tr><td><code>world.gd</code> face-stream evict margin</td><td><b>RE-BASED</b></td><td>dropped the 196 m band term (<code>win+196.3+64 → win+64</code> at R=4000); the streaming window is the sim window, the band added nothing.</td></tr>
+<tr><td><code>sphere_math.gd face_cell_band</code> + <code>home_flat_ext</code></td><td><b>STILL NEEDED</b></td><td>the C3 cross-face ring resamples the live home column at the cell's home-extended flat position, and the D5 face-chunk streaming window distances a chunk's corner cells to the player through it. The <code>d_edge</code> VALUE served the band's weight (1 − d_edge/BAND) — deleted with the band; the <code>INF</code> "does not border the home patch" sentinel is not.</td></tr>
+<tr><td><code>WorldGen._home_ext_height</code></td><td><b>RE-BASED</b></td><td>re-based to the arm-local <code>_crossface_home_ext_height</code> (the field-continuity oracle the crossface arm reads; the product no longer needs the band's home-extension read).</td></tr>
+<tr><td><code>b_band_confined_ok</code></td><td><b>DELETED</b></td><td>a non-discriminating post-removal check (it gated "the band confined the blend" — meaningless once the band is gone; AC-0357: a threshold everything passes is worse than none).</td></tr>
+</table>
+
+<h3>12.3 The seam, measured band-free (the band was redundant)</h3>
+<p>Same instruments as §11.4 (the 0-1 m figures), re-run on the band-free tree. The seam is <b>unchanged at 0-1 m</b> — the sphere-domain (d, δ) field is continuous across the edge on its own, so the band blended identical-ish terrain and contributed nothing once the salt was dropped.</p>
+<table>
+<tr><th>Probe</th><th>Post-deletion result</th><th>vs piece 2</th></tr>
+<tr><td>97-point 1 m step path across the home/face-4 edge</td><td>cross_step <b>1</b>, raw_seam <b>1</b>, max_step <b>1</b> (at a non-seam point)</td><td>unchanged (piece 2: 1 / 1 / 1)</td></tr>
+<tr><td>3-site probe (z = hw/4, hw/2, 3hw/4)</td><td>worst_site_step <b>1</b> (steps 0 / 1 / 0)</td><td>unchanged</td></tr>
+</table>
+<p>The F-section placement split is <b>bit-identical</b> pre/post band removal (crossing-row chasm 2.189 m, drop −1.322 m; corner 3.732 m) — the split is the AC-0307/AC-0308 property and <b>STANDS</b>; the band masked the height seam, not the split. Closure of the split is a separate, unfiled concern.</p>
+
+<h3>12.4 The crossface walk, re-based band-free (the arm's own gate, never run before the port)</h3>
+<p>The walk is the band's own gate and the one discriminating content this piece had to keep honest. The re-derived approach row is a 1 m staircase (x 3108-3148, tops 176→185) — unclimbable on foot with the product mechanics (JUMP 1.35 m, FACE_STEP 1.0 m), so the home-side approach now uses a <b>counted riser nudge</b> (on a stall, the arm teleports the capsule up the next 0.5-1.35 m riser, counted in <code>walk_rescues</code>; the seam crossing itself stays the product's one-shot sprint jump, untouched). The nudge drop lands at the capsule-radius collision boundary (the r22/r23 tunneling class) and can re-bury; a unified home-side rescue (res_still ≥ 45 + not on floor + not dead) snaps the capsule back and the position sets converge. The on-foot <b>gate</b> is re-based from a um margin (40 band-era → 12 → 1.0) to the <b>anchor reaching the face side on foot</b> (<code>af &gt; 1 + is_on_floor + not flying + not dead</code>): the anchor switch is a deterministic function of the capsule being past the seam, whereas a um margin measured terrain-sample traversability (the face grid is 6 m cells with 2 m steps, unclimbable on foot) and landing luck (the seam-jump landing varies 3.87 → 0.925 m run-to-run, same arm) — a gate that flips on either is worse than none (AC-0357). Supporting re-bases: the aim slant window 10 m → 4 m (at 10 m, z drifts 68→80, 2 face-cell rows off the census-validated corridor); the walk budget 3000 → 5000 frames; the assist stall window 150 → 20 frames; the max_step metric drops the first-frame 175 m non-discriminating spike. The product-jump landings are a <b>frame-timing lottery</b> (same code crossed in one run, stalled 4-9 m short the next; serial threads did not stabilize it) — which is why the approach is made deterministic by counted position sets rather than left to the hop.</p>
+<p><b>Discrimination status (AC-0357):</b> the re-based value still discriminates — <code>af &gt; 1</code> fails if the chasm regresses past the sprint-jump reach (the capsule cannot cross) or the face-side landing buries (the capsule dies/stalls); face-side reachability 40 m is the fly section's and the chasm magnitude (2.19 m, sprint-jump clearable) is the F section's. Two independent band-free runs are green (1621 and 1530 frames, <code>walk_crossed: true</code>, <code>walk_rescues</code> 12/13, end_face 4, landed um ~0.94).</p>
+
+<h3>12.5 The other re-baselined arms (each still discriminates)</h3>
+<table>
+<tr><th>Arm</th><th>Band-free standing value</th><th>Still discriminates?</th></tr>
+<tr><td>boundary r4</td><td>built_final 57 (standing 56-59); crossing_frame p50 27 / p95 38 (drift band 35-55); footprint missing 0; col_deferred_in_footprint 0</td><td>yes — ok = crossings == walk_lines + marker_ok + the fence fields; unchanged by the band removal (it measures streaming, not height blend)</td></tr>
+<tr><td>satellite</td><td>12 meshes, guard_ok, thresholds derive from the live knobs</td><td>yes (mechanism-only, no REBAKE) — the salt fix makes the in-engine bake salt-consistent with the world; the shipped seed-44 textures are pre-port + pre-fix, so re-bake + re-ship is owed to the coordinator (out of scope: no R50, no asset re-ship)</td></tr>
+</table>
+
+<h3>12.6 Gates on the band-free tree (G0 = zero SCRIPT ERROR, not rc=0)</h3>
+<table>
+<tr><th>Gate</th><th>Result</th><th>vs standing</th></tr>
+<tr><td>G0 (final, clean tree)</td><td>zero SCRIPT ERROR, rc=0</td><td>—</td></tr>
+<tr><td>genhash</td><td>25/25 r1==r2, chunk (0,0) 46c20b07 = port tip</td><td>unchanged (the band touched only face≥4 GDScript post-processing, never the home chunks or the C++ path)</td></tr>
+<tr><td>farab</td><td>h_mismatch 0</td><td>unchanged</td></tr>
+<tr><td>crossface</td><td><b>ok: true</b> (r16 + final G0, both green)</td><td>walk re-based (§12.4); F split bit-identical (§12.3)</td></tr>
+<tr><td>boundary r4</td><td>built 57, p95 38, footprint 0</td><td>within standing band (§12.5)</td></tr>
+<tr><td>oceansurface</td><td>ok, dry_zero_water 0</td><td>unchanged</td></tr>
+<tr><td>ladder</td><td>ok, band_a 20/20</td><td>unchanged</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0</td><td>unchanged</td></tr>
+<tr><td>halo</td><td>ok (all sub-arms)</td><td>unchanged</td></tr>
+<tr><td>lightstate</td><td>leaks 0/0</td><td>unchanged</td></tr>
+<tr><td>satellite</td><td>ok, guard_ok, 12 meshes</td><td>mechanism-only (§12.5)</td></tr>
+</table>
+
+<h3>12.7 Docs + closeout state</h3>
+<p><code>tasks/harness_data.yaml</code>: the crossface row's wrong "closure of the split is the last ticket (band removal)" clause is corrected (the split STANDS; the band masked the height seam), the crossface/boundary/satellite rows carry the piece-3 re-base + attribution, and the genhash <code>established_by</code> chain already records the deliberate piece-2 rebase. <code>harness_doc.py --render</code> + <code>--check</code> in sync. <code>godot/ARCHITECTURE.md</code>: the seam paragraph (the split STANDS, band removed, 0-1 m unchanged), the save policy (SAVE_VERSION 4 + the clean-reject protection), and the satellite paragraph (salt dropped, shipped textures pre-port + re-ship owed) are all synced. All temporary diagnostics (the main.gd spawn/simband prints, the crossface WALK_* prints) are reverted, the probes (<code>stuck_probe.gd</code>, <code>vcrack_p3.gd</code>, <code>vcrack_sites_p3.gd</code>) are deleted, and the final G0 on the clean tree is zero SCRIPT ERROR. No commits (closeout is the coordinator's); <code>TASKS.yaml</code> untouched (the in-progress status is the tasks.py tool, not a hand edit).</p>
+<p class="note">Gate logs: <code>.scratch/AC-0311-gates/p3_*.log</code> (this run: p3_crossface_r1…r16, p3_final_g0, p3_gate_chain) + the piece-2 logs (§11). No renders, no R50/battery/r16/Windows rebuild (out of scope for this bounded piece). The band is fully deleted and the seam is measured band-free — never half-removed.</p>
 </body></html>

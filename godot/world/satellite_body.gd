@@ -13,10 +13,13 @@
 #  (3) the runtime bake: far column payloads ([H u16x256][biome x256]
 #      [top x256] per chunk - the same call the demotion path makes)
 #      for all 196,196 chunks (home pair cx,cz in [-197,196]^2, then
-#      faces 2-11 as 64x64 at (face*64+ccx, face*64+ccz) with
-#      seed^(face*1000003) - the piece-1 keying, machine-diffed in
-#      piece 1), colour-baked with the piece-1 recipe (fcc top colour
-#      x fixed-sun lambert, stored sRGB). The bake is frame-sliced on
+#      faces 2-11 as 64x64 at (face*64+ccx, face*64+ccz) - the piece-1
+#      keying minus the per-face seed salt, dropped at AC-0311 piece 3:
+#      the sphere-domain field is one pure f(world, seed), so the bake
+#      and the streamed face chunks read the same terrain; the (face, R)
+#      thread reaches the C++ (d, delta) domain on both lanes), colour-
+#      baked with the piece-1 recipe (fcc top colour x fixed-sun
+#      lambert, stored sRGB). The bake is frame-sliced on
 #      the main thread (BAKE_BUDGET_MS per frame) so the game stays
 #      responsive; the per-frame stall is measured, not asserted
 #      (bake_stats). Off-thread generation is OWED (needs a TG-pool
@@ -303,18 +306,24 @@ func _step_bake() -> void:
 
 
 func _gen_one(g: Variant, idx: int) -> PackedByteArray:
-	# The piece-1 keying: home first (the plain seed), then faces 2-11
-	# at (face*64+ccx, face*64+ccz) with seed^(face*1000003).
+	# AC-0311 piece 3 (the same flat-frame class the port retired from
+	# generation): the piece-1 keying's per-face seed salt
+	# (seed^(face*1000003)) is DROPPED — in the sphere domain the field
+	# is ONE pure f(world, seed), so the bake and the streamed face
+	# chunks read the SAME terrain (a salted face would have been a
+	# different world from the live one). The (face, R) thread reaches
+	# the C++ (d, δ) domain on both lanes (R explicit — the bake is per
+	# (planet_id, R, seed), and the 4000 default is only the home planet).
 	if idx < HOME_CHUNKS:
 		var cx: int = idx % HOME_N - HOME_HALF
 		var cz: int = idx / HOME_N - HOME_HALF
-		return g.generate_far(cx, cz, seed, HMAX, SEA)
+		return g.generate_far(cx, cz, seed, HMAX, SEA, 0, R)
 	var kf: int = idx - HOME_CHUNKS
 	var f: int = 2 + kf / FACE_CHUNKS
 	var kk: int = kf % FACE_CHUNKS
 	var ccx: int = kk % FACE_GRID
 	var ccz: int = kk / FACE_GRID
-	return g.generate_far(f * FACE_GRID + ccx, f * FACE_GRID + ccz, seed ^ (f * 1000003), HMAX, SEA)
+	return g.generate_far(f * FACE_GRID + ccx, f * FACE_GRID + ccz, seed, HMAX, SEA, f, R)
 
 
 func _record_offset(f: int, ccx: int, ccz: int) -> int:

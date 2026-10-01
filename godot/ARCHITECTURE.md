@@ -135,8 +135,14 @@ Build and loading:
   per-face 1024² satellite textures of the canonical seed 44 (the piece-1 bake, 16.0 m²/texel
   equal-area); any other seed bakes them at runtime to
   `user://satellite/p{planet}_r{R}_s{seed}/` (frame-sliced, keyed by (planet_id, R, seed)).
-  The satellite body's camera-far extension (the default 4000 m plane clips the body's far
-  limb) is owned by the tier, not the camera.
+  **AC-0311 piece 3**: the in-engine bake's per-face SEED SALT was dropped in
+  `world/satellite_body.gd` `_gen_one` (the two far lanes thread (face, R) raw into
+  `generate_far`, matching the sphere-domain port — the field is one planet, one seed, so the
+  bake must be the SAME field, not a per-face-salted variant). The SHIPPED seed-44 textures are
+  pre-port + pre-salt-fix, so the in-engine bake no longer matches them; re-bake + re-ship of the
+  canonical textures is owed to the coordinator (the in-engine bake is the source of truth and is
+  now salt-consistent with the world). The satellite body's camera-far extension (the default
+  4000 m plane clips the body's far limb) is owned by the tier, not the camera.
 - **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
   blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
   `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). v6 = v5
@@ -164,7 +170,12 @@ Build and loading:
   but it must bump `SAVE_VERSION` so an old save is **rejected cleanly**: fail fast with a log line and
   start a fresh world, never half-load. Migration work is therefore a deliberate choice, not a default.
   This supersedes the earlier "keep older saves decoding" rule; AC-0288…AC-0292 and AC-0293 already
-  assumed it. Scope rule: the "Traps" list in `world/AGENTS.md`.
+  assumed it. Scope rule: the "Traps" list in `world/AGENTS.md`. **AC-0311 piece 3 bumped
+  `SAVE_VERSION` 3 → 4** (`autoload/save.gd`): the sphere-domain port re-derived the terrain field
+  (the lattice fields are f((d, δ)), the per-face seed salt dropped), so an old world half-loaded into
+  the re-derived world would place its edits on different ground and its player pose in mid-air; the
+  clean reject (a log line + a fresh world, no migration) is the owed protection. The bump is enforced
+  in `_continue_slot`'s `version_ok` gate (a SAVE SOFT-FAIL print; edits/pose/leaf-decay gated).
 
 ## 6. Stable design decisions
 
@@ -286,7 +297,12 @@ Match these; do not improvise a different approach in a task.
   hold 16×16 cells, keyed `face:ccx:ccz`, placed by `face_chunk_transform`
   (the pre-warp + per-chunk LSQ — the chart placement; the net-vs-chart
   placement residual it leaves at the seam is the AC-0307/AC-0308 property
-  the LAST ticket — the band removal — closes). `_face_stream` (per-frame)
+  and STANDS — AC-0311 piece 3 removed the C1 blend band, which masked the
+  surface-HEIGHT seam (0–1 m vcrack, unchanged band-free; the sphere-domain
+  (d, δ) field is continuous across the edge on its own), NOT the placement
+  split (crossing-row chasm 2.19 m, corner 3.73 m, bit-identical pre/post
+  band removal); the split's closure is a separate, unfiled concern).
+  `_face_stream` (per-frame)
   streams the player's window (sim_dist × 16 m, the per-face half of the
   edge — the along-edge clamp pairs faces 4/6/8/10 with the + half and
   5/7/9/11 with the − half; lumping the pair is the r15 hole-to-void bug).

@@ -2,7 +2,7 @@ extends Node
 
 const SLOTS := 3
 const BASE := "user://awecraft_save"
-const SAVE_VERSION := 3  # AC-0155: full-chunk-save era (load validates by shape, not version)
+const SAVE_VERSION := 4  # AC-0311 piece 3: the sphere-domain re-derivation (the deliberate genhash rebase) + the blend-band removal changed the generated terrain; an old save would half-load into the re-derived world (its edits re-applied over different ground). _continue_slot now rejects a version mismatch cleanly (edits + player pose dropped, fresh world at the same seed, one log line). NO migration — old worlds are disposable during development (ARCHITECTURE.md §5, user 2026-09-17)
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 
 var active_slot := -1

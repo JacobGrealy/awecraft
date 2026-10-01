@@ -210,24 +210,17 @@ static func _fbm2chunk(bx: int, sx: float, ox: float, bz: int, sz: float, oz: fl
 		j += 1
 
 # AC-0143 M4: per-face column generation (non-home faces only — face 0
-# always uses generate(); home-face byte-identity). 2D per-face noise
-# (P1a; 3D sphere noise = later upgrade): reuses the home-column pipeline
-# (generate_args) with a per-face salt seed ^ (face*1000003) and a
-# face-disjoint 2D domain (offset face*64 chunks = 1024 face cells).
-# AC-0309 C1 (INTERIM POLICY): a BLEND BAND of FACE_BLEND_BAND cells near
-# a home-shared cube edge fades the face field into the HOME-EXTENDED
-# field (the home pipeline's per-column height at the cell's extended flat
-# position — a position-based field shared by both sides, so at the edge
-# the face terrain IS the home terrain continued: the far side is ground
-# and the boundary is continuous). Generator-ONLY: the blend samples the
-# home C++ height pass, never live block data (an edit on the home side
-# can never shift a face's generated ground). The band is INTERIM: its
-# removal is the deliberately-last sphere-domain-generation ticket.
+# always uses generate(); home-face byte-identity). The (d, δ) sphere-
+# domain field is a pure f(world, seed) — ONE seed for the whole planet
+# (AC-0311 piece 2 dropped the per-face salt), so the surface/cave/ore/
+# biome fields continue across the face seams. AC-0311 piece 3 DELETED
+# the AC-0309 C1 interim BLEND BAND (FACE_BLEND_BAND cells near a
+# home-shared edge that faded the face field into the home-extended field
+# to hide the seam the per-face salt made): with the port both sides of
+# every boundary read the same (d, δ) field, the raw seam measures 0-1 m
+# (the 4/8-block quantization + the frame-fit residual), and the band was
+# blending identical terrain — the ticket's deliberately-last end-state.
 # Deterministic per (face, cx, cz, seed, R).
-const FACE_BLEND_BAND := 32  # face cells (≈ 196 m at R = 4000)
-static var _home_h_cache: Dictionary = {}  # "hcx,hcz" -> 512-byte u16 heightmap
-static var _home_h_order: Array = []  # LRU order (capped — the home grid is infinite)
-const _HOME_H_CACHE_CAP := 512
 
 static func generate_face(face: int, cx: int, cz: int, seed: int, R: float = 0.0) -> PackedByteArray:
 	# AC-0311 piece 2 (finishing-run fix): the per-face salt
@@ -245,96 +238,11 @@ static func generate_face(face: int, cx: int, cz: int, seed: int, R: float = 0.0
 	# domain — the field is generated on the chart the face is placed on
 	# (face_chunk_transform for face 2-11, column_transform for the home
 	# pair). R <= 0.0 (the default) means the home planet R = 4000.
-	# The BLEND BAND (AC-0309 C1 interim) stays until piece 3 deletes it.
+	# AC-0311 piece 3: the C1 blend band is GONE — the (d, δ) field is
+	# continuous across the seams on its own (the band's only reason to
+	# exist was the salt's seam).
 	var r: float = R if R > 0.0 else 4000.0
-	var data: PackedByteArray = generate_args(face * 64 + cx, face * 64 + cz, seed, Data.HEIGHT, Data.SEA, face, r)
-	if R > 0.0 and face >= 4:
-		_blend_face_chunk(data, face, cx, cz, seed, R)
-	return data
-
-# AC-0309 C1: the home-extended column height at flat (fx, fz) — the
-# home pipeline's per-column surface height (column_heights16: the
-# full-path H, post-carve) from the home chunk containing the position,
-# LRU-cached (the home grid is infinite; only the patch-edge strip is
-# ever requested, in a small window while walking a boundary).
-static func _home_ext_height(fx: float, fz: float, seed: int) -> int:
-	var hcx: int = int(floorf(fx / 16.0))
-	var hcz: int = int(floorf(fz / 16.0))
-	var key: String = "%d,%d" % [hcx, hcz]
-	if not _home_h_cache.has(key):
-		_home_h_cache[key] = gen_cpp().column_heights16(hcx, hcz, seed, Data.HEIGHT)
-		_home_h_order.append(key)
-		while _home_h_order.size() > _HOME_H_CACHE_CAP:
-			_home_h_cache.erase(String(_home_h_order.pop_front()))
-	var hx: int = int(floorf(fx)) - hcx * 16
-	var hz: int = int(floorf(fz)) - hcz * 16
-	var hb: PackedByteArray = _home_h_cache[key]
-	# the heightmap is 256 u16 heights in 512 bytes — the BYTE index is 2*slot
-	# (the slot-parity off-by-one that made odd slots read ~256x the height,
-	# a 383-m wall in the C1 blend band, is the AC-0309 walk-crossing killer)
-	var si: int = 2 * (hz * 16 + hx)
-	return (int(hb[si]) | (int(hb[si + 1]) << 8))
-
-# AC-0309 C1: the topmost SOLID (non-air, non-fluid) y of a column of a
-# 16x16xH chunk (local slot lx, lz), or -1 for an all-water/air column.
-static func _col_top(d: PackedByteArray, lx: int, lz: int, hmax: int) -> int:
-	var i0: int = (lz << 4) | lx
-	for y in range(hmax - 1, -1, -1):
-		var id: int = d[i0 + (y << 8)]
-		if id != 0 and id != B_WATER and id != B_LAVA:
-			return y
-	return -1
-
-# AC-0309 C1: crossfade ONE face column toward the home-extended field:
-# H = lerp of the two surface tops, the face column's composition and
-# caves kept (blend field VALUES — height — only; no geometry), the top
-# trimmed/extended to H with the column's own surface block, water
-# re-filled to SEA when H < SEA.
-static func _blend_column(dst: PackedByteArray, lx: int, lz: int, hh: int, w: float, hmax: int) -> void:
-	var hf: int = _col_top(dst, lx, lz, hmax)
-	if hf < 0:
-		return
-	var H: int = clampi(int(roundf(lerpf(float(hf), float(hh), w))), 1, hmax - 1)
-	# the column's surface block for the extension fill (topmost solid)
-	var top_id: int = 0
-	var i0: int = (lz << 4) | lx
-	for y in range(hf, -1, -1):
-		var id: int = dst[i0 + (y << 8)]
-		if id != 0 and id != B_WATER and id != B_LAVA:
-			top_id = id
-			break
-	for y in range(hmax):
-		var id: int = 0
-		if y <= H:
-			id = dst[i0 + (y << 8)]
-			if y > hf:  # extension: the face column had no solid here
-				id = top_id if top_id != 0 else B_DIRT
-		if id == 0 and y > H and H < Data.SEA and y <= Data.SEA:
-			id = B_WATER  # water re-filled to the sea level
-		dst[i0 + (y << 8)] = id
-
-# AC-0309 C1: run the blend band over one face chunk (16x16 cells). For
-# every cell within FACE_BLEND_BAND of a home-shared edge (face 4-11 only
-# border the home pair), blend its column with weight 1 - d/band (1 on the
-# edge). The local x slot respects the mirror class (face_local_x).
-static func _blend_face_chunk(data: PackedByteArray, face: int, ccx: int, ccz: int, seed: int, R: float) -> void:
-	var S: float = SphereMath.face_cell_size(R)
-	var band_m: float = float(FACE_BLEND_BAND) * S
-	var mirrored: bool = SphereMath.face_mirror_x(face)
-	for lx in range(16):
-		var iu: int = ccx * 16 + (15 - lx if mirrored else lx)
-		for lz in range(16):
-			var iv: int = ccz * 16 + lz
-			var b: Vector3 = SphereMath.face_cell_band(face, iu, iv, R)
-			if is_inf(b.z) or b.z < 0.0 or b.z >= band_m:
-				continue
-			var w: float = 1.0 - b.z / band_m
-			if w < 0.02:
-				continue  # within half a block of the unblended column
-			var hh: int = _home_ext_height(b.x, b.y, seed)
-			if hh < 1:
-				continue
-			_blend_column(data, lx, lz, hh, w, Data.HEIGHT)
+	return generate_args(face * 64 + cx, face * 64 + cz, seed, Data.HEIGHT, Data.SEA, face, r)
 
 
 # ---------------------------------------------------------------------------

@@ -12647,10 +12647,11 @@ var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
 # The home pair (faces 0,1) keeps its flat 1 m grid UNTOUCHED (D1: genhash
 # 25/25 stays byte-identical — the home terrain never changes). Faces 4-11
 # carry the 1024-cell grid; the player walks/flies from the home patch
-# across a shared cube edge onto the far side. C1's interim BLEND BAND
-# (generator.gd, FACE_BLEND_BAND cells) fades the face field into the
-# home-extended field so the far side is ground and the boundary is
-# continuous. C3 rule: the meshing stays PER-CHUNK — the cross-face SNAP
+# across a shared cube edge onto the far side. The boundary is
+# continuous by the field's OWN (d, δ) continuity (AC-0311: the C1
+# interim BLEND BAND was deleted — it existed only to hide the seam the
+# per-face salt made, and the port removed that seam). C3 rule: the
+# meshing stays PER-CHUNK — the cross-face SNAP
 # RING is a per-chunk solid test resampled from the neighbour's LIVE data
 # (no cross-face greedy merge: build_accs is a per-chunk function and the
 # ring only supplies neighbour solidness, never geometry).
@@ -13010,8 +13011,8 @@ func _face_in_mesh_window(face: int, ccx: int, ccz: int) -> bool:
 # player's (patch-clamped) flat position, on the 8 non-home faces that
 # border the patch, edge chunks first (the seam is what the player
 # meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work (an
-# ensure = gen + C1 blend for band chunks + the sync mesh + the star
-# seed); resident chunks are cheap (the dict lookup) and consume no
+# ensure = gen + the sync mesh + the star seed); resident chunks are
+# cheap (the dict lookup) and consume no
 # budget. Inert when the player is far from every edge (the boundary r4
 # walk stays in the spawn region with zero resident face chunks).
 const FACE_STREAM_BUDGET_MS := 12.0
@@ -13115,7 +13116,11 @@ func _face_stream() -> void:
 		var moved: float = INF if _face_evict_last == Vector2(INF, INF) else (_face_evict_last - p).length()
 		if moved > 16.0:
 			_face_evict_last = p
-			var evict_r: float = win + float(WorldGen.FACE_BLEND_BAND) * S + FACE_STREAM_EVICT_MARGIN
+			# AC-0311 piece 3: the +FACE_BLEND_BAND*S term (196 m at
+			# R = 4000) went with the band — it existed to keep the
+			# blended strip resident; nothing reads face chunks past
+			# the mesh window, so the plain win + margin stands.
+			var evict_r: float = win + FACE_STREAM_EVICT_MARGIN
 			for k in _face_order.duplicate():
 				var c = chunks.get(k)
 				if c == null:
@@ -13352,9 +13357,9 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	add_child(c)
 	# AC-0040: face-planet columns get the banana trees too (same shore
 	# rule in face space — the generate_face coordinate/seed transform).
-	# AC-0309 C1: R > 0 enables the generator blend band (the far side is
-	# ground: the face field fades into the home-extended field near the
-	# home edge).
+	# AC-0311 piece 3: R > 0 threads the (face, R) sphere-domain chart
+	# into the C++ (the C1 blend band that used to ride on it is gone —
+	# the (d, δ) field is continuous across the home edge on its own).
 	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed, Game.planet_R)
 	# AC-0311 piece 2 (finishing-run fix): the banana rolls drop the
 	# per-face salt too — one world seed (the C++ tree rolls in the same

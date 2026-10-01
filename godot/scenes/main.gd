@@ -490,6 +490,12 @@ func _continue_slot(slot: int) -> void:
 	# lets the player reach the non-home faces) records face edits — the
 	# gate accepts faces 0-11 (planet 0); an edit key of any other shape
 	# still soft-fails (old saves are disposable during development).
+	# AC-0311 piece 3 SOFT-FAIL: a SAVE_VERSION mismatch means the WORLD
+	# SHAPE moved (the sphere-domain re-derivation + the blend-band
+	# removal) — the saved edits and player pose no longer match the
+	# re-derived terrain, so they are dropped with the fresh world at the
+	# same seed (no migration owed, ARCHITECTURE.md §5).
+	var version_ok: bool = int(data.get("version", 0)) == Save.SAVE_VERSION
 	var planets = data.get("planets", null)
 	var planets_ok: bool = typeof(planets) == TYPE_ARRAY and (planets as Array).size() > 0
 	var edits_raw = data.get("edits", {})
@@ -500,8 +506,8 @@ func _continue_slot(slot: int) -> void:
 			if ep.size() != 5 or int(ep[0]) != 0 or int(ep[1]) < 0 or int(ep[1]) > 11:
 				edits_v2_ok = false
 				break
-	if height_ok and (not planets_ok or not edits_v2_ok):
-		print("SAVE SOFT-FAIL (old save format: planets_ok=%d edits_v2_ok=%d) - edits discarded, fresh world" % [int(planets_ok), int(edits_v2_ok)])
+	if (not version_ok) or (height_ok and (not planets_ok or not edits_v2_ok)):
+		print("SAVE SOFT-FAIL (old save format: version_ok=%d planets_ok=%d edits_v2_ok=%d) - edits discarded, fresh world" % [int(version_ok), int(planets_ok), int(edits_v2_ok)])
 	Save.active_slot = int(slot)
 	if world != null:
 		_free_game_nodes()
@@ -511,19 +517,20 @@ func _continue_slot(slot: int) -> void:
 		if typeof(home) == TYPE_DICTIONARY:
 			Game.planet_R = clampf(float((home as Dictionary).get("R", 4000.0)), 2000.0, 8000.0)
 	_create_game_nodes()
-	if height_ok and planets_ok and edits_v2_ok:
+	if version_ok and height_ok and planets_ok and edits_v2_ok:
 		world.edits = _conv_edits_v2(edits_raw)
 	# AC-0270: restore the in-flight leaf-decay timers (the chunk nodes
 	# that own them may not exist yet - world merges them in lazily when
 	# each chunk materializes, and re-runs the connectivity scan for logs
-	# the edits removed).
+	# the edits removed). AC-0311 piece 3: version-gated too — a timer
+	# over re-derived terrain is the same hazard class as the edits.
 	var leaf_decay_raw = data.get("leaf_decay", {})
-	if typeof(leaf_decay_raw) == TYPE_DICTIONARY:
+	if version_ok and typeof(leaf_decay_raw) == TYPE_DICTIONARY:
 		world.pending_leaf_decay = leaf_decay_raw
 	var ps: Dictionary = data.get("player", {})
 	var pos: Array = ps.get("pos", [])
 	var target: Vector3
-	if height_ok and pos.size() == 3:
+	if version_ok and height_ok and pos.size() == 3:
 		target = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
 	else:
 		target = world.spawn_point()
@@ -536,7 +543,13 @@ func _continue_slot(slot: int) -> void:
 	# sim taxi diamond (taxi <= band0_r) that the fresh-spawn path waits
 	# for — the continue flow has no loading window, so this wait is the
 	# whole activation gate here.
-	await _await_sim_band(target, 3000)
+	# AC-0311 p3: wait on the FLAT recenter position — the diamond the
+	# streaming actually builds around the recenter. The saved player's
+	# GLOBAL position was the old argument: past the patch centre its
+	# chunk arithmetic is a different space (the crossface arm's E
+	# round-trip timed out on a diamond 12 chunks from the recenter —
+	# a 50 s activation stall, not a gate).
+	await _await_sim_band(flt, 3000)
 	player = _spawn_player()
 	_restore_player(ps if height_ok else {})
 	if Game.world != null:

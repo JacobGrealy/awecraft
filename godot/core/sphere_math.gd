@@ -564,13 +564,20 @@ static func home_flat_ext(p: Vector3, R: float) -> Vector2:
 	var k: float = hw * 4.0 / PI
 	return Vector2(k * atan(d.x / d.y), k * atan(d.z / d.y))
 
-# AC-0309: the C1 blend-band query for one face cell: the cell centre's
-# extended home flat position (fx, fz) plus d_edge, its distance in metres
-# to the nearest home-shared cube edge along the extended home normal —
-# INF for cells that do not border the home pair (the -Y faces, and
-# +X/-X/+Z/-Z cells on the far hemisphere, d.y <= 0). The C1 band blends a
-# face cell whose d_edge < BAND into the home-extended field with weight
-# 1 - d_edge/BAND (1 on the edge).
+# AC-0309 (retitled at AC-0311 piece 3): the HOME-EXTENDED FLAT position
+# of a face cell: the cell centre's (fx, fz) on the home chart run past
+# its edges, plus d_edge, its distance in metres to the nearest home-
+# shared cube edge — INF for cells that do not border the home pair (the
+# -Y faces, and +X/-X/+Z/-Z cells on the far hemisphere, d.y <= 0).
+# Consumers: world.gd's C3 cross-face ring resamples the LIVE home column
+# at (fx, fz) (meshing the boundary never merges across the seam — it
+# reads the neighbour's data at the shared edge), and the D5 face-chunk
+# streaming window distances the chunk's corner cells to the player's
+# flat position through (fx, fz); the is_inf(z) form is the "does not
+# border the home patch" sentinel. The d_edge VALUE served the C1 blend
+# band's weight (1 - d_edge/BAND) — deleted with the band at AC-0311
+# piece 3 (the (d, δ) field is continuous across the edge on its own);
+# the finite d_edge read is now unused, the INF sentinel is not.
 static func face_cell_band(face: int, ccx: int, ccz: int, R: float) -> Vector3:
 	if face < 4:
 		return Vector3(INF, INF, INF)
