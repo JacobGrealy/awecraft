@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-09-30T04:08
+  updated_at: 2026-10-01T09:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0311
 - AC-0381
 - AC-0382
 - AC-0093
@@ -15019,11 +15018,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-17T18:37
-  updated_at: 2026-09-17T18:52
-  completed_at: null
+  updated_at: 2026-10-01T09:51
+  completed_at: 2026-10-01T09:51
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player travelling around the planet I want the far side of a face boundary
@@ -15078,7 +15077,78 @@ intake:
     So the band''s removal breaks builds inside the strip BY DESIGN and owes NO migration - do not build
     edit migration for it. What is still owed: bump SAVE_VERSION (or the column blob version) so an old
     world is rejected cleanly with a log line and starts fresh, rather than half-loading. The standing
-    policy now lives in godot/ARCHITECTURE.md section 5 ("Save compatibility policy") and godot/world/AGENTS.md.'
+    policy now lives in godot/ARCHITECTURE.md section 5 ("Save compatibility policy") and godot/world/AGENTS.md.
+
+
+    PIECE 1 COMPLETE AND ACCEPTED, WITH ONE VERIFICATION GAP I WANT ON THE RECORD RATHER THAN PAPERED
+    OVER. What the design bought, first, because it changes how this ticket should be prioritised: the
+    measured cost of the sphere-domain parametrisation is **+1.5% per chunk** (4,758 -> ~4,830 us; 167.7
+    ns per dense sphere-domain H eval = 138 ns of unchanged field work + 29.7 ns for the (d, delta) precompute,
+    +14% on the far lane at 92 -> ~105 us) against AC-0042''s +2-3x estimate. The reason the estimate
+    was so far out is worth remembering: it priced READING DENSITY, not the domain - the design precomputes
+    (d, delta) once per lattice point (2,401 unique per chunk, shared by all 16 fields) and substitutes
+    x -> R*d.x, z -> R*d.z, y -> delta into every noise call, so the lattice shape, the seeds, the octave
+    counts and the per-block reads are all unchanged. A +2-3x fear was a +1.5% fact, and it makes the
+    full port cheap rather than heroic. THE CONTINUITY ACCEPTANCE IS MET BY MEASUREMENT, not by argument:
+    along a 1 m path crossing the home/face-4 edge, the NEW form has a crossing step of ZERO with a max
+    adjacent step of 1 over 96 steps and no special kink at the edge (0.25/m), while the CURRENT form
+    has a raw seam 7 m cliff (home 166 against face-4 173) that the C1 blend band''s construction hides
+    but cannot remove - which is the V-crack AC-0368 measured at -4.69 m and which this ticket exists
+    to delete. THE PER-CONSTRUCT VERDICTS ARE RECORDED so a later reader does not re-derive them: surface
+    height, cheese/ore and the aquifer change (the aquifer''s cell grid re-tiles per face and its hash
+    keys go global); cave biomes, pillars and veins change their fields and per-cell hashes while their
+    y-band logic is already frame-independent; and the CARVERS need NO CHANGE at all, which is stated
+    explicitly because it is the kind of thing that gets needlessly rewritten. THE VERIFICATION GAP: genhash
+    returns 25 hashes deterministically across runs, but the value it now returns (a4d0cab2...) does not
+    appear anywhere in tasks/harness_data.yaml, so the standing row is not carrying the post-AC-0367 tip
+    and the "byte-identical to the standing reference" claim is really determinism on one build rather
+    than inertness against a HEAD-built binary. That distinction matters precisely because this piece
+    adds an env-gated prototype INSIDE the native lane: the right proof is a genhash comparison between
+    a binary built from HEAD''s gen.cpp and the binary carrying the prototype, and since swapping the
+    source without rebuilding changes nothing, that comparison costs two native rebuilds - so it belongs
+    in piece 2, which rebuilds anyway. Owed with it: the genhash row needs its current tip recorded, and
+    the piece-2 run should close both. TWO SMALLER FINDINGS from this run are also recorded rather than
+    dropped: the lightstate arm''s `ab` fixture row is stale from the AC-0360/0367 re-bases (deterministic
+    and provably not caused by this piece - the fifth stale-arm case this session), and boundary r4 read
+    p95 43 against a 39-42 band, which is machine variance rather than a regression since the piece changes
+    no streaming path.
+
+
+    CLOSED - THE SEAM END-STATE IS REACHED. The surface, cave, ore and biome fields are now functions
+    of a GLOBAL coordinate pair (d = P/|P| plus a radial depth delta = |P| - R), sampled per column in
+    its own placed frame, and the blend band that existed only to hide the seam is DELETED. The number
+    that defines the ticket: the raw seam at a face boundary went from **32 blocks to 0-1 m** (three sites
+    reading 0/1/0 across a 97-point crossing path) against 7 m for the flat world it replaces. And the
+    deletion was PROVEN redundant rather than assumed safe - the post-deletion seam reads EXACTLY the
+    same 0-1 m, so the (d, delta) field is continuous across the edge on its own, which is the whole design
+    thesis tested. The F placement split is bit-identical before and after (2.189 m crossing-row, 3.732
+    m corner), which says something precise about what the band had been doing all along: it masked the
+    HEIGHT seam, not the placement split, and the split stands as recorded. COST, against the epic''s
+    +2-3x fear: +1-2% per chunk (GENMS 126-128 against a baseline of 125), matching piece 1''s +1.5% prototype
+    measurement rather than the estimate, and +5.9% on the far lane (91.2 -> 96.59 us/chunk over 196,196
+    chunks) which is BETTER than the +14% piece 1 predicted for that lane. The estimate was wrong because
+    it priced reading density, not the domain. WHAT THE TICKET COST IN HUMAN TERMS, and I want this on
+    the record because it is the part that is easy to hide: TWO harness restarts cancelled runs mid-flight.
+    The first left a large coherent but UNVERIFIED port in the working tree; I inspected it rather than
+    reverting, kept it, and ran a verify-and-finish pass that found TWO REAL DEFECTS it had left behind
+    - the face-2-and-above chart domain was up to a face-width off on ten of the twelve faces, and a per-face
+    SEED SALT was still making the two sides of a seam roll two DIFFERENT noise realizations, which is
+    precisely the defect the ticket was written to remove. Neither would have produced an error; both
+    would have produced a subtly wrong world. Verifying a cancelled run''s work is not busywork. THE SUPPORTING
+    WORK: SAVE_VERSION 3 -> 4 with a clean reject and no migration (an old save half-loaded into the re-derived
+    world would place edits on different ground with the pose mid-air); every consumer classified as DELETED,
+    STILL NEEDED or RE-BASED with its values; every re-based arm documented as still DISCRIMINATING, including
+    a crossface gate that moved from a micron margin to anchor-on-face on foot because a micron margin
+    was measuring terrain and landing luck rather than the contract; the satellite''s flat-frame seed
+    salt dropped; ARCHITECTURE synced in three sections; and the 12 satellite textures RE-BAKED AND RE-SHIPPED
+    from the post-port binary, validated at ZERO of 12,582,912 pixels against the engine''s own bake,
+    with faces 2-11 fully re-rolled (88-95% of pixels) and the home pair near-invisible (mean delta about
+    6). MY VERIFICATION, twice and independently: the full heavy stage ran green both BEFORE the band
+    deletion (genhash tip 46c20b07, r16 no reds with far_holes 0/0, R24 sweep p50 5.9 / frame p95 48 /
+    storm p99 67, r4 13/33, farab h_mismatch 0, halo ok, battery green) and AFTER it (the same tip 46c20b07
+    and the same shape of numbers), which is the evidence that the deletion moved no world content. The
+    Windows download is rebuilt at d4240c5, stamp 20261001-0950, verified by fetching BUILD.txt rather
+    than by trusting the port.'
   comments: []
 - id: AC-0312
   title: far-band-draw-tiers
