@@ -11312,6 +11312,43 @@ func _satellite_test(spawn: Vector3) -> void:
 		out["full_fail"] = lad[3]
 	# (3) the bake (the sliced bake's measured main-thread stall)
 	out["bake"] = sb.bake_stats
+	# AC-0384: the EXPORT-CONDITION assertion. The satellite textures are
+	# IMPORTED resources: the export PCK ships the imported .ctex, not the raw
+	# .png, so the res path must be chosen by ResourceLoader.exists (true in an
+	# export) and loaded via the import system - not FileAccess (false in an
+	# export - the white planet). The source tree cannot reproduce the export
+	# condition (both predicates are true there), so this RECORDS which
+	# predicate chose the source (a silent fall-through to baking is now
+	# VISIBLE in the RESULT) and asserts the import path is actually loadable
+	# for all 12 faces - the export-relevant property.
+	out["src_predicate"] = sb._src_predicate
+	out["res_load_via"] = sb._res_load_via
+	var res_export_ok := true
+	var res_missing: Array = []
+	for rf in 12:
+		var rp := "res://assets/satellite/satellite_face%02d.png" % rf
+		if not ResourceLoader.exists(rp) or ResourceLoader.load(rp) == null:
+			res_export_ok = false
+			res_missing.append(rp)
+	out["res_export_ok"] = res_export_ok
+	out["res_missing"] = res_missing
+	if not res_export_ok:
+		ok = false
+		out["res_export_fail"] = "shipped res:// textures not loadable via the import system (ResourceLoader) - the export would bake instead of drawing them"
+	# The source-choice contract: the canonical seed must take the shipped
+	# res:// path (a user:// cache if present). A bake for the canonical seed
+	# is the pre-AC-0384 white-planet fallthrough.
+	var canon := int(Game.world_seed) == SatelliteBody.CANONICAL_SEED
+	out["canonical_seed"] = canon
+	if canon and sb._load_src == "":
+		ok = false
+		out["export_fallthrough"] = "canonical seed %d took the bake path instead of the shipped res:// textures (predicate=%s) - the white-planet fallthrough" % [int(Game.world_seed), sb._src_predicate]
+	# When the res path is taken, the recorded predicate must be the export-
+	# safe one (a regression to FileAccess.res shows in any run, not just the
+	# export).
+	if sb._load_src == "res" and not sb._src_predicate.begins_with("ResourceLoader"):
+		ok = false
+		out["predicate_fail"] = "res path chosen but predicate is not ResourceLoader.*: %s" % sb._src_predicate
 	if OS.get_environment("AWECRAFT_SATELLITE_REBAKE") == "1":
 		sb.force_rebake()
 		var t2 := 0

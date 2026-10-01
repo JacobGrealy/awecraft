@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0384 — satellite LOD white in the exported build (fixed)</title>
+<style>
+ body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+ h1{font-size:22px;border-bottom:2px solid #333;padding-bottom:6px}
+ h2{font-size:17px;margin-top:26px;border-bottom:1px solid #ccc;padding-bottom:3px}
+ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+ pre{background:#f4f4f4;border:1px solid #ddd;border-radius:4px;padding:10px;overflow-x:auto}
+ .ok{color:#0a7a2a;font-weight:600}.no{color:#b00020;font-weight:600}.warn{color:#a06000;font-weight:600}
+ table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+ th,td{border:1px solid #ccc;padding:5px 8px;text-align:left;vertical-align:top}
+ th{background:#f0f0f0}
+ .kv td:first-child{width:280px;font-weight:600}
+ .box{border-left:4px solid #3a6ea5;background:#f3f7fc;padding:8px 12px;margin:10px 0}
+ .box.green{border-left-color:#0a7a2a;background:#f2faf5}
+ .box.red{border-left-color:#b00020;background:#fdf2f4}
+ small{color:#555}
+</style>
+</head>
+<body>
+<h1>AC-0384 — the satellite LOD never loads (white planet in the Windows build)</h1>
+<p><strong>Status: FIXED.</strong> Priority 1, reported by the user from the Windows build. Root cause confirmed
+and reproduced against a real export pack, fix verified green across the standing set. The full battery + the
+Windows rebuild are the coordinator's — the Linux lane is staged (this page + the gate logs in
+<code>.scratch/AC-0384-gates/</code>).</p>
+
+<div class="box red"><strong>Symptom:</strong> "the satellite LOD never loads, I just see a white planet."
+<strong>Root cause (verified, not re-derived):</strong> <code>godot/world/satellite_body.gd::configure</code> chose its
+texture source with <code>FileAccess.file_exists()</code> on <code>res://assets/satellite/satellite_face%02d.png</code>.
+<code>FileAccess</code> does <em>not</em> consult Godot's import system. The export PCK ships the <em>imported</em>
+<code>.ctex</code>, not the raw <code>.png</code>, so in an export that predicate is <strong>false</strong> → the canonical
+seed-44 branch is skipped → the body falls through to <code>_start_bake()</code> and draws with unset textures =
+Godot's default <strong>white</strong>. Every gate passed because the arms run from the source tree, where the raw
+<code>.png</code> is on disk and the predicate is <strong>true</strong>.</div>
+
+<h2>1. The export condition, reproduced (the decisive evidence)</h2>
+<p>The source tree cannot distinguish the two predicates (both are true there), so the export condition was
+reproduced directly: export a PCK (<code>godot --headless --path godot --export-pack Windows awecraft.pck</code>) and
+probe <code>res://</code> <em>against the pack</em> (<code>--main-pack awecraft.pck</code>). Output,
+<code>.scratch/AC-0384-gates/packed_probe.log</code> (pack 5,487,464 bytes, PCK <code>awecraft.pck</code> kept):</p>
+<pre>
+PACKED FileAccess.file_exists = false        &lt;-- the predicate the buggy code used: FALSE in an export
+PACKED ResourceLoader.exists  = true         &lt;-- the correct predicate: TRUE in an export
+PACKED ResourceLoader.load type = CompressedTexture2D
+PACKED import get_image (headless) = (1024, 1024)   &lt;-- the import load path yields a valid image
+PACKED raw FileAccess OPEN = null (raw png NOT accessible in the pack)
+PACKED json FileAccess.file_exists = true     &lt;-- a .json (no importer) ships RAW; FileAccess is right for it
+PACKED 12-face import-loadable = 12 / 12      &lt;-- all 12 shipped textures are present + loadable in the export
+</pre>
+<p>This is the discriminator the source tree can never show: <span class="no">FileAccess.file_exists = false</span> /
+<span class="ok">ResourceLoader.exists = true</span> / <span class="ok">ResourceLoader.load().get_image() = 1024²</span> /
+<span class="ok">12/12 import-loadable</span>. It proves (a) the old predicate was the bug, (b) the fix's predicate
+is the export-true one, and (c) the fix's <em>load</em> path (the import system) actually works in the export.</p>
+<div class="box green"><strong>Post-export check is FEASIBLE and DONE</strong> on this box — the PCK was exported and
+inspected (12/12 textures present, loadable via the import system). The full Windows exe rebuild + re-ship is the
+coordinator's (per the ticket); the PCK-level evidence is sufficient to close the reproducer loop: a reproducer of the
+old predicate would read <code>false</code> on exactly this pack and bake a white planet.</div>
+
+<h2>2. The fix</h2>
+<p>Three coordinated changes, all necessary (a predicate swap alone is not enough — the res <em>load</em> path was
+also raw-<code>FileAccess</code>, dead in an export):</p>
+<table class="kv">
+<tr><td><code>godot/world/satellite_body.gd</code> — predicate, split by domain</td>
+<td><code>_all_exist()</code> (one <code>FileAccess.file_exists</code> for both domains) is replaced by
+<code>_cache_paths_exist()</code> (<code>FileAccess.file_exists</code> — correct for <code>user://</code> runtime files)
+and <code>_res_paths_exist()</code> (<code>ResourceLoader.exists</code> — correct for imported <code>res://</code>
+resources, and the only predicate true in an export).</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code> — load via the import system</td>
+<td>New <code>_load_res_face()</code>: <code>ResourceLoader.load(res_path)</code> → <code>Texture2D</code> →
+<code>get_image()</code>. In an export the raw <code>.png</code> is absent, so this is the <em>only</em> path that
+works. A headless source-tree run (no GPU to decode the <code>CompressedTexture2D</code>) falls back to the raw file
+(which exists only in the source tree), keeping the pixel guard runnable in the headless arm. <code>configure</code>
+records <code>_src_predicate</code> / <code>_res_load_via</code> / <code>_bake_reason</code>.</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code> — loud, not silent</td>
+<td>If the canonical seed-44 textures are expected but not loadable via the import system, a
+<code>push_warning</code> fires and the bake runs <em>knowingly</code> (<code>_src_predicate = "bake.res-missing"</code>)
+instead of falling through with no signal. <code>_fail()</code> now records the predicate + via + reason in
+<code>bake_stats</code>.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code> — the satellite arm records + asserts the export condition</td>
+<td>Surfaces <code>src_predicate</code> / <code>res_load_via</code> in the RESULT and adds
+<code>res_export_ok</code> (all 12 faces loadable via <code>ResourceLoader</code> — the export-relevant property),
+<code>canonical_seed</code>, and two loud failures: <code>export_fallthrough</code> (canonical seed took the bake
+path = the white planet) and <code>predicate_fail</code> (res path chosen without a <code>ResourceLoader.*</code>
+predicate). A run that silently fell through to baking is now <strong>visible</strong> in the RESULT.</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code></td>
+<td>Documented the new arm fields (<code>harness_doc.py --render</code>; <code>--check</code> in sync).</td></tr>
+</table>
+
+<h2>3. The bug-class sweep (every <code>res://</code> decision site)</h2>
+<p>A <code>res://</code> existence check that lies in an export is not unique, so the whole project was swept for
+<code>file_exists</code> and other filesystem probes making a <em>decision</em> about a <code>res://</code> path.</p>
+<table>
+<tr><th>Site</th><th>Domain / resource</th><th>Verdict</th><th>Why</th></tr>
+<tr><td><code>satellite_body.gd:221</code> <code>_all_exist</code></td><td>res:// <strong>.png</strong> (imported)</td>
+<td class="no">FIXED</td><td>The white planet. Raw <code>.png</code> not in the PCK → <code>FileAccess.file_exists</code>
+false in export. Now <code>_res_paths_exist</code> uses <code>ResourceLoader.exists</code> + the load uses the import system.</td></tr>
+<tr><td><code>menu.gd:499,504,505</code> <code>_on_pack_file_selected</code></td><td>res:// .png, raw
+<code>Image.load_from_file</code></td><td class="warn">EDITOR-ONLY (flagged, unchanged)</td>
+<td>Runtime texture-pack import. It calls <code>AtlasScript.import_pack</code> (line 493), which <em>writes to
+<code>res://assets/</code></em> — the PCK is read-only in an export, so that fails first and 499–507 never runs.
+Correct in the editor (res:// writable, raw <code>.png</code> on disk); unreachable in the export. Shares the class;
+would need import-system treatment if the feature were ever made export-capable. Left unchanged (don't touch a
+working editor feature).</td></tr>
+<tr><td><code>atlas.gd:135</code>, <code>data.gd:239,296</code>, <code>probe_alpha.gd:10</code></td><td>res://
+<strong>.json</strong> (no importer → raw data)</td><td class="ok">CORRECT</td>
+<td>A <code>.json</code> has no Godot importer, so it ships <em>raw</em> in the PCK and
+<code>FileAccess.file_exists</code> is <strong>true in an export too</strong> (packed probe:
+<code>json FileAccess.file_exists = true</code>). <code>FileAccess</code> is the right predicate for raw data read
+via <code>FileAccess.open</code>. Switching these to <code>ResourceLoader.exists</code> would be <em>wrong</em>.</td></tr>
+<tr><td><code>data.gd:236,293</code>, <code>atlas.gd:143</code></td><td>res:// .png via <code>load()</code></td>
+<td class="ok">CORRECT</td><td>These <em>load</em> the texture via <code>load()</code> (the import system) — the right way.</td></tr>
+<tr><td><code>save.gd:16,56,120</code>, <code>settings.gd:124</code>, <code>chunk_io.gd:226,243,256,266</code>,
+<code>world.gd:11505,11645</code>, <code>debug.gd</code> (log/zip paths)</td><td><strong>user://</strong>
+(save/settings/region/log)</td><td class="ok">CORRECT</td>
+<td>Runtime files the engine wrote at runtime — the import system does not apply; <code>FileAccess.file_exists</code>
+is the only correct predicate (confirmed the domains are <code>user://awecraft_save</code> /
+<code>user://chunkdir_%d</code> / <code>user://awecraft.cfg</code>).</td></tr>
+<tr><td><code>harness.gd:1545,19184,19285,19542,20419,20891,22151,22162,24660,24776,27964,29081</code></td>
+<td>user:// or <code>.scratch</code> absolute (test arms)</td><td class="ok">CORRECT (test code)</td>
+<td>Arms run from the source tree and decide about save/region/log/scratch data, never about an imported
+<code>res://</code> resource. <code>harness.gd:11350</code> <code>_sat_img</code> (raw <code>res://</code> load) is the
+REBAKE pixel-compare — source-tree tool, not shipped.</td></tr>
+</table>
+<p><strong>Net:</strong> exactly one shipped-game bug of the class (<code>satellite_body.gd</code>, fixed); one
+editor-only site flagged (<code>menu.gd</code>); the rest correct by domain (raw <code>.json</code> /
+<code>user://</code> → <code>FileAccess</code>; imported resources → <code>load()</code>/<code>ResourceLoader</code>).</p>
+
+<h2>4. How the export condition is now asserted (and made visible)</h2>
+<ol>
+<li><strong>Definitive (done):</strong> the packed-build probe reproduces the export condition and proves the old
+predicate is false / the new predicate is true / the 12 textures load via the import system (§1). This is the
+reproducer the ticket asked for — the white planet is now excluded <em>by evidence</em>, not "the user looking again."</li>
+<li><strong>Recorded field:</strong> the satellite arm's RESULT carries <code>src_predicate</code> (which predicate
+chose the source). In a broken export a run that fell through to baking would report
+<code>src_predicate: "bake.res-missing"</code> — <em>visible</em>, not an invisible white ball.</li>
+<li><strong>Loud arm assertions:</strong> <code>res_export_ok</code> (12/12 import-loadable — a regression that breaks
+importability fails the arm), <code>export_fallthrough</code> (canonical seed took the bake path), and
+<code>predicate_fail</code> (res path chosen without a <code>ResourceLoader.*</code> predicate). In the (correct)
+source-tree run all pass and the arm records
+<code>src_predicate: "ResourceLoader.res"</code>, <code>res_load_via: "import"</code>, <code>res_export_ok: true</code>.</li>
+</ol>
+<p><small>Honest limitation (the ticket's point): the source tree cannot by itself distinguish
+<code>ResourceLoader.exists</code> from <code>FileAccess.file_exists</code> (both true there) — that is exactly why
+item (1), the packed-build probe, is the load-bearing evidence, and why the recorded field (item 2) is the escape
+hatch for any future export run.</small></p>
+
+<h2>5. Gates (Linux lane, all green)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Standing value</th><th></th></tr>
+<tr><td>G0 (zero SCRIPT ERROR, final pristine tree)</td><td><code>0</code> SCRIPT ERROR</td><td>0</td><td class="ok">OK</td></tr>
+<tr><td>genhash 25/25 byte-identical</td><td>25/25 diff-clean vs <code>.scratch/AC-0311-gates/p2_genhash_r1.log</code> (chunk (0,0) = <code>46c20b07…</code>, the current tip)</td><td>25/25</td><td class="ok">OK</td></tr>
+<tr><td>satellite arm r4</td><td><code>ok:true</code>, <code>mode:res</code>, <code>src_predicate:ResourceLoader.res</code>, <code>res_load_via:import</code>, <code>res_export_ok:true</code>, ratio 0.25, guard_ok 12/12</td><td>ok / ladder / 0.25</td><td class="ok">OK</td></tr>
+<tr><td>&nbsp;&nbsp;— ladder</td><td>hidden h 26.59 (op 0, hidden) · rim h 176.59 (nadir op 0 / rim op 1) · dissolve h 200.8 (nadir op <strong>0.5</strong>, nadir_d 74.8 ∈ (69.6, 80)) · full h 306.0 (nadir op 1)</td><td>hidden/rim/dissolve@0.5/full</td><td class="ok">OK</td></tr>
+<tr><td>piece-1 two-axis variance guard</td><td>12/12 faces <code>ok:true</code> (spread 179, one face 160)</td><td>pass on every face</td><td class="ok">OK</td></tr>
+<tr><td>farab</td><td><code>ok:true</code>, <code>h_mismatch:0</code>, slab_cmp 1080/1080</td><td>h_mismatch 0</td><td class="ok">OK</td></tr>
+<tr><td>ladder (draw-tier)</td><td><code>ok:true</code>, band_a_ok 20/20, tier_mismatch 0, sky_bad_alpha 0</td><td>20/20</td><td class="ok">OK</td></tr>
+<tr><td>meshprobe</td><td><code>ok:true</code>, match_rate 1.0, verts 121620/121620</td><td>1.0</td><td class="ok">OK</td></tr>
+<tr><td>halo</td><td><code>ok:true</code>, inner/boundary mismatches 0, slabs_ok 227</td><td>ok / 0</td><td class="ok">OK</td></tr>
+<tr><td>lightstate</td><td><code>ok:true</code>, 20/20 chunks leaks 0, double-LOD census 0/0, wash false, worst null, arr_diff_cells 1</td><td>0/0</td><td class="ok">OK</td></tr>
+<tr><td>r16</td><td><code>ok:true</code>, built_all, all <code>lod</code> sub-flags true, far_holes <strong>0/0</strong> (far0/far1), inr4 holes 0</td><td>all sub-flags, far_holes 0/0</td><td class="ok">OK</td></tr>
+<tr><td>boundary r4</td><td>2 runs: <code>ok:true</code>, p95 34 ms, resident 93, marker/remesh ok; staged_dropped 2755 / 2490</td><td>in band (p95 35–42, resident 93, staged ≤ 2500)</td><td class="ok">OK</td></tr>
+</table>
+<p><strong>Deviation note (boundary r4, <code>staged_dropped</code>):</strong> run A 2755 / run B 2490. This is a
+streaming throughput metric that varies by machine timing (the AC-0350 A/B read 1739–1771; both of my runs sit at the
+~2500 mark, run B ≤ 2500). It is <em>not</em> the gate (<code>ok:true</code> both runs, p95 34 ms and resident 93
+stable, in the standing band). My change touches a render tier and <em>no</em> streaming/scheduling code, and genhash is
+25/25 byte-identical — so this is variance, not a regression. Full battery + Windows rebuild: coordinator's.</p>
+
+<h2>6. The harvested rule (<code>godot/OPS.md</code> §2)</h2>
+<blockquote>
+<strong>Never decide anything about a <code>res://</code> resource with <code>FileAccess.file_exists</code> (or
+<code>FileAccess.open</code> / <code>Image.load_from_file</code>) — use <code>ResourceLoader.exists</code> to probe
+and <code>ResourceLoader.load</code> to load.</strong> <code>FileAccess</code> does not consult the import system; an
+exported PCK ships the <em>imported</em> form (a <code>.png</code> → its <code>.ctex</code>), not the raw source, so
+<code>FileAccess.file_exists("res://…png")</code> is false in an export while <code>ResourceLoader.exists</code> is
+true. Every gate we own runs from the source tree, where the raw <code>.png</code> is on disk and the old predicate is
+true — so the branch is unreachable in every test and the bug ships. Correct split: <code>res://</code> imported
+resources → <code>ResourceLoader</code>; <code>user://</code> runtime files and non-imported raw data
+(<code>.json</code>) → <code>FileAccess</code>. <strong>The general shape (the recurring class): any decision that is
+true in the editor and false in an export is invisible to every gate we own.</strong>
+</blockquote>
+
+<h2>7. Artifacts</h2>
+<ul>
+<li>Gate logs + the export pack: <code>.scratch/AC-0384-gates/</code> — <code>g0_final.log</code>,
+<code>genhash.log</code>, <code>satellite_r4.log</code>, <code>farab.log</code>, <code>ladder.log</code>,
+<code>meshprobe.log</code>, <code>halo.log</code>, <code>lightstate.log</code>, <code>r16.log</code>,
+<code>boundary_r4.log</code>/<code>boundary_r4_b.log</code>, <code>packed_probe.log</code> (the export-condition
+probe), <code>awecraft.pck</code> (the export pack, 5.4 MB). Temporary probe <code>.gd</code> scripts removed.</li>
+<li>Changed files: <code>godot/world/satellite_body.gd</code>, <code>godot/scenes/harness.gd</code>,
+<code>tasks/harness_data.yaml</code>, <code>godot/HARNESS.md</code> (re-rendered), <code>godot/OPS.md</code> (rule).</li>
+<li>No commit (per the ticket); TASKS.yaml untouched (shared ticket).</li>
+</ul>
+</body>
+</html>

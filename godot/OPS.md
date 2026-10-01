@@ -75,6 +75,26 @@ machine reason behind them.
 - **Heavy gate scripts should be RESUMABLE**: skip a gate whose log already contains a `RESULT`
   (or `GENHASH` — the genhash arm prints only `GENHASH` lines, a trap that silently re-ran it).
   A restart then costs one gate instead of a whole stage. Both lessons are AC-0356's.
+- **Never decide anything about a `res://` resource with `FileAccess.file_exists` (or
+  `FileAccess.open` / `Image.load_from_file`) — use `ResourceLoader.exists` to probe and
+  `ResourceLoader.load` to load** (found by AC-0384, 2026-10-01, the white-planet export bug):
+  `FileAccess` does NOT consult the import system. An exported PCK ships the **imported** form of
+  an imported resource (a `.png` → its `.ctex`), not the raw source file, so in an export
+  `FileAccess.file_exists("res://…/x.png")` is **FALSE** while `ResourceLoader.exists("res://…/x.png")`
+  is **TRUE**. Every gate we own runs from the **source tree**, where the raw `.png` is on disk and
+  `FileAccess.file_exists` is TRUE — so the branch is unreachable in every test and the bug ships.
+  The satellite body chose its texture source this way (`godot/world/satellite_body.gd`), so the
+  canonical seed-44 path was skipped in the Windows build and the body drew with unset textures
+  (Godot's default WHITE). **PROVEN, not asserted**: a `--export-pack` PCK probed with `--main-pack`
+  gives `FileAccess.file_exists` = **false** / `ResourceLoader.exists` = **true** /
+  `ResourceLoader.load().get_image()` = 1024² for the satellite png, 12/12 faces import-loadable
+  (`.scratch/AC-0384-gates/`). The correct split: **`res://` imported resources → `ResourceLoader`;
+  `user://` runtime files and non-imported raw data (`.json`) → `FileAccess`** (a `.json` has no
+  importer, ships raw in the PCK, and `FileAccess.file_exists` is TRUE for it in an export too).
+  **The general shape (the class that keeps recurring): any decision that is true in the editor and
+  false in an export is invisible to every gate we own** — the arm's escape is to (a) use the
+  export-true predicate, and (b) record *which* predicate chose the path in the arm's RESULT so a
+  silent fall-through is visible (AC-0384 added `src_predicate` to the satellite arm).
 
 ## 3. Daemons and ports
 

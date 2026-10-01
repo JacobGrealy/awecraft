@@ -113,6 +113,12 @@ var face_nodes: Array = []  # 12 MeshInstance3D
 var shader_mats: Array = []  # 12 ShaderMaterial
 var _shader: Shader = null
 var _load_src := ""  # "cache" | "res" - where the LOAD phase reads
+# AC-0384: which predicate CHOSE _load_src, recorded so a run that silently
+# fell through to baking is VISIBLE in the arm's RESULT (the editor-true /
+# export-false decision is invisible to a bare "did it bake" check).
+var _src_predicate := ""  # "FileAccess.user" | "ResourceLoader.res" | "bake.*"
+var _res_load_via := ""  # how the res faces loaded: "import" | "raw-fallback" | ...
+var _bake_reason := ""  # why a bake ran (loud, never silent)
 
 var bake_active := false
 var bake_stats: Dictionary = {}
@@ -180,13 +186,33 @@ func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> vo
 	SEA = p_sea
 	pay_total = HOME_CHUNKS + 10 * FACE_CHUNKS
 	position = Vector3(0.0, -R, 0.0)  # the planet-frame centre in the global frame
-	if _all_exist(_cache_dir_paths()):
+	if _cache_paths_exist():
+		# (1) user:// runtime cache: raw files the engine wrote ->
+		#     FileAccess.file_exists is the right (and only) predicate.
 		_load_src = "cache"
+		_src_predicate = "FileAccess.user"
 		_phase_load("cache", _cache_dir())
-	elif seed == CANONICAL_SEED and _all_exist(_res_paths()):
+	elif seed == CANONICAL_SEED and _res_paths_exist():
+		# (2) the shipped res:// textures are IMPORTED resources. The export
+		#     PCK ships the imported .ctex, NOT the raw .png, so
+		#     FileAccess.file_exists is FALSE in an export (the AC-0384 white
+		#     planet) while ResourceLoader.exists - which consults the import
+		#     system - is TRUE in an export (proven by the packed-build probe).
 		_load_src = "res"
+		_src_predicate = "ResourceLoader.res"
 		_phase_load("res", "res://assets/satellite/")
 	else:
+		# (3) bake - LOUD. Expected for a non-canonical seed, but for the
+		#     canonical seed it means the shipped textures were NOT loadable
+		#     via the import system - the export signature. Say which, never
+		#     fall through with no signal (the pre-AC-0384 bug).
+		if seed == CANONICAL_SEED:
+			_bake_reason = "canonical seed %d, shipped res:// textures not loadable via ResourceLoader" % seed
+			_src_predicate = "bake.res-missing"
+			push_warning("SATELLITE: %s - baking instead (the export must pack assets/satellite/ as imported textures)." % _bake_reason)
+		else:
+			_bake_reason = "non-canonical seed %d (no shipped textures)" % seed
+			_src_predicate = "bake.no-shipped"
 		_start_bake()
 
 
@@ -216,9 +242,23 @@ func _res_paths() -> Array:
 	return out
 
 
-func _all_exist(paths: Array) -> bool:
-	for pth in paths:
+# AC-0384: the existence predicate is DOMAIN-DEPENDENT.
+#  - user:// (the runtime bake cache): raw files the engine wrote ->
+#    FileAccess.file_exists is the right (and only) predicate.
+#  - res:// (the shipped textures): IMPORTED resources -> the PCK ships the
+#    imported .ctex, not the raw .png, so FileAccess.file_exists is FALSE in
+#    an export (the AC-0384 white planet). ResourceLoader.exists consults the
+#    import system and is TRUE in an export (packed-build probe: 12/12).
+func _cache_paths_exist() -> bool:
+	for pth in _cache_dir_paths():
 		if not FileAccess.file_exists(pth):
+			return false
+	return true
+
+
+func _res_paths_exist() -> bool:
+	for pth in _res_paths():
+		if not ResourceLoader.exists(pth):
 			return false
 	return true
 
@@ -290,10 +330,21 @@ func _bake_main_step() -> void:
 		if lf >= 12:
 			return
 		var t0l := Time.get_ticks_usec()
-		var pth: String = _cache_path(lf) if _load_src == "cache" else _res_path(lf)
-		var img: Image = _load_png(pth)
+		var img: Image
+		if _load_src == "cache":
+			# user:// runtime file - a raw FileAccess read is correct.
+			img = _load_png(_cache_path(lf))
+		else:
+			# res:// shipped texture - the IMPORT SYSTEM (AC-0384). The raw
+			# .png is not in the PCK, so FileAccess cannot read it; only
+			# ResourceLoader.load (which consults the import system) works in
+			# an export. The old _load_png(res path) is dead there.
+			var r := _load_res_face(lf)
+			img = r["img"]
+			_res_load_via = r["via"]
 		if img == null:
-			_fail("cannot read %s" % pth)
+			_fail("cannot load %s (res:// faces come from the import system - the "
+				+ "export ships the imported texture, not the raw png; via=%s)" % [_res_path(lf), _res_load_via])
 			return
 		var gd := _guard_check(img)
 		guard.append(gd)
@@ -673,6 +724,30 @@ func _load_png(pth: String) -> Image:
 	return img
 
 
+# AC-0384: load one shipped res:// face via the IMPORT SYSTEM. The export PCK
+# contains the imported .ctex, not the raw .png, so FileAccess cannot read it
+# - ResourceLoader.load is the only path that works in an export. Returns
+# {"img": Image, "via": String}. img is null only in a headless SOURCE-TREE
+# run where the import texture has no CPU Image to decode to (no GPU); then
+# it falls back to the raw file, which exists ONLY in the source tree (never
+# in an export) - that keeps the pixel guard runnable in the headless arm.
+# In an export the import path always yields the Image (packed probe: 1024^2).
+func _load_res_face(f: int) -> Dictionary:
+	var pth := _res_path(f)
+	var tex := ResourceLoader.load(pth)
+	if tex == null:
+		return {"img": null, "via": "load-failed"}
+	var img: Image = null
+	if tex is Texture2D:
+		img = tex.get_image()
+	if img != null:
+		return {"img": img, "via": "import"}
+	img = _load_png(pth)
+	if img != null:
+		return {"img": img, "via": "raw-fallback"}
+	return {"img": null, "via": "import-no-image"}
+
+
 # The runtime twin of the piece-1 on-disk variance guard (the smear
 # repair): the loaded image must vary along BOTH axes. Lighter sample
 # than the bake's (16 lines x 16 px, floor 4 distinct / 8 spread) - the
@@ -826,6 +901,11 @@ func _finish_bake() -> void:
 	bake_stats = {
 		"mode": bake_stats.get("mode", "baked"),
 		"cache": bake_stats.get("cache", ""),
+		# AC-0384: the recorded decision - which predicate chose the source and
+		# how the res faces loaded, so a silent fall-through is visible.
+		"src_predicate": _src_predicate,
+		"res_load_via": _res_load_via,
+		"bake_reason": _bake_reason,
 		"wall_ms": wall,
 		"worker": _worker_images.size() > 0,
 		"worker_ms": bake_worker_ms,
@@ -848,8 +928,15 @@ func _fail(why: String) -> void:
 	bake_active = false
 	phase = Phase.FAILED
 	visible = false
-	bake_stats = {"mode": "failed", "why": why, "guard": guard.duplicate()}
-	print("SATELLITE bake FAILED: %s" % why)
+	# AC-0384: record the decision even on failure - a res face that failed to
+	# load is exactly the export condition, and it must be VISIBLE, not a bare
+	# "bake failed".
+	bake_stats = {
+		"mode": "failed", "why": why, "guard": guard.duplicate(),
+		"src_predicate": _src_predicate, "res_load_via": _res_load_via,
+		"bake_reason": _bake_reason,
+	}
+	print("SATELLITE bake FAILED (predicate=%s via=%s): %s" % [_src_predicate, _res_load_via, why])
 
 
 func force_rebake() -> void:
