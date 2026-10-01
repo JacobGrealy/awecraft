@@ -116,7 +116,7 @@ static func generate(cx: int, cz: int, seed: int) -> PackedByteArray:
 	# AC-0091: height/sea come from Data (was hard-coded 80/30).
 	return generate_args(cx, cz, seed, Data.HEIGHT, Data.SEA)
 
-static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> PackedByteArray:
+static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int, face: int = 0, R: float = 4000.0) -> PackedByteArray:
 	# AC-0188: C++ path (coarse 3D density) — every GDScript caller (genhash,
 	# spawn sync column, face gen, probes) runs the C++ terrain; workers use
 	# gen_cpp().generate_resl directly (slab form). AC-0208: C++-ONLY — the
@@ -124,7 +124,11 @@ static func generate_args(cx: int, cz: int, seed: int, hmax: int, sea: int) -> P
 	# helper cluster) was REMOVED; AweGen.generate_flat is the only terrain
 	# generator (the C++ extension is required). _putc survives for the
 	# harness flora reference (main.gd _trees_ref_flora).
-	return gen_cpp().generate_flat(cx, cz, seed, hmax, sea)
+	# AC-0311 piece 2: the (face, R) thread — face 0/1 is the home pair
+	# (the default), faces 2-11 are the face chunks (generate_face passes
+	# the face-local chunk). The C++ default (face=0, R=4000) keeps every
+	# existing home caller bit-identical in signature.
+	return gen_cpp().generate_flat(cx, cz, seed, hmax, sea, 0, PackedByteArray(), face, R)
 
 
 static func _fbm2chunk(bx: int, sx: float, ox: float, bz: int, sz: float, oz: float, s: int, oct: int, acc: PackedFloat64Array) -> void:
@@ -226,8 +230,24 @@ static var _home_h_order: Array = []  # LRU order (capped — the home grid is i
 const _HOME_H_CACHE_CAP := 512
 
 static func generate_face(face: int, cx: int, cz: int, seed: int, R: float = 0.0) -> PackedByteArray:
-	var fsalt: int = seed ^ (face * 1000003)
-	var data: PackedByteArray = generate_args(face * 64 + cx, face * 64 + cz, fsalt, Data.HEIGHT, Data.SEA)
+	# AC-0311 piece 2 (finishing-run fix): the per-face salt
+	# (seed ^ (face*1000003) — the FLAT-FRAME construct that made each
+	# face a separate world) is DROPPED: in the sphere domain the field
+	# is a pure f(world, seed) — one seed for the whole planet — so the
+	# surface/cave/ore/biome fields continue across the face seams (the
+	# ticket's boundary-continuity gate). With the salt, the two sides of
+	# a seam rolled different noise realizations at the same (d, δ): the
+	# home/face-4 seam measured a 32-block raw V-crack on the enabled
+	# path (the flat-world seam was 7 m; the prototype expectation is 0).
+	# Uniqueness no longer needs the salt — (d, δ) is unique per planet
+	# position, and the carver/tree keys still carry the chunk index.
+	# AC-0311 piece 2: the (face, R) thread reaches the C++ (d, δ)
+	# domain — the field is generated on the chart the face is placed on
+	# (face_chunk_transform for face 2-11, column_transform for the home
+	# pair). R <= 0.0 (the default) means the home planet R = 4000.
+	# The BLEND BAND (AC-0309 C1 interim) stays until piece 3 deletes it.
+	var r: float = R if R > 0.0 else 4000.0
+	var data: PackedByteArray = generate_args(face * 64 + cx, face * 64 + cz, seed, Data.HEIGHT, Data.SEA, face, r)
 	if R > 0.0 and face >= 4:
 		_blend_face_chunk(data, face, cx, cz, seed, R)
 	return data

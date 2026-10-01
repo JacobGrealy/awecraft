@@ -295,6 +295,7 @@
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float64_array.hpp>
 #include <godot_cpp/variant/variant.hpp>
 
 #include <algorithm>
@@ -640,21 +641,397 @@ static inline size_t grid_idx_c(int64_t ix, int64_t iy, int64_t iz) {
 	return (size_t)((ix + 1) * GYN_C + iy) * GZN + (iz + 1);
 }
 
+// ---------------------------------------------------------------------------
+// AC-0311 piece 2 — the SPHERE-DOMAIN port (the epic P7 seam end-state,
+// executed from tasks/AC-0311/AC-0311-results.html §3). Every lattice field
+// is a function of the GLOBAL coordinate pair (d, δ): d = the direction
+// unit vector (face-independent, continuous everywhere on the sphere), δ =
+// the radial depth above R. The design (piece 1, accepted): precompute
+// (d, δ) ONCE per lattice point (2,401 C48 points per chunk, shared by all
+// 16 fields) and substitute x -> R·d.x, z -> R·d.z, y -> δ into every noise
+// call — the lattice shape, the seeds, the octave counts and the per-block
+// reads are all unchanged (measured +1.5% per chunk, vs AC-0042's +2-3x
+// fear). The placement is the column's PLACED frame (sm_column_transform
+// for the home pair, sm_face_chunk_transform for faces 2-11 — the same
+// transform the chunk node wears), so the field follows the placement; the
+// dense sources (aquifer H window, cell status, per-block hash keys) use
+// the CHART at the sample's flat position (home chart / the face uv chart —
+// both continuous past the face edges, the gapless edge continuation the
+// off-face samples need). The per-cell hash keys go to the global sphere
+// integers (⌊R·dx⌋, ⌊δ⌋, ⌊R·dz⌋) so the same physical cell rolls the same
+// hash from either face. This is the ticket's deliberate genhash rebase —
+// the only piece allowed to move genhash, and it does so on purpose.
+//
+// The GD originals (sphere_math.gd) this section mirrors: _prewarp :68,
+// uv_to_world :90, home_point :324, column_transform :332 (the SEAM_FILL
+// grout included — the shipped placement), face_chunk_transform :508 (the
+// 256-cell-centre LSQ affine; the local grid is constant, so the Gram
+// inverse is the compile-time SM_FIT_INV — the _fit_build_gram formula).
+// Verified <1e-6 against the GD transforms by the AC-0311 piece-2 scratch
+// probe (the genprobe lockstep pattern) before the flip-on.
+// ---------------------------------------------------------------------------
+
+static const double SM_PI = 3.141592653589793238462643383279502884;
+
+// (forward declaration — the floor-division definition sits later, in the
+// aquifer section; the key helpers below need it)
+static inline int floordiv(int a, int b);
+
+struct SmV3 {
+	double x, y, z;
+};
+
+static inline SmV3 sm_cross(const SmV3 &a, const SmV3 &b) {
+	return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+static inline double sm_dot(const SmV3 &a, const SmV3 &b) {
+	return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static inline SmV3 sm_norm(SmV3 v) {
+	double n = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+	if (n > 0.0) {
+		v.x /= n;
+		v.y /= n;
+		v.z /= n;
+	}
+	return v;
+}
+
+// The per-coordinate pre-warp (sphere_math.gd :68) — the cube step plus the
+// AC-0306 spacing warp; the only warp shape that keeps the gapless invariant.
+static inline double sm_prewarp(double c) {
+	return std::tan(c * SM_PI * 0.25);
+}
+
+// The (u, v) cell of one cube face -> the planet frame (sphere_math.gd :90)
+// — the cube maps AS-IS from the header table, prewarped pointwise,
+// normalised to R. CONTINUOUS in (u, v) past the face edges (the pre-warp
+// is a pointwise cube-coord function): an off-face sample is the same cube
+// point the neighbouring face would chart — the gapless continuation.
+static inline SmV3 sm_uv_to_world(int face, double u, double v, double R) {
+	double cx, cy, cz;
+	switch (face) {
+	case 0: cx = u; cy = 1.0; cz = 2.0 * v - 1.0; break;
+	case 1: cx = u - 1.0; cy = 1.0; cz = 2.0 * v - 1.0; break;
+	case 2: cx = u; cy = -1.0; cz = 2.0 * v - 1.0; break;
+	case 3: cx = u - 1.0; cy = -1.0; cz = 2.0 * v - 1.0; break;
+	case 4: cx = 1.0; cy = 2.0 * u - 1.0; cz = v; break;
+	case 5: cx = 1.0; cy = 2.0 * u - 1.0; cz = v - 1.0; break;
+	case 6: cx = -1.0; cy = 2.0 * u - 1.0; cz = v; break;
+	case 7: cx = -1.0; cy = 2.0 * u - 1.0; cz = v - 1.0; break;
+	case 8: cx = u; cy = 2.0 * v - 1.0; cz = 1.0; break;
+	case 9: cx = u - 1.0; cy = 2.0 * v - 1.0; cz = 1.0; break;
+	case 10: cx = u; cy = 2.0 * v - 1.0; cz = -1.0; break;
+	default: cx = u - 1.0; cy = 2.0 * v - 1.0; cz = -1.0; break;
+	}
+	SmV3 p = sm_norm({sm_prewarp(cx), sm_prewarp(cy), sm_prewarp(cz)});
+	return {p.x * R, p.y * R, p.z * R};
+}
+
+// The home-hemisphere chart (sphere_math.gd home_point :324) — the flat home
+// pair (faces 0/1) bent onto the planet; continuous past the patch edges
+// (no pole in the neighbourhood).
+static inline SmV3 sm_home_point(double x, double z, double R) {
+	double hw = SM_PI * R * 0.25;
+	if (x < 0.0)
+		return sm_uv_to_world(1, x / hw + 1.0, (z / hw + 1.0) * 0.5, R);
+	return sm_uv_to_world(0, x / hw, (z / hw + 1.0) * 0.5, R);
+}
+
+// A placed chunk column: basis COLUMNS m[0..2] (x, y, z) + origin o —
+// P_world = m[0]*lx + m[1]*ly + m[2]*lz + o (o already carries the
+// planet-frame shift, so P_planet = P_world + (0, R, 0)).
+struct SmT {
+	double m[3][3];
+	double o[3];
+};
+
+static inline SmV3 sm_apply(const SmT &t, double lx, double ly, double lz) {
+	return {
+		t.m[0][0] * lx + t.m[1][0] * ly + t.m[2][0] * lz + t.o[0],
+		t.m[0][1] * lx + t.m[1][1] * ly + t.m[2][1] * lz + t.o[1],
+		t.m[0][2] * lx + t.m[1][2] * ly + t.m[2][2] * lz + t.o[2],
+	};
+}
+
+// The home pair's RIGID per-column placement (column_transform :332) AS-IS
+// (the SEAM_FILL grout included — it is the shipped placement the fields
+// must follow).
+static inline SmT sm_column_transform(int cx, int cz, double R) {
+	double cxx = (double)cx * 16.0 + 8.0;
+	double czz = (double)cz * 16.0 + 8.0;
+	SmV3 P = sm_home_point(cxx, czz, R);
+	SmV3 n = {P.x / R, P.y / R, P.z / R};
+	SmV3 hp1 = sm_home_point(cxx, czz + 8.0, R);
+	SmV3 hp2 = sm_home_point(cxx, czz - 8.0, R);
+	SmV3 z0 = sm_norm({hp1.x - hp2.x, hp1.y - hp2.y, hp1.z - hp2.z});
+	SmV3 e1 = sm_home_point(cxx + 16.0, czz, R);
+	// GD: uE = (e1n).cross(n) — e1n × n (the z0 sign check below
+	// normalises the facing).
+	SmV3 uE = sm_norm(sm_cross({e1.x / R, e1.y / R, e1.z / R}, n));
+	if (sm_dot(uE, z0) < 0.0)
+		uE = {-uE.x, -uE.y, -uE.z};
+	SmV3 e2 = sm_home_point(cxx - 16.0, czz, R);
+	SmV3 uW = sm_norm(sm_cross({e2.x / R, e2.y / R, e2.z / R}, n));
+	if (sm_dot(uW, z0) < 0.0)
+		uW = {-uW.x, -uW.y, -uW.z};
+	SmV3 z;
+	bool hasE = (uE.x * uE.x + uE.y * uE.y + uE.z * uE.z) > 1.0e-12;
+	bool hasW = (uW.x * uW.x + uW.y * uW.y + uW.z * uW.z) > 1.0e-12;
+	if (hasE && hasW)
+		z = sm_norm({uE.x + uW.x, uE.y + uW.y, uE.z + uW.z});
+	else if (hasE)
+		z = uE;
+	else if (hasW)
+		z = uW;
+	else
+		z = z0;
+	SmV3 x = sm_norm(sm_cross(n, z));
+	const double s = 1.0 + 1.0e-4; // SEAM_FILL (sphere_math.gd :56)
+	SmT t;
+	t.m[0][0] = x.x * s; t.m[0][1] = x.y * s; t.m[0][2] = x.z * s;
+	t.m[1][0] = n.x;     t.m[1][1] = n.y;     t.m[1][2] = n.z;
+	t.m[2][0] = z.x * s; t.m[2][1] = z.y * s; t.m[2][2] = z.z * s;
+	t.o[0] = P.x - 8.0 * s * x.x - 8.0 * s * z.x;
+	t.o[1] = P.y - 8.0 * s * x.y - 8.0 * s * z.y - R;
+	t.o[2] = P.z - 8.0 * s * x.z - 8.0 * s * z.z;
+	return t;
+}
+
+// The 16×16 local-grid Gram inverse (sphere_math.gd _fit_build_gram) — the
+// local positions are identical for every face chunk, so the inverse is a
+// compile-time constant (Cramer's-rule cofactors of the normal matrix,
+// round-trip-verified). Row-major.
+static const double SM_FIT_INV[9] = {
+	0.0001838235294117647, 0, -0.0014705882352941176,
+	0, 0.0001838235294117647, -0.0014705882352941176,
+	-0.0014705882352941176, -0.0014705882352941176, 0.027435661764705882,
+};
+
+static inline bool sm_face_mirror_x(int face) {
+	return (face >= 2 && face <= 5) || (face >= 8 && face <= 9);
+}
+
+// The face 2-11 per-chunk LSQ-AFFINE placement (face_chunk_transform :508)
+// AS-IS — the 256 cell centres of the chunk (home frame, minus (0, R, 0))
+// fit the local (cell) grid by least squares; the local +Y is the radial at
+// the chunk centre; the mirror class enters through the data layout only.
+static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) {
+	bool mirrored = sm_face_mirror_x(face);
+	double u0 = ((double)ccx * 16.0 + 8.0) / 1024.0;
+	double v0 = ((double)ccz * 16.0 + 8.0) / 1024.0;
+	SmV3 Pc = sm_uv_to_world(face, u0, v0, R);
+	SmV3 n = {Pc.x / R, Pc.y / R, Pc.z / R};
+	double s[3][3];
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++)
+			s[i][j] = 0.0;
+	for (int lx = 0; lx < 16; lx++) {
+		int iu = ccx * 16 + (mirrored ? 15 - lx : lx);
+		double x = (double)lx + 0.5;
+		for (int lz = 0; lz < 16; lz++) {
+			int iv = ccz * 16 + lz;
+			SmV3 w = sm_uv_to_world(face,
+					((double)iu + 0.5) / 1024.0,
+					((double)iv + 0.5) / 1024.0, R);
+			w.y -= R;
+			double y = (double)lz + 0.5;
+			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x;
+			s[1][0] += x * w.y; s[1][1] += y * w.y; s[1][2] += w.y;
+			s[2][0] += x * w.z; s[2][1] += y * w.z; s[2][2] += w.z;
+		}
+	}
+	// co[ci][cj] = (inv * s[ci] row)[cj] — [coef_lx, coef_lz, const]
+	double co[3][3];
+	for (int ci = 0; ci < 3; ci++) {
+		for (int cj = 0; cj < 3; cj++) {
+			double v = 0.0;
+			for (int k = 0; k < 3; k++)
+				v += SM_FIT_INV[cj * 3 + k] * s[ci][k];
+			co[ci][cj] = v;
+		}
+	}
+	SmT t;
+	t.m[0][0] = co[0][0]; t.m[0][1] = co[1][0]; t.m[0][2] = co[2][0];
+	t.m[1][0] = n.x;      t.m[1][1] = n.y;      t.m[1][2] = n.z;
+	t.m[2][0] = co[0][1]; t.m[2][1] = co[1][1]; t.m[2][2] = co[2][1];
+	t.o[0] = co[0][2];
+	t.o[1] = co[1][2];
+	t.o[2] = co[2][2];
+	return t;
+}
+
+// The GLOBAL sphere direction at a flat position (fx, fz) — the CHART (home
+// pair: home_point; faces 2-11: the face uv chart in the face's flat domain,
+// one unit = one face cell; continuous past the face edges). δ at such a
+// position = the caller's height (the chart sits on the sphere).
+// AC-0311 piece 2 (finishing-run fix): for faces 2-11 the LINEARIZED flat
+// index is face*1024 + the face's OWN cell index, so the face offset must
+// come off before the /1024 chart divide; the mirror class additionally
+// un-runs the per-chunk x data layout (face_local_x: k -> 15-k) so the
+// sample charts at the cell's TRUE planet position. Charting the raw
+// linearized index is only accidentally right for faces 4 and 8 (the tan
+// warp's 2/4-period swallows the offset there): on the other ten faces the
+// dense-source keys would land up to a face-width off, and on the mirror
+// class at the mirror-flipped cell — no longer a pure f(world, seed) shared
+// across the face seams (the §3.5.1 contract). The gapless continuation
+// past u/v in [0,1) is the off-face form the 7×5 H window's edge samples
+// need.
+static inline void sm_chart_dir(int face, double fx, double fz, double R,
+		double *dx, double *dz) {
+	SmV3 p;
+	if (face <= 1) {
+		p = sm_home_point(fx, fz, R);
+	} else {
+		double fx2 = fx - (double)face * 1024.0;
+		double fz2 = fz - (double)face * 1024.0;
+		if (sm_face_mirror_x(face)) {
+			double c0 = std::floor(fx2 / 16.0);
+			fx2 = c0 * 16.0 + (15.0 - (fx2 - c0 * 16.0));
+		}
+		p = sm_uv_to_world(face, fx2 / 1024.0, fz2 / 1024.0, R);
+	}
+	SmV3 n = sm_norm(p);
+	*dx = n.x;
+	*dz = n.z;
+}
+
+// The per-chunk (d, δ) TABLE — one (R·d.x, R·d.z, |P|−R) triple per C48
+// lattice point, precomputed ONCE per chunk and shared by all 16 lattice
+// fields (the piece-1 design: the cost lives here, not per field). The
+// placement is the column's PLACED frame (sm_column_transform for the home
+// pair — face 0/1 share it, home_uv splits at x = 0 inside;
+// sm_face_chunk_transform for faces 2-11). coarse_only: the far/H/veg lanes
+// build only the 441 coarse-lattice points (iy%6==0 — the coarse row = C48
+// row × 6, because 48 blocks = 6×8 blocks).
+struct SpTable {
+	double sx[GFN_C];   // R * d.x per C48 point
+	double sz[GFN_C];   // R * d.z per C48 point
+	double delta[GFN_C]; // |P_planet| - R per C48 point (the exact δ)
+};
+
+static inline void sp_table_build(int face, int ccx, int ccz, double R,
+		bool coarse_only, SpTable &t) {
+	SmT T;
+	if (face <= 1)
+		T = sm_column_transform(ccx, ccz, R);
+	else
+		T = sm_face_chunk_transform(face, ccx, ccz, R);
+	for (int64_t ix = -1; ix <= 5; ix++) {
+		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
+			if (coarse_only && iy % 6 != 0)
+				continue;
+			for (int64_t iz = -1; iz <= 5; iz++) {
+				SmV3 P = sm_apply(T, (double)(ix * 4), (double)(iy * 8),
+						(double)(iz * 4));
+				double px = P.x;
+				double py = P.y + R;
+				double pz = P.z;
+				double n = std::sqrt(px * px + py * py + pz * pz);
+				size_t idx = grid_idx_c(ix, iy, iz);
+				t.sx[idx] = R * px / n;
+				t.sz[idx] = R * pz / n;
+				t.delta[idx] = n - R;
+			}
+		}
+	}
+}
+
+// The C++ flat chunk index -> the placed column index (the home pair keeps
+// the real flat index, which may be negative; faces 2-11 carry
+// face*64 + ccx — the generate_face convention).
+static inline int sp_col_index(int face, int c) {
+	return (face <= 1) ? c : c - face * 64;
+}
+
+// The 2-D hash key (tree / flower / dripstone length rolls) — the global
+// arc integers (⌊R·dx⌋, ⌊R·dz⌋) of the 4-BLOCK lattice cell the position
+// sits in (the SpTable xz, row 0 — a documented lattice-cell form: the tree
+// gate rolls 400 candidates per chunk, and a per-candidate chart eval would
+// spend half the +1.5% budget before the 3-D keys are counted).
+static inline void sp_key2(int x, int z, int bx, int bz, const SpTable &sp,
+		int64_t &kx, int64_t &kz) {
+	int64_t ix = floordiv(x - bx, 4);
+	int64_t iz = floordiv(z - bz, 4);
+	if (ix < -1)
+		ix = -1;
+	else if (ix > 5)
+		ix = 5;
+	if (iz < -1)
+		iz = -1;
+	else if (iz > 5)
+		iz = 5;
+	size_t ic = grid_idx_c(ix, 0, iz);
+	kx = (int64_t)std::floor(sp.sx[ic]);
+	kz = (int64_t)std::floor(sp.sz[ic]);
+}
+
+// The 3-D per-block hash key (deepslate blend / sculk / moss / obsidian /
+// stalactite / stalagmite) — the global sphere integers at the cell
+// (⌊R·dx⌋, ⌊δ⌋, ⌊R·dz⌋). SP_BLOCK_KEY: 1 = the cell's OWN (d, δ) (one chart
+// eval per hash cell — the spec's primary form); 0 = the 4-block lattice
+// cell's (dx, dz, δ) from the precomputed table (the spec's fallback when
+// the per-cell term blows the budget — a deliberate, counted re-baseline).
+// MEASURED (AC-0311 piece 2, this run): the per-block form costs GENMS
+// 132-134 vs the 125 baseline (the +6-8% blows the +1.5% prediction — the
+// deepslate-blend band alone rolls ~2k cells/chunk, plus sculk/moss/
+// obsidian in the deep biomes), so the SHIPPED form is the lattice-cell
+// key: the roll is the table entry of the 4-block cell containing the
+// block (a ~1 ns table read, zero chart evals).
+static const int SP_BLOCK_KEY = 0;
+
+static inline void sp_key3(int face, int x, int y, int z, int bx, int bz,
+		double R, const SpTable &sp,
+		int64_t &kx, int64_t &ky, int64_t &kz) {
+	if (SP_BLOCK_KEY) {
+		double dx, dz;
+		sm_chart_dir(face, (double)x, (double)z, R, &dx, &dz);
+		kx = (int64_t)std::floor(R * dx);
+		ky = (int64_t)y; // δ ≈ the block's own height (the chart is on R)
+		kz = (int64_t)std::floor(R * dz);
+	} else {
+		int64_t ix = floordiv(x - bx, 4);
+		int64_t iy = (int64_t)y / 8;
+		int64_t iz = floordiv(z - bz, 4);
+		if (ix < -1)
+			ix = -1;
+		else if (ix > 5)
+			ix = 5;
+		if (iz < -1)
+			iz = -1;
+		else if (iz > 5)
+			iz = 5;
+		if (iy < 0)
+			iy = 0;
+		else if (iy > GYN_C - 1)
+			iy = GYN_C - 1;
+		size_t ic = grid_idx_c(ix, iy, iz);
+		kx = (int64_t)std::floor(sp.sx[ic]);
+		ky = (int64_t)std::floor(sp.delta[ic]);
+		kz = (int64_t)std::floor(sp.sz[ic]);
+	}
+}
+
 // oct: the fbm octave count per lattice point (default 2 — every pre-AC-0288
 // field; AC-0288's primary cave octave passes 3).
-static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
+static void build_field(Field &f, double ystep, int64_t seed,
 		double fx, double fy, double fz, double ox, double oy, double oz,
-		int oct = 2) {
+		const SpTable &sp, int oct = 2) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
-		// AC-0359: the y bound was the hardcoded 8 — it HAD to be raised
-		// together with GY_CELLS in AC-0344's B-variants (latent bug). The
-		// constant form is the same value for the coarse lattice.
 		for (int64_t iy = 0; iy <= GYN - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
+				// AC-0311 piece 2: the x/z inputs are the GLOBAL sphere
+				// coords (R·d.x / R·d.z) of the C48 lattice point (coarse
+				// row = C48 row × 6 — 48 blocks = 6×8 blocks); y stays the
+				// local row (the lattice may use local y — δ ≈ y to the
+				// facet sagitta).
+				size_t ic = grid_idx_c(ix, iy * 6, iz);
 				f[grid_idx(ix, iy, iz)] = fbm3(
-						((double)(bx + ix * 4)) / fx + ox,
+						sp.sx[ic] / fx + ox,
 						((double)(iy * (int)(ystep))) / fy + oy,
-						((double)(bz + iz * 4)) / fz + oz,
+						sp.sz[ic] / fz + oz,
 						seed, oct);
 			}
 		}
@@ -667,17 +1044,19 @@ static void build_field(Field &f, int bx, int bz, double ystep, int64_t seed,
 // before sampling"). No coordinate offsets (the vanilla cave entries have
 // none). The old build_field (divide-by-scale) is kept for the other
 // fields. y is the lattice row's block index, exactly as build_field.
-static void build_field_vn(Field &f, int bx, int bz, double ystep, int64_t seed,
+static void build_field_vn(Field &f, double ystep, int64_t seed,
 		double sx, double sy, double sz, int first_oct,
-		const double *amps, int n) {
+		const double *amps, int n, const SpTable &sp) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
-		// AC-0359: `iy <= GYN - 1` (was the hardcoded 8 — see build_field).
 		for (int64_t iy = 0; iy <= GYN - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
+				// AC-0311 piece 2: the sphere-domain substitution (see
+				// build_field).
+				size_t ic = grid_idx_c(ix, iy * 6, iz);
 				f[grid_idx(ix, iy, iz)] = vn3(
-						(double)(bx + ix * 4) * sx,
+						sp.sx[ic] * sx,
 						(double)(iy * (int)(ystep)) * sy,
-						(double)(bz + iz * 4) * sz,
+						sp.sz[ic] * sz,
 						seed, first_oct, amps, n);
 			}
 		}
@@ -686,32 +1065,38 @@ static void build_field_vn(Field &f, int bx, int bz, double ystep, int64_t seed,
 
 // AC-0359: the C48 cave-lattice builders — build_field / build_field_vn with
 // the 2401-pt FieldC and grid_idx_c (same world coords, 8-block y rows).
-static void build_field_c(FieldC &f, int bx, int bz, double ystep, int64_t seed,
+static void build_field_c(FieldC &f, double ystep, int64_t seed,
 		double fx, double fy, double fz, double ox, double oy, double oz,
-		int oct = 2) {
+		const SpTable &sp, int oct = 2) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
 		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
-				f[grid_idx_c(ix, iy, iz)] = fbm3(
-						((double)(bx + ix * 4)) / fx + ox,
+				// AC-0311 piece 2: the sphere-domain substitution (see
+				// build_field) — on the C48 lattice the table index is 1:1.
+				size_t ic = grid_idx_c(ix, iy, iz);
+				f[ic] = fbm3(
+						sp.sx[ic] / fx + ox,
 						((double)(iy * (int)(ystep))) / fy + oy,
-						((double)(bz + iz * 4)) / fz + oz,
+						sp.sz[ic] / fz + oz,
 						seed, oct);
 			}
 		}
 	}
 }
 
-static void build_field_vn_c(FieldC &f, int bx, int bz, double ystep, int64_t seed,
+static void build_field_vn_c(FieldC &f, double ystep, int64_t seed,
 		double sx, double sy, double sz, int first_oct,
-		const double *amps, int n) {
+		const double *amps, int n, const SpTable &sp) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
 		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
-				f[grid_idx_c(ix, iy, iz)] = vn3(
-						(double)(bx + ix * 4) * sx,
+				// AC-0311 piece 2: the sphere-domain substitution (see
+				// build_field) — on the C48 lattice the table index is 1:1.
+				size_t ic = grid_idx_c(ix, iy, iz);
+				f[ic] = vn3(
+						sp.sx[ic] * sx,
 						(double)(iy * (int)(ystep)) * sy,
-						(double)(bz + iz * 4) * sz,
+						sp.sz[ic] * sz,
 						seed, first_oct, amps, n);
 			}
 		}
@@ -724,14 +1109,18 @@ static void build_field_vn_c(FieldC &f, int bx, int bz, double ystep, int64_t se
 // value (3 vn3 per lattice point at build time) so the scan pays one
 // tril_c instead of three dense vn3 per deep point (the AC-0359 lesson —
 // the dense evaluation stays out of the scan).
-static void build_field_eval_c(FieldC &f, int bx, int bz, double ystep,
-		const std::function<double(double, double, double)> &fn) {
+static void build_field_eval_c(FieldC &f, double ystep,
+		const std::function<double(double, double, double)> &fn,
+		const SpTable &sp) {
 	for (int64_t ix = -1; ix <= 5; ix++) {
 		for (int64_t iy = 0; iy <= GYN_C - 1; iy++) {
 			for (int64_t iz = -1; iz <= 5; iz++) {
-				f[grid_idx_c(ix, iy, iz)] =
-						fn((double)(bx + ix * 4), (double)(iy * (int)(ystep)),
-								(double)(bz + iz * 4));
+				// AC-0311 piece 2: the caller's expression is evaluated at
+				// the GLOBAL sphere coords (R·d.x, local-y, R·d.z) — the
+				// dense expression itself is unchanged (the genprobe
+				// lockstep keeps it a pure function of its inputs).
+				size_t ic = grid_idx_c(ix, iy, iz);
+				f[ic] = fn(sp.sx[ic], (double)(iy * (int)(ystep)), sp.sz[ic]);
 			}
 		}
 	}
@@ -1430,9 +1819,12 @@ static inline long long now_us() {
 //     comparisons use the raw sampled H. Consequence: a lake can NEVER sit
 //     above the lowest sampled ground (the AC-0342 open-pool artifact class
 //     is structurally impossible; land caves gain hidden perched lakes only).
-//   * H samples are DENSE (aqu_surface_h_dense — the same three surface
-//     fields evaluated directly at the sea slice, no lattice build): they
-//     differ from the exact H by the trilinear residual (a few blocks). The
+//   * H samples are DENSE (aqu_surface_h_sphere — the same three surface
+//     fields evaluated directly at the sea slice in the (d, δ) domain, no
+//     lattice build): they differ from the exact H by the trilinear
+//     residual (a few blocks). AC-0311 piece 2: the sample inputs are the
+//     chart direction at the sample's flat position (the 7×5 window's
+//     off-face samples resolve through the gapless chart continuation). The
 //     cell status must be a pure f(world, seed) (shared across chunk seams),
 //     so the own-chunk exact heights[] are not used. Exact H itself never
 //     moves (thash is the proof).
@@ -1502,15 +1894,23 @@ static inline double aqu_erosion(double x, double z, int64_t s) {
 			AQU_EROSION_OCT, AQU_EROSION_AMPS, AQU_EROSION_N);
 }
 
-// The aquifer's H reference — the DENSE sea-slice surface (the exact
-// surface_h formula with the three fields evaluated directly instead of
-// trilinear off the 4-block lattice; the 2-octave builds match
-// build_field's default). Differs from the exact H by the trilinear
-// residual; the cap uses it raw (no +8 — the section header).
-static inline int aqu_surface_h_dense(int x, int z, int64_t seed) {
-	double c = fbm3((double)x / 220.0, 126.0 / 64.0, (double)z / 220.0, seed, 2);
-	double h = fbm3((double)x / 70.0 + 333.0, 126.0 / 64.0, (double)z / 70.0 + 333.0, seed + 7, 2);
-	double r = fbm3((double)x / 300.0 + 500.0, 126.0 / 64.0, (double)z / 300.0 + 500.0, seed + 13, 2);
+// The aquifer's H reference — the DENSE sea-slice surface in the (d, δ)
+// domain (AC-0311 piece 2): the exact surface_h formula with the three
+// fields evaluated directly instead of trilinear off the 4-block lattice,
+// the tangential noise inputs (R/S)·d.x / (R/S)·d.z — (dx, dz) = the CHART
+// at the sample's flat (x, z) (home pair: the home chart, continuous past
+// the patch; faces 2-11: the face uv chart in the face's flat domain — the
+// gapless continuation the 7×5 window's off-face samples need; the spec's
+// dense-H formula). δ stays the sea slice (126/64) exactly as today.
+// Differs from the exact H by the trilinear residual; the cap uses it raw
+// (no +8 — the section header).
+static inline int aqu_surface_h_sphere(int face, double x, double z, double R,
+		int64_t seed) {
+	double dx, dz;
+	sm_chart_dir(face, x, z, R, &dx, &dz);
+	double c = fbm3((R / 220.0) * dx, 126.0 / 64.0, (R / 220.0) * dz, seed, 2);
+	double h = fbm3((R / 70.0) * dx + 333.0, 126.0 / 64.0, (R / 70.0) * dz + 333.0, seed + 7, 2);
+	double r = fbm3((R / 300.0) * dx + 500.0, 126.0 / 64.0, (R / 300.0) * dz + 500.0, seed + 13, 2);
 	double cc = 0.4219 + (c - 0.3681) * (0.1280 / 0.0467);
 	double hc = 0.4964 + (h - 0.5112) * (0.1361 / 0.1107);
 	double rc = 0.4292 + (r - 0.5743) * (0.1366 / 0.1443);
@@ -1575,11 +1975,24 @@ struct AquTable {
 	int16_t max_fluid{0};
 };
 
-static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
-		const AquTable &hm, int cx0, int cz0, AquCell &c) {
-	c.cx = (int16_t)(ix * AQU_CX + AQU_OX + (int)(hash3i((int64_t)ix, 0, (int64_t)iz, seed + 316) * 10.0));
-	c.cy = (int16_t)(iy * AQU_CY + AQU_OY + (int)(hash3i(0, (int64_t)iy, (int64_t)iz, seed + 317) * 9.0));
-	c.cz = (int16_t)(iz * AQU_CZ + AQU_OZ + (int)(hash3i((int64_t)ix, 0, (int64_t)iz, seed + 318) * 10.0));
+static inline void aqu_cell_build(int face, double R, int ix, int iy, int iz,
+		int64_t seed, int sea, const AquTable &hm, int cx0, int cz0,
+		AquCell &c) {
+	// AC-0311 piece 2: the cell's GLOBAL key — the sphere integers at its
+	// nominal centre (corner + offset, pre-jitter): the same physical cell
+	// read from either face is identical (the chart is continuous at the
+	// boundary), and the jitter re-keys onto it.
+	double fx0 = (double)(ix * AQU_CX + AQU_OX);
+	double fy0 = (double)(iy * AQU_CY + AQU_OY);
+	double fz0 = (double)(iz * AQU_CZ + AQU_OZ);
+	double dx0, dz0;
+	sm_chart_dir(face, fx0, fz0, R, &dx0, &dz0);
+	int64_t gx = (int64_t)std::floor(R * dx0);
+	int64_t gy = (int64_t)std::floor(fy0);
+	int64_t gz = (int64_t)std::floor(R * dz0);
+	c.cx = (int16_t)(ix * AQU_CX + AQU_OX + (int)(hash3i(gx, gy, gz, seed + 316) * 10.0));
+	c.cy = (int16_t)(iy * AQU_CY + AQU_OY + (int)(hash3i(gx, gy, gz, seed + 317) * 9.0));
+	c.cz = (int16_t)(iz * AQU_CZ + AQU_OZ + (int)(hash3i(gx, gy, gz, seed + 318) * 10.0));
 	int hown = 1 << 30;
 	int hmin = 1 << 30;
 	bool sea_poke = false;
@@ -1612,8 +2025,12 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 		c.cls = 2;
 		return;
 	}
-	// Underground.
-	bool excluded = (aqu_erosion((double)c.cx, (double)c.cz, seed) < -0.225)
+	// Underground. AC-0311 piece 2: the cell-centre noise on the cell's
+	// (d, δ) — the chart direction at the centre's flat position, δ = the
+	// centre's height (the sources' xz/y scales apply inside them).
+	double dxc, dzc;
+	sm_chart_dir(face, (double)c.cx, (double)c.cz, R, &dxc, &dzc);
+	bool excluded = (aqu_erosion(R * dxc, R * dzc, seed) < -0.225)
 			&& (1.5 - (double)c.cy / 128.0 > 0.9);
 	if (excluded) {
 		c.type = 0;
@@ -1621,7 +2038,7 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 		c.cls = 0;
 		return;
 	}
-	double f = aqu_floodedness((double)c.cx, (double)c.cy, (double)c.cz, seed);
+	double f = aqu_floodedness(R * dxc, (double)c.cy, R * dzc, seed);
 	if (f < -1.0)
 		f = -1.0;
 	else if (f > 1.0)
@@ -1647,10 +2064,20 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 		c.level = sea;
 		c.cls = 4;
 	} else if (f > part_th) {
-		int rx = floordiv(c.cx, 16);
-		int ry = floordiv(c.cy, 40);
-		int rz = floordiv(c.cz, 16);
-		double sv = aqu_spread(16.0 * rx + 8.0, 40.0 * ry + 20.0, 16.0 * rz + 8.0, seed);
+		// AC-0311 piece 2: the quantized regions re-key onto the GLOBAL
+		// sphere integers at the cell's (d, δ) — the 16×40×16 spread /
+		// 64×40×64 lava regions measured in (R·d.x, δ, R·d.z) units; the
+		// region noise is sampled at the region centre's chart direction
+		// (the normalised global position) with δ = the centre's height.
+		int64_t gcx = (int64_t)std::floor(R * dxc);
+		int64_t gcy = (int64_t)std::floor((double)c.cy);
+		int64_t gcz = (int64_t)std::floor(R * dzc);
+		int rx = floordiv((int)gcx, 16);
+		int ry = floordiv((int)gcy, 40);
+		int rz = floordiv((int)gcz, 16);
+		SmV3 scd = sm_norm({(double)(16 * rx + 8), R + (double)(40 * ry + 20),
+				(double)(16 * rz + 8)});
+		double sv = aqu_spread(R * scd.x, (double)(40 * ry + 20), R * scd.z, seed);
 		int sraw = (int)std::floor(sv * 10.0 + 0.5);
 		if (sraw < -10)
 			sraw = -10;
@@ -1661,7 +2088,7 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 			q = 0;
 		else if (q > 6)
 			q = 6;
-		int level = 40 * floordiv(c.cy, 40) + 20 + (q * 3 - 10);
+		int level = 40 * floordiv((int)gcy, 40) + 20 + (q * 3 - 10);
 		if (level > hmin)
 			level = hmin; // capped at the lowest sampled surface (no +8 — see above)
 		c.type = 1;
@@ -1676,10 +2103,15 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 	// The lava type: a flooded cell becomes lava when its level is at or
 	// below vanilla −10 (ours 54) and |lava| > 0.3, once per 64×40×64 region.
 	if (c.type == 1 && c.level <= AQU_LAVA_LEVEL_MAX) {
-		int lx = floordiv(c.cx, 64);
-		int ly = floordiv(c.cy, 40);
-		int lz = floordiv(c.cz, 64);
-		double lv = aqu_lava(64.0 * lx + 32.0, 40.0 * ly + 20.0, 64.0 * lz + 32.0, seed);
+		int64_t gcx = (int64_t)std::floor(R * dxc);
+		int64_t gcy = (int64_t)std::floor((double)c.cy);
+		int64_t gcz = (int64_t)std::floor(R * dzc);
+		int lx = floordiv((int)gcx, 64);
+		int ly = floordiv((int)gcy, 40);
+		int lz = floordiv((int)gcz, 64);
+		SmV3 lcd = sm_norm({(double)(64 * lx + 32), R + (double)(40 * ly + 20),
+				(double)(64 * lz + 32)});
+		double lv = aqu_lava(R * lcd.x, (double)(40 * ly + 20), R * lcd.z, seed);
 		if (lv < 0.0)
 			lv = -lv;
 		if (lv > 0.3)
@@ -1687,19 +2119,26 @@ static inline void aqu_cell_build(int ix, int iy, int iz, int64_t seed, int sea,
 	}
 }
 
-static inline void aqu_table_build(int cx, int cz, int64_t seed, int sea, AquTable &t) {
+static inline void aqu_table_build(int face, double R, int cx, int cz,
+		int64_t seed, int sea, AquTable &t) {
+	// AC-0311 piece 2: the 7×5 H window re-keys onto the (d, δ) domain —
+	// each of the 35 chunk-centre samples resolves through the chart at its
+	// flat position (off-face samples take the gapless continuation; the
+	// 2:1 edge cell ratio the flat window ignored is sub-sample — a
+	// deterministic, counted re-baseline).
 	for (int i = 0; i < 7; i++) {
 		for (int j = 0; j < 5; j++) {
 			int ncx = cx - 4 + i;
 			int ncz = cz - 2 + j;
-			t.h[i * 5 + j] = (int16_t)aqu_surface_h_dense(ncx * 16 + 8, ncz * 16 + 8, seed);
+			t.h[i * 5 + j] = (int16_t)aqu_surface_h_sphere(face,
+					(double)(ncx * 16 + 8), (double)(ncz * 16 + 8), R, seed);
 		}
 	}
 	for (int ax = 0; ax < 3; ax++) {
 		for (int ay = 0; ay < 35; ay++) {
 			for (int az = 0; az < 3; az++) {
-				aqu_cell_build(cx - 1 + ax, -2 + ay, cz - 1 + az, seed, sea, t, cx, cz,
-						t.cells[ax][ay][az]);
+				aqu_cell_build(face, R, cx - 1 + ax, -2 + ay, cz - 1 + az, seed, sea,
+						t, cx, cz, t.cells[ax][ay][az]);
 			}
 		}
 	}
@@ -1773,8 +2212,9 @@ static inline const int32_t *aq_sq() {
 	return g_aq_sq;
 }
 
-static inline void aqu_block(int x, int y, int z, int he, int cx, int cz,
-		const AquTable &t, int64_t seed, int sea, AquOut &out, AqColState &st) {
+static inline void aqu_block(int face, double R, int x, int y, int z, int he,
+		int cx, int cz, const AquTable &t, int64_t seed, int sea, AquOut &out,
+		AqColState &st) {
 	out.block = 0;
 	out.fl = 0;
 	g_aqu_searches.fetch_add(1, std::memory_order_relaxed);
@@ -1909,7 +2349,12 @@ static inline void aqu_block(int x, int y, int z, int he, int cx, int cz,
 			}
 		}
 		if (p > 0.0) {
-			p += 2.0 * aqu_barrier((double)x, (double)y, (double)z, seed);
+			// AC-0311 piece 2: the barrier noise on the block's (d, δ) —
+			// the search computation itself (12 candidates / 4 nearest /
+			// d² 25) is unchanged (the local frame, integer d²).
+			double dxb, dzb;
+			sm_chart_dir(face, (double)x, (double)z, R, &dxb, &dzb);
+			p += 2.0 * aqu_barrier(R * dxb, (double)y, R * dzb, seed);
 		}
 		if (p > 0.0 && y < he) {
 			// The stone rim (only below the topmost solid — the rim can
@@ -2293,12 +2738,17 @@ static inline double noodle_density(double x, double y, double z, int64_t s) {
 // The rock base — the surface-rule stage's deepslate transition. The fill
 // chain, stone_ore_slab and (via it) the far emit's deep cells must all
 // agree on this (the farab A/B contract).
-static inline uint8_t rock_base(int y, int x, int z, int64_t s) {
+static inline uint8_t rock_base(int face, int y, int x, int z, int bx, int bz,
+		double R, const SpTable &sp, int64_t s) {
 	if (y < DEEPSLATE_Y)
 		return (uint8_t)B_DEEPSLATE;
 	if (y < DEEPSLATE_BLEND_TOP) {
 		double t = (double)(DEEPSLATE_BLEND_TOP - y) * 0.125; // 1.0 @64 -> 0.125 @71
-		return hash3i(x, y, z, s + 326) < t ? (uint8_t)B_DEEPSLATE : (uint8_t)B_STONE;
+		// AC-0311 piece 2: the blend roll re-keys onto the global sphere
+		// integers at the cell (⌊R·dx⌋, ⌊δ⌋, ⌊R·dz⌋).
+		int64_t kx, ky, kz;
+		sp_key3(face, x, y, z, bx, bz, R, sp, kx, ky, kz);
+		return hash3i(kx, ky, kz, s + 326) < t ? (uint8_t)B_DEEPSLATE : (uint8_t)B_STONE;
 	}
 	return (uint8_t)B_STONE;
 }
@@ -2314,19 +2764,24 @@ static inline uint8_t rock_base(int y, int x, int z, int64_t s) {
 // full regen keeps the same H, the halo terrain never shifts). The 1024-
 // byte payload is what the v6 codec (flag bit 1) stores in place of the
 // slab section (~1 KB on disk — AC-0287's save filter drops it entirely).
-static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax, int sea) {
+static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax,
+		int sea, int face = 0, double R = 4000.0) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	double ystep = (double)hmax / GY_CELLS;
 	long long t0 = now_us();
 	g_t_cols_far.fetch_add(1, std::memory_order_relaxed);
+	// AC-0311 piece 2: the (d, δ) table — the far lane builds only the 441
+	// coarse-lattice points (the spec's part-1 +14% far-lane budget).
+	SpTable sp;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, true, sp);
 	// Only the 3 SURFACE fields (the 2-octave 441-pt builds — the H's
 	// physics). The cave + ore fields are never read here.
 	long long t_field = now_us();
 	Field f_sc, f_sh, f_sr;
-	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
-	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
-	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	build_field(f_sc, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
+	build_field(f_sh, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0, sp);
+	build_field(f_sr, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0, sp);
 	g_t_field_us.fetch_add(now_us() - t_field, std::memory_order_relaxed);
 	long long t_ht = now_us();
 	std::vector<int> heights(256);
@@ -2370,15 +2825,19 @@ static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax, int 
 // recount and the far emit) — they never flip a 4x4x4 cell, so they are
 // not listed. The 20x20 neighborhood: trees up to 2 cells OUTSIDE the
 // column reach into it (the 5x5 leaf footprint).
-static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax, int sea) {
+static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax,
+		int sea, int face = 0, double R = 4000.0) {
 	long long t0 = now_us();
 	int bx = cx * 16;
 	int bz = cz * 16;
 	double ystep = (double)hmax / GY_CELLS;
+	// AC-0311 piece 2: the coarse (d, δ) table (441 pts — the H/veg lane).
+	SpTable sp;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, true, sp);
 	Field f_sc, f_sh, f_sr;
-	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
-	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
-	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	build_field(f_sc, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
+	build_field(f_sh, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0, sp);
+	build_field(f_sr, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0, sp);
 	std::vector<int> heights(256);
 	std::vector<int> bcode(256);
 	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
@@ -2395,7 +2854,13 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 	std::vector<uint8_t> ids;
 	for (int tz = bz - 2; tz < bz + 18; tz++) {
 		for (int tx = bx - 2; tx < bx + 18; tx++) {
-			double hv = hash2i(tx, tz, seed + 55);
+			// AC-0311 piece 2: the tree rolls re-key onto the global arc
+			// integers of the 4-block lattice cell (the SpTable xz — the
+			// 400-candidate gate makes a per-candidate chart eval half the
+			// +1.5% budget before the 3-D keys are counted).
+			int64_t t2x, t2z;
+			sp_key2(tx, tz, bx, bz, sp, t2x, t2z);
+			double hv = hash2i(t2x, t2z, seed + 55);
 			if (hv >= 0.14)
 				continue;
 			int glx = tx - bx;
@@ -2422,7 +2887,7 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 			int hcol = H2; // the lazy margin = the heightmap surface exactly
 			if (hcol < 1)
 				continue;
-			int tth = 4 + (int)(hash2i(tx, tz, seed + 66) * 3.0);
+			int tth = 4 + (int)(hash2i(t2x, t2z, seed + 66) * 3.0);
 			for (int dy = 1; dy <= tth; dy++) {
 				int wy = hcol + dy;
 				int ax = tx - bx;
@@ -2478,9 +2943,15 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 					top = B_SNOW_GRASS;
 				if (fh <= sea + 1 && bcode[idx] != 1)
 					top = B_SAND;
-				if (top == B_GRASS && hash2i(bx + lx, bz + lz, seed + 777) < 0.02) {
-					int k = ((fh + 1) << 8) | (lz << 4) | lx;
-					seen[k] = -1; // the flower wins (unconditional write)
+				if (top == B_GRASS) {
+					// AC-0311 piece 2: the flower rolls re-key onto the
+					// global arc integers of the 4-block lattice cell.
+					int64_t f2x, f2z;
+					sp_key2(bx + lx, bz + lz, bx, bz, sp, f2x, f2z);
+					if (hash2i(f2x, f2z, seed + 777) < 0.02) {
+						int k = ((fh + 1) << 8) | (lz << 4) | lx;
+						seen[k] = -1; // the flower wins (unconditional write)
+					}
 				}
 			}
 		}
@@ -2522,10 +2993,16 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 // cross-slab state exists). The surface slab is always kept (the span
 // contains the tower's top), so the effective surface + veg always land.
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
-		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr) {
+		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr,
+		int face = 0, double R = 4000.0) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
+	// AC-0311 piece 2: the (d, δ) table — all 2,401 C48 points, built ONCE
+	// and shared by all 16 lattice fields (the precompute cost is the whole
+	// +1.5%; the per-field cost is a table read).
+	SpTable sp;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, false, sp);
 	// AC-0291: the fl (fluid-level) array — the scheduled-flow marks (fl = 8
 	// on the aquifer boundary water, 0 elsewhere). Only the FULL path marks
 	// (the skip path keeps its all-zero fl — the band-A contract).
@@ -2535,7 +3012,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	const AquTable *aq_p = nullptr;
 	if (!skip) {
 		long long ta = now_us();
-		aqu_table_build(cx, cz, seed, sea, aq);
+		aqu_table_build(face, R, cx, cz, seed, sea, aq);
 		aq_p = &aq;
 		g_t_aquifer_us.fetch_add(now_us() - ta, std::memory_order_relaxed);
 	}
@@ -2580,9 +3057,9 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		// the CHEESE_* constants + the file header) — ONE vn3 field
 		// replaces the old AC-0288 two-octave blend (f_cave/f_cave2 gone).
 		// AC-0359: on the cave lattice (ystep_cave).
-		build_field_vn_c(f_cheese, bx, bz, ystep_cave, seed + 301,
+		build_field_vn_c(f_cheese, ystep_cave, seed + 301,
 				CHEESE_XZ_SCALE, CHEESE_Y_SCALE, CHEESE_XZ_SCALE,
-				CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N);
+				CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N, sp);
 		// AC-0367 piece B: the VANILLA TUNNEL FAMILY (the piece-A ported
 		// sources — spaghetti_2d / spaghetti_3d / spaghetti_roughness /
 		// noodle) on the C48 cave lattice: the DENSE expressions evaluated
@@ -2597,59 +3074,59 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 		// the build cost is measured, not assumed (the AC-0366 price: the
 		// expected win assumed these terms were cheap; they are not — see
 		// the results page).
-		build_field_eval_c(f_s2d, bx, bz, ystep_cave,
+		build_field_eval_c(f_s2d, ystep_cave,
 				[&](double x, double y, double z) {
 					return spag2d_density(x, y, z, seed);
-				});
-		build_field_eval_c(f_s3d, bx, bz, ystep_cave,
+				}, sp);
+		build_field_eval_c(f_s3d, ystep_cave,
 				[&](double x, double y, double z) {
 					return spag3d_density(x, y, z, seed);
-				});
-		build_field_eval_c(f_spr, bx, bz, ystep_cave,
+				}, sp);
+		build_field_eval_c(f_spr, ystep_cave,
 				[&](double x, double y, double z) {
 					return spagrough_density(x, y, z, seed);
-				});
-		build_field_eval_c(f_nod, bx, bz, ystep_cave,
+				}, sp);
+		build_field_eval_c(f_nod, ystep_cave,
 				[&](double x, double y, double z) {
 					return noodle_density(x, y, z, seed);
-				});
+				}, sp);
 		// AC-0359: the layer (vanilla cave_layer AS-IS — the 32-block period
 		// rides 4 samples/period) and the entrance (vanilla cave_entrance
 		// AS-IS) move ONTO the cave lattice — the AC-0344 C48 design. They
 		// were DENSE vn3 in the scan before (layer deep-band only).
-		build_field_vn_c(f_layer, bx, bz, ystep_cave, seed + 302,
+		build_field_vn_c(f_layer, ystep_cave, seed + 302,
 				LAYER_XZ_SCALE, LAYER_Y_SCALE, LAYER_XZ_SCALE,
-				LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N);
-		build_field_vn_c(f_entr, bx, bz, ystep_cave, seed + 306,
+				LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N, sp);
+		build_field_vn_c(f_entr, ystep_cave, seed + 306,
 				ENTR_XZ_SCALE, ENTR_Y_SCALE, ENTR_XZ_SCALE,
-				ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N);
+				ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N, sp);
 		// AC-0292: the PILLAR field — the full vanilla caves/pillars value
 		// stored per lattice point (3 vn3 at build time, 1 tril_c in the
 		// scan). The SAME expression as the dense pillar_density (the
 		// genprobe lockstep source) — the lattice points are bit-exact
 		// with a dense evaluation.
-		build_field_eval_c(f_pillar, bx, bz, ystep_cave,
+		build_field_eval_c(f_pillar, ystep_cave,
 				[&](double x, double y, double z) {
 					return pillar_density(x, y, z, seed);
-				});
+				}, sp);
 		// AC-0292: the ORE VEIN field (one vn3 — the nested per-ore
 		// thresholds in the stone_ore chain below).
-		build_field_vn_c(f_vein, bx, bz, ystep_cave, seed + 323,
+		build_field_vn_c(f_vein, ystep_cave, seed + 323,
 				VEIN_XZ_SCALE, VEIN_Y_SCALE, VEIN_XZ_SCALE,
-				VEIN_FIRST_OCT, VEIN_AMPS, 2);
+				VEIN_FIRST_OCT, VEIN_AMPS, 2, sp);
 		// AC-0292: the CAVE BIOME field (one vn3 — the per-column
 		// 16-level precompute below).
-		build_field_vn_c(f_biome, bx, bz, ystep_cave, seed + 319,
+		build_field_vn_c(f_biome, ystep_cave, seed + 319,
 				BIOME_XZ_SCALE, BIOME_Y_SCALE, BIOME_XZ_SCALE,
-				BIOME_FIRST_OCT, BIOME_AMPS, 2);
+				BIOME_FIRST_OCT, BIOME_AMPS, 2, sp);
 	}
-	build_field(f_ore1, bx, bz, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
-	build_field(f_ore2, bx, bz, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
-	build_field(f_ore3, bx, bz, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
+	build_field(f_ore1, ystep, seed + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0, sp);
+	build_field(f_ore2, ystep, seed + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0, sp);
+	build_field(f_ore3, ystep, seed + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0, sp);
 	Field f_sc, f_sh, f_sr;
-	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
-	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
-	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	build_field(f_sc, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
+	build_field(f_sh, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0, sp);
+	build_field(f_sr, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0, sp);
 	g_t_field_us.fetch_add(now_us() - t_field, std::memory_order_relaxed);
 	long long t_ht = now_us();
 
@@ -2691,11 +3168,15 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			return B_IRON_ORE;
 		if (y < 60 && tril(f_ore3, gx, (double)y / ystep, gz) > 0.82)
 			return B_COAL_ORE;
-		if (y < 10 && hash3i(x, y, z, seed + 333) < 0.02)
-			return B_OBSIDIAN;
+		if (y < 10) {
+			int64_t kx, ky, kz;
+			sp_key3(face, x, y, z, bx, bz, R, sp, kx, ky, kz);
+			if (hash3i(kx, ky, kz, seed + 333) < 0.02)
+				return B_OBSIDIAN;
+		}
 		// AC-0292: the surface-rule stage's deepslate transition (the
 		// far emit's stone_ore_slab precompute agrees cell-for-cell).
-		int b = rock_base(y, x, z, seed);
+		int b = rock_base(face, y, x, z, bx, bz, R, sp, seed);
 		if (b == B_DEEPSLATE)
 			g_p4_deepslate.fetch_add(1, std::memory_order_relaxed);
 		return b;
@@ -2927,7 +3408,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 								cell = 0;
 							} else {
 								AquOut aout;
-								aqu_block(x, y, z, he, cx, cz, *aq_p, seed, sea, aout, aqst);
+								aqu_block(face, R, x, y, z, he, cx, cz, *aq_p, seed, sea, aout, aqst);
 								if (aout.block == 0 && y <= AQU_LAVA_SURF) {
 									// The global lava layer (vanilla -54 + 64 =
 									// 10, "exists regardless of aquifers") —
@@ -2950,14 +3431,23 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 						// the post-carve drip pass below).
 						if (!skip) {
 							int bb = bio[y >> 3];
-							if (bb == 1 && (cell == B_STONE || cell == B_DEEPSLATE)
-									&& hash3i(x, y, z, seed + 327) < 0.10) {
-								cell = B_SCULK;
-								g_p4_sculk.fetch_add(1, std::memory_order_relaxed);
-							} else if (bb == 3 && (cell == B_STONE || cell == B_DEEPSLATE)
-									&& hash3i(x, y, z, seed + 328) < 0.06) {
-								cell = B_MOSS;
-								g_p4_moss.fetch_add(1, std::memory_order_relaxed);
+							// AC-0311 piece 2: the biome rock rolls re-key
+							// onto the global sphere integers at the cell
+							// (the SP_BLOCK_KEY forms — see sp_key3).
+							if (bb == 1 && (cell == B_STONE || cell == B_DEEPSLATE)) {
+								int64_t kx, ky, kz;
+								sp_key3(face, x, y, z, bx, bz, R, sp, kx, ky, kz);
+								if (hash3i(kx, ky, kz, seed + 327) < 0.10) {
+									cell = B_SCULK;
+									g_p4_sculk.fetch_add(1, std::memory_order_relaxed);
+								}
+							} else if (bb == 3 && (cell == B_STONE || cell == B_DEEPSLATE)) {
+								int64_t kx, ky, kz;
+								sp_key3(face, x, y, z, bx, bz, R, sp, kx, ky, kz);
+								if (hash3i(kx, ky, kz, seed + 328) < 0.06) {
+									cell = B_MOSS;
+									g_p4_moss.fetch_add(1, std::memory_order_relaxed);
+								}
 							}
 						}
 					}
@@ -3035,52 +3525,69 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					// untouched (h naturally stays under the cap).
 					bool crosses_sea = a <= sea && sea <= b
 							&& flat[(size_t)(sea << 8) | base] == B_WATER;
-					if (ceil_solid && bio[up >> 3] == 2
-							&& hash3i(x, a, z, seed + 330) < 0.35) {
-						int h = 2 + (int)(hash2i(x, z, seed + 332) * 5.0); // 2..6
-						if (h > len)
-							h = len;
-						if (crosses_sea && h > sea - a)
-							h = sea - a;
-						for (int yy = a; yy < a + h; yy++) {
-							if (flat[(size_t)(yy << 8) | base] == 0) {
-								flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
-								g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+					// AC-0311 piece 2: the drip rolls re-key onto the
+					// global sphere integers (the 3-D key at the spire
+					// cell, the 2-D lattice-cell key for the length — see
+					// sp_key3/sp_key2).
+					if (ceil_solid && bio[up >> 3] == 2) {
+						int64_t kx, ky, kz;
+						sp_key3(face, x, a, z, bx, bz, R, sp, kx, ky, kz);
+						if (hash3i(kx, ky, kz, seed + 330) < 0.35) {
+							int64_t k2x, k2z;
+							sp_key2(x, z, bx, bz, sp, k2x, k2z);
+							int h = 2 + (int)(hash2i(k2x, k2z, seed + 332) * 5.0); // 2..6
+							if (h > len)
+								h = len;
+							if (crosses_sea && h > sea - a)
+								h = sea - a;
+							for (int yy = a; yy < a + h; yy++) {
+								if (flat[(size_t)(yy << 8) | base] == 0) {
+									flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
+									g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+								}
 							}
 						}
 					}
 					// Stalagmite — from the floor (its level must be drip).
-					if (floor_solid && bio[dn >> 3] == 2
-							&& hash3i(x, b, z, seed + 331) < 0.35) {
-						int h = 2 + (int)(hash2i(x, z, seed + 335) * 5.0); // 2..6
-						if (h > len)
-							h = len;
-						for (int yy = b - h + 1; yy <= b; yy++) {
-							if (flat[(size_t)(yy << 8) | base] == 0) {
-								flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
-								g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+					if (floor_solid && bio[dn >> 3] == 2) {
+						int64_t kx, ky, kz;
+						sp_key3(face, x, b, z, bx, bz, R, sp, kx, ky, kz);
+						if (hash3i(kx, ky, kz, seed + 331) < 0.35) {
+							int64_t k2x, k2z;
+							sp_key2(x, z, bx, bz, sp, k2x, k2z);
+							int h = 2 + (int)(hash2i(k2x, k2z, seed + 335) * 5.0); // 2..6
+							if (h > len)
+								h = len;
+							for (int yy = b - h + 1; yy <= b; yy++) {
+								if (flat[(size_t)(yy << 8) | base] == 0) {
+									flat[(size_t)(yy << 8) | base] = B_DRIPSTONE;
+									g_p4_dripstone.fetch_add(1, std::memory_order_relaxed);
+								}
 							}
 						}
 					}
 					// Clay pool — the pure-water run over a solid floor.
-					if (floor_solid && c0 == B_WATER && bio[dn >> 3] == 2
-							&& hash2i(x, z, seed + 329) < 0.06) {
-						bool all_water = true;
-						for (int yy = a; yy <= b; yy++) {
-							if (flat[(size_t)(yy << 8) | base] != B_WATER) {
-								all_water = false;
-								break;
+					if (floor_solid && c0 == B_WATER && bio[dn >> 3] == 2) {
+						int64_t k2x, k2z;
+						sp_key2(x, z, bx, bz, sp, k2x, k2z);
+						if (hash2i(k2x, k2z, seed + 329) < 0.06) {
+							bool all_water = true;
+							for (int yy = a; yy <= b; yy++) {
+								if (flat[(size_t)(yy << 8) | base] != B_WATER) {
+									all_water = false;
+									break;
+								}
 							}
-						}
-						if (all_water) {
-							int d = 1 + (hash2i(x, z, seed + 334) < 0.5)
-									+ (hash2i(x, z, seed + 336) < 0.3); // 1..3
-							if (d > len)
-								d = len;
-							for (int yy = b - d + 1; yy <= b; yy++) {
-								if (flat[(size_t)(yy << 8) | base] == B_WATER) {
-									flat[(size_t)(yy << 8) | base] = B_CLAY;
-									g_p4_clay.fetch_add(1, std::memory_order_relaxed);
+							if (all_water) {
+								int d = 1 + (hash2i(k2x, k2z, seed + 334) < 0.5)
+										+ (hash2i(k2x, k2z, seed + 336) < 0.3); // 1..3
+								if (d > len)
+									d = len;
+								for (int yy = b - d + 1; yy <= b; yy++) {
+									if (flat[(size_t)(yy << 8) | base] == B_WATER) {
+										flat[(size_t)(yy << 8) | base] = B_CLAY;
+										g_p4_clay.fetch_add(1, std::memory_order_relaxed);
+									}
 								}
 							}
 						}
@@ -3098,7 +3605,13 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	// field (2-ring margin).
 	for (int tz = bz - 2; tz < bz + 18; tz++) {
 		for (int tx = bx - 2; tx < bx + 18; tx++) {
-			double hv = hash2i(tx, tz, seed + 55);
+			// AC-0311 piece 2: the tree rolls re-key onto the global arc
+			// integers of the 4-block lattice cell (the SpTable xz — the
+			// 400-candidate gate makes a per-candidate chart eval half the
+			// +1.5% budget before the 3-D keys are counted).
+			int64_t t2x, t2z;
+			sp_key2(tx, tz, bx, bz, sp, t2x, t2z);
+			double hv = hash2i(t2x, t2z, seed + 55);
 			if (hv >= 0.14)
 				continue;
 			int glx = tx - bx;
@@ -3184,7 +3697,7 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			}
 			if (skip)
 				continue;
-			int tth = 4 + (int)(hash2i(tx, tz, seed + 66) * 3.0);
+			int tth = 4 + (int)(hash2i(t2x, t2z, seed + 66) * 3.0);
 			for (int dy = 1; dy <= tth; dy++) {
 				// _putc (log): only empty cells, inside the chunk, and
 				// (AC-0237) inside the generated slab range.
@@ -3233,8 +3746,14 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				// the slab above).
 				if (!slab_kept((fh + 1) >> 4))
 					continue;
-				if (flat[idxf] == B_GRASS && hash2i(bx + lx, bz + lz, seed + 777) < 0.02) {
-					flat[idxf + 256] = hash2i(bx + lx, bz + lz, seed + 778) < 0.5 ? B_ROSE : B_DANDELION;
+				if (flat[idxf] == B_GRASS) {
+					// AC-0311 piece 2: the flower rolls re-key onto the
+					// global arc integers of the 4-block lattice cell.
+					int64_t f2x, f2z;
+					sp_key2(bx + lx, bz + lz, bx, bz, sp, f2x, f2z);
+					if (hash2i(f2x, f2z, seed + 777) < 0.02) {
+						flat[idxf + 256] = hash2i(f2x, f2z, seed + 778) < 0.5 ? B_ROSE : B_DANDELION;
+					}
 				}
 			}
 		}
@@ -3252,14 +3771,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 // main thread. Only the three SURFACE fields are built (the cave/ore
 // fields are never read) — the heights pass of gen_flat, ~33us, with no
 // density scan, no fill, no palettize.
-static std::vector<uint8_t> column_heights(int cx, int cz, int64_t seed, int hmax) {
+static std::vector<uint8_t> column_heights(int cx, int cz, int64_t seed, int hmax,
+		int face = 0, double R = 4000.0) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	double ystep = (double)hmax / GY_CELLS;
+	// AC-0311 piece 2: the coarse (d, δ) table (441 pts — the H-only lane).
+	SpTable sp;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, true, sp);
 	Field f_sc, f_sh, f_sr;
-	build_field(f_sc, bx, bz, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
-	build_field(f_sh, bx, bz, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
-	build_field(f_sr, bx, bz, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+	build_field(f_sc, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
+	build_field(f_sh, ystep, seed + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0, sp);
+	build_field(f_sr, ystep, seed + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0, sp);
 	std::vector<uint8_t> out(256);
 	for (int lz = 0; lz < 16; lz++) {
 		for (int lx = 0; lx < 16; lx++) {
@@ -3450,12 +3973,13 @@ public:
 		// AC-0216: the optional 6th arg `skip` (default 0 = the pre-AC-0216
 		// full density field, bit-for-bit) — the lazy offscreen-interior
 		// skip (see the file header).
-		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_flat, DEFVAL(0), DEFVAL(PackedByteArray()));
-		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_slabs, DEFVAL(0), DEFVAL(PackedByteArray()));
-		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()));
+		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_flat, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
+		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_slabs, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
+		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
 		// AC-0283 P3: the halo band's heightmap sky source (the heights
 		// pass only — see column_heights above).
-		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h"), &AweGen::column_heights);
+		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h", "face", "R"), &AweGen::column_heights, DEFVAL(0), DEFVAL(4000.0));
+		ClassDB::bind_method(D_METHOD("sphere_table", "face", "cx", "cz", "R"), &AweGen::sphere_table);
 		// AC-0311 piece 1: the sphere-domain surface-height prototype
 		// (env-gated, inert — see the method).
 		ClassDB::bind_method(D_METHOD("sphere_h", "x", "z", "r", "s"), &AweGen::sphere_h);
@@ -3463,19 +3987,19 @@ public:
 		// AC-0284b: the far (h-only) column — the 1024-byte far payload
 		// (256 H u16 LE + 256 biome + 256 top-block id; see gen_far).
 		// generate_resl with skip == 2 returns it as resl[2] too.
-		ClassDB::bind_method(D_METHOD("generate_far", "cx", "cz", "s", "h", "sea"), &AweGen::generate_far);
+		ClassDB::bind_method(D_METHOD("generate_far", "cx", "cz", "s", "h", "sea", "face", "R"), &AweGen::generate_far, DEFVAL(0), DEFVAL(4000.0));
 		// AC-0284b: the u16 LE heightmap (512 bytes — the legacy u8
 		// column_heights wraps above 255; the farab H battery compares
 		// the far payload against THIS).
-		ClassDB::bind_method(D_METHOD("column_heights16", "cx", "cz", "s", "h"), &AweGen::column_heights16);
+		ClassDB::bind_method(D_METHOD("column_heights16", "cx", "cz", "s", "h", "face", "R"), &AweGen::column_heights16, DEFVAL(0), DEFVAL(4000.0));
 		// AC-0284b: the far emitter's DEEP-COLOR precompute — the exact
 		// stone_ore chain (the fill lambda) per slab cell (see the
 		// method). Pass it to AweMesh.h_avg_emit for the slabs with deep
 		// cells (si <= 3 — the ore bands end at y = 60).
-		ClassDB::bind_method(D_METHOD("stone_ore_slab", "cx", "cz", "s", "h", "si"), &AweGen::stone_ore_slab);
+		ClassDB::bind_method(D_METHOD("stone_ore_slab", "cx", "cz", "s", "h", "si", "face", "R"), &AweGen::stone_ore_slab, DEFVAL(0), DEFVAL(4000.0));
 		// AC-0284b: the column's tree cells (the far emitter's solid-set
 		// extension — see gen_veg_cells).
-		ClassDB::bind_method(D_METHOD("veg_cells", "cx", "cz", "s", "h", "sea"), &AweGen::veg_cells);
+		ClassDB::bind_method(D_METHOD("veg_cells", "cx", "cz", "s", "h", "sea", "face", "R"), &AweGen::veg_cells, DEFVAL(0), DEFVAL(4000.0));
 		ClassDB::bind_method(D_METHOD("skip_chunks_total"), &AweGen::skip_chunks_total);
 		ClassDB::bind_method(D_METHOD("skip_cols_total"), &AweGen::skip_cols_total);
 		ClassDB::bind_method(D_METHOD("reset_skip_stats"), &AweGen::reset_skip_stats);
@@ -3705,9 +4229,9 @@ public:
 	// AC-0237: p_keep = the 24-byte slab keep mask (slab si generated iff
 	// p_keep[si] != 0); an EMPTY array = the full column, bit-identical
 	// to the pre-AC-0237 output (the genhash A==B gate relies on it).
-	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0) const {
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, nullptr, p_face, p_R);
 		PackedByteArray out;
 		out.resize((int)f.size());
 		if (!f.empty())
@@ -3715,9 +4239,9 @@ public:
 		return out;
 	}
 
-	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+	Array generate_slabs(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0) const {
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep);
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, nullptr, p_face, p_R);
 		return awegen::palettize_slabs(f, p_h);
 	}
 
@@ -3730,9 +4254,9 @@ public:
 	// the fluid tick's explicit-fl pass makes them flow: the waterfalls).
 	// The skip paths keep all-null fl (no flow marks — the band-A/far
 	// payloads stay bit-exact by construction).
-	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep) const {
+	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0) const {
 		if (p_skip == 2) {
-			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea);
+			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea, p_face, p_R);
 			Array resl;
 			Array ds;
 			ds.resize(p_h / 16); // all null — the far column holds no slabs
@@ -3758,7 +4282,7 @@ public:
 		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
 		std::vector<uint8_t> ffl;
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl);
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl, p_face, p_R);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
 		if (p_skip == 0) {
@@ -3773,8 +4297,8 @@ public:
 
 	// AC-0284b: the far (h-only) column's 1024-byte payload (256 H u16
 	// LE + 256 biome + 256 top-block id — see gen_far above).
-	PackedByteArray generate_far(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
-		std::vector<uint8_t> f = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea);
+	PackedByteArray generate_far(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_face = 0, double p_R = 4000.0) const {
+		std::vector<uint8_t> f = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea, p_face, p_R);
 		PackedByteArray out;
 		out.resize((int)f.size());
 		if (!f.empty())
@@ -3785,14 +4309,17 @@ public:
 	// AC-0284b: the column's 256 heights as u16 LE (512 bytes). The u8
 	// column_heights above wraps above 255 (TERRAIN_H_MAX = 300); this is
 	// the exact form the far payload stores.
-	PackedByteArray column_heights16(int p_cx, int p_cz, int p_s, int p_h) const {
+	PackedByteArray column_heights16(int p_cx, int p_cz, int p_s, int p_h, int p_face = 0, double p_R = 4000.0) const {
 		int bx = p_cx * 16;
 		int bz = p_cz * 16;
 		double ystep = (double)p_h / GY_CELLS;
+		// AC-0311 piece 2: the coarse (d, δ) table (441 pts — the H lane).
+		SpTable sp;
+		sp_table_build(p_face, sp_col_index(p_face, p_cx), sp_col_index(p_face, p_cz), p_R, true, sp);
 		Field f_sc, f_sh, f_sr;
-		build_field(f_sc, bx, bz, ystep, p_s, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0);
-		build_field(f_sh, bx, bz, ystep, p_s + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0);
-		build_field(f_sr, bx, bz, ystep, p_s + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0);
+		build_field(f_sc, ystep, p_s, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
+		build_field(f_sh, ystep, p_s + 7, 70.0, SURF_YSCALE, 70.0, 333.0, 0.0, 333.0, sp);
+		build_field(f_sr, ystep, p_s + 13, 300.0, SURF_YSCALE, 300.0, 500.0, 0.0, 500.0, sp);
 		PackedByteArray out;
 		out.resize(512);
 		for (int lz = 0; lz < 16; lz++) {
@@ -3814,14 +4341,17 @@ public:
 	// are plain B_STONE without a field read. AweMesh.h_avg_emit colors
 	// its deep sub-cells (y < H - 3) from this — the skip-fill equivalence
 	// the farab A/B gate checks.
-	PackedByteArray stone_ore_slab(int p_cx, int p_cz, int p_s, int p_h, int p_si) const {
+	PackedByteArray stone_ore_slab(int p_cx, int p_cz, int p_s, int p_h, int p_si, int p_face = 0, double p_R = 4000.0) const {
 		int bx = p_cx * 16;
 		int bz = p_cz * 16;
 		double ystep = (double)p_h / GY_CELLS;
+		// AC-0311 piece 2: the coarse (d, δ) table (441 pts — the H lane).
+		SpTable sp;
+		sp_table_build(p_face, sp_col_index(p_face, p_cx), sp_col_index(p_face, p_cz), p_R, true, sp);
 		Field f_ore1, f_ore2, f_ore3;
-		build_field(f_ore1, bx, bz, ystep, p_s + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0);
-		build_field(f_ore2, bx, bz, ystep, p_s + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0);
-		build_field(f_ore3, bx, bz, ystep, p_s + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0);
+		build_field(f_ore1, ystep, p_s + 77, 7.0, 7.0, 7.0, 0.0, 0.0, 0.0, sp);
+		build_field(f_ore2, ystep, p_s + 88, 9.0, 9.0, 9.0, 900.0, 0.0, 900.0, sp);
+		build_field(f_ore3, ystep, p_s + 99, 6.0, 6.0, 6.0, 1700.0, 0.0, 1700.0, sp);
 		std::vector<uint8_t> out(4096, B_STONE);
 		for (int ly = 0; ly < 16; ly++) {
 			int wy = p_si * 16 + ly;
@@ -3840,15 +4370,19 @@ public:
 					// AC-0292: the rock base first (the deepslate
 					// transition), the ore chain overrides — the fill's
 					// stone_ore chain's exact shape (same ops, f64).
-					int id = rock_base(wy, x, z, p_s);
+					int id = rock_base(p_face, wy, x, z, bx, bz, p_R, sp, p_s);
 					if (wy < 16 && tril(f_ore1, gx, (double)wy / ystep, gz) > 0.78)
 						id = B_DIAMOND_ORE;
 					else if (wy < 42 && tril(f_ore2, gx, (double)wy / ystep, gz) > 0.8)
 						id = B_IRON_ORE;
 					else if (wy < 60 && tril(f_ore3, gx, (double)wy / ystep, gz) > 0.82)
 						id = B_COAL_ORE;
-					else if (wy < 10 && hash3i(x, wy, z, p_s + 333) < 0.02)
-						id = B_OBSIDIAN;
+					else if (wy < 10) {
+						int64_t kx, ky, kz;
+						sp_key3(p_face, x, wy, z, bx, bz, p_R, sp, kx, ky, kz);
+						if (hash3i(kx, ky, kz, p_s + 333) < 0.02)
+							id = B_OBSIDIAN;
+					}
 					out[(ly << 8) | (lz << 4) | lx] = (uint8_t)id;
 				}
 			}
@@ -3862,8 +4396,8 @@ public:
 	// AC-0284b: the column's TREE cells (see gen_veg_cells — the far
 	// emitter adds them to the H-driven solid set so the halo's tree
 	// blobs are byte-identical to the skip slab's emit).
-	PackedByteArray veg_cells(int p_cx, int p_cz, int p_s, int p_h, int p_sea) const {
-		std::vector<uint8_t> v = awegen::gen_veg_cells(p_cx, p_cz, p_s, p_h, p_sea);
+	PackedByteArray veg_cells(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_face = 0, double p_R = 4000.0) const {
+		std::vector<uint8_t> v = awegen::gen_veg_cells(p_cx, p_cz, p_s, p_h, p_sea, p_face, p_R);
 		PackedByteArray out;
 		out.resize((int)v.size());
 		if (!v.empty())
@@ -3872,11 +4406,32 @@ public:
 	}
 
 	// AC-0283 P3: the column's 256-byte heightmap (the halo sky source).
-	PackedByteArray column_heights(int p_cx, int p_cz, int p_s, int p_h) const {
-		std::vector<uint8_t> h = awegen::column_heights(p_cx, p_cz, p_s, p_h);
+	PackedByteArray column_heights(int p_cx, int p_cz, int p_s, int p_h, int p_face = 0, double p_R = 4000.0) const {
+		std::vector<uint8_t> h = awegen::column_heights(p_cx, p_cz, p_s, p_h, p_face, p_R);
 		PackedByteArray out;
 		out.resize(256);
 		std::memcpy(out.ptrw(), h.data(), h.size());
+		return out;
+	}
+
+	// AC-0311 piece 2: the (d, δ) TABLE as a probe surface — a
+	// PackedFloat64Array of [sx, sz, delta] × GFN_C (R·d.x, R·d.z, |P|−R
+	// per C48 lattice point, grid_idx_c order). The piece-2 scratch probe
+	// compares this against the GD column_transform / face_chunk_transform
+	// on a (cx, cz) grid and requires <1e-6 agreement on the direction
+	// before the flip-on (spec §3.1 — the genprobe lockstep pattern).
+	PackedFloat64Array sphere_table(int p_face, int p_cx, int p_cz, double p_R) const {
+		SpTable sp;
+		sp_table_build(p_face, sp_col_index(p_face, p_cx), sp_col_index(p_face, p_cz), p_R,
+				false, sp);
+		PackedFloat64Array out;
+		out.resize((int)(GFN_C * 3));
+		double *o = (double *)out.ptrw();
+		for (size_t i = 0; i < GFN_C; i++) {
+			o[3 * i] = sp.sx[i];
+			o[3 * i + 1] = sp.sz[i];
+			o[3 * i + 2] = sp.delta[i];
+		}
 		return out;
 	}
 

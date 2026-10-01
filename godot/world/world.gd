@@ -13356,7 +13356,11 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	# ground: the face field fades into the home-extended field near the
 	# home edge).
 	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed, Game.planet_R)
-	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed ^ (face * 1000003), Data.HEIGHT)
+	# AC-0311 piece 2 (finishing-run fix): the banana rolls drop the
+	# per-face salt too — one world seed (the C++ tree rolls in the same
+	# chunk run on the raw seed; the salt was the flat-frame construct,
+	# retired by the sphere domain).
+	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(fdata, PackedByteArray())
 	c.no_caves = false
 	if int(c.band) == 0:

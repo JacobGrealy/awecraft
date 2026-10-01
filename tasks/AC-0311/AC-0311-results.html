@@ -185,4 +185,68 @@ x_flat → R·d.x     z_flat → R·d.z     y_flat → δ (≈ local y)</pre>
 <tr><td>The rest of the standing set (G0 / farab / ladder / meshprobe / halo / lightstate / r16 / boundary r4 / battery)</td><td><b>Not run</b> — the port is off, so they would read the (unchanged) HEAD world; running them is the finishing run's verification of the <i>ported</i> world (§7)</td><td>all green (HEAD)</td></tr>
 </table>
 <p class="note">Scope of this run: the inertness baseline (<code>.scratch/AC-0311-gates/genhash_head_baseline.log</code>), the <code>harness_data.yaml</code> genhash chain-tip + "rebase again deliberately" note, and this results page. No <code>gdext/</code>/<code>godot/</code> code change (the shipped path is bit-identical to HEAD), no commits (closeout is the coordinator's).</p>
+
+<h2>11. The finishing run (2026-09-30) — audit, two completions, full gate set, FLIP-ON</h2>
+<p>An earlier finishing candidate (cancelled by a harness restart) had ported the sphere domain into the working tree (~924 lines in <code>gdext/src/gen.cpp</code> + the <code>generate_face</code> face/R pass in <code>godot/world/generator.gd</code>) and left it unverified. This run: (1) walked the §3 checklist against the diff, (2) closed two real defects the audit found, (3) rebuilt and ran the full standing set against the <b>enabled</b> path, (4) measured the V-crack from the enabled path, (5) decided.</p>
+
+<h3>11.1 Completeness audit (§3, item by item)</h3>
+<table>
+<tr><th>Spec item</th><th>Verdict</th></tr>
+<tr><td>§3.1 the (d, δ) substitution + transforms</td><td><b>Done.</b> C++ mirrors <code>godot/core/sphere_math.gd</code> as-is (home_uv / home_point / column_transform / face_chunk_transform / face_mirror_x / _prewarp / uv_to_world); <code>SM_FIT_INV[9]</code> verified exactly equal to the Gram inverse of the 16×16 grid (err 0.0); home pair and face chart agree at 0.0 m on the shared boundary (numeric check).</td></tr>
+<tr><td>§3.2 signatures + caller set</td><td><b>Done.</b> All 8 entry points carry <code>(face=0, R=4000.0)</code> defaults; <code>generate_face</code> passes face/R; the world.gd threadgen workers and column_heights / stone_ore_slab / veg_cells call sites are home-only (verified — the face-0 default is correct for them).</td></tr>
+<tr><td>§3.3 all 16 noise fields</td><td><b>Done.</b> Centralized in the five builders over <code>SpTable</code> (2,401 C48 points / 441 coarse); every field reads through them.</td></tr>
+<tr><td>§3.4 dense sources</td><td><b>Partial — the documented alternative.</b> <code>aqu_surface_h_sphere</code> done and home-correct; the genprobe dense twins deliberately NOT re-substituted (the arm reads red until rebased — spec's stated option; see §11.5 watch). The audit additionally found the face 2-11 chart-domain defect — fixed below.</td></tr>
+<tr><td>§3.5 aquifer re-tile</td><td><b>Structurally done, one defect fixed this run.</b> Global keys, 7×5 window, quantized regions, barrier all present; but the chart position for faces 2-11 was up to a face-width off on 10 of 12 faces (mirror-flipped on the mirror class) — the raw linearized index only charts correctly for faces 4 and 8 (the tan warp's 2/4-period swallows their even offsets).</td></tr>
+<tr><td>§3.6 per-cell hashes</td><td><b>Done.</b> All 11 sites re-keyed (deepslate/obsidian/sculk/moss/dripstone/clay, trees/veg); the lattice-cell key form (the documented fallback) adopted; the per-block alternative was costed and rejected (see §11.3).</td></tr>
+<tr><td>§3.7 carvers</td><td><b>No change</b> — verified untouched.</td></tr>
+<tr><td>§3.8 trees/veg</td><td><b>Done.</b> Trees +55/+66, flowers +777/+778 via <code>sp_key2</code> on both entry points.</td></tr>
+<tr><td>Not in §3, owed by the ticket's gate note</td><td><b>The per-face seed salt was still in.</b> <code>generate_face</code> rolled <code>seed ^ (face*1000003)</code> (as did the banana pass in world.gd) — a flat-frame construct. In the sphere domain the field must be ONE pure f(world, seed) or the seam discontinuity is guaranteed — with the salt, the home/face-4 seam measured a <b>32-block V-crack</b> on the enabled path. Dropped in both places this run.</td></tr>
+</table>
+
+<h3>11.2 The two completions</h3>
+<ol>
+<li><b><code>sm_chart_dir</code> face≥2 chart domain</b> (<code>gen.cpp</code>): strip the <code>face*1024</code> offset, un-run the per-chunk mirror layout (<code>face_local_x</code>), then <code>uv_to_world</code>. Without it the aquifer/cell keys were a pure f(world, seed) only for faces 4 and 8 — the ticket's boundary-continuity contract failed on the other ten by construction.</li>
+<li><b>The per-face seed salt</b> (<code>generator.gd</code> <code>generate_face</code> + the <code>world.gd</code> banana pass): one world seed everywhere — the (d, δ) field is face-independent by definition. <code>satellite_body.gd:317</code> still passes a salted seed + face default 0 to <code>generate_far</code> — the parallel AC-0310 feature, out of scope here, flagged for the coordinator.</li>
+</ol>
+<p>Both completions touch ONLY face≥2 dense-source charts and face-chunk seeds. Proof they are inert on the home path: the new build's genhash (25/25) is <b>byte-identical</b> to the previous port build's (the salted, chart-buggy one) — and that build is itself the sphere world (25/25 new vs the HEAD baseline). Rebuild: <code>PYTHONPATH=.scratch/scons python3 -m SCons -C gdext platform=linux target=template_release</code> — the load-bearing <code>-O2 -ffp-contract=off</code> flags present on every compile line; new <code>libchunkio.so</code> md5 <code>408e73e1…</code> staged to <code>godot/bin/</code>.</p>
+
+<h3>11.3 Gates (the full standing set, enabled path)</h3>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Verdict</th></tr>
+<tr><td>G0 (<code>--quit</code>)</td><td>0 SCRIPT ERROR, rc 0</td><td>✓</td></tr>
+<tr><td><code>genhash</code> ×2</td><td><b>25/25 NEW</b> vs the HEAD-built baseline (chunk (0,0) <code>a4d0cab2…</code> → <code>46c20b07…</code> — the deliberate rebase lands); r1 == r2 byte-identical; GENMS 126-128</td><td>✓ §5 closed (the chain tip is recorded in <code>harness_data.yaml</code>)</td></tr>
+<tr><td>GENMS budget</td><td>baseline 125; shipped lattice-key form 126-128 (inside the +1.5% ≈ 126.9 budget and the HEAD build's own 125-138 machine spread); the per-block per-cell-key alternative measured 132-134 and was NOT shipped</td><td>✓ §3.6 fallback chosen on measurement</td></tr>
+<tr><td><code>farab</code></td><td><code>h_mismatch</code> 0, slab 1080/1080, <code>mat_surf_diff</code> 0, ok</td><td>✓ §7</td></tr>
+<tr><td><code>thash</code> (H)</td><td><code>8df7aeb4…</code> → <code>34cbd5aa…</code> (a move — expected: the surface-field class); min 118 / max 164 / mean 144.99 <b>unchanged</b> over 112,896 columns</td><td>✓ re-measured as the ticket required: the cc/hc/rc re-fit the spec anticipated is NOT needed — recorded as the item's closure</td></tr>
+<tr><td><code>oceansurface</code> (the water/aquifer census — the AC-0291/AC-0342 standing claims)</td><td><code>dry_zero_water</code> 0, <code>open_wet</code> 0, sea surface 1080/1080 at 126; census re-established: ocean 1,080 / land 29,896 / open 108 / water 30,019 / lava 1,058 (one column flipped at the H=126 boundary; the aquifer re-tile re-placed lake/lava volumes — the deliberate rebase class)</td><td>✓ §7 — standing values re-baselined WITH attribution in <code>harness_data.yaml</code></td></tr>
+<tr><td><code>lightstate</code> R16</td><td>all 20 grid chunks leaks 0, worst null, wash false, double-LOD census 0/0; <code>ab</code>: <code>arr_diff_cells</code> 1 preserved, the fixture re-carved [0,123,0] → <b>[0,141,0]</b> (deterministic, both runs) — exactly the §9 prediction</td><td>✓ §9 — re-baselined WITH attribution</td></tr>
+<tr><td><code>ladder</code></td><td><code>band_a_ok</code> 20/20; slabs self-consistent (146/90 vs 155/94 — streamed-count timing drift, the data byte-identical)</td><td>✓</td></tr>
+<tr><td><code>meshprobe</code></td><td><code>match_rate</code> 1.0 (cpp ≡ gd, 699/699 quads self-consistent)</td><td>✓</td></tr>
+<tr><td><code>halo</code></td><td>ok; (a) 0/0 mismatches, (c) 0 mismatches</td><td>✓</td></tr>
+<tr><td><code>boundary</code> r4</td><td>ok / remesh_ok / marker_ok; in-radius built 57 (standing range 56-59); crossing frames 29/35/38 ms (the AC-0352 gate fields — smooth); p95 34 (1 ms below the 35-55 drift band — the machine-variance class piece 1 already documented on this arm); staged_dropped 2781 within the documented run-to-run range</td><td>✓</td></tr>
+<tr><td><code>battery</code> / <code>r16</code></td><td>carried from the previous (salted) port build — same home code (byte-identical genhash); battery ok true, r16 built_all true</td><td>coordinator re-verifies in the heavy stage</td></tr>
+</table>
+
+<h3>11.4 The V-crack — the real number from the enabled path</h3>
+<p>Instrument: the 97-point 1 m step path across the home/face-4 edge at x=+hw (a ∈ [−48, 48], z=+hw/2), plus the 3-site probe along the edge — both sides computed through the ENABLED path (home <code>column_heights16</code>; face 4 via <code>world_to_face</code> → the face-local index → <code>column_heights16(…, 4, R)</code>).</p>
+<table>
+<tr><th>Configuration</th><th>Raw seam step</th><th>Max adjacent step (1 m grid)</th></tr>
+<tr><td>Pre-fix (salted sphere path)</td><td><b>32 blocks</b> — worse than the flat world's 7 m seam; the two sides rolled different noise realizations at the same (d, δ)</td><td>32</td></tr>
+<tr><td>Post-fix (one world seed, face-local chart)</td><td><b>1 block</b> at z=hw/2</td><td><b>1</b> (at a non-seam point; the seam's own step is 0-1)</td></tr>
+<tr><td>3 sites (z = hw/4, hw/2, 3hw/4)</td><td colspan="2">steps 0 / 1 / 0 — worst <b>1</b></td></tr>
+</table>
+<p>Prototype expectation was crossing step 0; the lattice world measures <b>0-1 m</b> (the 4/8-block quantization plus the frame-fit residual — §6's prediction). The ticket's "the crack is measurably smaller or gone" gate: <b>satisfied</b> (32 → 0-1; the flat world it replaces read 7).</p>
+
+<h3>11.5 Decision and the coordinator's watch list (heavy stage)</h3>
+<p><b>VERDICT: the port stays ON.</b> Every §7 contract holds on the enabled path; the V-crack is measured, not asserted; the genhash rebase is deliberate, recorded, and budgeted; the lightstate fixture landed exactly where §9 predicted and was re-baselined with attribution. The two completions (§11.2) were the difference between "port complete on paper" and "port complete" — the spec's own gate note required the boundary-continuity fix, and it was not in the diff until this run.</p>
+<ul>
+<li><b>Windows</b>: the staged <code>libchunkio.windows…dll</code> is PRE-PORT — <code>build_windows.sh</code> + re-stage is owed before any player build (the product is the Windows DLL).</li>
+<li><b>r16 / battery</b> on the new build (carried evidence, §11.3 — same home data, but the heavy stage re-runs them).</li>
+<li><b><code>genprobe</code> arm: known-red</b> until the dense twins (density_cave/layer/entry/dens + the 5 aquifer sources + pillar/vein/biome lockstep) are re-substituted — the spec §3.4 documented alternative; the noise primitives (hash/fade/vnoise/fbm) stay bit-exact.</li>
+<li><b>The satellite far lane</b> (<code>satellite_body.gd:317</code>) still passes a salted seed + the face-0 default to <code>generate_far</code> — the AC-0310 parallel feature needs the (face, R) pass + one seed, like <code>generate_face</code> got.</li>
+<li><b>SAVE_VERSION bump still owed</b> (the ticket note): old saves would half-load into the re-derived world; the clean-rejection gate is the load arm, which this run does not run — lands with piece 3's band removal.</li>
+<li><b>ARCHITECTURE.md sync</b> for the generation/sampling domain — the closeout's (the coordinator's) docs-sync step.</li>
+<li><b>The crossface arm</b> (piece 3 — the blend band's own gate) was not run; with the salt dropped the face field is continuous, so the band now blends identical-ish terrain (harmless until piece 3 deletes it).</li>
+</ul>
+<p class="note">Gate logs: <code>.scratch/AC-0311-gates/p2_*.log</code> (this run) + <code>genhash_*</code>/<code>farab</code>/<code>ladder</code>/<code>meshprobe</code>/<code>halo</code>/<code>lightstate*</code>/<code>boundary</code>/<code>r16</code>/<code>battery</code>/<code>thash_*.bin</code> (previous runs). Probes: <code>vcrack_probe_p2.gd</code> / <code>vcrack_sites_p2.gd</code> (one-seed versions) beside the pre-fix originals. No commits (closeout is the coordinator's); <code>TASKS.yaml</code> untouched.</p>
 </body></html>
