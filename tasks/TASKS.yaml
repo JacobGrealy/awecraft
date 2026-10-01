@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-01T12:42
+  updated_at: 2026-10-01T14:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -22496,10 +22496,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-01T10:33
-  updated_at: 2026-10-01T10:33
+  updated_at: 2026-10-01T12:43
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -22549,6 +22549,186 @@ intake:
     CONTEXT: read tasks/AC-0381/AC-0381-results.html (the split, the could-not-measure list and the instruments
     it says are needed), tasks/AC-0372/AC-0372-results.html (the kept /proc sampler), and the AC-0352
     page for the original 68% figure.
+
+    '
+  comments: []
+- id: AC-0384
+  title: satellite-body-white-in-exported-build
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-01T14:33
+  updated_at: 2026-10-01T14:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
+    satellite surface the last tickets baked never appears in the built game, even though it works when
+    running from the source tree.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER FROM THE WINDOWS BUILD (2026-10-01): "the satellite LOD never loads, I just see
+    a white planet". ROOT CAUSE FOUND BY READING THE CODE, and it is a textbook editor-versus-export bug
+    that no headless arm could have caught:
+
+    `godot/world/satellite_body.gd::configure` chooses its texture source with **`FileAccess.file_exists()`
+    on `res://assets/satellite/satellite_face%02d.png`** (via `_all_exist(_res_paths())`). In the editor
+    that returns true, because the SOURCE PNGs are on disk. **In an exported build the source `.png` does
+    not exist** - the export contains the imported `.ctex` and `FileAccess` does NOT consult Godot''s
+    import remapping the way `ResourceLoader` does. So `_all_exist` returns FALSE, the canonical seed-44
+    branch is skipped, and the code falls through to **`_start_bake()`**: the body then draws with **unset
+    textures, which is Godot''s default WHITE**, for as long as the bake runs. That is exactly the reported
+    symptom.
+
+    WHY EVERY GATE PASSED: the arms run from the source tree, where `file_exists` succeeds, so the failing
+    branch was unreachable in every test we own. AC-0311''s "0 of 12,582,912 pixels" comparison was between
+    the Python bake and the IN-ENGINE bake - it never exercised the `res://` load path at all. This is
+    the same class of blindness as the engine-side gap AC-0383 just instrumented: a whole code path with
+    no instrument that can reach it.
+
+    THE FIX, small and precise: (a) use **`ResourceLoader.exists()`** for `res://` paths - it consults
+    the import system and is the correct predicate for an imported resource - while keeping `FileAccess.file_exists()`
+    for `user://` (the cache dir), where it is right; (b) make a FAILED load LOUD rather than silent:
+    if the res textures are expected but unavailable, log the reason and then bake knowingly, instead
+    of falling through with no signal; (c) consider making the canonical seed take the shipped-textures
+    path without a filesystem probe at all, since for seed 44 those textures ARE shipped, and the probe
+    exists only to decide whether to trust them.
+
+    THE VERIFICATION THAT WOULD HAVE CAUGHT IT, which is part of this ticket and not an afterthought:
+    an assertion that exercises the EXPORT CONDITION rather than the editor condition. The honest form
+    is a predicate test - the loader must decide on `ResourceLoader.exists`, and there must be a check
+    that the two predicates are not interchangeable (for example an arm field recording which predicate
+    chose the source, so a run that silently fell through to baking is visible). If a post-export check
+    is feasible on this box, verify that the shipped PCK/exe actually contains the 12 imported textures;
+    if it is not feasible, say so and rely on the predicate test. Either way the white planet must be
+    reproducible-or-excluded BY EVIDENCE, not by the user looking again.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (a render tier touches no generation); the satellite arm''s
+    ladder (hidden / rim / dissolve at nadir_op 0.5 / full) and the 0.25 texel-to-chunk ratio must stay
+    intact; the piece-1 two-axis variance guard keeps passing; the standing set green (G0 zero SCRIPT
+    ERROR, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags
+    with far_holes 0/0 both bands, boundary r4 in band, the battery); ARCHITECTURE.md sync if the load
+    contract changes; and the Windows export must be rebuilt so the user can confirm.
+
+    CONTEXT: read godot/world/satellite_body.gd (configure, _res_paths, _all_exist, _phase_load) and tasks/AC-0310/AC-0310-results.html
+    for the tier''s design and its ladder.
+
+    '
+  comments: []
+- id: AC-0385
+  title: clouds-wrap-the-planet
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-01T14:33
+  updated_at: 2026-10-01T14:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The clouds do not wrap the planet - from orbit the cloud layer does not read
+    as a shell around the sphere.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER FROM THE WINDOWS BUILD (2026-10-01), and explicitly framed by the user as a NEW
+    ASK rather than a regression: "the clouds also do not wrap the planet". The satellite body itself
+    is the whole-body tier at R+SEA (AC-0310) with its per-face textures and its 0.25 texel-to-chunk dissolve
+    ratio; the cloud layer is a separate system and this ticket is about making it read as a SHELL around
+    the planet rather than a flat or local effect.
+
+    THE JOB, which needs a short survey first because the answer depends on what the cloud system actually
+    is today: find how clouds are drawn (grep for the cloud/weather code; the world''s sky and the far
+    tier''s heightmap sky are both plausible owners), then decide what "wrapping the planet" means for
+    it at each scale - a spherical shell at a fixed radius above the surface with its own texture or noise,
+    faded in above the atmosphere, and consistent with the satellite body''s own dissolve so the two do
+    not fight at the transition. If the current clouds are a flat layer or a screen-space effect, say
+    so plainly and price the spherical replacement; if they are already a shell but do not read as one
+    from orbit, find out why (density, scale, the fade band, the lighting) and fix that instead. Do not
+    assume a rewrite is needed - but do not assume a tweak is either.
+
+    KEEP THE ALREADY-SETTLED CONTRACTS: the planet''s atmospheric look is defined by the depth fog the
+    satellite tier uses (full strength by 714 m against an 800 m render edge at R50) and the whole-body
+    tier opens above it; the satellite''s dissolve is opacity-driven by view distance with a fixed 0.25
+    texel-to-chunk ratio, and clouds must not reintroduce a pop at that transition. Renders are NOT available
+    on this box (llvmpipe is degraded), so evidence this by geometry, density and coverage numbers, and
+    by a data-driven PNG if that helps the coordinator''s eye - the coordinator looks at pictures, builders
+    do not.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (weather is not generation unless it is, in which case say
+    so and rebase deliberately); the standing set green (G0 zero SCRIPT ERROR, farab h_mismatch 0, ladder
+    20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, the battery); the satellite arm''s ladder and ratio intact; and if the native lane is
+    touched, rebuild + re-stage including the Windows DLL.
+
+    CONTEXT: read tasks/AC-0310/AC-0310-results.html (the whole-body tier, its thresholds and its dissolve)
+    and tasks/AC-0382/AC-0382-results.html (the sun-tracking shading, which is the same DayNight convention
+    clouds should use rather than a second one).
+
+    '
+  comments: []
+- id: AC-0386
+  title: sky-transitions-to-space
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-01T14:33
+  updated_at: 2026-10-01T14:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Flying up from the surface, the sky never turns into space - the horizon and
+    the skybox stay atmospheric however high you go, so the moment of leaving the planet never lands.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER FROM THE WINDOWS BUILD (2026-10-01), and framed by the user as a NEW ASK: "the
+    skybox never transitions to space". The player CAN already fly there - AC-0145 gave the player radial
+    gravity, tangent walking and a 6-DOF free-flight band above the atmosphere (band = smoothstep(500,
+    2000, |pos - C| - R), with depth fog saturated by 714 m at an R50 render edge) - so this ticket is
+    about what the player SEES on the way up, not about reaching it.
+
+    THE JOB: make the sky transition across the flight band - at minimum a sky colour and horizon that
+    darken and a star field that appears above the atmosphere, tied to the same radial altitude the flight
+    model already uses (alt = |pos - C| - R), so the visual transition and the control transition agree
+    rather than being two independent thresholds. Where the sky is drawn today must be established first
+    (grep the sky/skybox/fog code; the far tier''s heightmap sky and the world''s sky are both plausible
+    owners), and the design should reuse existing conventions - the DayNight sun direction that AC-0382
+    wired into the satellite shading is the natural source for the sun''s position in space.
+
+    WHAT TO GET RIGHT, because this is the kind of change that looks easy and is not: the transition must
+    not pop (drive it from the same smoothstep the flight band uses, or a deliberately different curve,
+    and say which and why); the ground seen from orbit must not be double-darkened by both the fog and
+    the new space gradient; and the satellite body''s own fade band (opacity by view distance, opening
+    above the atmosphere) must agree with the sky so the planet does not appear to hang in the atmosphere
+    or in vacuum inconsistently. Renders are NOT available on this box (llvmpipe is degraded), so evidence
+    the transition with numbers - the sky colour and star opacity as functions of radial altitude across
+    the band - and with a data-driven PNG of the gradient if that helps the coordinator''s eye; the coordinator
+    looks at pictures, builders do not.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (the sky is not generation); the standing set green (G0
+    zero SCRIPT ERROR, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all
+    sub-flags with far_holes 0/0 both bands, boundary r4 in band, the battery); the satellite arm''s ladder
+    and the 0.25 ratio intact; and the daynight arm specifically, since the sun drives both.
+
+    CONTEXT: read tasks/AC-0145/AC-0145-piece2-results.html (the radial altitude model and the 6-DOF band,
+    including the fog figures that justify the 2000 m edge), tasks/AC-0310/AC-0310-results.html (the tier
+    that opens above the atmosphere) and tasks/AC-0382/AC-0382-results.html (the sun convention).
 
     '
   comments: []
