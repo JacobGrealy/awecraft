@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-01T09:51
+  updated_at: 2026-10-01T10:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0381
 - AC-0382
 - AC-0093
 - AC-0038
@@ -22218,11 +22217,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-29T16:42
-  updated_at: 2026-09-29T16:42
-  completed_at: null
+  updated_at: 2026-10-01T10:33
+  completed_at: 2026-10-01T10:33
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -22359,7 +22358,39 @@ intake:
     -> AC-0369/0370/0371 pattern is the model: one review, then one ticket per finding). Where a fix would
     change generated output, it needs the full genhash/genprobe/farab/ladder/thash set and `H` byte-exact.
 
-    '
+
+
+    CLOSED - the re-review is done on tree f6dd516 (2026-10-01), every figure in the page carries its
+    tree SHA and date, and the three traps the ticket listed were honoured rather than acknowledged. THE
+    REGION CAVEAT IS APPLIED EXPLICITLY, which is the trap that has bitten this project twice: the measurements
+    are an R24 spawn-anchored walk (seed 44) plus an origin 5x5 genhash window on the home-face interior,
+    and the page says so and says what is OUTSIDE the region - face-boundary chunks and the satellite
+    tier. No planet-wide claim is made from a spawn-window measurement. WHAT THE CURRENT TREE ACTUALLY
+    LOOKS LIKE, with the classification the ticket asked for: (1) **DRAIN 57.6-59.9% of the worst-20 walk
+    frames - MOVED**, down from 72% at AC-0363 (bc597d0, 09-27), still #1 and still the bound on the fill
+    window; (2) **the engine-side gap at 62.6-71.9% of the max frame - UNCHANGED**, the same shape AC-0352
+    measured at 68%, and the important new statement is that its interior is SUSPECTED-UNMEASURED: no
+    counter in this project sees the 6-DOF flight, the satellite draw, or the 466 collision bodies, so
+    the largest single share of the longest frames is now the part nothing observes - which is filed rather
+    than shrugged at; (3) **HANDOFF 14.0% and RECENTER 15.1%, a tied pair - MOVED**, and instructively
+    so: their SHARE roughly doubled (against 5.7-6.6%) while their ABSOLUTE cost stayed flat (6.0-6.5
+    against 5.8 ms), because the denominator shrank underneath them. That distinction is exactly the kind
+    of thing a naive review reports as a regression, and MISC below them follows the opposite pattern
+    - MOVED-cheaper (3.4-3.6 against 6.2 ms per frame) which is the tick port''s effect showing up in
+    a place nobody would look for it. GENERATION, against AC-0366''s price list: GENMS 122-124 gives 4,880-4,960
+    us/chunk, i.e. **10.2 to 11.5% CHEAPER**, and the decomposition is the interesting part - the field
+    stage is 22.7% MORE expensive per evaluation (23.0 -> 28.1-28.4 ns, matching piece 1''s predicted
+    +29.7 ns for the sphere-domain precompute almost exactly) while fill plus aquifer fell 53% (AC-0371),
+    so the net saving is AC-0367''s smaller void population paying for the port twice over. THE FILL WINDOW
+    DID NOT VISIBLY MOVE: the hard bound re-measured at >=10.3 s against AC-0364''s >=10.13 s, with the
+    end state identical (queue 1,250-1,256, thread-gen still starved at 1-2 in-flight), and the ~20 +/-
+    4 s model stays labelled PRIOR. One provenance gap was found in our own records rather than in the
+    tree: AC-0364''s page carries no tree SHA, so its figure cannot be compared the way this ticket demands
+    - worth fixing the next time that page is touched. STABILITY IS REPORTED, because this session has
+    learned what a flapping gate costs: shares, storm p99 (71/71), resident (1453/1453), GENMS (+/-0.9%)
+    and the stage atomics (+/-2%) are stable across two runs, while the arm max, storm_n, inr_built, walk_s
+    and crossing_burst_max flap (13.6/15.3 within the recorded same-build band). All standing gates are
+    green and NO re-baseline was made, so nothing was moved to make the review look tidy.'
   comments: []
 - id: AC-0382
   title: satellite-body-off-thread-bake-and-sun-tracking
@@ -22425,6 +22456,69 @@ intake:
 
     CONTEXT: read tasks/AC-0310/AC-0310-results.html (the tier, the thresholds, the measured stall and
     the owed list) and tasks/AC-0310/AC-0310-piece1-results.html (the bake, its cost and its guard).
+
+    '
+  comments: []
+- id: AC-0383
+  title: instrument-the-engine-side-frame-gap
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-01T10:33
+  updated_at: 2026-10-01T10:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The single biggest share of our longest frames is time we cannot account for
+    - our own profiler does not see the flying, the planet drawn from orbit, or the hundreds of physics
+    bodies - so "we know what is slow" is false for the largest piece of it.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0381''s re-review (2026-10-01, tree f6dd516): the engine-side gap is **62.6-71.9% of the
+    longest frames** (the max frames measured at 85 and 160 ms), the same shape AC-0352 measured at 68%
+    - and the new and important part is that its interior is now SUSPECTED-UNMEASURED rather than merely
+    unattributed: **no counter in this project sees the 6-DOF flight path, the satellite body draw, or
+    the 466 collision bodies**. All three are new or newly-prominent since the last review (AC-0145, AC-0310,
+    and the body count from the collision work), so the largest share of the worst frames grew exactly
+    where our instrumentation does not reach.
+
+    WHY THIS IS A TICKET AND NOT A FOOTNOTE: every other bottleneck in this project has a counter and
+    a history - DRAIN, HANDOFF, RECENTER, MISC, COLLIDE, the storm ring, GENMS. The one that now dominates
+    is the one with no instrument, which means the next performance ticket cannot be aimed at it and any
+    change to those three systems is unmeasurable in the tail. This is the same class of defect as the
+    four stale or flapping instruments this session repaired, except here the instrument does not exist
+    yet rather than being wrong.
+
+    THE JOB: build the missing counters, then use them. Determine what CAN be measured in-process (the
+    wprof partition brackets code we control) versus what is genuinely engine-side (Godot''s physics server
+    stepping 466 bodies, the render server drawing the in-tree instances, the satellite draw) - the second
+    class needs either engine-side instrumentation the project already knows about (the AC-0338 standing
+    row''s labelled derivation, the RS/PS timing questions the storm work ran into) or an external sampler
+    (the AC-0372 work built a /proc-based main-thread sampler and it is kept and re-runnable; extend it
+    if in-process brackets cannot reach). Then attribute the gap with the same discipline AC-0381 used:
+    state the tree SHA, state the REGION, distinguish a share from an absolute cost, and say which values
+    are stable across runs.
+
+    A CAUTION FROM THIS SESSION, so the new instrument does not repeat an old mistake: do not build a
+    gate that everything passes or a field that rides a variable process. Whatever you add should be able
+    to FAIL visibly - negative-test it the way the AC-0310 bake guard and the AC-0379 straddler assertion
+    were negative-tested, because those two are the only instruments added this session that demonstrably
+    bite.
+
+    CONSTRAINTS: instrumentation-only - no behaviour change, genhash 25/25 byte-identical, G0 zero SCRIPT
+    ERROR (not rc=0), the standing set green (ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16
+    all sub-flags with far_holes 0/0 both bands, boundary r4 in band, the battery), and any new field
+    or row goes into tasks/harness_data.yaml with the doc re-rendered and --check clean.
+
+    CONTEXT: read tasks/AC-0381/AC-0381-results.html (the split, the could-not-measure list and the instruments
+    it says are needed), tasks/AC-0372/AC-0372-results.html (the kept /proc sampler), and the AC-0352
+    page for the original 68% figure.
 
     '
   comments: []
