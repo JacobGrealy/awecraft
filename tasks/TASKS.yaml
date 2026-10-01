@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-01T10:34
+  updated_at: 2026-10-01T12:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0382
 - AC-0383
 - AC-0093
 - AC-0038
@@ -22400,11 +22399,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-30T04:07
-  updated_at: 2026-09-30T04:07
-  completed_at: null
+  updated_at: 2026-10-01T12:42
+  completed_at: 2026-10-01T12:42
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The planet looks round from orbit now, but the first view of a new world can
@@ -22458,7 +22457,37 @@ intake:
     CONTEXT: read tasks/AC-0310/AC-0310-results.html (the tier, the thresholds, the measured stall and
     the owed list) and tasks/AC-0310/AC-0310-piece1-results.html (the bake, its cost and its guard).
 
-    '
+
+
+    CLOSED - the worst hitch in the game is gone and the planet''s day/night now moves, both measured
+    rather than asserted. COORDINATOR VERIFICATION on my own capped stage of commit d5f00db (every arm
+    rc 0, zero SCRIPT ERROR): genhash 25/25 byte-identical in two runs with the chunk-(0,0) tip still
+    46c20b07, which is the proof that a render tier touched no generation; farab h_mismatch 0; ladder
+    20/20; meshprobe with an EMPTY mismatch list; halo ok; lightstate 0/0; r16 no reds with far_holes
+    0/0 in both bands; boundary r4 ok at 14/33; the R24 walk inside every gated value (sweep p50 5.4,
+    crossing frame p95 50, storm p99 86); the battery complete; and the satellite arm as I ran it reads
+    ok true with the angular ratio still exactly 0.25, texel_m 4.0 and the full ladder hidden/rim/dissolve/full.
+    THE HITCH FIX IS THE SUBSTANTIVE WIN and the numbers are worth stating plainly: on an r4 forced rebake
+    of 196,196 columns the main-thread step went from a mean/max of 9.68 / 288.75 ms to 0.0 / 0.26 ms
+    and the frame from 12.93 / 293.0 to 6.96 / 35.0 ms - a 288 ms spike reduced to a quarter of a millisecond
+    by moving the pipeline onto one LOW-priority slot of the engine''s own WorkerThreadPool, the same
+    pool thread-generation already uses, taking 86.2 s of work off-thread (19.7 generation, 63.8 colour,
+    2.6 PNG). THE ROUTE ALSO KILLED A STATED ASSUMPTION, which is the part I want remembered: the previous
+    run believed this needed a C++ task type, but generate_far is a pure const C++ call the thread-gen
+    pool ALREADY runs from worker threads, so the native lane was untouched and no Windows rebuild was
+    owed for it. An assumption that turns out to be wrong costs nothing; one that gets built on costs
+    a day. THE SUN: the shader re-weights the baked fixed-sun lambert by clamp(dot(u_sun, NORMAL) * sqrt(1.2),
+    0, 1) with u_sun taken from the flat world''s own DayNight.sun_direction rather than a second convention
+    invented for the sphere - noon appearance unchanged, night keeps the existing 0.18 floor, the terminator
+    moves, and the cost is one dot per fragment with NO re-bake, NO new channel and the textures byte-untouched
+    (a rebuild-versus-shipped diff of zero). The 0.25 texel-to-chunk ratio and the ladder survive because
+    neither the geometry nor the opacity path was touched, and the piece-1 two-axis variance guard still
+    passes 12 of 12 on the worker''s read-back of the written bytes. The sub-pixel cull is written down
+    as DO NOT IMPLEMENT at the code site as well as in the page, so the next reader finds it where the
+    idea would occur to them rather than in a report they may not read. Two things remain owed to me and
+    are recorded: an R50 satellite re-measure, which my own standing fence declines to run, and the full
+    16 GB battery - which my stage has now run green, so only the R50 figure stays open and the r4 numbers
+    are decisive on their own.'
   comments: []
 - id: AC-0383
   title: instrument-the-engine-side-frame-gap
