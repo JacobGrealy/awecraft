@@ -177,6 +177,7 @@ var _vm_L := 1.0
 
 func _ready() -> void:
 	Game.player = self
+	_ac0383_player_init()  # AC-0383: read the env once (zero per-frame cost when off)
 	if Game.world != null:
 		# AC-0307: spawn_point() is flat; the placed world needs the
 		# sphere conversion (mm-level near the spawn, exact by contract).
@@ -419,7 +420,24 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(dt: float) -> void:
 	if OS.get_environment("AWECRAFT_CBLOG") == "1":
 		print("CBP in t=%d" % Time.get_ticks_msec())
-	_physics_process_impl(dt)
+	if ac0383_on:
+		# AC-0383: bracket the movement-model step (the 6-DOF flight path +
+		# the surface-walk blend — ONE model, AC-0145 P2). It runs in
+		# _physics_process, OUTSIDE the wprof frame window, so the partition
+		# could never see it. Instrument-only.
+		var _p0 := Time.get_ticks_usec()
+		_physics_process_impl(dt)
+		_ac0383_player_add(Time.get_ticks_usec() - _p0)
+	elif ac0383_guard:
+		# the blind negative test: the code runs, the bracket is disabled —
+		# the guard must trip visibly (the AC-0310/AC-0379 pattern).
+		_ac0383_blind_n += 1
+		if not _ac0383_guard_tripped and _ac0383_blind_n >= 60:
+			_ac0383_guard_tripped = true
+			print("AC0383_GUARD FAIL player_phys: %d physics frames ran with the bracket blind" % _ac0383_blind_n)
+		_physics_process_impl(dt)
+	else:
+		_physics_process_impl(dt)
 	if OS.get_environment("AWECRAFT_CBLOG") == "1":
 		print("CBP out t=%d" % Time.get_ticks_msec())
 
@@ -770,9 +788,119 @@ func _physics_process_impl(dt: float) -> void:
 			damage_player(1.0, "starve")
 	else:
 		_starve_t = 0.0
+	# AC-0383: the per-step census (which model ran this physics step — the
+	# band blend value + the flying flag; the guard/bracket read these).
+	if ac0383_guard:
+		_ac0383_play_n += 1
+		if flying:
+			_ac0383_fly_n += 1
+		_ac0383_band_now = band
+		if band > 0.001:
+			_ac0383_band_n += 1
 	if _debug_label.visible:
 		_update_debug_label()
 
+
+# --- AC-0383: the movement-model (6-DOF flight path) per-step bracket ---
+# Env-gated (AWECRAFT_AC0383, the world's _ac0383_init is the same value —
+# the player reads it itself because _ready order is not guaranteed):
+# unset = off (zero cost, pristine behavior); "1" = on; "blind" = guard
+# armed, bracket disabled (the negative test — must trip visibly).
+var ac0383_on := false
+var ac0383_guard := false
+var _ac0383_n := 0
+var _ac0383_play_n := 0
+var _ac0383_fly_n := 0
+var _ac0383_band_n := 0
+var _ac0383_band_now := 0.0
+var _ac0383_us_total := 0
+var _ac0383_us_max := 0
+var _ac0383_ring: Array = []   # AC0383_RING entries [t_ms, us] (pre-allocated)
+var _ac0383_head := 0
+var _ac0383_worst: Array = []  # worst-20 [t_ms, us, fly, band01] (pre-allocated)
+var _ac0383_blind_n := 0
+var _ac0383_guard_tripped := false
+const AC0383_RING := 8192
+const AC0383_WORST_N := 20
+
+func _ac0383_player_init() -> void:
+	var e := OS.get_environment("AWECRAFT_AC0383")
+	ac0383_on = e == "1"
+	ac0383_guard = ac0383_on or e == "blind"
+	_ac0383_ring.clear()
+	for i in range(AC0383_RING):
+		_ac0383_ring.append([0, 0])
+	_ac0383_worst.clear()
+	for i in range(AC0383_WORST_N):
+		_ac0383_worst.append([0, 0, 0, 0])
+
+func _ac0383_player_add(us: int) -> void:
+	_ac0383_n += 1
+	_ac0383_us_total += us
+	if us > _ac0383_us_max:
+		_ac0383_us_max = us
+	var t := Time.get_ticks_msec()
+	_ac0383_ring[_ac0383_head][0] = t
+	_ac0383_ring[_ac0383_head][1] = us
+	_ac0383_head = (_ac0383_head + 1) % AC0383_RING
+	if _ac0383_worst.size() < AC0383_WORST_N:
+		_ac0383_worst.append([t, us, int(flying), int(_ac0383_band_now > 0.001)])
+	else:
+		var mi := 0
+		for i in range(1, AC0383_WORST_N):
+			if int(_ac0383_worst[i][1]) < int(_ac0383_worst[mi][1]):
+				mi = i
+		if us > int(_ac0383_worst[mi][1]):
+			_ac0383_worst[mi][0] = t
+			_ac0383_worst[mi][1] = us
+			_ac0383_worst[mi][2] = int(flying)
+			_ac0383_worst[mi][3] = int(_ac0383_band_now > 0.001)
+
+func _ac0383_pct(sorted_us: Array, p: float) -> float:
+	if sorted_us.is_empty():
+		return 0.0
+	var i := int(floorf(p * float(sorted_us.size())))
+	if i >= sorted_us.size():
+		i = sorted_us.size() - 1
+	return float(sorted_us[i])
+
+# AC-0383: the stats snapshot (read once at run end by the boundary arm's
+# RESULT, with the worst-20 arm-side frame windows for the per-window sums).
+func ac0383_stats(windows: Array) -> Dictionary:
+	var seen := mini(_ac0383_n, AC0383_RING)
+	var us_vals: Array = []
+	for i in range(seen):
+		us_vals.append(float(_ac0383_ring[(_ac0383_head - seen + i + AC0383_RING) % AC0383_RING][1]))
+	us_vals.sort()
+	var pwin: Dictionary = {}
+	for w in windows:
+		var t0: int = int(w[0])
+		var t1: int = t0 + int(w[1])
+		var s := 0
+		var k := 0
+		for i in range(seen):
+			var e: Array = _ac0383_ring[(_ac0383_head - seen + i + AC0383_RING) % AC0383_RING]
+			if int(e[0]) >= t0 and int(e[0]) < t1:
+				s += int(e[1])
+				k += 1
+		pwin[t0] = [int(s), int(k)]
+	var worst: Array = []
+	for e in _ac0383_worst:
+		worst.append({"t_ms": int(e[0]), "us_ms": roundf(float(e[1]) / 1000.0 * 100.0) / 100.0,
+			"fly": int(e[2]), "band": int(e[3])})
+	return {
+		"n": int(_ac0383_n),
+		"play_n": int(_ac0383_play_n),
+		"fly_n": int(_ac0383_fly_n),
+		"band_n": int(_ac0383_band_n),
+		"sum_ms": roundf(float(_ac0383_us_total) / 1000.0 * 10.0) / 10.0,
+		"p50_ms": roundf(_ac0383_pct(us_vals, 0.50) / 1000.0 * 100.0) / 100.0,
+		"p95_ms": roundf(_ac0383_pct(us_vals, 0.95) / 1000.0 * 100.0) / 100.0,
+		"max_ms": roundf(float(_ac0383_us_max) / 1000.0 * 100.0) / 100.0,
+		"per_window_us": pwin,
+		"blind_guard": {"blind_frames": int(_ac0383_blind_n), "tripped": bool(_ac0383_guard_tripped)},
+		"worst": worst,
+	}
 
 func _init_inv() -> void:
 	inv.clear()

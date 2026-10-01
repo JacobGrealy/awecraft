@@ -3551,6 +3551,7 @@ func _bd_log(cx: int, cz: int) -> void:
 		build_dispatch_log.pop_front()
 
 func _ready() -> void:
+	_ac0383_init()  # AC-0383: read the env once (zero per-frame cost when off)
 	# AC-0270: the harness shortens the decay window deterministically.
 	var _ldms := OS.get_environment("AWECRAFT_LEAFDECAY_MS")
 	if _ldms != "":
@@ -3954,10 +3955,33 @@ var _tm_concur_peak := 0
 
 
 func _physics_process_impl(_d: float) -> void:
-	if not threadmesh_inflight.is_empty():
-		threadmesh_poll()
-	_overlay_tick(_d)
-	_mob_tick(_d)
+	if ac0383_on:
+		# AC-0383: bracket the physics-process work (OUTSIDE the wprof frame
+		# window — the engine-side gap's IN-PROCESS part: threadmesh poll,
+		# overlay tick, mob tick). Instrument-only; the call order is the
+		# original, unchanged.
+		var _wp0 := Time.get_ticks_usec()
+		if not threadmesh_inflight.is_empty():
+			threadmesh_poll()
+		_overlay_tick(_d)
+		_mob_tick(_d)
+		_ac0383_wphys_add(Time.get_ticks_usec() - _wp0)
+	elif ac0383_guard:
+		# the blind negative test: the code runs, the bracket is disabled —
+		# the guard must trip visibly (the AC-0310/AC-0379 pattern).
+		_ac0383_wphys_blind_n += 1
+		if not _ac0383_wphys_guard_tripped and _ac0383_wphys_blind_n >= 60:
+			_ac0383_wphys_guard_tripped = true
+			print("AC0383_GUARD FAIL world_phys: %d physics frames ran with the bracket blind" % _ac0383_wphys_blind_n)
+		if not threadmesh_inflight.is_empty():
+			threadmesh_poll()
+		_overlay_tick(_d)
+		_mob_tick(_d)
+	else:
+		if not threadmesh_inflight.is_empty():
+			threadmesh_poll()
+		_overlay_tick(_d)
+		_mob_tick(_d)
 
 
 # AC-0174: dev overlay gizmos - three independent Options toggles
@@ -4219,7 +4243,14 @@ const WP_STAR := 11
 # this stage the collision cost was only visible in the MISC residual and
 # the batch counters (which count batches, not slabs).
 const WP_COLLIDE := 12
-const WP_STAGES := 13
+# AC-0383: the satellite body per-frame driver (satellite.process_frame —
+# the _tick_view threshold/visibility/uniform work, called from
+# World._process). A SUB-STAGE like STAR/COLLIDE: it accumulates where the
+# work happens and never into the 5-stage partition (it lives in the MISC
+# residual), so the reconciliation stays exact. Before this stage the
+# satellite driver was only visible as unnamed MISC.
+const WP_SATELLITE := 13
+const WP_STAGES := 14
 const WP_RING := 180
 
 # --- AC-0352: per-frame WORST-FRAME CAPTURE (instrument-ONLY) ---
@@ -4250,6 +4281,7 @@ var _wfa_df := 0                  # ... perf_edit_defers
 var _wfa_sy := 0                  # ... perf_edit_syncs
 
 var _wp_rows: Array = []    # WP_RING rows, each an Array of WP_STAGES ints (usec)
+var _wp_t: Array = []       # AC-0383: the in-run t_ms at each committed row (the arm-window pairing anchor)
 var _wp_head := 0
 var _wp_filled := 0
 var _wp_cur: Array = []    # the accumulating row (a reference into _wp_rows)
@@ -4275,6 +4307,9 @@ func _wprof_init() -> void:
 		for j in range(WP_STAGES):
 			r.append(0)
 		_wp_rows.append(r)
+	_wp_t.clear()
+	for i in range(WP_RING):
+		_wp_t.append(0)
 	_wp_head = 0
 	_wp_filled = 0
 	_wp_cur = []
@@ -4291,12 +4326,12 @@ func _wprof_init() -> void:
 		d["frames"] = 0
 		_wp_stat.append(d)
 	_wp_names = ["DRAIN", "LOW", "HANDOFF", "FACELIGHT", "IO", "RECENTER", "RESCORE", "MESHATTACH", "MISC", "frame",
-		"LOW_POLL", "STAR", "COLLIDE"]  # AC-0337 step 0: the collision sub-stage
+		"LOW_POLL", "STAR", "COLLIDE", "SATELLITE"]  # AC-0383: the satellite sub-stage
 	_wp_live = {}
 	for j in range(WP_STAGES):
 		_wp_live[_wp_names[j]] = _wp_stat[j]
 	_wp_live["partition"] = ["DRAIN", "LOW", "HANDOFF", "IO", "RECENTER", "MISC"]
-	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR", "COLLIDE"]
+	_wp_live["substages"] = ["FACELIGHT", "RESCORE", "MESHATTACH", "LOW_POLL", "STAR", "COLLIDE", "SATELLITE"]
 	_wp_live["occupancy"] = {"tg": 0, "tm": 0, "low": 0, "star": 0}
 	_wp_live["misc_neg_max_us"] = 0
 	_wp_scratch.resize(WP_RING)
@@ -4338,6 +4373,140 @@ func _wprof_meshattach(us: int) -> void:
 func _wprof_collide(us: int) -> void:
 	_wprof_add(WP_COLLIDE, us)
 
+# --- AC-0383: the engine-side-gap instrument (env-gated, instrument-ONLY) ---
+# AWECRAFT_AC0383: unset = off (zero cost, pristine behavior); "1" = the
+# brackets + censuses on; "blind" = the guards armed but the brackets
+# deliberately DISABLED (the negative test — a blind counter must trip its
+# own guard visibly, the AC-0310 bake-guard / AC-0379 straddler pattern:
+# the cumulative-0-over-N-frames form, so a healthy run can never trip it
+# while a blinded one must).
+var ac0383_env := ""
+var ac0383_on := false
+var ac0383_guard := false
+# SATELLITE coverage guard state (the bracket's cumulative total must move
+# over the LOADED-phase frames — a cumulative 0 means it silently missed).
+var _ac0383_sat_us_total := 0
+var _ac0383_sat_loaded_frames := 0
+var _ac0383_sat_guard_tripped := false
+# World._physics_process bracket (outside the wprof frame window — the
+# engine-side gap's IN-PROCESS part: threadmesh poll + overlay + mob tick).
+var _ac0383_wphys_blind_n := 0
+var _ac0383_wphys_guard_tripped := false
+var _ac0383_wphys_n := 0
+var _ac0383_wphys_us_total := 0
+var _ac0383_wphys_max_us := 0
+var _ac0383_wphys_worst: Array = []  # worst-N [t_ms, us] (pre-allocated)
+const AC0383_WORST_N := 20
+
+func _ac0383_init() -> void:
+	ac0383_env = OS.get_environment("AWECRAFT_AC0383")
+	ac0383_on = ac0383_env == "1"
+	ac0383_guard = ac0383_on or ac0383_env == "blind"
+	_ac0383_wphys_worst.clear()
+	for i in range(AC0383_WORST_N):
+		_ac0383_wphys_worst.append([0, 0])
+
+func _ac0383_wphys_add(us: int) -> void:
+	_ac0383_wphys_n += 1
+	_ac0383_wphys_us_total += us
+	if us > _ac0383_wphys_max_us:
+		_ac0383_wphys_max_us = us
+	var t := Time.get_ticks_msec()
+	if _ac0383_wphys_worst.size() < AC0383_WORST_N:
+		_ac0383_wphys_worst.append([t, us])
+	else:
+		var mi := 0
+		for i in range(1, AC0383_WORST_N):
+			if int(_ac0383_wphys_worst[i][1]) < int(_ac0383_wphys_worst[mi][1]):
+				mi = i
+		if us > int(_ac0383_wphys_worst[mi][1]):
+			_ac0383_wphys_worst[mi][0] = t
+			_ac0383_wphys_worst[mi][1] = us
+
+# AC-0383: the one-shot tree census (same shape as the harness's AC-0352
+# census — the physics-body population + the in-tree MI count, the
+# instance-level scale ground for the engine-side work).
+func _ac0383_tree_census() -> Dictionary:
+	var sb := 0
+	var mi := 0
+	var nodes := 0
+	var stack: Array = [get_tree().root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		nodes += 1
+		if n is StaticBody3D:
+			sb += 1
+		elif n is MeshInstance3D:
+			mi += 1
+		var ch := n.get_children()
+		for i in range(ch.size()):
+			stack.append(ch[i])
+	return {"tree_nodes": nodes, "tree_mi": mi, "collision_bodies": sb, "resident": int(chunks.size())}
+
+# AC-0383: the stats snapshot (read on demand — the boundary arm's RESULT
+# calls it once, at run end, with the worst-20 ARM-side frame windows so
+# the per-window in-process sums are computed here, not shipped as JSON).
+# windows: [[t0_ms, ms], ...] (the arm-side frames, in any order — the
+# per-window arrays come back in the same order).
+func ac0383_stats(windows: Array) -> Dictionary:
+	_wprof_refresh()  # the stats dict is read-on-demand; refresh it here (the boundary arm never calls the wprof ring read)
+	var sat := {}
+	if not _wp_stat.is_empty():
+		var ss: Dictionary = _wp_stat[WP_SATELLITE]
+		sat = {"p50_ms": float(ss["p50"]), "p95_ms": float(ss["p95"]), "max_ms": float(ss["max"]),
+			"avg_ms": float(ss["avg"]), "frames": int(ss["frames"])}
+	var plr := {}
+	if Game.player != null and Game.player.has_method("ac0383_stats"):
+		plr = Game.player.ac0383_stats(windows)
+	var wpw: Array = []
+	for e in _ac0383_wphys_worst:
+		wpw.append({"t_ms": int(e[0]), "us": int(e[1])})
+	return {
+		"env": ac0383_env,
+		"t_ms_at_result": int(Time.get_ticks_msec()),
+		"satellite": sat,
+		"satellite_guard": {"loaded_frames": int(_ac0383_sat_loaded_frames),
+			"us_total": int(_ac0383_sat_us_total), "tripped": bool(_ac0383_sat_guard_tripped)},
+		"player_phys": plr,
+		"world_phys": {"n": int(_ac0383_wphys_n),
+			"sum_ms": roundf(float(_ac0383_wphys_us_total) / 1000.0 * 10.0) / 10.0,
+			"max_ms": roundf(float(_ac0383_wphys_max_us) / 1000.0 * 10.0) / 10.0,
+			"per_window_us": _ac0383_window_sums(_ac0383_wphys_worst, windows),
+			"blind_guard": {"blind_frames": int(_ac0383_wphys_blind_n), "tripped": bool(_ac0383_wphys_guard_tripped)},
+			"worst": wpw},
+		"census_now": _ac0383_tree_census(),
+		"wfc_total_n": int(wfc_total_n),
+	}
+
+# AC-0383: per-window sums over a [t_ms, us] entry list, keyed by the
+# window's t0 (the window is identified by its start — arm_worst carries
+# the same t0s, so the analyzer pairs on the key, not the order).
+func _ac0383_window_sums(entries: Array, windows: Array) -> Dictionary:
+	var out: Dictionary = {}
+	for w in windows:
+		var t0: int = int(w[0])
+		var t1: int = t0 + int(w[1])
+		var s := 0
+		var k := 0
+		for e in entries:
+			if int(e[0]) >= t0 and int(e[0]) < t1:
+				s += int(e[1])
+				k += 1
+		out[t0] = [int(s), int(k)]
+	return out
+
+# AC-0383: the just-committed World._process frame row [t_ms, wp_us,
+# satellite_us] (the last committed wprof row). The boundary arm reads it
+# once per arm frame — the row of THAT frame (one arm frame = one main-loop
+# iteration = exactly one committed row), so the per-frame pairing needs no
+# ring depth (the ring holds only WP_RING frames; the worst frames sit
+# across the whole walk).
+func _ac0383_last_frame_row() -> Array:
+	if _wp_rows.is_empty() or _wp_filled == 0:
+		return []
+	var idx := (_wp_head - 1 + WP_RING) % WP_RING
+	return [int(_wp_t[idx]), int(_wp_rows[idx][WP_FRAME]), int(_wp_rows[idx][WP_SATELLITE])]
+
 # Commit the frame row: MISC = frame total - the five disjoint top stages
 # (exact by construction; a negative MISC would mean the stage brackets
 # overlap or exceed the frame — tracked in _wp_neg_max).
@@ -4353,6 +4522,18 @@ func _wprof_end_frame(f0_usec: int) -> void:
 		_wp_neg_max = maxi(_wp_neg_max, -misc)
 	_wp_cur[WP_MISC] = maxi(0, misc)
 	_wp_cur[WP_FRAME] = f1 - f0_usec
+	_wp_t[_wp_head] = Time.get_ticks_msec()  # AC-0383: the pairing anchor
+	# AC-0383: the SATELLITE coverage guard (the counter must be able to fail
+	# VISIBLY): over the LOADED-phase frames the bracket's cumulative total
+	# must move — a cumulative 0 over 60+ LOADED frames means the bracket
+	# silently missed the work (the blind negative test trips exactly here).
+	if ac0383_guard and satellite != null and satellite.configured \
+			and int(satellite.phase) == int(SatelliteBody.Phase.LOADED):
+		_ac0383_sat_loaded_frames += 1
+		if not _ac0383_sat_guard_tripped and _ac0383_sat_loaded_frames >= 60 \
+				and _ac0383_sat_us_total == 0:
+			_ac0383_sat_guard_tripped = true
+			print("AC0383_GUARD FAIL satellite: %d LOADED frames, bracket total 0 us (blind)" % _ac0383_sat_loaded_frames)
 	_wp_dirty = true
 	_wp_head = (_wp_head + 1) % WP_RING
 	_wp_filled = mini(_wp_filled + 1, WP_RING)
@@ -4396,6 +4577,7 @@ func _wfc_capture() -> void:
 		"facelight": _wfc_ms(WP_FACELIGHT), "rescore": _wfc_ms(WP_RESCORE),
 		"meshattach": _wfc_ms(WP_MESHATTACH), "low_poll": _wfc_ms(WP_LOW_POLL),
 		"star": _wfc_ms(WP_STAR), "collide": _wfc_ms(WP_COLLIDE),
+		"satellite": _wfc_ms(WP_SATELLITE),  # AC-0383
 	}
 	# The one O(resident) cost — the in-radius census (the player-chunk
 	# square, the arm's own convention), run only on over-threshold frames.
@@ -4420,6 +4602,16 @@ func _wfc_capture() -> void:
 			dirty_max = int(row[1])
 		if int(row[2]) > remesh_max:
 			remesh_max = int(row[2])
+	# AC-0383: the blind-spot instance census at THIS frame (the physics-body
+	# population + the in-tree MI count — the engine-side work's scale at the
+	# worst moment, not just at walk end). Capture-only cost (AFTER the f1
+	# stamp — the WFC discipline keeps it out of the measured total), and
+	# only when the instrument is on.
+	var cen := {"bodies": 0, "mi": 0}
+	if ac0383_on:
+		var tc := _ac0383_tree_census()
+		cen["bodies"] = int(tc["collision_bodies"])
+		cen["mi"] = int(tc["tree_mi"])
 	var entry := {
 		"t_ms": int(Time.get_ticks_msec()),
 		"ms": roundf(float(int(_wp_cur[WP_FRAME])) / 1000.0 * 10.0) / 10.0,
@@ -4429,6 +4621,7 @@ func _wfc_capture() -> void:
 			"tg": int(threadgen_inflight.size()), "low": int(_low_tasks.size()),
 			"star": 0 if star == null else int(star.pending_cells()),
 			"resident": int(chunks.size()), "inr_present": inr_present, "inr_built": inr_built,
+			"bodies": int(cen["bodies"]), "mi": int(cen["mi"]),  # AC-0383
 		},
 		"edit": {
 			"dispatches": int(perf_edit_dispatches), "defers": int(perf_edit_defers),
@@ -4526,7 +4719,19 @@ func _process(_delta: float) -> void:
 		if not satellite.configured:
 			satellite.configure(0, int(Game.world_seed), Game.planet_R, int(Data.HEIGHT), int(Data.SEA))
 		var _sp: Vector3 = Game.player.position if Game.player != null else Vector3.ZERO
-		satellite.process_frame(_sp, Game.time_of_day, render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
+		if ac0383_on:
+			# AC-0383: the SATELLITE sub-stage bracket (the per-frame driver —
+			# _tick_view's thresholds/visibility/uniforms when LOADED, the bake
+			# main step otherwise). Instrument-only: the call and its args are
+			# unchanged.
+			var _sat0 := Time.get_ticks_usec()
+			satellite.process_frame(_sp, Game.time_of_day, render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
+			var _sat_us := Time.get_ticks_usec() - _sat0
+			_wprof_add(WP_SATELLITE, _sat_us)
+			if ac0383_guard:
+				_ac0383_sat_us_total += _sat_us
+		else:
+			satellite.process_frame(_sp, Game.time_of_day, render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,

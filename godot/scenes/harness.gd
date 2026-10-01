@@ -23407,6 +23407,8 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	var walk_frames := 0
 	var walk_max_frames := 30000
 	var prev_t := Time.get_ticks_msec()
+	var ac0383_frame_t: Array = []  # AC-0383: the in-run t_ms at each arm-frame START (the external sampler's correlation anchor; populated only when the instrument is on)
+	var ac0383_frame_wp: Array = []  # AC-0383: per arm frame, the just-committed World._process row [t_ms, wp_us, satellite_us] (the per-frame gap pairing — no ring depth needed)
 	var light_comp_mark := int(world.perf_light_self_computes)
 	var light_batch_mark := int(world.perf_light_batch_calls)
 	var light_comp_cross: Array = []
@@ -23430,6 +23432,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		frame_ms_list.append(fms)
 		if fms > max_ms:
 			max_ms = fms
+		if world.ac0383_env != "":
+			ac0383_frame_t.append(fb)  # AC-0383
+			ac0383_frame_wp.append(world._ac0383_last_frame_row())
 		if _framelog:
 			print("FLOG %d %d %d" % [walk_frames, fms, fe])
 		walk_frames += 1
@@ -23872,6 +23877,9 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"worst_frames": worst_frames,
 		"census_walk_start": census_start,
 		"census_walk_end": census_end,
+		# AC-0383: the engine-side-gap instrument (env-gated — absent when
+		# AWECRAFT_AC0383 is unset).
+		"ac0383": _ac0383_result_block(ac0383_frame_t, frame_ms_list, ac0383_frame_wp),
 	})
 	get_tree().quit()
 
@@ -23908,6 +23916,33 @@ func _max_f(arr: Array) -> float:  # AC-0348: the float twin (the burst ms are s
 # no rasterizer, so the draw-call/object counters are meaningless here — the
 # census is the instance-level read; the draw counts come from the AC-0338
 # standing row's proxy-render numbers (labeled derivation).
+# AC-0383: the engine-side-gap RESULT block (empty when the instrument is
+# off). arm_worst = the worst-20 ARM-side frames as {t_ms, ms} — the
+# correlation anchors for the external /proc sampler: wall(t_ms) = t_ms +
+# (the result line's wall stamp minus ac0383.t_ms_at_result). The in-process
+# per-window sums (player/world physics) are computed in-process so the
+# RESULT stays compact.
+func _ac0383_result_block(frame_t: Array, frame_ms_list: Array, frame_wp: Array) -> Dictionary:
+	if world.ac0383_env == "":
+		return {}
+	var pairs: Array = []
+	for i in range(frame_t.size()):
+		pairs.append([int(frame_t[i]), int(frame_ms_list[i])])
+	var d: Dictionary = world.ac0383_stats(pairs)
+	var pw: Dictionary = {}
+	for i in range(frame_wp.size()):
+		var r: Array = frame_wp[i]
+		if r.size() == 3:
+			pw[int(frame_t[i])] = [int(r[1]), int(r[2])]
+	d["proc_windows"] = pw
+	pairs.sort_custom(func(a, b): return int(a[1]) > int(b[1]))
+	var aw: Array = []
+	for i in range(mini(20, pairs.size())):
+		aw.append({"t_ms": int(pairs[i][0]), "ms": int(pairs[i][1])})
+	d["arm_worst"] = aw
+	return d
+
+
 func _ac0352_tree_census() -> Dictionary:
 	var mi := 0
 	var sb := 0

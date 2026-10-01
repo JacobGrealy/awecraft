@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0383 — instrument-the-engine-side-frame-gap (results)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}.ok{color:#0a7a2f;font-weight:600}.warn{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.find{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.prior{color:#777}</style></head><body>
+<h1>AC-0383 — instrument the engine-side frame gap</h1>
+<p class="meta"><b>Tree (every CURRENT figure):</b> <code>61812662a1594508aff9b92b71609487d830e2dc</code> (HEAD at task start; AC-0381 measured <code>f6dd516</code>, AC-0352 the 2026-09-23 tree — the gap's <i>shape</i> comparisons are same-region, the body/MI counts are same-instrument, not same-tree). 2026-10-01 · headless 4.7.1, <code>ulimit -v 8388608</code>, one godot at a time, seed 44.<br>
+<b>REGION:</b> R24 instrumented walk arm (<code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=24 AWECRAFT_WALK=10 AWECRAFT_TICKTIME=1</code>), spawn-anchored, ~384 m — same region/arm as AC-0381/AC-0352/AC-0372. <b>Headless caveat (stated up front):</b> no rasterizer in the loop, so the render-server side of the engine-side class (the satellite's 12 face meshes, the ~900 tree MIs) is measured at its headless bookkeeping cost — a no-op class per the AC-0338 standing row's labeled-derivation convention (the census, not draw counters, is the instance-level read). Nothing here is an on-Windows / Forward+ statement.</p>
+<div class="find"><b>Verdict:</b> The three previously-invisible systems now have counters, and the previously-unseen gap is attributed per worst frame: <b>95.0–97.3% of it is genuinely engine-side and main-thread CPU-bound</b> (physics server stepping 501–534 walk-end bodies + engine bookkeeping — the sampler proves CPU-bound, not waiting); the in-process brackets own 2.7–5.0% of the gap (the flight model — the arm runs <code>set_fly(true)</code>, so the flight branch <i>is</i> the per-frame movement model) and ~0% (world physics). The satellite driver is ~0.1 ms/frame steady (negligible in this region; its real cost was a one-time front-loaded bake tail). What remains unsplit: physics-server vs render/other <i>inside</i> the engine residual — it needs engine-internal RS/PS timing or perf symbols (§5). The instrument was negative-tested: the blind run tripped all three guards visibly (§1). genhash 25/25 byte-identical, G0 zero SCRIPT ERROR, standing set green (§6).</div>
+
+<h2>0. The instrument (what was built, and which class each term belongs to)</h2>
+<p>All in-tree code is env-gated (<code>AWECRAFT_AC0383</code>: unset = zero-cost off; <code>1</code> = on; <code>blind</code> = guards armed, brackets deliberately disabled — the negative test). No behaviour change in any mode: the brackets wrap unchanged call sequences; with the env unset the only added code is a bool read (the env is parsed once in <code>_ready</code>). Files: <code>godot/world/world.gd</code> (SATELLITE sub-stage, world-physics bracket, guards, per-frame census, stats), <code>godot/player/player.gd</code> (flight-model bracket + census + guard), <code>godot/scenes/harness.gd</code> (per-arm-frame capture + the <code>ac0383</code> RESULT block). The new fields are documented in <code>tasks/harness_data.yaml</code> (standing row, doc re-rendered, <code>--check</code> in sync).</p>
+<table>
+<tr><th>term</th><th>class</th><th>instrument</th></tr>
+<tr><td><b>6-DOF flight model</b> — the whole movement-model step (<code>player.gd _physics_process_impl</code>: the radial band blend, the free-basis alignment, the <code>if flying:</code> thrust/velocity branches — the AC-0145 P2 one model)</td><td><b>IN-PROCESS</b> (GDScript — but in <code>_physics_process</code>, OUTSIDE the wprof frame window; that is exactly why the partition never saw it)</td><td>per-physics-step wall bracket; ring over EVERY step (p50/p95/max/sum) + worst-20 with in-run t_ms; fly/band census; coverage guard</td></tr>
+<tr><td><b>Satellite body per-frame driver</b> — <code>satellite.process_frame()</code> (<code>_tick_view</code> threshold/visibility/uniform work when LOADED; the bake main step otherwise), called from <code>World._process</code></td><td><b>IN-PROCESS</b> (inside the wprof frame window — previously UNNAMED MISC; its engine-side half — drawing the 12 face meshes — is the render server, no-op class in headless, scale given by the census)</td><td>new wprof <b>SATELLITE</b> sub-stage — same discipline as STAR/COLLIDE (accumulates where the work happens, never into the 5-stage partition, MISC reconciliation stays exact); appears in every worst-frame split + a per-frame guard (cumulative-0-over-LOADED-frames)</td></tr>
+<tr><td><b>World physics-process work</b> — <code>World._physics_process_impl</code> (threadmesh poll + overlay + mob tick)</td><td><b>IN-PROCESS</b> (also outside the wprof window — was inside the gap's shadow)</td><td>per-physics-step bracket + worst-20 ring + coverage guard</td></tr>
+<tr><td><b>Collision-body population</b> — the 466→501–534 <code>StaticBody3D</code> the physics server steps</td><td>per-frame cost is <b>ENGINE-SIDE</b> (the physics-server step + the player capsule's collision detection against them). Nothing in-process loops over the bodies per frame — the in-process body work is build-time only and was already bracketed (COLLIDE sub-stage, AC-0337)</td><td>per-worst-frame tree census (bodies + in-tree MI) in the WFC capture state + the walk-start/end census (AC-0352, unchanged) as scale ground</td></tr>
+<tr><td><b>The engine-side gap itself</b> — per arm-side frame: <code>gap = arm-frame − World._process frame</code>; <code>eng = gap − player − world_phys</code></td><td><b>ENGINE-SIDE</b> (in-process brackets structurally cannot reach it)</td><td>per-frame boundary pairing (the harness's arm-frame start clocks + the just-committed wprof row captured per frame — no ring-depth limit) + the <b>AC-0372 /proc sampler extended 10→100 Hz</b> (kept instrument, re-runnable; a 160 ms window = ~16 samples) which classifies the residual via the main-thread utime+stime delta (CPU-bound) × state × wchan — outside godot, so it survives the thing it measures</td></tr>
+</table>
+
+<h2>1. Negative test — how the counters were made to fail</h2>
+<p>Pattern: AC-0310 bake guard / AC-0379 straddler assertion. Each counter carries a GUARD that trips if the counter silently stops seeing the work it is supposed to see: <code>AWECRAFT_AC0383=blind</code> arms the guards and disables the brackets — the code paths run, the counters record nothing, and each guard must print <code>AC0383_GUARD FAIL …</code> once after 60 frames. The <b>cumulative-0-over-N-frames</b> form is what makes it safe: a healthy run (bracket total &gt; 0 µs over dozens of frames) can never trip it, while a blinded one must. The 60-frame threshold keeps it out of startup transients.</p>
+<pre>blind run (walk_blind.log, tree 6181266, AWECRAFT_AC0383=blind) — ALL THREE guards tripped, visibly, in-run:
+W 3.425  AC0383_GUARD FAIL world_phys: 60 physics frames ran with the bracket blind
+W 3.765  AC0383_GUARD FAIL satellite: 60 LOADED frames, bracket total 0 us (blind)
+W 4.719  AC0383_GUARD FAIL player_phys: 60 physics frames ran with the bracket blind
+RESULT guard states: satellite_guard {loaded_frames: 726, tripped: true, us_total: 0}
+                     player_phys blind_guard {blind_frames: 2280, tripped: true} (n: 0, sum_ms: 0.0)
+                     world_phys  blind_guard {blind_frames: 2354, tripped: true} (n: 0, sum_ms: 0.0)
+healthy runs (A/B/C, env=1): tripped: false everywhere — satellite_guard us_total 172,397–178,132 µs &gt; 0</pre>
+<p>0 SCRIPT ERROR in the blind run too (the guards are prints, not asserts — a tripped guard is data in the log + the RESULT, the way the AC-0310 guard reports). I could not construct a healthy-run scenario that trips the guards, and that is the point: the trip condition is "the code ran N times with zero cumulative bracketed time", which a working bracket cannot produce.</p>
+
+<h2>2. Hygiene gates</h2>
+<pre>G0 pristine (before any edit)        rc=0, SCRIPT ERROR 0        (g0_pristine.log)
+G0 with instrument in tree, env off  rc=0, SCRIPT ERROR 0        (g0_instrument4.log)
+every run (3 instrumented + 1 blind + genhash ×2 + standing set)  0 SCRIPT ERROR
+genhash ×2, env off: 25/25 each, r1 ≡ r2, r1 ≡ AC-0381 reference set
+  (chunk (0,0) = 46c20b07c95cb03b57772e1531c97f71 — byte-identical to the AC-0311 P2 / AC-0381 sets: no behaviour change)</pre>
+
+<h2>3. In-process: what is now bracketed</h2>
+<table>
+<tr><th>counter</th><th>run A</th><th>run B</th><th>run C</th><th>stability</th></tr>
+<tr><td>player (flight model) p50 / p95 / max, ms/step</td><td>0.83 / 0.93 / 22.63</td><td>0.84 / 0.92 / 21.02</td><td>0.84 / 0.94 / 19.80</td><td><span class="ok">STABLE</span> (p50 ±0.01; max = single-sample storm event, same ~20 ms class)</td></tr>
+<tr><td>player sum, ms over all steps (n steps)</td><td>2097.6 (2362)</td><td>1915.6 (2167)</td><td>2137.9 (2377)</td><td>STABLE (≈0.89 ms/step mean)</td></tr>
+<tr><td>player fly_n / band_n</td><td>2352 / 0</td><td>2157 / 0</td><td>2367 / 0</td><td>the arm calls <code>p.set_fly(true)</code> (harness:23356, "MSG Flying" at W 3.8 s) — the flight branch runs EVERY frame of the walk; band 0 (the 8 m walk altitude is below the 6-DOF band — the high-altitude side is the spherewalk arm's, not this arm's)</td></tr>
+<tr><td>world_phys sum / max, ms (n steps)</td><td>970.8 / 29.2 (2438)</td><td>859.4 / 28.7 (2244)</td><td>970.3 / 30.0 (2452)</td><td>STABLE (threadmesh poll on in-flight frames; its ~29 ms class lands on MID-TIER frames — 0.0 ms inside all 60 worst arm-frames)</td></tr>
+<tr><td>SATELLITE sub-stage, walk-window tail (180-frame ring)</td><td>— (stale read, pre-fix)</td><td>— (stale read, pre-fix)</td><td>0.1 ms p50/p95/max, 180/180 frames active</td><td><span class="ok">STEADY ~0.1 ms/frame</span> — the hidden-at-8 m <code>_tick_view</code> pass (visibility flicker at the <code>h_first</code> boundary + the 12-face uniform pass). Runs A/B read 0.0 because the stats dict was only refreshed on the wprof arm's read path — fixed in run C (<code>_wprof_refresh()</code> in the stats read); the per-frame capture (below) was correct in all three.</td></tr>
+<tr><td>SATELLITE guard cumulative (LOADED frames, µs)</td><td>756 frames, 178,132</td><td>678 frames, 172,397</td><td>749 frames, 176,664</td><td>STABLE ±3% — the one-time front-loaded bake tail (12 faces consumed one per frame after the off-thread bake, AC-0382); per-worst-frame <code>sat_ms</code> = 0.1 ms in every frame of all three runs</td></tr>
+<tr><td>census at walk end (bodies / tree MI / resident)</td><td>534 / 941 / 1436</td><td>533 / 930 / 1436</td><td>501 / 894 / 1438</td><td>STABLE ±3% (AC-0381's 466 / 876 was tree f6dd516 — the population grew since; same instrument, different tree)</td></tr>
+</table>
+
+<h2>4. Engine-side: the per-frame gap split (runs A/B/C; worst-20 arm frames each)</h2>
+<p>Per-frame definition: <code>gap = arm_ms − wp_ms</code> (arm-side frame − the World._process frame inside it — one arm frame = one main-loop iteration = exactly one committed wprof row); <code>eng = gap − plr − wphys</code> (what remains is the physics-server step over N bodies + the render-server flush (headless no-op class) + remaining node callbacks + engine bookkeeping). The sampler's window = the arm frame's wall window (anchor: <code>Δ = wall(result line) − t_ms_at_result</code>; the script clock starts ~0.73 s after process start, expected — <code>Time.get_ticks_msec()</code> is the script clock). <code>cpu_ms</code> = main-thread utime+stime delta across the window, <b>quantized to 10 ms jiffies</b> — read the <code>cpu%</code> column as a bound class, and <code>fracR</code>/<code>wchan</code> as the classification.</p>
+<p><b>Run A</b> (max arm frame 294 ms):</p>
+<pre>arm_ms   t_ms     wp_ms    gap_ms   plr_ms   wphys_ms  eng_ms   cpu_ms  cpu%   fracR  n_smp  wchan   bodies  mi   sat_ms
+  294.0  12458     21.4    272.6      1.7      0.0     270.9    280.0  95.2   1.0     30     0:30     -      -     0.1
+  138.0  11941     13.5    124.5      1.0      0.0     123.5    140.0 101.4   0.9     14  0:13,futex:1  -      -     0.1
+  106.0  13123     23.0     83.0      1.7      0.0      81.3    110.0 103.8   1.0     11     0:11     -      -     0.1
+   83.0  13647     18.8     64.2     12.2      0.0      52.1     90.0 108.4   1.0      9     0:9      -      -     0.1
+   82.0  14205     31.8     50.2      0.0      0.0      50.2     80.0  97.6   1.0      8     0:8      -      -     0.1
+   … (15 more frames, same shape: gap 16–46 ms, eng 86–100% of gap, fracR 1.0, wchan 0)
+SUM (worst-20): arm 1640.0 (mean 82.0) · wp 668.2 (33.4) · GAP 971.8 = 59.3% of arm time
+  in-process in gap: player 37.3 ms (3.8%) · world_phys 0.0 · ENGINE residual 934.5 ms = 96.2% of gap (57.0% of arm)
+  sampler: 890 ms CPU over the 8 post-sampler windows (100.0% of a core; 12 of 20 frames predate the ~7.5 s sampler attach)
+  census at the sampled worst frames: e.g. t 12950 → 448 bodies / 811 MI (walk-end class)</pre>
+<p><b>Runs B and C (stability):</b></p>
+<pre>B: arm 1825.0 (mean 91.2) · wp 699.4 (35.0) · GAP 1125.6 = 61.7% · player 30.1 (2.7%) · ENGINE 1095.4 = 97.3% of gap (60.0% of arm) · max frame 248 ms · sampler: 1250 ms CPU over 11 sampled windows (99.8% of a core)
+C: arm 1259.0 (mean 63.0) · wp 654.1 (32.7) · GAP 604.9  = 48.0% · player 30.3 (5.0%) · ENGINE 574.6  = 95.0% of gap (45.6% of arm) · max frame 91 ms · sampler: 820 ms CPU over 13 sampled windows (101.0% of a core)
+   run C worst frames: 91 ms → gap 50.3 / eng 48.3 (bodies 283); 73 ms → gap 61.4 / eng 60.4; 65 ms → gap 17.7 / eng 16.0 (bodies 448, mi 811)</pre>
+<p><b>Reading:</b> the main thread is CPU-bound in <b>every</b> sampled window (state R, <code>wchan 0</code> — the one <code>futex_do_wait</code> sample sits inside an otherwise-100%-CPU window; the AC-0372 baseline was the same read). So the engine-side residual is engine <i>work</i> on the main thread — not waiting, not IO, not a lock. In headless that work is: the physics server stepping the ~501–534 walk-end <code>StaticBody3D</code> + the player capsule's broadphase/narrowphase against them + the engine main-loop bookkeeping; the render-server half is the no-op class (no rasterizer — the 12 satellite face meshes and ~900 tree MIs are the census's scale, not a draw-time claim).</p>
+
+<h2>5. Attribution of the previously-unseen gap — shares vs absolutes</h2>
+<p>AC-0381's engine-side gap was <b>62.6–71.9% of the run's MAX frame</b> (single-sample population), AC-0352's 68% the same shape. This ticket measures the gap <b>per frame</b>, on the worst-20 population:</p>
+<table>
+<tr><th>quantity</th><th>A</th><th>B</th><th>C</th><th>kind</th></tr>
+<tr><td>gap as a SHARE of the worst-20 mean arm frame</td><td>59.3%</td><td>61.7%</td><td>48.0%</td><td><b>FLAPS</b> with the run regime (this box's walk regime moved: max frames 294/248/91 ms) — the AC-0381 trap in action: a share rides the frame population. Same phenomenon as HANDOFF/RECENTER's share doubling at flat absolute (AC-0381 §2.3).</td></tr>
+<tr><td>gap ABSOLUTE (mean per worst frame)</td><td>48.6 ms</td><td>56.3 ms</td><td>30.2 ms</td><td>same ~30–56 ms class across runs; the 294 ms max frame's gap is 272.6 ms = 92.7% of it (the single-max population AC-0381 used) — <span class="ok">consistent with the prior 62.6–71.9%</span></td></tr>
+<tr><td>wp (World._process) ABSOLUTE (mean per worst frame)</td><td>33.4 ms</td><td>35.0 ms</td><td>32.7 ms</td><td><span class="ok">STABLE</span> — the in-process partition's share of the worst frames is steady</td></tr>
+<tr><td>in-process share of the gap (player / world_phys)</td><td>3.8% / 0%</td><td>2.7% / 0%</td><td>5.0% / 0%</td><td>player p50 0.83–0.84 ms/step <span class="ok">STABLE</span>; spikes 12.2 ms on one recenter-class frame (run A t 13647); world_phys 0.0 in all 60 worst frames (its 29–30 ms class hits mid-tier frames)</td></tr>
+<tr><td>ENGINE-side residual: share of the gap / absolute mean</td><td>96.2% / 46.7 ms</td><td>97.3% / 54.8 ms</td><td>95.0% / 28.7 ms</td><td><span class="ok">STABLE share (95–97%)</span>; absolute tracks the regime. CPU-bound in every sampled window (fracR 1.0, wchan 0, ~100% of a core — 10 ms jiffies bound class).</td></tr>
+</table>
+<div class="warn"><b>The honest residual — what the instrument still cannot split:</b> <b>95.0–97.3% of the gap is attributed to "main-thread CPU inside the engine"</b> as a CLASS (proven CPU-bound by the external sampler), but the split <i>inside</i> that class — physics server over N bodies vs render-server bookkeeping vs other node callbacks vs main-loop bookkeeping — is NOT measured: in-process brackets structurally stop at the engine boundary, and /proc sampling sees the main thread but not its call stack. On this headless arm the render half is a no-op class by construction (the labeled-derivation convention), so the residual is <i>expected</i> to be dominated by the physics-server step of the 501–534 bodies — but "expected by construction" is not a measurement, and on a Forward+ build the split would be different. The instrument it would need: engine-internal RS/PS timing (the exact question the storm work hit — the project's standing answer is the AC-0338 row's labeled derivation, which is an instance-count argument, not a time) or <code>perf record -g</code> / a profiler build for the symbol level. Stated as a fraction of the gap: <b>~95–97% is class-attributed (main-thread engine CPU); within it, the physics-vs-render split is 100% unmeasured</b>; the other ~3–5% (flight model) + ~0% (world physics) are fully attributed to named in-process code. That is the expected honest partial attribution for this ticket.</div>
+<p class="note">Caveats on the sampler columns: (a) cpu_ms is 10 ms jiffies-quantized (±10–20 ms per window — per-frame cpu% reads 90–116%); (b) the sampler attaches ~7.5 s after boot, so worst frames earlier than that (12 of 20 in run A, 9 of 20 in run B) have no CPU classification (their gap/eng split is still exact — it comes from the in-process clocks); (c) one arm frame can contain several physics steps (fixed 16.67 ms step) — the player/world per-window sums cover ALL steps in the window, so the split stays exact.</p>
+
+<h2>6. Standing gates (tree 6181266, instrument in tree, env off — all arms run after the final edits)</h2>
+<table>
+<tr><th>arm</th><th>gate</th><th>measured</th><th></th></tr>
+<tr><td>farab</td><td>h_mismatch 0</td><td><code>h_mismatch: 0</code>, slab_cmp 1080/1080 (4×4 + 8×8), mat_surf_diff 0, ok true</td><td class="ok">GREEN</td></tr>
+<tr><td>ladder</td><td>20/20</td><td><code>band_a_ok: 20</code> / 20, <code>band_a_fail: []</code>, ok true</td><td class="ok">GREEN</td></tr>
+<tr><td>meshprobe</td><td>1.0</td><td><code>match_rate: 1.0</code>, ok true</td><td class="ok">GREEN</td></tr>
+<tr><td>halo</td><td>ok</td><td>a: inner 0 / boundary 0 (settled 41 — the documented value, ref_converged in 2 rounds); b: slabs 227/227 byte-identical; ok true</td><td class="ok">GREEN</td></tr>
+<tr><td>lightstate (R16)</td><td>0/0</td><td>leaks 0/0 (before/after), wash false, <code>arr_diff_cells: 1</code> at [0,141,0] — the documented AC-0311 piece-2 re-carve cell (recorded value, unchanged)</td><td class="ok">GREEN</td></tr>
+<tr><td>r16 (--fixed-fps 600)</td><td>all sub-flags, far_holes 0/0 both bands</td><td>ALL 11 sub-flags true (air/catch_up/height/immediate/inr/low_sync_zero/low_thread/no_downgrade/no_giant/uv_repeat/wave); <code>far_holes 0 / 0</code> (far0/far1); inr4 holes 0 / pending 0; built_all true; section_first_ok true</td><td class="ok">GREEN</td></tr>
+<tr><td>boundary r4</td><td>in band</td><td>ok true, 20/20 crossings, p50 13 / p95 33 / max 243 ms, marker/remesh ok, <code>col_deferred_in_footprint: 0</code> (p95 below the documented 42–51 first-flush-condensation class — faster, not degraded)</td><td class="ok">GREEN</td></tr>
+<tr><td>battery (7 modes)</td><td>ok</td><td>ok true (player/interact/light/fluids/buckets/genhash/settings all completed; per-mode <code>ok</code> exists only where the arm defines it — the battery-level ok is the gate; genhash excluded from ok by arm design, its dedicated 25/25 × 2 runs above are the hash gate)</td><td class="ok">GREEN</td></tr>
+</table>
+<p class="note">All arms: rc=0, 0 SCRIPT ERROR (G0 on the final tree: <code>g0_final.log</code> rc=0, 0). The instrument's presence in the tree (env off) is what these arms ran against — the no-behaviour-change claim is what the standing set + genhash prove.</p>
+
+<h2>7. Files and evidence</h2>
+<pre>In-tree (the instrument — env-gated, kept; the deliverable):
+  godot/world/world.gd       SATELLITE sub-stage (WP_SATELLITE, WP_STAGES 13→14), the wprof-ring t_ms stamp,
+                             world-physics bracket, SATELLITE/player/world guards, per-worst-frame tree census,
+                             ac0383_stats() + _ac0383_last_frame_row()
+  godot/player/player.gd     the flight-model bracket + 8192-entry ring + fly/band census + guard + ac0383_stats()
+  godot/scenes/harness.gd    per-arm-frame capture (t0 + the just-committed wprof row) + the ac0383 RESULT block
+  tasks/harness_data.yaml    the standing row (doc re-rendered, --check in sync)
+
+.scratch/AC-0383/
+  g0_pristine.log            G0, pristine (rc=0, 0 SCRIPT ERROR)
+  g0_final.log               G0, FINAL tree (all edits in), env off (rc=0, 0)
+  stand_{farab,ladder,meshprobe,halo,lightstate,r16,boundary_r4,battery}.log   the standing set (rc=0, 0 errors each)
+  genhash_r1.log / genhash_r2.log   25/25 each, r1 ≡ r2 ≡ AC-0381 reference set
+  walk_a.log / walk_b.log / walk_c.log   R24 walk runs, env=1 (tee_wall output)
+  walk_blind.log             the NEGATIVE TEST (env=blind — all three AC0383_GUARD FAIL lines)
+  sample_100hz_{a,b,c}.csv   the 100 Hz main-thread samples (raw evidence)
+  meta_{a,b,c}.json          sampler meta (pid, process_start_epoch)
+  analysis_{a,b,c}.txt       the per-frame attribution tables (this page's §4)
+  sampler.py                 the AC-0372 sampler, 10→100 Hz main cadence (the AC-0372 original untouched)
+  tee_wall.py                wall-stamp wrapper (unchanged copy)
+  analyze_ac0383.py          the correlation (wall anchor + per-worst-frame split + guard summary)</pre>
+<p class="note">Fences honoured: shared ticket — <b>TASKS.yaml not edited</b>; no commits; no renders; no images opened; R50 and the <code>load</code> arm never run; one godot at a time (slot checked before every launch); all godot runs <code>ulimit -v 8388608</code>; the instrument is a permanent env-gated deliverable (not a temporary probe — nothing to remove; G0 re-verified on the final tree). Native lane untouched — no rebuild/re-stage owed.</p>
+</body></html>
