@@ -19,11 +19,34 @@
 #      and the streamed face chunks read the same terrain; the (face, R)
 #      thread reaches the C++ (d, delta) domain on both lanes), colour-
 #      baked with the piece-1 recipe (fcc top colour x fixed-sun
-#      lambert, stored sRGB). The bake is frame-sliced on
-#      the main thread (BAKE_BUDGET_MS per frame) so the game stays
-#      responsive; the per-frame stall is measured, not asserted
-#      (bake_stats). Off-thread generation is OWED (needs a TG-pool
-#      task) - see tasks/AC-0310/AC-0310-results.html.
+#      lambert, stored sRGB).
+#
+# BAKE MODE (AC-0382 a) - OFF-THREAD. The whole bake pipeline (generate_
+# far x 196,196, the piece-1 colour, the 12 PNG writes - the ~tens-of-ms
+# deflate spike lives here now - the read-back + variance guard, and the
+# 12 face geometries) runs on ONE WorkerThreadPool slot, not sliced on
+# the main thread (the pre-AC-0382 6 ms/frame slice measured step max
+# 171 ms @R50 / 288.75 ms @r4 - the PNG-deflate frame - against a full
+# frame max 229/293 ms; tasks/AC-0382/AC-0382-results.html has the
+# before/after pair). generate_far is a pure const C++ call the
+# thread-gen pool already runs from worker threads (world.gd
+# _threadgen_worker; the AC-0263 prewarm note owns the singleton race),
+# so no new C++ task type was owed - the pool-thread twin of the old
+# slice is the same call, un-sliced. The main thread only polls
+# (bake_done) and then does the thin GPU-side consumption (one face's
+# ImageTexture + mesh node per frame). The single-writer discipline:
+# before bake_done only the worker touches pay/_out/_h2/_t2/guard/_geom/
+# _worker_images; the main thread reads them only after.
+#
+# SHADING (AC-0382 b) - the moving sun. The bake carries the piece-1
+# fixed-sun lambert in the pixels; the shader re-weights it by the
+# radial ratio dot(u_sun, NORMAL)/L_RADIAL so the terminator tracks the
+# world's actual sun (the DayNight.sun_direction convention, the same
+# functions the flat world's DirectionalLight3D uses). No re-bake per
+# sun position, no new texture channel - the ratio is exact for the
+# dominant (radial) lambert term, which is constant for every fragment
+# (L_RADIAL = 1/sqrt(1.2)); the per-texel slope modulation stays baked
+# (the minor term, frozen at the piece-1 sun). See the shader.
 class_name SatelliteBody
 extends Node3D
 
@@ -34,10 +57,12 @@ const HOME_N := HOME_HALF * 2  # 394
 const HOME_CHUNKS := HOME_N * HOME_N  # 155,236
 const FACE_GRID := 64  # faces 2-11: face chunks per axis
 const FACE_CHUNKS := FACE_GRID * FACE_GRID  # 4,096
-const BAKE_BUDGET_MS := 6.0  # main-thread slice budget per frame
 const CANONICAL_SEED := 44  # the shipped res:// textures are this seed's bake
+# AC-0382: the bake no longer slices the main thread (it runs on a pool
+# thread); the 6 ms budget is the pre-AC-0382 constant, kept for the
+# AC-0310 results cross-reference.
 
-enum Phase { NONE, PAYLOAD, FACE, LOAD, LOADED, FAILED }
+enum Phase { NONE, PAYLOAD, FACE, LOAD, LOADED, FAILED, WORK }  # PAYLOAD/FACE: pre-AC-0382 slice phases (kept for old-log phase values)
 
 # fcc top-face colours (linear) - the far tier's exact per-block values
 # (world.gd _lod_fcc_get: the atlas tile sRGB average with the data.gd
@@ -66,12 +91,12 @@ var R := 0.0  # the reference radius (Game.planet_R)
 var SEA := 126
 var HMAX := 384
 
-var pay := PackedByteArray()  # 196,196 x 1024-byte far payloads
-var pay_next := 0
+var pay := PackedByteArray()  # 196,196 x 1024-byte far payloads (worker-owned until bake_done)
 var pay_total := 0
 
-var color_face := 0  # the face in the FACE/LOAD phases
-var color_row := 0
+var color_face := 0  # LOAD phase (cache/res): the face index
+var color_row := 0  # the row machine's position (faces 0..11)
+var bake_consume := 0  # WORK-phase consumption: the next face (main thread)
 var _h2 := PackedInt32Array()  # faces 2-11: the 1024^2 H grid (lazy 16-row blocks)
 var _t2 := PackedByteArray()  # faces 2-11: the 1024^2 top grid
 var _bld_row := 0  # next 16-row H2 block to build (faces 2-11)
@@ -104,6 +129,13 @@ var _frame_n := 0
 var _last_bake_tick := 0
 var guard: Array = []  # 12 per-face guard dictionaries (load order)
 var _first_col: PackedByteArray = PackedByteArray()
+# AC-0382: the off-thread bake state. The worker is the single writer of
+# every field below until bake_done (main-thread reads only after).
+var bake_done := false
+var bake_result: Dictionary = {}
+var bake_worker_ms := 0
+var _worker_images: Array = []  # 12 decoded Images (the read-back the guard ran on)
+var _geom: Array = []  # 12 precomputed face geometries {v,u,n,i}
 
 # the per-frame state the probe arm reads (the shader-side values,
 # mirrored - headless has no GPU, the arm checks the contract numerically)
@@ -117,6 +149,24 @@ var _cam: Node = null
 
 func _ready() -> void:
 	_shader = load("res://core/satellite_body.gdshader")
+
+
+func _reset_counters() -> void:
+	# AC-0382: explicit reset - the pre-AC-0382 code never zeroed the
+	# accumulators between a startup load and force_rebake's bake, so the
+	# rebake's frames/step/frame stats inherited the startup's (a latent
+	# measurement bug the AC-0310 res-then-rebake runs happened not to
+	# expose: the res load contributed 0 to gen/color/png).
+	_gen_ms = 0.0
+	_color_ms = 0.0
+	_png_ms = 0.0
+	_load_ms = 0.0
+	_step_max_ms = 0.0
+	_step_sum_ms = 0.0
+	_frame_max_ms = 0.0
+	_frame_sum_ms = 0.0
+	_frame_n = 0
+	_last_bake_tick = 0
 
 
 func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> void:
@@ -180,21 +230,34 @@ func _phase_load(src: String, where: String) -> void:
 	bake_active = true
 	bake_stats = {"mode": src, "cache": where}
 	_bake_wall_t0 = Time.get_ticks_msec()
-	_last_bake_tick = 0
+	_reset_counters()
 
 
 func _start_bake() -> void:
-	phase = Phase.PAYLOAD
+	phase = Phase.WORK
 	bake_active = true
 	bake_stats = {"mode": "baked", "cache": _cache_dir()}
-	pay = PackedByteArray()  # appended record-by-record (no pre-alloc)
-	pay_next = 0
-	color_face = 0
+	pay = PackedByteArray()
 	guard.clear()
 	textures.clear()
+	_worker_images = []
+	_geom = []
+	color_face = 0
+	bake_consume = 0
+	bake_done = false
+	bake_result = {}
+	bake_worker_ms = 0
 	_bake_wall_t0 = Time.get_ticks_msec()
-	_last_bake_tick = 0
+	_reset_counters()
 	DirAccess.make_dir_recursive_absolute(_cache_dir())
+	# The C++ generator reference is fetched on the MAIN thread (the
+	# AC-0263 prewarm already closed the lazy-singleton race at
+	# world._ready; passing the reference keeps the pool thread from
+	# being a first caller anyway) and handed to the worker as an arg.
+	var g: Variant = WorldGen.gen_cpp()
+	# .bind (the project convention - world.gd _tm_worker_run.bind(skey)):
+	# the 4.7 add_task takes no args array.
+	Engine.get_singleton("WorkerThreadPool").add_task(_bake_worker.bind(g), false)
 
 
 # The per-frame driver (world._process). State is read back through the
@@ -202,7 +265,7 @@ func _start_bake() -> void:
 func process_frame(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
 	if bake_active:
 		var s0 := Time.get_ticks_usec()
-		_step_bake()
+		_bake_main_step()
 		var sms := float(Time.get_ticks_usec() - s0) / 1000.0
 		_step_sum_ms += sms
 		if sms > _step_max_ms:
@@ -211,78 +274,18 @@ func process_frame(ppos: Vector3, day_t: float, render_radius: int, fog_pct: flo
 		_tick_view(ppos, day_t, render_radius, fog_pct)
 
 
-func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
-	var h_band: float = (ppos + Vector3(0.0, R, 0.0)).length() - R
-	var RB: float = R + float(SEA)
-	var ff: float = DayNight.fog_far(render_radius, fog_pct)
-	var edge: float = (float(render_radius) + 1.0) * 16.0
-	# Derived thresholds (no constants - spec precision (a)):
-	#  h_first: the rim's tangent distance d_t(h) = sqrt((R+h)^2 - RB^2)
-	#           crosses fog_far - the rim emerges as it passes the fog wall.
-	#  h_full:  the nadir (distance h - SEA) clears the render edge - the
-	#           near region is fully established.
-	var h_first: float = sqrt(RB * RB + ff * ff) - R
-	var h_full: float = float(SEA) + edge
-	last_h_band = h_band
-	last_h_first = h_first
-	last_h_full = h_full
-	last_fog_far = ff
-	last_render_edge = edge
-	var vis := h_band > h_first
-	if visible != vis:
-		visible = vis
-	if vis:
-		for m in shader_mats:
-			m.set_shader_parameter("u_fog_far", ff)
-			m.set_shader_parameter("u_render_edge", edge)
-			m.set_shader_parameter("u_clear_dist", 4.0 * edge)
-			m.set_shader_parameter("u_air", DayNight.sky_display(day_t))
-			m.set_shader_parameter("u_day", 0.18 + 0.82 * DayNight.day(day_t))
-		# The camera far plane (default 4000) would clip the body's far
-		# limb (h + 2*RB out): extend it while the body is visible,
-		# restore it when hidden.
-		if _cam == null or not is_instance_valid(_cam):
-			var pl = Game.player
-			_cam = pl.get_node_or_null("Camera3D") if pl != null else null
-		if _cam != null:
-			var want: float = h_band + 2.0 * RB + 200.0
-			if absf(float(_cam.far) - want) > 1.0:
-				_cam.far = want
-	elif _cam != null and is_instance_valid(_cam) and absf(float(_cam.far) - 4000.0) > 1.0:
-		_cam.far = 4000.0  # the engine default, restored
-
-
-# The shader-side per-fragment opacity, mirrored for the probe arm
-# (headless has no GPU; the arm checks the contract numerically).
-func opacity_at(d: float) -> float:
-	return smoothstep(last_fog_far, last_render_edge, d)
-
-
-# The bake state machine - one budgeted slice per frame.
-func _step_bake() -> void:
-	var t0 := Time.get_ticks_usec()
-	if phase == Phase.PAYLOAD:
-		var g: Variant = WorldGen.gen_cpp()
-		if g == null:
-			_fail("no AweGen (WorldGen.gen_cpp() null)")
-			return
-		while pay_next < pay_total:
-			var rec: PackedByteArray = _gen_one(g, pay_next)
-			if rec.size() != 1024:
-				_fail("generate_far payload %d bytes at record %d" % [rec.size(), pay_next])
-				return
-			pay.append_array(rec)  # records land in generation order
-			pay_next += 1
-			if (Time.get_ticks_usec() - t0) / 1000.0 >= BAKE_BUDGET_MS:
-				_gen_ms += float(Time.get_ticks_usec() - t0) / 1000.0
-				return
-		_gen_ms += float(Time.get_ticks_usec() - t0) / 1000.0
-		phase = Phase.FACE
-		color_face = 0
-		_start_face()
-	elif phase == Phase.FACE:
-		_step_face(t0)
-	elif phase == Phase.LOAD:
+# The main-thread half of the bake (AC-0382). Two shapes:
+#  - LOAD phase (cache/res mode): UNCHANGED from AC-0310 - one face per
+#    frame (PNG load + guard + ImageTexture), all 12 meshes in the final
+#    frame;
+#  - WORK phase (bake mode): while the pool worker owns the pipeline
+#    this is a poll (the main-thread stall of the bake is whatever
+#    streaming owes on the same frame - measured as the frame delta, the
+#    failure mode). On bake_done: the thin GPU-side consumption - one
+#    face per frame (its ImageTexture from the worker-decoded image, its
+#    mesh node from the worker-computed geometry).
+func _bake_main_step() -> void:
+	if phase == Phase.LOAD:
 		var lf: int = color_face
 		if lf >= 12:
 			return
@@ -303,17 +306,163 @@ func _step_bake() -> void:
 		if color_face >= 12:
 			_build_meshes()
 			_finish_bake()
+		return
+	if not bake_done:
+		return
+	if not bake_result.get("ok", false):
+		_fail(str(bake_result.get("why", "worker failed")))
+		return
+	if bake_consume == 0:
+		visible = false  # no un-uniformed flash (the first _tick_view sets it)
+	var lf: int = bake_consume
+	if lf < 12:
+		textures.append(ImageTexture.create_from_image(_worker_images[lf]))
+		_build_face(lf)
+		bake_consume += 1
+	if bake_consume >= 12:
+		visible = false
+		_finish_bake()
 
 
+func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
+	var h_band: float = (ppos + Vector3(0.0, R, 0.0)).length() - R
+	var RB: float = R + float(SEA)
+	var ff: float = DayNight.fog_far(render_radius, fog_pct)
+	var edge: float = (float(render_radius) + 1.0) * 16.0
+	# Derived thresholds (no constants - spec precision (a)):
+	#  h_first: the rim's tangent distance d_t(h) = sqrt((R+h)^2 - RB^2)
+	#           crosses fog_far - the rim emerges as it passes the fog wall.
+	#  h_full:  the nadir (distance h - SEA) clears the render edge - the
+	#           near region is fully established.
+	# AC-0382 (c) - RECORDED, DO NOT IMPLEMENT: an explicit "sub-pixel
+	# disc cull at altitude" is a visual NO-OP. Above the fade band,
+	# every drawn-disc fragment farther than fog_far from the player is
+	# 100% depth-fogged - it renders EXACTLY the air colour (the same
+	# value the body's near-edge haze blends to, AC-0310-results §3).
+	# Culling it changes no pixels, only fill/vertex cost. Do not "fix"
+	# the disc's altitude draw as a visual change; if it is ever
+	# optimized, it is a draw-cost optimization and must be measured as
+	# one (AC-0310-results §8, this ticket's results page §4).
+	var h_first: float = sqrt(RB * RB + ff * ff) - R
+	var h_full: float = float(SEA) + edge
+	last_h_band = h_band
+	last_h_first = h_first
+	last_h_full = h_full
+	last_fog_far = ff
+	last_render_edge = edge
+	var vis := h_band > h_first
+	if visible != vis:
+		visible = vis
+	if vis:
+		# AC-0382 (b): the moving sun - the DayNight convention (the same
+		# functions the flat world's DirectionalLight3D + ambient use,
+		# main.gd): u_day = floor+gain level, u_day_gain = the per-
+		# fragment sun term's weight (0 at night - the flat 0.18 floor,
+		# exactly the pre-AC-0382 night), u_sun = direction TO the sun
+		# (the light travels along sun_direction, so to-sun is its
+		# negation). The shader re-weights the baked fixed-sun lambert by
+		# the radial ratio - the terminator now tracks the world's sun.
+		var day := DayNight.day(day_t)
+		for m in shader_mats:
+			m.set_shader_parameter("u_fog_far", ff)
+			m.set_shader_parameter("u_render_edge", edge)
+			m.set_shader_parameter("u_clear_dist", 4.0 * edge)
+			m.set_shader_parameter("u_air", DayNight.sky_display(day_t))
+			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
+			m.set_shader_parameter("u_day_gain", 0.82 * day)
+			m.set_shader_parameter("u_sun", -DayNight.sun_direction(day_t))
+		# The camera far plane (default 4000) would clip the body's far
+		# limb (h + 2*RB out): extend it while the body is visible,
+		# restore it when hidden.
+		if _cam == null or not is_instance_valid(_cam):
+			var pl = Game.player
+			_cam = pl.get_node_or_null("Camera3D") if pl != null else null
+		if _cam != null:
+			var want: float = h_band + 2.0 * RB + 200.0
+			if absf(float(_cam.far) - want) > 1.0:
+				_cam.far = want
+	elif _cam != null and is_instance_valid(_cam) and absf(float(_cam.far) - 4000.0) > 1.0:
+		_cam.far = 4000.0  # the engine default, restored
+
+
+# The shader-side per-fragment opacity, mirrored for the probe arm
+# (headless has no GPU; the arm checks the contract numerically).
+func opacity_at(d: float) -> float:
+	return smoothstep(last_fog_far, last_render_edge, d)
+
+
+# AC-0382: the off-thread bake (one WorkerThreadPool slot, LOW priority
+# so the streaming HIGH tasks are never starved). The pipeline:
+#  1. generate_far x 196,196 -> pay (the pure const C++ call the
+#     thread-gen pool already runs from worker threads - the same
+#     precedent as world.gd _threadgen_worker; no new C++ task type
+#     owed, the GDScript pool-thread twin suffices);
+#  2. the piece-1 colour per face (the un-sliced twin of the old main-
+#     thread slice: same _step_face row machine, budget = INF), each
+#     face's PNG written as it completes (the ~tens-of-ms deflate spike
+#     lands on the pool thread, not the main one);
+#  3. the read-back + the variance guard on the bytes actually written;
+#  4. the 12 face geometries (pure SphereMath, thread-safe).
+# Single writer until bake_done (see the class header).
+func _bake_worker(g: Variant) -> void:
+	var err := ""
+	var w0 := Time.get_ticks_msec()
+	if g == null:
+		err = "no AweGen (WorldGen.gen_cpp() null)"
+	if err == "":
+		var t0 := Time.get_ticks_msec()
+		for i in pay_total:
+			var rec: PackedByteArray = _gen_one(g, i)
+			if rec.size() != 1024:
+				err = "generate_far payload %d bytes at record %d" % [rec.size(), i]
+				break
+			pay.append_array(rec)  # records land in generation order
+		_gen_ms = float(Time.get_ticks_msec() - t0)  # ms (the fields are ms)
+	if err == "" and pay.size() != pay_total * 1024:
+		err = "payload %d bytes (want %d)" % [pay.size(), pay_total * 1024]
+	if err == "":
+		var t_face := Time.get_ticks_msec()
+		for f in 12:
+			color_face = f
+			_start_face()
+			while not _step_face(Time.get_ticks_usec(), 1e9):
+				pass
+		# colour time = the face-pipeline wall minus the PNG writes (the
+		# old main-thread slice's field semantics: colour and png separate;
+		# _step_face accrues the png time into _png_ms inside the face).
+		_color_ms = float(Time.get_ticks_msec() - t_face) - _png_ms
+		pay = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
+	if err == "":
+		var t2 := Time.get_ticks_msec()
+		for f in 12:
+			var img: Image = _load_png(_cache_path(f))
+			if img == null:
+				err = "cannot read %s" % _cache_path(f)
+				break
+			var gd := _guard_check(img)
+			guard.append(gd)
+			if not gd["ok"]:
+				err = "variance guard failed on face %d: %s" % [f, str(gd)]
+				break
+			_worker_images.append(img)
+		_load_ms = float(Time.get_ticks_msec() - t2)  # ms
+	if err == "":
+		for f in 12:
+			_geom.append(_geom_for_face(f))
+	bake_result = {"ok": err == "", "why": err}
+	bake_worker_ms = int(Time.get_ticks_msec() - w0)
+	bake_done = true
+
+
+# AC-0311 piece 3 (the same flat-frame class the port retired from
+# generation): the piece-1 keying's per-face seed salt
+# (seed^(face*1000003)) is DROPPED — in the sphere domain the field
+# is ONE pure f(world, seed), so the bake and the streamed face
+# chunks read the SAME terrain (a salted face would have been a
+# different world from the live one). The (face, R) thread reaches
+# the C++ (d, δ) domain on both lanes (R explicit — the bake is per
+# (planet_id, R, seed), and the 4000 default is only the home planet).
 func _gen_one(g: Variant, idx: int) -> PackedByteArray:
-	# AC-0311 piece 3 (the same flat-frame class the port retired from
-	# generation): the piece-1 keying's per-face seed salt
-	# (seed^(face*1000003)) is DROPPED — in the sphere domain the field
-	# is ONE pure f(world, seed), so the bake and the streamed face
-	# chunks read the SAME terrain (a salted face would have been a
-	# different world from the live one). The (face, R) thread reaches
-	# the C++ (d, δ) domain on both lanes (R explicit — the bake is per
-	# (planet_id, R, seed), and the 4000 default is only the home planet).
 	if idx < HOME_CHUNKS:
 		var cx: int = idx % HOME_N - HOME_HALF
 		var cz: int = idx / HOME_N - HOME_HALF
@@ -391,7 +540,13 @@ func _face_build_block(b: int) -> void:
 				_t2[pidx] = int(pay[o + 768 + slot])
 
 
-func _step_face(t0: int) -> void:
+# The row machine for the current face (color_face / color_row state).
+# AC-0382: the pre-AC-0310 main-thread 6 ms slice is gone - the caller
+# is the pool worker (budget_ms = 1e9, runs the face to completion).
+# Returns false when the budget is spent (face incomplete - resume on
+# the next call), true when the face's rows are done AND its PNG is
+# written (the deflate spike is part of the face, measured in _png_ms).
+func _step_face(t0: int, budget_ms: float) -> bool:
 	var f: int = color_face
 	var s_cell: float = SphereMath.face_cell_size(R)
 	var du_m: float
@@ -403,7 +558,6 @@ func _step_face(t0: int) -> void:
 		du_m = s_cell * 0.5
 		dv_m = s_cell
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var t_start := t0
 	while color_row < NPIX:
 		var j: int = color_row
 		if f > 1:
@@ -413,9 +567,8 @@ func _step_face(t0: int) -> void:
 			while _bld_row <= need_hi:
 				_face_build_block(_bld_row)
 				_bld_row += 1
-				if (Time.get_ticks_usec() - t0) / 1000.0 >= BAKE_BUDGET_MS:
-					_color_ms += float(Time.get_ticks_usec() - t_start) / 1000.0
-					return
+				if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
+					return false
 		var cz := 0
 		var lz := 0
 		if f <= 1:
@@ -446,25 +599,17 @@ func _step_face(t0: int) -> void:
 				gz = (float(_h2[mini(j + 1, NPIX - 1) * NPIX + i]) - float(_h2[maxi(j - 1, 0) * NPIX + i])) / (2.0 * dv_m)
 			_pixel((j * NPIX + i) * 3, hv, tv, gx, gz)
 		color_row += 1
-		if (Time.get_ticks_usec() - t0) / 1000.0 >= BAKE_BUDGET_MS:
-			_color_ms += float(Time.get_ticks_usec() - t_start) / 1000.0
-			return
-	# face complete - the PNG (one per face; the deflate is a ~tens-of-ms
-	# spike, measured in the frame stats - it is part of the honest stall)
+		if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
+			return false
+	# face complete - the PNG (the deflate spike lands on the calling
+	# thread - the pool worker since AC-0382)
 	var t_png := Time.get_ticks_usec()
 	var img := Image.create_from_data(NPIX, NPIX, false, Image.FORMAT_RGB8, _out)
 	img.save_png(_cache_path(f))
 	_png_ms += float(Time.get_ticks_usec() - t_png) / 1000.0
 	_out = PackedByteArray()
 	color_face += 1
-	if color_face >= 12:
-		# the cache is fresh - load it back (the guard runs on the bytes
-		# actually written, like the piece-1 on-disk guard)
-		phase = Phase.LOAD
-		color_face = 0
-		_load_src = "cache"
-	else:
-		_start_face()
+	return true
 
 
 func _pixel(o: int, hv: int, tv: int, gx: float, gz: float) -> void:
@@ -580,64 +725,87 @@ func _guard_check(img: Image) -> Dictionary:
 	}
 
 
-func _build_meshes() -> void:
+# The face geometry (pure SphereMath - thread-safe; the worker
+# precomputes all 12 before bake_done, the cache/res path computes
+# them on the main thread in _build_face). Cached in _geom.
+func _geom_for_face(f: int) -> Dictionary:
+	if _geom.size() > f:
+		return _geom[f]
 	var RB: float = R + float(SEA)
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var nrm := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for j in MESH_RES + 1:
+		for i in MESH_RES + 1:
+			var u: float = float(i) / float(MESH_RES)
+			var v: float = float(j) / float(MESH_RES)
+			var p: Vector3 = SphereMath.uv_to_world(f, u, v, RB)
+			verts.append(p)  # body origin = the sphere centre: local == radial
+			uvs.append(Vector2(u, v))
+			nrm.append(p / RB)
+	# winding per face: the chart axes differ per face; pick the
+	# order whose corner normal points outward (cull_back then keeps
+	# exactly the front hemisphere from outside - one front patch per
+	# view ray, no self-ordering problem).
+	var p00: Vector3 = SphereMath.uv_to_world(f, 0.0, 0.0, RB)
+	var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
+	var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
+	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) >= 0.0
+	for j in MESH_RES:
+		for i in MESH_RES:
+			var a: int = j * (MESH_RES + 1) + i
+			var b: int = a + 1
+			var c: int = a + (MESH_RES + 1)
+			var d: int = c + 1
+			if outward:
+				idx.append_array([a, c, b, b, c, d])
+			else:
+				idx.append_array([a, b, c, b, d, c])
+	var ge := {"v": verts, "u": uvs, "n": nrm, "i": idx}
+	if f == _geom.size():
+		_geom.append(ge)
+	return ge
+
+
+func _build_face(f: int) -> void:
+	# One face: the mesh node + material (the thin main-thread work; the
+	# geometry arrays come from _geom_for_face - worker-precomputed in
+	# bake mode, computed here in the cache/res mode).
+	var RB: float = R + float(SEA)
+	var ge: Dictionary = _geom_for_face(f)
+	var mesh := ArrayMesh.new()
+	# 4.7 ArrayMesh does NOT compute the AABB from
+	# add_surface_from_arrays (it stays zero) and a degenerate AABB
+	# flakily culls the MeshInstance3D (the AC-0235 star fix,
+	# main.gd) - the body is a 12 km sphere at up to 12 km view
+	# distance: a zero AABB would cull it. Set the enclosing cube.
+	var arrs: Array = []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = ge["v"]
+	arrs[Mesh.ARRAY_TEX_UV] = ge["u"]
+	arrs[Mesh.ARRAY_NORMAL] = ge["n"]
+	arrs[Mesh.ARRAY_INDEX] = ge["i"]
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	mesh.set_custom_aabb(AABB(Vector3(-RB, -RB, -RB), Vector3(RB * 2.0, RB * 2.0, RB * 2.0)))
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	var sm := ShaderMaterial.new()
+	sm.shader = _shader
+	sm.set_shader_parameter("tex", textures[f])
+	mi.material_override = sm
+	mi.cast_shadow = 0  # the body casts no shadow (no world light path)
+	add_child(mi)
+	face_nodes.append(mi)
+	shader_mats.append(sm)
+
+
+func _build_meshes() -> void:
+	# The cache/res path (unchanged from AC-0310: all 12 in the final
+	# LOAD frame).
 	_free_render()
 	for f in 12:
-		var mesh := ArrayMesh.new()
-		var verts := PackedVector3Array()
-		var uvs := PackedVector2Array()
-		var nrm := PackedVector3Array()
-		var idx := PackedInt32Array()
-		for j in MESH_RES + 1:
-			for i in MESH_RES + 1:
-				var u: float = float(i) / float(MESH_RES)
-				var v: float = float(j) / float(MESH_RES)
-				var p: Vector3 = SphereMath.uv_to_world(f, u, v, RB)
-				verts.append(p)  # body origin = the sphere centre: local == radial
-				uvs.append(Vector2(u, v))
-				nrm.append(p / RB)
-		# winding per face: the chart axes differ per face; pick the
-		# order whose corner normal points outward (cull_back then keeps
-		# exactly the front hemisphere from outside - one front patch per
-		# view ray, no self-ordering problem).
-		var p00: Vector3 = SphereMath.uv_to_world(f, 0.0, 0.0, RB)
-		var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
-		var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
-		var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) >= 0.0
-		for j in MESH_RES:
-			for i in MESH_RES:
-				var a: int = j * (MESH_RES + 1) + i
-				var b: int = a + 1
-				var c: int = a + (MESH_RES + 1)
-				var d: int = c + 1
-				if outward:
-					idx.append_array([a, c, b, b, c, d])
-				else:
-					idx.append_array([a, b, c, b, d, c])
-		var arrs: Array = []
-		arrs.resize(Mesh.ARRAY_MAX)
-		arrs[Mesh.ARRAY_VERTEX] = verts
-		arrs[Mesh.ARRAY_TEX_UV] = uvs
-		arrs[Mesh.ARRAY_NORMAL] = nrm
-		arrs[Mesh.ARRAY_INDEX] = idx
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
-		# 4.7 ArrayMesh does NOT compute the AABB from
-		# add_surface_from_arrays (it stays zero) and a degenerate AABB
-		# flakily culls the MeshInstance3D (the AC-0235 star fix,
-		# main.gd) - the body is a 12 km sphere at up to 12 km view
-		# distance: a zero AABB would cull it. Set the enclosing cube.
-		mesh.set_custom_aabb(AABB(Vector3(-RB, -RB, -RB), Vector3(RB * 2.0, RB * 2.0, RB * 2.0)))
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		var sm := ShaderMaterial.new()
-		sm.shader = _shader
-		sm.set_shader_parameter("tex", textures[f])
-		mi.material_override = sm
-		mi.cast_shadow = 0  # the body casts no shadow (no world light path)
-		add_child(mi)
-		face_nodes.append(mi)
-		shader_mats.append(sm)
+		_build_face(f)
 	visible = false  # the first tick sets it (no un-uniformed flash)
 
 
@@ -659,6 +827,8 @@ func _finish_bake() -> void:
 		"mode": bake_stats.get("mode", "baked"),
 		"cache": bake_stats.get("cache", ""),
 		"wall_ms": wall,
+		"worker": _worker_images.size() > 0,
+		"worker_ms": bake_worker_ms,
 		"gen_ms": int(_gen_ms),
 		"color_ms": int(_color_ms),
 		"png_ms": int(_png_ms),
@@ -685,6 +855,9 @@ func _fail(why: String) -> void:
 func force_rebake() -> void:
 	# The arm's reproducibility check: wipe the cache, free the render,
 	# and run the whole pipeline again from the payloads.
+	if bake_active:
+		push_error("SatelliteBody.force_rebake: a bake is already running")
+		return
 	var d := DirAccess.open(_cache_dir())
 	if d != null:
 		for f in 12:
@@ -697,7 +870,7 @@ func force_rebake() -> void:
 
 func _process(_delta: float) -> void:
 	# the FULL frame delta while the bake runs (the hitch that matters -
-	# the slice's own cost is _step_*; the frame delta includes the
+	# the main-thread slice cost is _step_*; the frame delta includes the
 	# streaming work that shares the main thread).
 	if bake_active:
 		var now := Time.get_ticks_msec()
