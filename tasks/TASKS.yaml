@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-01T14:34
+  updated_at: 2026-10-01T19:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0384
 - AC-0383
 - AC-0093
 - AC-0038
@@ -22562,11 +22561,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T14:33
-  completed_at: null
+  updated_at: 2026-10-01T19:11
+  completed_at: 2026-10-01T19:11
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
@@ -22622,7 +22621,43 @@ intake:
     CONTEXT: read godot/world/satellite_body.gd (configure, _res_paths, _all_exist, _phase_load) and tasks/AC-0310/AC-0310-results.html
     for the tier''s design and its ladder.
 
-    '
+
+
+    CLOSED - FIXED AND VERIFIED, and the user''s report was a bug of a class this project had no instrument
+    for at all. COORDINATOR VERIFICATION on my own capped stage of commit 6a40471 (every arm rc 0, zero
+    SCRIPT ERROR): genhash 25/25 byte-identical in two runs with the chunk-(0,0) tip still 46c20b07; r16
+    no reds with far_holes 0/0 in both bands; boundary r4 ok at 13/34; the battery complete. AND THE DECISIVE
+    CHECK, the satellite arm as I ran it: ok true with **mode res**, **src_predicate ResourceLoader.res**,
+    **res_load_via import** and an EMPTY bake_reason, the ratio still exactly 0.25 and the ladder hidden/rim/dissolve/full
+    intact - which is the arm itself now proving it takes the SHIPPED textures through Godot''s import
+    system, the path that is true in an export, instead of silently baking a white planet. WHAT WAS ACTUALLY
+    WRONG, because the shape generalises and that is the durable part: satellite_body.gd decided whether
+    the shipped per-face textures existed with `FileAccess.file_exists` on a `res://` path. That is TRUE
+    in the editor, where the source PNGs sit on disk, and FALSE in an exported build, where only the imported
+    .ctex ships - FileAccess does not consult Godot''s import remapping. So the canonical seed-44 branch
+    was skipped, the code fell through to a runtime bake, and the body drew with unset textures, which
+    is Godot''s default WHITE. THE REASON NO GATE CAUGHT IT IS THE LESSON WORTH KEEPING: every arm runs
+    from the source tree, where that branch is unreachable, and AC-0311''s celebrated "0 of 12,582,912
+    pixels" was a python-bake-versus-in-engine-bake comparison that never touched the res:// load path
+    at all. We had verified the bake, the dissolve, the ratio, the ladder and the cost - every part of
+    the tier except the one thing the player actually sees. THE FIX: split the predicate by domain (ResourceLoader.exists
+    for res://, which consults the import system; FileAccess.file_exists kept for user://, where it is
+    right), load the res textures through the import system because the raw path is dead in an export,
+    make a canonical-seed bake LOUD (push_warning plus bake.res-missing) instead of silent, and record
+    src_predicate, res_load_via and bake_reason so a fall-through is VISIBLE. THE EXPORT CONDITION WAS
+    REPRODUCED FOR REAL rather than argued: the run exported a PCK and probed it, finding FileAccess.file_exists
+    FALSE where ResourceLoader.exists is TRUE, load().get_image() returning a 1024-square, and 12 of 12
+    faces import-loadable - on that pack the old predicate would have baked a white planet, and the arm
+    now fails loudly on export_fallthrough, predicate_fail and res_export_ok. THE SWEEP found exactly
+    one bad site, this one: menu.gd''s import_pack probe is editor-only and unreachable in an export because
+    it writes the read-only PCK first, the .json loaders are correct because raw data ships raw, the user://
+    save/settings/region sites are correct, and the load()-based texture loads were already correct. THE
+    RULE IS IN OPS.md: never decide anything about a res:// resource with FileAccess.file_exists - use
+    ResourceLoader.exists or load - and, more generally, ANY DECISION THAT IS TRUE IN THE EDITOR AND FALSE
+    IN AN EXPORT IS INVISIBLE TO EVERY GATE WE OWN. That sentence is the most valuable thing this ticket
+    produced, and it applies to the two new asks filed from the same report (AC-0385 clouds, AC-0386 sky-to-space):
+    both are visual, both are unverifiable by our headless arms in the same way, and both will need their
+    evidence built deliberately rather than assumed.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
