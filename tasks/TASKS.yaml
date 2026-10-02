@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T09:16
+  updated_at: 2026-10-02T11:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0039
 - AC-0159
 - AC-0112
 - AC-0113
@@ -2374,16 +2373,56 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-10-02T11:33
+  completed_at: 2026-10-02T11:33
   waiting_on: null
   parent_id: null
   notes: 'WS8 procedural sound (no assets): block/step/hit/eat/splash/arrow/bow/mob/ambient — headless-asserted
-    (dummy audio driver)'
+    (dummy audio driver)
+
+
+    CLOSED - a feature that is genuinely verifiable on a box with no sound card, which is the only reason
+    it could be trusted at all. THE NINE SOUNDS ARE SYNTHESISED, NOT SHIPPED: 22050 Hz mono 16-bit PCM
+    generated in code, deterministic, with ZERO asset files - block as a decaying tone with a crackle,
+    step a short thud, hit a falling sweep with a burst, eat a wobbling tone behind a two-pulse gate,
+    splash lowpassed noise, arrow a rising whoosh with a landing thud, bow a pluck with creak, mob a sawtooth
+    with a growl wobble, and a two-second ambient bed built from integer-cycle sines plus Hann-windowed
+    noise so it loops seamlessly (LOOP_FORWARD). A shape-preserving 0.9-peak limiter makes no-clipping
+    a property of the synthesis rather than of the 16-bit clamp, which matters because the clamp would
+    hide it. ALL NINE ARE WIRED TO REAL EVENTS rather than to a stub: break, place and doors for block;
+    the player''s footfall cadence for step, computed in the radial-up frame and floor-only; arrow impacts
+    plus the hurt and pickup aliases for hit; the banana item for eat; the in-water transition for splash;
+    firing and solid landings for arrow; the bow shot; mob hurt; and an always-on ambient loop. THE ASSERTIONS
+    ARE THE DELIVERABLE AND THEY WERE SHOWN FAILING: per voice an RMS floor, a no-clipping check, an all-ones
+    check, a DC-rail check and an exact sample duration, plus 36 pairwise distinctness comparisons whose
+    minimum separation is 0.070 - and the negative tests are real, with a silent buffer rejected as all-zero,
+    an all-ones buffer rejected at rms 1.000, and an aliased copy rejected on zero separation. That last
+    set is what separates this from a did-it-crash test: a synthesiser whose every output is a click would
+    pass a naive check, and the buffer inspection is why we know it does not. THE VOICE DISCIPLINE COPIES
+    THE PARTICLE POOL, which is the right instinct on a project that has already learned what unbounded
+    per-event growth costs: a fixed 16-voice pool, round-robin, preempting the oldest at the cap (887
+    preemptions across a 1000-trigger burst), a dedicated looping ambient player so an ambient loop can
+    never consume an effect slot, and an allocation proof reading zero growth with a live peak of 16 returning
+    to zero. TRIGGER COST: 5.4 microseconds average, 18 maximum, roughly one eighteen-hundredth of the
+    R24 crossing gate, with a one-time 32.9 ms synthesis at startup - which is the number that mattered
+    to have, because AC-0387 made the far lane about 35x more expensive and per-event main-thread work
+    now has to justify itself. MY STAGE CONFIRMED IT on commit 7e3614e: genhash 25/25 byte-identical in
+    two runs, farab h_mismatch 0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok, the battery
+    complete, and lightstate leaks 0. ON THE LIGHTSTATE STRAGGLER DRIFT THE BUILDER FLAGGED: it read leaks
+    0 with stragglers 3 against a standing 0/0, and its A/B - audio.gd stubbed at HEAD with the sound
+    arm removed, nothing else changed - reproduced it exactly, which is the correct way to attribute a
+    drift and is why it is recorded here as a SHARED-TREE watch item rather than blamed on or hidden by
+    this ticket. That is the fourth time this session a gate has moved for reasons outside the change
+    under test, and the pattern is consistent: on a tree two sessions are editing at once, a standing
+    value that moves must be attributed by bisection before it is re-based or ignored. Note also, as a
+    process observation rather than a defect, that godot/autoload/game.gd, godot/scenes/main.gd and godot/entities/drop.gd
+    were dirty in the tree and were deliberately left UNSTAGED because they belong to the other session''s
+    in-flight work - which is the correct behaviour and the reason the staged list is printed before every
+    commit.'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
