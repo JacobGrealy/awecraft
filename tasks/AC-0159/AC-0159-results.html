@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0159 — results (per-vertex smooth lighting + AO)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#eef7ee}.find{background:#fff8e6}.fail{background:#fdecec}.note{color:#555;font-size:14px}</style></head><body>
+<h1>AC-0159 — per-vertex smooth lighting + AO (Java Fancy) — builder results</h1>
+<p class="note">Status: <b>DONE</b> (builder scope). Linux <code>.so</code> rebuilt + staged; all
+standing gates re-run after the change (table in §7). Windows <code>.dll</code> rebuild + full
+battery = the coordinator's.</p>
+
+<h2>1. What the mesh build actually is (where the feature lands)</h2>
+<p>The ticket names <code>godot/world/world.gd</code> "mesh build", but since AC-0190/AC-0208 the
+<b>high-band mesh build is C++-only</code>: <code>AweMesh.build_accs</code> in
+<code>gdext/src/mesh.cpp</code> (the GDScript <code>ChunkScript.build_accs</code> fallback was removed in AC-0208 —
+the C++ extension is required, no GDScript lane survives). <code>world.gd</code> only dispatches
+(<code>_tm_worker_run</code> → <code>mc.build_accs(...)</code>, world.gd:6298). Smooth lighting therefore lands in
+<code>mesh.cpp</code>, the lane where the light is already sampled (<code>s_face_light</code>, mesh.cpp:392).
+This is the deviation from the ticket's file pointer, recorded here; the ticket's <i>shape</i>
+(sample 3 neighbours + the block's light per face corner, interpolate 0–15 into the vertex colour,
+AO 0.2 per occluding solid, multipliers 1.0/0.8/0.6/0.4) is implemented as specified.</p>
+<p>Consequences: the Linux <code>.so</code> rebuild + re-stage is mandatory and done in this task
+(<code>gdext/AGENTS.md</code>); the Windows <code>.dll</code> rebuild is the coordinator's (same C++ source,
+same flags).</p>
+
+<h3>1.1 The light data the mesh already has</h3>
+<ul>
+<li>The per-chunk light is the AweStarlight settled payload (AC-0283 P2/P4): one <b>combined 0–15
+intensity per cell</b> (<code>eff</code> bytes) + a per-cell <b>block-light evidence mask</b>
+(<code>blk &gt; 0</code>). There is no separate per-corner sky/block split in the data — the combined
+value is what Java's fancy averaging would consume too (Java averages <code>max(sky, block)</code> per
+sample cell). Sky vs block only matters for the <i>channel</i> the value is packed into (below).</li>
+<li><code>bake_box</code> expands it to a 20×20 (2-cell margin) light box <code>barr</code>; the block-id
+box <code>snap</code> is 18×18 (1-cell margin, edge rings from the 4 edge neighbours; the 4 corner
+margin cells stay 0 = air).</li>
+<li>Vertex colour repack (AC-0128): with atlas → <code>r = s</code> (sky channel) <b>or</b> <code>g = s</code>
+(block channel, when the face has block-light evidence, the <code>mask</code>), <code>b = face shade</code>
+(FSH: 0.8/0.8/1.0/0.5/0.8/0.8). The opaque shader (chunk_lit_opaque.gdshader) computes
+<code>L = 0.20 + 0.80 * max(u_day * r, g)</code> and <code>ALBEDO = tex * b * L</code> — the 0.20 floor / 0.80
+gain is the standing user-directed curve (AC-0135) and is <b>not</b> part of this change.</li>
+</ul>
+
+<h3>1.2 The Java Fancy formula implemented (per face corner)</h3>
+<p>Face block <code>B</code>, normal <code>n</code>, corner vertex at in-plane offsets
+<code>(du, dv) ∈ {0, +1, −1}</code> (per the FCV corner table); <code>O = B + du·ê_u + dv·ê_v</code> (the
+inside block the corner touches); directions <code>d_u, d_v ∈ {+1, −1}</code> away from the face's own
+origin (the corner's far side). Then, per corner:</p>
+<pre>// 4 light samples (3 neighbours + the block's own light), each a combined 0-15 int
+S0 = O                        (the corner block itself)
+S1 = O + d_u·ê_u              (in-plane neighbour, axis u)
+S2 = O + d_v·ê_v              (in-plane neighbour, axis v)
+S3 = O + d_u·ê_u + d_v·ê_v + n (the OUTSIDE diagonal)
+Lc = (L(S0)+L(S1)+L(S2)+L(S3)) / 4      // integer sum / 4 — EXACT in binary FP (no rounding)
+// 3 AO occluders (outside of the face, at the corner)
+A1 = O + d_u·ê_u + n    A2 = O + d_v·ê_v + n    A3 = S3 (shared)
+ao = count(solid(A1), solid(A2), solid(A3))      // solid = C.stab[id] &gt; 0 (the face-cull solid test)
+vertex light sl = clamp(Lc/15, 0.08, 1.0) * {1.0, 0.8, 0.6, 0.4}[ao]   // ticket's multipliers, verbatim</pre>
+<p>Channel choice per corner: <code>chan = OR(mask(S0..S3))</code> — if any of the 4 sample cells has
+block-light evidence the corner's light is packed into <code>g</code> (stays bright at night,
+<code>u_day</code>-independent), else into <code>r</code> (fades with the day cycle). This is the per-corner
+generalisation of the standing face-level <code>face_mask</code> decision: a sky-lit corner of a
+partly-torched face now fades at night, as in Java (where the sky portion of a corner's light is
+recomputed per corner), instead of the whole face inheriting one channel.</p>
+<p><b>Rounding/determinism</b> (the prompt's subtle part): the 4-sample average is
+<code>integerSum / 4.0f</code> — a power-of-two division of an exact small integer, so it is
+<b>exactly representable in binary FP32, no rounding at all</b> (unlike e.g. <code>/15</code> or
+<code>/60</code>). The remaining arithmetic is the standing light→float conversion
+(<code>/15.0f</code>, one IEEE rounding, same as today's flat path) and the AO table
+(<code>1.0f, 0.8f, 0.6f, 0.4f</code> — the ticket's literal constants; 0.8/0.6/0.4 are not
+binary-exact but are <i>display-side constants</i> applied identically by the single C++ code path
+that emits vertex colours). There is <b>no second lane computing the same per-vertex value</b>:
+the far lane has no per-vertex light (it is per-cell average colour, §2), so no cross-lane bit
+agreement is owed on the per-vertex values themselves — what is owed is §2's light-<i>field</i>
+agreement, which this change leaves untouched (same <code>larr</code>, same starlight engine).
+<code>-ffp-contract=off</code> is unaffected (no new float multiply-add chains; the divisions are
+exactly representable or the standing single-rounding form).</p>
+<p><b>Scope of application</b> (matching Java, where fancy lighting applies to full blocks only):
+the opaque face path <code>ro</code> (solids incl. leaves) and <code>rc_o</code> (tinted xtab faces,
+the opaque-drawn leaves) get per-vertex light + AO. Cutout (<code>rk</code>, glass/flowers),
+cross-quad (<code>rq</code>, plants/torches) and fluid faces stay flat-lit exactly as before.</p>
+
+<h3>1.3 Merging with per-vertex colour (the perf-critical shape)</h3>
+<p>The high path greedy-merges coplanar faces (up to 16×4) into one quad with ONE colour
+(<code>qwrite_merged</code>). A per-vertex colour would make any merge across a gradient
+<i>incorrect</i> (the merged quad bilinearly interpolates only its 4 outer corners; the per-face
+union would show interior dips). Java's answer: fancy lighting disables merging entirely
+(one quad per face). This implementation is <b>at least as fast as Java's</b>: a region may still
+merge when every face in it is <b>uniform</b> — all of its 4 corners carry the same
+(L-sum, ao, chan) triple — because then every per-face quad in the region is a flat quad of one
+colour, and the merged quad (whose 4 vertices are 4 of those same uniform colours) is exactly
+equal to the per-face union. In a fully-lit open ground (all samples 15, no occluders) the
+16×4 merge survives byte-for-byte; gradients and AO corners fall back to per-face quads, exactly
+where the new detail lives. Implementation: the merge key grows from <code>(id, fni, shade)</code> to
+<code>(id, fni, uniform, L, ao, chan)</code>; uniform faces emit through the unchanged
+<code>qwrite_merged</code> (one colour), non-uniform faces through a new 4-colour
+<code>qwrite</code> twin.</p>
+
+<h2>2. The far lane: what it produces and what this change owes it</h2>
+<ul>
+<li><b>Does the far lane produce light? Yes — per coarse cell, not per vertex.</b> Bands B/C
+draw the average-colour emits (<code>h_avg_emit</code> / <code>low_emit_avg</code>, 8×8×8 med / 4×4×4
+low). Their light is the <b>heightmap sky</b> (AC-0283 P3): per cell, 15 strictly above the
+carved terrain top, 0 at/below; <b>no block light, no cave carving, no interpolation</b>. The
+vertex colour of those meshes is (1.0-flat sky, 0 block, per-face shade) — a filler.</li>
+<li><b>Granularity:</b> one light per 2×2×2 (med) or 4×4×4 (low) cell — 2–16× coarser than the
+full lane's per-cell starlight, before any vertex interpolation.</li>
+<li><b>What this change owes it:</b> the far lane's light is an <i>independent approximation</i> of
+the same physical field (heightmap sky, its own C++ compute — <code>gen_far</code>/sky payload).
+Smooth lighting does not change the <i>field</i>: it redistributes the <i>same</i> per-cell starlight
+values onto face corners (a convex combination — interpolation cannot create or destroy light),
+so the far lane's approximation remains equally valid, and its emitted bytes are untouched.
+The promotion seam (far → full) already changes the light model today (0/15 heightmap sky →
+true starlight with caves and block light); this change adds no new seam class — the promoted
+column gets the same field it would have gotten flat-lit, just distributed smoothly across faces.
+No far-lane value is re-derived or rounded by this change: <code>h_avg_emit</code>,
+<code>low_emit_avg</code> and the sky payload are byte-untouched, which the <b>farab</b> gate
+(1080/1080 byte-identity + h_mismatch 0) and <b>halo</b> re-prove after the change.</li>
+</ul>
+
+<h2>3. Corner gradient vs flat — the numeric verify</h2>
+<p>Probe: a standalone headless script (removed at closeout) calling
+<code>AweMesh.build_accs</code> directly on crafted 16×16×16 slabs with crafted star-shape light
+payloads, dumping the emitted per-vertex colours <i>next to independently computed expected
+values</i> — the probe re-states the §1.2 formula in GDScript with integer arithmetic (an
+independent re-statement, not a copy of the C++), so every <code>[ok]</code> is a C++-vs-spec
+agreement, not C++-vs-C++. 40 corners checked across the cases, <b>0 mismatches</b> after the
+change. The before-run used the pre-change <code>.so</code> (flat path) on the same crafted
+inputs. Light scale is the ticket's 0–1 interpolated value
+(<code>clamp(Lc/15, 0.08, 1) · AO-mult</code>), i.e. the <code>sl</code> the vertex colour packs
+(before FSH face shade).</p>
+<h3>Corner gradient vs flat — the numeric table</h3>
+<table>
+<tr><th>Case (face, per-corner sample sum /4)</th><th>Corner</th><th>flat (before)</th><th>smooth (after)</th><th>match</th></tr>
+<tr class="ok"><td rowspan="4">Fully lit — top face, all cells 15 (sum 60)</td><td>(1,15,1)</td><td>1.0</td><td>1.0</td><td>[ok]</td></tr>
+<tr class="ok"><td>(1,15,2)</td><td>1.0</td><td>1.0</td><td>[ok]</td></tr>
+<tr class="ok"><td>(2,15,1)</td><td>1.0</td><td>1.0</td><td>[ok]</td></tr>
+<tr class="ok"><td>(2,15,2)</td><td>1.0</td><td>1.0</td><td>[ok]</td></tr>
+<tr><td rowspan="4">One dark neighbour (one cell 4) — sums 49 / 60 / 49 / 49</td><td>(1,15,1)</td><td>1.0 (flat, no gradient)</td><td>0.816667</td><td>[ok]</td></tr>
+<tr><td>(1,15,2)</td><td>1.0</td><td>1.0</td><td>[ok]</td></tr>
+<tr><td>(2,15,1)</td><td>1.0</td><td>0.816667</td><td>[ok]</td></tr>
+<tr><td>(2,15,2)</td><td>1.0</td><td>0.816667</td><td>[ok]</td></tr>
+<tr><td rowspan="4">Two dark neighbours — sums 49 / 49 / 38 / 38</td><td>(5,15,1)</td><td>1.0</td><td>0.816667</td><td>[ok]</td></tr>
+<tr><td>(5,15,2)</td><td>1.0</td><td>0.816667</td><td>[ok]</td></tr>
+<tr><td>(6,15,1)</td><td>1.0</td><td>0.633333</td><td>[ok]</td></tr>
+<tr><td>(6,15,2)</td><td>1.0</td><td>0.633333</td><td>[ok]</td></tr>
+<tr><td rowspan="4">Three dark neighbours (corner of the dark cluster) — sums 38 / 38 / 38 / 27</td><td>(9,15,1)</td><td>1.0</td><td>0.633333</td><td>[ok]</td></tr>
+<tr><td>(9,15,2)</td><td>1.0</td><td>0.633333</td><td>[ok]</td></tr>
+<tr><td>(10,15,1)</td><td>1.0</td><td>0.633333</td><td>[ok]</td></tr>
+<tr><td>(10,15,2)</td><td>1.0</td><td>0.45 (darkest corner)</td><td>[ok]</td></tr>
+</table>
+<p class="note">The flat baseline shows the feature's absence: every corner reads the face's single
+value (1.0 on a lit face) with no gradient; the after column shows the interpolated
+12.25/9.5/6.75 averages exactly. The fully-lit row is the byte-identity guarantee:
+<code>Lc = 60/4 = 15 → sl = 1.0</code> reproduces the flat value, so uniform regions are
+unchanged (§1.3).</p>
+
+<h2>4. AO multipliers</h2>
+<p>AO case: the same fully-lit geometry with solid occluders placed at the corner-occluder cells
+(A1/A2/A3 of §1.2) of a vertical wall face (FSH 0.8), so the emitted colour isolates the AO
+multiplier on the 1.0 light base. The probe read the emitted per-vertex colour and the corner's
+occluder count:</p>
+<table>
+<tr><th>Occluders at the corner</th><th>multiplier</th><th>base light × FSH</th><th>emitted (expected)</th><th>match</th></tr>
+<tr class="ok"><td>0 (the ao0 corner)</td><td>1.0</td><td>1.0 × 0.8</td><td>0.80</td><td>[ok]</td></tr>
+<tr class="ok"><td>1 (the ao1 corner)</td><td>0.8</td><td>1.0 × 0.8 × 0.8</td><td>0.64</td><td>[ok]</td></tr>
+<tr class="ok"><td>2 (the ao2 corner)</td><td>0.6</td><td>1.0 × 0.8 × 0.6</td><td>0.48</td><td>[ok]</td></tr>
+<tr class="ok"><td>3 (three solids meet — the ao3 corner)</td><td>0.4</td><td>1.0 × 0.8 × 0.4</td><td>0.32 (darkest)</td><td>[ok]</td></tr>
+</table>
+<p>The ticket's table <b>1.0 / 0.8 / 0.6 / 0.4 for 0/1/2/3 occluders is confirmed exactly</b>,
+applied <i>per corner</i> (the ao1 face above carries both a 0.80 and a 0.64 vertex on the same
+quad — AO varies across the face, not just per face). The three-occluder corner is the darkest,
+as required. Two extra checks on the same corner: its block-light evidence flag
+(<code>chan</code>) is 1 (the 4-sample set includes the torch cell), so with an atlas that corner
+packs its light into the <code>g</code> channel — it stays bright at night, per-corner, exactly
+as §1.2's channel rule describes. The 0.2-per-occluder attenuation is the ticket's
+<code>1.0 − 0.2·ao</code> table (1.0/0.8/0.6/0.4), not a separate multiply — same values.</p>
+
+<h2>5. Lane agreement + rounding bound</h2>
+<p>The world/AGENTS.md contract: "Terrain and light must match the reference path exactly… never
+re-derive or round a value another lane computes independently" (the AC-0387 cautionary tale: the
+far lane re-derived heights on its own and diverged 91 blocks). What this change owes the far
+lane, restated: <b>no per-vertex value is computed by the far lane at all</b> — its light is the
+per-cell heightmap sky (§2), and its emits are byte-untouched by this change. The agreement owed
+is on the light <i>field</i> (<code>larr</code>/starlight), which is untouched: same engine, same
+payload, same <code>bake_box</code> box.</p>
+<table>
+<tr><th>Gate</th><th>after result</th><th>verdict</th></tr>
+<tr class="ok"><td><b>farab</b> (the far-lane byte-identity gate — the AC-0387 class)</td><td>ok:true, <code>h_mismatch 0</code>, <code>slab_cmp 1080/1080</code> (G=4) and <code>slab_cmp8 1080/1080</code> (G=8), <code>mat_pierce_cells 0</code>, <code>mat_surf_diff 0</code>, 45 cols</td><td>far lane byte-identical — nothing re-derived</td></tr>
+<tr class="ok"><td><b>halo</b> (light-field agreement vs an independent reference, 41 cols)</td><td>ok:true, block (a) inner+boundary mismatches 0, (c) mismatches 0, (b)/(d)/(d2) ok</td><td>light field unchanged and still matches the reference</td></tr>
+<tr class="ok"><td><b>meshprobe</b> (C++↔C++ dispatch invariant — full-slab vs compact-ring nbs, both sides the changed emitter)</td><td>ok:true, <code>match_rate 1.0</code>, verts_cpp == verts_gd (173856)</td><td>the dispatch invariant survives the new per-vertex path</td></tr>
+</table>
+<p><b>Rounding bound (the prompt's "prove the difference below a stated threshold" clause):</b>
+there is no cross-lane per-vertex value to bound — the statement reduces to the single-lane
+rounding analysis of §1.2, which is <b>exact, not merely bounded</b>:</p>
+<ul>
+<li>The per-corner average <code>Lc = integerSum / 4.0f</code> is a power-of-two division of an
+exact integer 0–60 → <b>exactly representable in binary FP32; zero rounding</b>. (Compare the
+flat path's <code>v/15.0f</code>, which is one IEEE rounding; the smooth path does the same single
+rounding on the averaged value.)</li>
+<li>The AO multipliers are the ticket's literals <code>1.0f/0.8f/0.6f/0.4f</code> — display-side
+constants applied identically by the one code path that emits these vertex colours; 0.8/0.6/0.4
+are not binary-exact but are the <i>spec's</i> values, so any "difference" from an
+infinitely-precise reading is below 2⁻²⁴ relative and is the spec's own rounding, not a lane
+divergence.</li>
+<li>No <code>float</code> multiply-add chains were added to the light path (the light <i>field</i>
+itself is still integer starlight; <code>-ffp-contract=off</code> is unaffected). The only new
+float arithmetic is the vertex-colour composition <code>clamp(Lc/4/15, 0.08, 1) · AO-mult</code>,
+evaluated identically on every platform by the same C++ TU.</li>
+</ul>
+
+<h2>6. Performance (mesh build + frame)</h2>
+<p><b>Mesh build cost, per chunk</b> — the probe's R6 case: a full 24-slab column (all 384 rows)
+of seeded terrain with a <i>y-ramp</i> light (every row a different light → the worst case for
+per-corner variation), same inputs before/after:</p>
+<table>
+<tr><th>Build path</th><th>before (flat)</th><th>after (smooth)</th><th>delta</th></tr>
+<tr><td>per-face (no merge)</td><td>8 ms / 20992 quads / 83968 verts</td><td>10 ms / 20992 quads / 83968 verts</td><td>+2 ms, geometry identical</td></tr>
+<tr><td>merged (the production high path)</td><td>5 ms / 1640 quads / 6560 verts</td><td>8–9 ms / 6704 quads / 26816 verts</td><td>+3–4 ms, quads ×4 (worst case)</td></tr>
+<tr><td>fully-lit column, merged (R2, uniform light)</td><td>4 ms / 40 quads</td><td>4 ms / 105 quads</td><td>time flat; quad delta = the §6.1 boundary artifact only</td></tr>
+</table>
+<p>Interpretation: the cost of the feature is (a) 4×(4 light + 4 mask + 3 solid) reads per
+emitted opaque face — <b>precomputed per corner inside the build</b> (the ticket's "cheaper
+shape" is the precompute itself; there is no per-vertex work at mesh-upload time), and (b) the
+quad/vertex census on <i>gradient</i> terrain, where a non-uniform face cannot merge (§1.3) —
+that is the feature's own detail, bounded by the face count. On uniform (fully-lit, no-occluder)
+terrain the merged geometry is essentially unchanged (the R2 delta is §6.1). The R6 numbers are
+an upper bound: real terrain has far fewer light-level changes per row than a 200-row ramp, and
+real margins carry the neighbour's true light rather than R6's synthetic ramp-margin.</p>
+<h3>6.1 FINDING — the 20×20 light box's corner margin is dark (pre-existing, now visible per corner)</h3>
+<div class="find"><p>While instrumenting the merged path it came out that <code>bake_box</code> fills the
+20×20 box's <b>four 2×2 corner-margin cells only for row 0</b> (the corner-strip write keeps the
+GDScript write order with no row offset — "every y overwrites, y_hi last wins — byte-exact",
+mesh.cpp <code>bake_box</code>); for rows &gt; 0 those four cells stay at their 0 init. The smooth
+path's S3 sample (the outside diagonal) lands in those cells for the 4 edge faces of each corner
+column of a chunk, so exactly one corner of such a face reads light 0 → the face is non-uniform →
+it falls back to a per-face quad with one darkened corner. This is <b>not new light</b>: the old
+flat path read the same box through <code>s_effl</code> and got the same 0 (its in-plane max-probe
+sampled these cells too, just masked by the <code>max</code>); smooth lighting merely makes the
+single-cell dark corner visible instead of averaged away. At a chunk boundary the same corner
+point is darkened from both sides (symmetric across the seam), it is one vertex at the exact
+corner of a chunk edge, and it is bounded to faces whose outside diagonal is a chunk corner —
+classified as an acceptable boundary artifact (same class as AO missing the diagonal occluder at
+chunk corners). Re-fixing the box (per-row corner cells) would change the <i>light field</i> the
+flat path also consumes — that is a separate light-ticket decision, not this mesh ticket.</p></div>
+<p><b>Frame cost:</b> no frame-cost regression in the standing arms — <b>r16</b>: static
+p50 7 / p95 9 / max 31 ms, moving p50 8 / p95 9 / max 22 ms (the moving-vs-static A/B is the
+arm's own gate, green; the vertex census delta lands on the worker-thread build, not the
+frame). <b>boundary r4</b> (one-shot): crossing frame p50 29 / <b>p95 42</b> (the standing
+35–42 band), crossing sweep p50 4.3 ms / p95 10.7 ms with one 15.2 ms single-sample max (the
+documented single-sample class — the sweep is scan-dominated, 5.4 ms); resident 93, 20/20
+crossings. Standing-picture context: R24 crossing-frame p95 ~52 ms and the crossing burst
+~4–5 ms vs the 10 ms gate (AC-0388) — the r4 sweep p50 4.3 ms is <i>inside</i> that class, i.e.
+no regression at the seam this change could affect (mesh attach after a rebuild).</p>
+<p class="note">If the census ever matters on real terrain, the cheaper shapes are, in order:
+(i) a per-cell corner-tag table (each cell is a corner for up to 3 neighbours — cut the ~11
+reads/face to 4 table hits at the price of a 16×16×h scratch table), (ii) merging adjacent
+non-uniform faces when their 4 corner tags agree pairwise (extends the §1.3 uniform merge).
+Not taken: the measured +2–4 ms sits on the worker thread and the R6 column is a synthetic
+worst case.</p>
+
+<h2>7. Gates</h2>
+<p>All re-run on the changed <code>.so</code> after the change (one godot at a time; logs in
+<code>.scratch/ac0159_logs/*_after.log</code>; the full battery + Windows rebuild is the
+coordinator's).</p>
+<table>
+<tr><th>Gate</th><th>standing value</th><th>after</th><th>verdict</th></tr>
+<tr class="ok"><td>G0 (zero SCRIPT ERROR, not rc=0)</td><td>0</td><td>0 (twice — after change and on the pristine tree after probe removal)</td><td>green</td></tr>
+<tr class="ok"><td>genhash (25× MD5 of <code>WorldGen.generate</code> — terrain only; light/mesh are NOT in the hash)</td><td>25/25 byte-identical</td><td>25/25 byte-identical (diff vs the before log: empty)</td><td>green — terrain untouched</td></tr>
+<tr class="ok"><td>farab (far-lane byte identity — §5)</td><td>ok:true, h_mismatch 0, slab 1080/1080</td><td>ok:true, h_mismatch 0, slab_cmp 1080/1080 (G=4) + slab_cmp8 1080/1080 (G=8), mat_pierce 0</td><td>green</td></tr>
+<tr class="ok"><td>halo (light field vs independent reference)</td><td>ok:true</td><td>ok:true — (a) 0/0 mismatches, (b1) 20/20, (c) 0, (d)/(d2) ok</td><td>green</td></tr>
+<tr class="ok"><td>ladder (3-tier far-band)</td><td>20/20 band A</td><td>ok:true — band_a_ok 20/20, band_b 144/144, band_c 90/90, tier_mismatch 0, sky_bad_alpha 0</td><td>green</td></tr>
+<tr class="ok"><td>meshprobe (C++↔C++ dispatch invariant)</td><td>1.0</td><td>1.0 — verts 173856/173856, 1866 accs compared, quadcheck 0 mismatch</td><td>green</td></tr>
+<tr class="ok"><td>lightstate (the light-state arm — §8)</td><td>0/0 leaks, wash false, census 0/0</td><td>20/20 chunks leaks 0, wash false, double-LOD census 0/0, A/B vertex-colour canary byte-identical to the before run</td><td>green (movement analyzed in §8 — not a re-baseline)</td></tr>
+<tr class="ok"><td>r16 (all sub-flags, <code>--fixed-fps 600</code>)</td><td>all sub-flags, far_holes 0/0 both bands</td><td>all 12 sub-flags true; inr4 holes 0 / pending 0; <b>far0.far_holes 0 / far1.far_holes 0</b>; uv_mismatch 0/0; built_all true</td><td>green</td></tr>
+<tr class="ok"><td>boundary r4 (one-shot self-check)</td><td>crossing frame p95 in the 35–42 band</td><td>ok:true — p50 29 / <b>p95 42</b> (in band), sweep p50 4.3 ms, resident 93, 20 crossings</td><td>green — in band (one-shot, per the standing rule)</td></tr>
+<tr class="ok"><td>satellite (AC-0310 P2)</td><td>ok, ratio 0.25, ladder intact</td><td>ok:true — guard_ok, angular ratio 0.25, phase 4 (LOADED), res_export_ok true</td><td>green</td></tr>
+<tr class="ok"><td>sound (AC-0039)</td><td>ok</td><td>ok:true — deterministic, 36/36 voice pairs distinct (min 0.070 &gt; 0.05)</td><td>green</td></tr>
+<tr class="ok"><td>pcensus (AC-0038)</td><td>ok</td><td>ok:true — allocs_delta 0, stress cap 200 / evicted 100 / died 200, live→0</td><td>green</td></tr>
+</table>
+<p class="note">Non-fatal noise present in the logs is the known standing class (threadgen
+transients, the farab <code>SHADER ERROR: Invalid render mode: 'transparent'</code>, the 2
+ObjectDB instances leaked at exit) — none are SCRIPT ERRORs and none are new.</p>
+
+<h2>8. Lightstate movement (FINDING — not a re-baseline)</h2>
+<table>
+<tr><th>Field</th><th>before (flat .so)</th><th>after (smooth .so)</th><th>read</th></tr>
+<tr class="ok"><td>grid (20 chunks × leaks)</td><td>all leaks 0</td><td>all leaks 0</td><td>unchanged — the light FIELD (eff) is untouched, as expected</td></tr>
+<tr class="ok"><td>ab.arr_diff_cells / ab.cell</td><td>1 / [0,141,0]</td><td>1 / [0,141,0]</td><td>unchanged — the standing 1-cell edit class (HARNESS-documented)</td></tr>
+<tr class="ok"><td>ab.vc_diff / vc_common / vc_n0 / vc_n1 (the A/B <b>vertex-colour</b> canary — the arm's one mesh-side measurement)</td><td>2 / 393 / 394 / 395</td><td>2 / 393 / 394 / 395</td><td><b>byte-identical counts</b></td></tr>
+<tr class="ok"><td>wash_detected / worst / double-LOD census</td><td>false / null / 0-0</td><td>false / null / 0-0</td><td>unchanged</td></tr>
+<tr class="find"><td>demoted / stragglers / move.delta</td><td>1 / 3 / 0</td><td>41 / 0 / 1</td><td>machine-timing churn — see below</td></tr>
+</table>
+<p><b>The vertex-colour canary is byte-identical and that is the point.</b> The arm's A/B
+rebuilds one slab (first landing vs a 1-block edit) and diffs the emitted opaque-surface vertex
+colours — exactly the values this feature changes. It reads the <i>same counts before and
+after</i> (common 393, diff 2, n0 394, n1 395) because the fixture is the fully-lit surface cell
+[0,141,0]: on fully-lit, occluder-free faces the smooth path reproduces the flat value exactly
+(§3's fully-lit row, <code>Lc 60 → sl 1.0</code>), so the change is a byte-identity there by
+construction. No vertex colour moved that the canary can see, and none is owed to move.</p>
+<p><b>The demoted/straggler delta is not a value movement:</b> HARNESS documents this exact field
+class as machine timing ("the demote/straggler counts are machine-timing … the 41/0 pair is the
+standing measured value; an earlier same-build pair had read 1/3"). The before run happened to
+wait 1800 frames in the move phase (its churn tail), the after run 25 — the after run's 41/0 is
+the standing measured value, the before run's 1/3 the churned tail. The light-state invariants
+(0 leaks, wash false, census 0/0, the 1-cell A/B class) are all unchanged. <b>Verdict: no
+lightstate value moved; no re-baseline owed.</b></p>
+
+</body></html>

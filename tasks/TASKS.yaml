@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-02T14:19
+  updated_at: 2026-10-02T17:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0389
 - AC-0159
 - AC-0112
 - AC-0113
@@ -7067,10 +7068,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-30T15:38
-  updated_at: 2026-08-31T16:40
+  updated_at: 2026-10-02T14:20
   completed_at: null
   waiting_on: AC-0156
   parent_id: null
@@ -22675,7 +22676,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-02T08:00
+  updated_at: 2026-10-02T17:11
   completed_at: 2026-10-02T06:39
   waiting_on: null
   parent_id: null
@@ -22893,7 +22894,29 @@ intake:
     their sizes; whether the material''s SHADER is non-null (a null shader renders white and is invisible
     to every gate we own); the mesh''s vertex count and AABB; the computed opacity and the fog-far and
     render-edge values being used; and whether the node is visible. Anything less repeats the mistake
-    of measuring a proxy for the thing.'
+    of measuring a proxy for the thing.
+
+
+    F7 TEST ANSWERED BY THE USER 2026-10-02: "F7 causes it to disappear so it is the satellite body".
+    THE AMBIGUITY IS RESOLVED AND THE DIAGNOSTIC EARNED ITS KEEP ON THE FIRST TRY - the pale surface the
+    user sees from altitude IS the satellite body, which means the AC-0384 fragment-discard fix WORKED
+    (the body now draws, where before it discarded 100% of its fragments and rendered nothing at all)
+    and the remaining defect is its COLOUR. That is a much narrower bug than "it never loads", and it
+    is the third distinct state this ticket has passed through: nothing drawn, then drawn-but-ambiguous-against-the-clouds,
+    now drawn-and-confirmed-but-wrong-coloured. The user did not paste the SATDIAG lines, so the specific
+    cause of the pale colour is still open - and the diagnostic was built precisely so it would not have
+    to be guessed: the lines report which source the textures came from, all 12 texture sizes, whether
+    the SHADER resource is non-null with non-empty code, the mesh''s vertex count and AABB, and the runtime
+    line with alt, S, op_nadir, u_fog_far, u_render_edge and vis. THE NEXT STEP IS A PASTE, NOT A GUESS:
+    ask for the SATDIAG block from the console (or user://satdiag.txt), ideally taken while the body is
+    on screen at altitude, and fix whatever it shows rather than inferring again. Candidates the lines
+    will separate, in the order the evidence would discriminate them: a null or failed shader resource
+    (a ShaderMaterial without a shader renders PURE WHITE and is invisible to every gate we own); a texture
+    that binds but samples as its default white (an unset or empty sampler); the day/night factor collapsing
+    the albedo toward a uniform value (u_day = 0.18 + 0.82*day, so a wrong sun direction at altitude would
+    wash the whole disc); or the haze term still dominating despite the AC-0384 build having measured
+    its disc-centre weight at 0.0000, which would mean the computed term and the rendered result disagree
+    - the exact failure mode the fail-able texture-dominance assertion was added to catch.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
@@ -23277,4 +23300,66 @@ intake:
     saying what it measured. Note also that three files in the tree (game.gd, drop.gd, main.gd) remain
     dirty from the OTHER session''s in-flight work and were deliberately left unstaged, which is why this
     commit contains only gen.cpp, world.gd and the ticket''s own page.'
+  comments: []
+- id: AC-0389
+  title: ambient-bed-always-on-needs-a-toggle
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-02T17:11
+  updated_at: 2026-10-02T17:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: There is a background sound that loops constantly - the user describes it as
+    waves or wind - and they want it gone or at least switchable, so the game is not always making noise
+    at them.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER (2026-10-02, playing the Windows build) as a defect against MY OWN recent work:
+    "there is a background sound that sounds like waves or wind or something, we should remove this or
+    make it Togglable". The culprit is the AMBIENT bed that AC-0039 added to satisfy the sound ticket''s
+    list: a 2.0-second seamless loop built from integer-cycle sines at 1/2.5/5.5/55 Hz plus Hann-windowed
+    noise, played on a dedicated looping player outside the 16-voice effect pool, and wired as an "always-on
+    bed". The synthesis is fine and the loop is genuinely seamless - the problem is that it was made always-on
+    without a way to turn it off, so a player who does not want constant ambience has no recourse. That
+    is a product judgement I should have surfaced as a choice rather than decided silently inside a feature
+    ticket.
+
+    THE FIX, and the user''s phrasing allows either: MAKE IT TOGGLEABLE and DEFAULT IT OFF. Defaulting
+    off is the right call for two reasons - the user asked for it to be removed rather than tuned, and
+    an always-on loop is the kind of thing a player notices immediately and cannot un-notice - while keeping
+    the feature means the ticket that asked for an ambient bed is still satisfied for anyone who wants
+    it. Whichever way it ends up, the toggle must persist like the project''s other settings do, and it
+    must be reachable from wherever the existing audio or gameplay settings live rather than from a debug
+    key.
+
+    ALSO CHECK THE REST OF THE SOUND LAYER FOR THE SAME MISTAKE, since this ticket exists because one
+    sound was made always-on without a switch: which of the nine sounds can fire when the player is doing
+    nothing? A footstep needs a step, an impact needs a hit, but a bed plays forever on its own - and
+    if any other sound has that property (a wind layer, a cave rumble, anything positional keyed to altitude
+    or biome), it needs the same treatment and should be listed here. Say explicitly which sounds are
+    event-driven and which are ambient, because the distinction is the whole issue.
+
+    CONSTRAINTS: do not remove the synthesis or break the sound arm - the buffer assertions (RMS floor,
+    no clipping, no all-ones, no DC rail, exact duration, 36 pairwise distinctness checks, all negative-tested)
+    must stay green and the nine event sounds must keep working; a toggle that also silences the effect
+    pool would be a regression rather than a fix, so verify the event sounds still fire with the ambient
+    switched off; genhash 25/25 byte-identical; G0 zero SCRIPT ERROR (not rc=0); the standing set green
+    (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with
+    far_holes 0/0 both bands, boundary r4 in band); settings changes may move a standing settings-arm
+    value, in which case re-establish it in the same task and say so; ARCHITECTURE.md sync if the settings
+    surface changes.
+
+    CONTEXT: read tasks/AC-0039/AC-0039-results.html (the nine sounds, the synthesis parameters, the ambient
+    bed and the voice-cap policy) and the settings arm in godot/scenes/harness.gd for how an existing
+    toggle is persisted and asserted.
+
+    '
   comments: []

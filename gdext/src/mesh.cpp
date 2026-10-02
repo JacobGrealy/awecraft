@@ -139,6 +139,14 @@ static const float FCV[6][4][3] = {
 	{{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
 	{{0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
 };
+// AC-0159: Java Fancy ambient-occlusion corner multipliers (0..3 solid
+// occluders at the face corner). The Bedrock lighter curve stays reserved
+// for a later toggle — this table is the Java one.
+static const float AO_MULT[4] = {1.0f, 0.8f, 0.6f, 0.4f};
+// AC-0159: the two in-plane axes per face (axis index 0=x, 1=y, 2=z) — the
+// axes whose FCV offsets vary across the 4 corners.
+static const int UA[6] = {1, 1, 0, 0, 0, 0};
+static const int VA[6] = {2, 2, 2, 2, 1, 1};
 // chunk.gd:8-9 (XQ cross-quad corners)
 static const float XQ_A[4][3] = {{0.0f, 0.0f, 0.5f}, {1.0f, 0.0f, 0.5f}, {1.0f, 1.0f, 0.5f}, {0.0f, 1.0f, 0.5f}};
 static const float XQ_B[4][3] = {{0.5f, 0.0f, 0.0f}, {0.5f, 0.0f, 1.0f}, {0.5f, 1.0f, 1.0f}, {0.5f, 1.0f, 0.0f}};
@@ -372,6 +380,47 @@ static void qwrite(Acc &acc, const Color &c, const int n[3], const float *uvs, c
 	acc.q = k + 1;
 }
 
+// AC-0159: the 4-colour twin of qwrite — a smooth-lighting face whose four
+// corners carry different light/AO values cannot merge into a single-colour
+// quad, so each vertex gets its own colour. Positions/normals/uvs/index
+// pattern are identical to qwrite.
+static void qwrite_vc(Acc &acc, const Color *c, const int n[3], const float *uvs, const float (*fcv)[3], int lx, int y, int lz, float py0, float py1, float py2, float py3) {
+	int k = acc.q;
+	acc.ensure(k + 1);
+	int b = k * 4;
+	acc.v[(b + 0) * 3 + 0] = (float)lx + fcv[0][0];
+	acc.v[(b + 0) * 3 + 1] = (float)y + py0;
+	acc.v[(b + 0) * 3 + 2] = (float)lz + fcv[0][2];
+	acc.v[(b + 1) * 3 + 0] = (float)lx + fcv[1][0];
+	acc.v[(b + 1) * 3 + 1] = (float)y + py1;
+	acc.v[(b + 1) * 3 + 2] = (float)lz + fcv[1][2];
+	acc.v[(b + 2) * 3 + 0] = (float)lx + fcv[2][0];
+	acc.v[(b + 2) * 3 + 1] = (float)y + py2;
+	acc.v[(b + 2) * 3 + 2] = (float)lz + fcv[2][2];
+	acc.v[(b + 3) * 3 + 0] = (float)lx + fcv[3][0];
+	acc.v[(b + 3) * 3 + 1] = (float)y + py3;
+	acc.v[(b + 3) * 3 + 2] = (float)lz + fcv[3][2];
+	for (int j = 0; j < 4; j++) {
+		acc.n[(b + j) * 3 + 0] = (float)n[0];
+		acc.n[(b + j) * 3 + 1] = (float)n[1];
+		acc.n[(b + j) * 3 + 2] = (float)n[2];
+		acc.u[(b + j) * 2 + 0] = uvs[j * 2 + 0];
+		acc.u[(b + j) * 2 + 1] = uvs[j * 2 + 1];
+		acc.c[(b + j) * 4 + 0] = c[j].r;
+		acc.c[(b + j) * 4 + 1] = c[j].g;
+		acc.c[(b + j) * 4 + 2] = c[j].b;
+		acc.c[(b + j) * 4 + 3] = c[j].a;
+	}
+	int ib = k * 6;
+	acc.i[ib + 0] = b;
+	acc.i[ib + 1] = b + 2;
+	acc.i[ib + 2] = b + 1;
+	acc.i[ib + 3] = b;
+	acc.i[ib + 4] = b + 3;
+	acc.i[ib + 5] = b + 2;
+	acc.q = k + 1;
+}
+
 // ---------------------------------------------------------------------------
 // Light sampling (chunk.gd:1101/1113) + mask evidence (chunk.gd:622/636)
 // + the vColor repack (chunk.gd:606).
@@ -457,6 +506,66 @@ static inline int face_mask(int id, int wx, int y, int wz, const int n[3], const
 		}
 	}
 	return m;
+}
+
+// AC-0159: Java Fancy smooth lighting + AO for one face corner.
+//
+// Corner j of the face block (wx,y,wz) on face fi: O is the in-block cell at
+// the corner; S1/S2 are O one step along the two in-plane axes, AWAY from the
+// corner (offset 0 -> +1, offset 1 -> -1); S3 is the OUTSIDE diagonal
+// (O + d_u + d_v + n). Light = L(S0)+L(S1)+L(S2)+L(S3) — an integer sum in
+// 0..60 (kept unnormalized: 60/4/15 is exact in binary FP32, no rounding).
+// AO occluders: A1 = S1 + n, A2 = S2 + n, A3 = S3 (the diagonal cell is
+// shared between the light sample and the occluder count, exactly as in
+// Java). chan = block-light evidence (the payload mask) ORed over S0..S3.
+// Solid = stab (full cubes only — matches Java's "full block" AO rule).
+//
+// The 4 light cells sit at most 1 margin cell outside the chunk, inside the
+// 20x20 light box (2-cell margin). The 3 AO cells sit at most 1 margin cell
+// out, inside the 18x18 snap box; the 4 snap CORNER margin cells are 0
+// (air), so a diagonal occluder exactly at a chunk corner is missed — the
+// classic Java boundary artifact, accepted.
+static inline void s_corner_tag(int fi, int j, int wx, int y, int wz, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int h, int wx0, int wz0, const std::vector<uint8_t> &snap, const uint8_t *stab, const uint8_t *bmask, int bmask_sz, int &olsum, int &oao, int &ochan) {
+	const int n[3] = {FN[fi][0], FN[fi][1], FN[fi][2]};
+	int ua = UA[fi];
+	int va = VA[fi];
+	int offu = (int)FCV[fi][j][ua];
+	int offv = (int)FCV[fi][j][va];
+	int du = (offu == 0) ? 1 : -1;
+	int dv = (offv == 0) ? 1 : -1;
+	// O = face block + the in-plane corner offset (the normal-axis FCV
+	// offset is the plane and never part of O).
+	int ox = wx + (ua == 0 ? offu : 0) + (va == 0 ? offv : 0);
+	int oy = y + (ua == 1 ? offu : 0) + (va == 1 ? offv : 0);
+	int oz = wz + (ua == 2 ? offu : 0) + (va == 2 ? offv : 0);
+	int su[3] = {0, 0, 0};
+	su[ua] = du;
+	int sv[3] = {0, 0, 0};
+	sv[va] = dv;
+	int s0x = ox, s0y = oy, s0z = oz;
+	int s1x = ox + su[0], s1y = oy + su[1], s1z = oz + su[2];
+	int s2x = ox + sv[0], s2y = oy + sv[1], s2z = oz + sv[2];
+	int s3x = ox + su[0] + sv[0] + n[0], s3y = oy + su[1] + sv[1] + n[1], s3z = oz + su[2] + sv[2] + n[2];
+	olsum = s_effl(lmn, larr, lw, ld, s0x, s0y, s0z, h) + s_effl(lmn, larr, lw, ld, s1x, s1y, s1z, h) + s_effl(lmn, larr, lw, ld, s2x, s2y, s2z, h) + s_effl(lmn, larr, lw, ld, s3x, s3y, s3z, h);
+	ochan = (mask_sample(s0x, s0y, s0z, lmn, h, bmask, bmask_sz) | mask_sample(s1x, s1y, s1z, lmn, h, bmask, bmask_sz) | mask_sample(s2x, s2y, s2z, lmn, h, bmask, bmask_sz) | mask_sample(s3x, s3y, s3z, lmn, h, bmask, bmask_sz)) != 0 ? 1 : 0;
+	auto solid1 = [&](int ax, int ay, int az) -> int {
+		if (ay < 0 || ay >= h)
+			return 0;
+		int lx = ax - wx0, lz = az - wz0;
+		if (lx < -1 || lx > 16 || lz < -1 || lz > 16)
+			return 0;
+		uint8_t bid = snap[(size_t)ay * SNAP_ROW + (lz + 1) * SNAP_W + (lx + 1)];
+		return stab[bid] > 0 ? 1 : 0;
+	};
+	oao = solid1(s1x + n[0], s1y + n[1], s1z + n[2]) + solid1(s2x + n[0], s2y + n[1], s2z + n[2]) + solid1(s3x, s3y, s3z);
+}
+
+// AC-0159: corner brightness from the integer sum — the SAME normalization
+// the flat path uses (sum/4/15, MIN_AMB..1.0, one IEEE rounding each) times
+// the AO multiplier (applied AFTER the clamp, so a triple-occluded corner in
+// a dark cave can sit below the 0.08 floor — the point of the feature).
+static inline float s_corner_sl(int lsum, int ao) {
+	return clampf((float)lsum / 4.0f / 15.0f, MIN_AMB, 1.0f) * AO_MULT[ao];
 }
 
 // AC-0128 vColor repack: has_tex -> r = sky s (or 0), g = s (only when the
@@ -1058,7 +1167,10 @@ static inline bool s_is_interior(int lx, int y, int lz, const std::vector<uint8_
 
 // _s_emit_faces (chunk.gd:1230) — the per-face quad path (the scoped edit
 // fast-pass + the non-merged fallback).
-static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz) {
+// AC-0159: smooth = per-vertex Java Fancy light + AO (ro + rc_o). Cutouts
+// (ktab) stay flat in BOTH paths — fancy lighting is full-block only, as in
+// Java; the flat path is byte-identical to the pre-AC-0159 code.
+static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth) {
 	int h = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1089,14 +1201,38 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 			face_idx = 0;
 			tint = ctx.tint_side[id];
 		}
-		float sl = s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, h);
-		int mask = face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, h, bmask, bmask_sz);
-		Color c = light_color(sl, FSH[fi], mask, face_color, has_tex);
-		if (has_tex)
-			c = mul_cc(c, tint);
 		const float *uvs = s_uvc(uvc, ctx, id, fi, face_idx);
 		Acc &sa = accs[y / 16];
-		qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1]);
+		float py0 = FCV[fi][0][1], py1 = FCV[fi][1][1], py2 = FCV[fi][2][1], py3 = FCV[fi][3][1];
+		if (smooth && ctx.ktab[id] == 0) {
+			int lsum[4], ao[4], chan[4];
+			for (int j = 0; j < 4; j++)
+				s_corner_tag(fi, j, wx0 + lx, y, wz0 + lz, lmn, larr, lw, ld, h, wx0, wz0, snap, stab, bmask, bmask_sz, lsum[j], ao[j], chan[j]);
+			bool uniform = lsum[0] == lsum[1] && lsum[0] == lsum[2] && lsum[0] == lsum[3] && ao[0] == ao[1] && ao[0] == ao[2] && ao[0] == ao[3] && chan[0] == chan[1] && chan[0] == chan[2] && chan[0] == chan[3];
+			if (uniform) {
+				float sl = s_corner_sl(lsum[0], ao[0]);
+				Color c = light_color(sl, FSH[fi], chan[0], face_color, has_tex);
+				if (has_tex)
+					c = mul_cc(c, tint);
+				qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+			} else {
+				Color cc[4];
+				for (int j = 0; j < 4; j++) {
+					cc[j] = light_color(s_corner_sl(lsum[j], ao[j]), FSH[fi], chan[j], face_color, has_tex);
+					if (has_tex)
+						cc[j] = mul_cc(cc[j], tint);
+				}
+				qwrite_vc(sa, cc, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+			}
+		} else {
+			// Flat per-face light (rk/rq and cutout blocks — unchanged).
+			float sl = s_face_light(id, wx0 + lx, y, wz0 + lz, n, lmn, larr, lw, ld, h);
+			int mask = face_mask(id, wx0 + lx, y, wz0 + lz, n, lmn, h, bmask, bmask_sz);
+			Color c = light_color(sl, FSH[fi], mask, face_color, has_tex);
+			if (has_tex)
+				c = mul_cc(c, tint);
+			qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+		}
 	}
 }
 
@@ -1251,7 +1387,14 @@ static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0
 // (to 4, full-width rows — the atlas strips tile 4 rows). The grid cells
 // are MergedCell* into a per-face arena (reserved up front so the pointers
 // never invalidate).
-static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz) {
+// AC-0159: under smooth lighting a merged quad is only valid when EVERY face
+// in the region is UNIFORM (all 4 corners share (lsum, ao, chan)) — then the
+// merged quad equals the per-face union exactly and the merge key stays
+// (id, fni, shade). A non-uniform face emits its own 4-colour quad (per-face
+// UVs, like the non-merged path) and cannot merge: a gradient cannot cross a
+// merge. Java disables merging entirely under fancy; keeping it for uniform
+// regions is strictly cheaper. Cutouts stay flat (see emit_faces).
+static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth) {
 	int hgt = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1261,12 +1404,49 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 		cells[f].reserve(recs.size());
 		grids[f].assign((size_t)16 * hgt * 16, nullptr);
 	}
+	UvcCache uvc; // per-face UVs for the non-uniform (non-mergable) fallback
 	for (const FRec &r : recs) {
 		const int n[3] = {FN[r.fi][0], FN[r.fi][1], FN[r.fi][2]};
-		float sl = s_face_light(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, larr, lw, ld, hgt);
-		int mask = face_mask(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, hgt, bmask, bmask_sz);
-		float shade = FSH[r.fi] * sl;
+		float sl;
+		int mask;
 		int fi = r.fi;
+		if (smooth && ctx.ktab[r.id] == 0) {
+			int lsum[4], ao[4], chan[4];
+			for (int j = 0; j < 4; j++)
+				s_corner_tag(fi, j, wx0 + r.lx, r.y, wz0 + r.lz, lmn, larr, lw, ld, hgt, wx0, wz0, snap, stab, bmask, bmask_sz, lsum[j], ao[j], chan[j]);
+			bool uniform = lsum[0] == lsum[1] && lsum[0] == lsum[2] && lsum[0] == lsum[3] && ao[0] == ao[1] && ao[0] == ao[2] && ao[0] == ao[3] && chan[0] == chan[1] && chan[0] == chan[2] && chan[0] == chan[3];
+			if (!uniform) {
+				// One quad, one colour per vertex — straight out of the grid.
+				int face_idx = 0;
+				Color face_color = ctx.cs[r.id];
+				Color tint = ctx.tint_side[r.id];
+				if (r.fni == 1) {
+					face_color = ctx.ct[r.id];
+					face_idx = 1;
+					tint = ctx.tint_top[r.id];
+				} else if (r.fni == 2) {
+					face_color = ctx.cb[r.id];
+					face_idx = 2;
+					tint = ctx.tint_bottom[r.id];
+				}
+				Color cc[4];
+				for (int j = 0; j < 4; j++) {
+					cc[j] = light_color(s_corner_sl(lsum[j], ao[j]), FSH[fi], chan[j], face_color, has_tex);
+					if (has_tex)
+						cc[j] = mul_cc(cc[j], tint);
+				}
+				const float *uvs = s_uvc(uvc, ctx, r.id, fi, face_idx);
+				qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1]);
+				continue;
+			}
+			sl = s_corner_sl(lsum[0], ao[0]);
+			mask = chan[0];
+		} else {
+			// Flat (cutouts / smooth off) — byte-identical to pre-AC-0159.
+			sl = s_face_light(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, larr, lw, ld, hgt);
+			mask = face_mask(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, hgt, bmask, bmask_sz);
+		}
+		float shade = FSH[r.fi] * sl;
 		size_t idx;
 		if (fi == 2 || fi == 3)
 			idx = (size_t)r.y * 256 + r.lz * 16 + r.lx;
@@ -3214,12 +3394,12 @@ public:
 		{
 			int64_t te = now_msec();
 			if (M.nonempty && !ro.empty() && !scoped)
-				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz);
+				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true);
 			else
-				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz);
+				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);
 			phet[0] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz);
+			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);
 			phet[1] = now_msec() - te;
 			te = now_msec();
 			emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, C, h);
@@ -3228,7 +3408,7 @@ public:
 			emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, C, h);
 			phet[3] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz);
+			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, false);
 			phet[4] = now_msec() - te;
 			te = now_msec();
 			emit_xquad(rq, s_ax, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz);
