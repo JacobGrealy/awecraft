@@ -26,6 +26,10 @@ var entities: Node:
 	get: return main.entities
 	set(v): main.entities = v
 
+var particles: Node3D:
+	get: return main.particles
+	set(v): main.particles = v
+
 var sun: DirectionalLight3D:
 	get: return main.sun
 	set(v): main.sun = v
@@ -683,6 +687,16 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			return
 		if logic == "nightlot":
 			await _nightlot_test(spawn)
+			return
+		if logic == "pcensus":
+			# AC-0038: the pooled-particle census (standalone, headless).
+			await _pcensus_test(spawn)
+			return
+		if logic == "sound":
+			# AC-0039: the procedural-sound arm (standalone, headless;
+			# dummy audio driver — asserts the generated buffers, not the
+			# device).
+			await _sound_test(spawn)
 			return
 		if logic == "viewlight":
 			player = main._spawn_player()
@@ -30789,3 +30803,453 @@ func _crossface_home_ext_height(fx: float, fz: float, seed: int) -> int:
 	# the heightmap is 256 u16 heights in 512 bytes — the BYTE index is 2*slot
 	var si: int = 2 * (hz * 16 + hx)
 	return (int(hb[si]) | (int(hb[si + 1]) << 8))
+
+
+# ---------------------------------------------------------------------------
+# AC-0038: the pooled-particle census (AWECRAFT_LOGIC=pcensus).
+# STANDALONE like nightlot — NOT in the battery. Headless, renders are
+# infeasible on this box, so every claim is a number:
+#   A) each of the four events emits its configured count and releases
+#      every particle back to the pool (live -> 0);
+#   B) a stress burst over the cap (300 requested) holds live <= 200 with
+#      drop-oldest eviction (100 evicted, 200 die, 0 lost);
+#   C) RADIAL fall: two identically-seeded controlled bursts (tangential
+#      velocity, fixed life 1.0 s) at the home face and at the +X face —
+#      the per-particle RADIAL displacement agrees in the local frame
+#      (same dt stream -> near-bit-exact) while the world-space displacement
+#      differs (falls world -Y at home, world -X at the +X face);
+#   D) frame cost: 200 sustained live, pool on vs pool disabled, plus the
+#      pool's own step bracket.
+# The pool's census_* / emit_probe / seed_census API is test-only; the game
+# path never calls it, so the zero-allocation-after-ready contract still
+# holds (the pool's own .new() counter must not move after _ready).
+func _pc_wait_ms(ms: int) -> void:
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < ms:
+		await get_tree().process_frame
+
+
+func _pcensus_test(_spawn: Vector3) -> void:
+	var pool = main.particles  # untyped on purpose: the pool API is dynamic
+	var out: Dictionary = {}
+	var ok: bool = pool != null
+	out["pool_present"] = ok
+	if not ok:
+		print("RESULT ", JSON.stringify(out))
+		get_tree().quit()
+		return
+	out["cap"] = 200
+	out["allocs_at_ready"] = pool.allocs_at_ready()
+
+	# ---- Phase A: per-event emission + full release --------------------
+	var expected := {"break": 12, "hit": 8, "arrow": 10, "pickup": 8}
+	var per: Dictionary = {}
+	var evs: Array = [
+		["break", Vector3(0.0, 140.0, 0.0)],
+		["hit", Vector3(4.0, 140.0, 0.0)],
+		["arrow", Vector3(8.0, 140.0, 0.0)],
+		["pickup", Vector3(12.0, 140.0, 0.0)],
+	]
+	for e in evs:
+		var name := str(e[0])
+		var at: Vector3 = e[1]
+		pool.reset_counters()
+		pool.census_begin()
+		match name:
+			"break":
+				pool.burst_break(at, Color(0.45, 0.42, 0.38))
+			"hit":
+				pool.burst_hit(at, at - Vector3(1.0, 0.0, 0.5))
+			"arrow":
+				pool.burst_arrow(at, Vector3(0.3, 1.0, 0.1))
+			"pickup":
+				pool.burst_pickup(at)
+		var live_now: int = pool.live()
+		await _pc_wait_ms(1200)  # > the max configured lifetime (0.8 s)
+		var live_later: int = pool.live()
+		var recs: Array = pool.census_end()
+		var lsum := 0.0
+		for r in recs:
+			lsum += float(r[3])
+		var lavg := lsum / float(recs.size()) if recs.size() > 0 else 0.0
+		per[name] = {
+			"requested": pool.emitted,
+			"live_after_emit": live_now,
+			"live_after_wait": live_later,
+			"released": recs.size(),
+			"life_avg_s": lavg,
+			"evicted": pool.evicted,
+		}
+		ok = ok and live_now == int(expected[name]) and live_later == 0 \
+				and recs.size() == int(expected[name]) and pool.evicted == 0
+	out["events"] = per
+
+	# ---- Phase B: stress burst over the cap ----------------------------
+	# 25 break bursts = 300 requested in ONE frame (the loop is synchronous,
+	# so the pool step has not run yet when live is read).
+	pool.reset_counters()
+	pool.census_begin()
+	for _i in range(25):
+		pool.burst_break(Vector3(0.0, 140.0, 0.0), Color(0.6, 0.4, 0.3))
+	var live_burst: int = pool.live()
+	var emitted_burst: int = pool.emitted
+	var evicted_burst: int = pool.evicted
+	await _pc_wait_ms(1200)
+	var live_burst_after: int = pool.live()
+	var recs_b: Array = pool.census_end()
+	out["stress"] = {
+		"requested": emitted_burst,
+		"live_peak": live_burst,
+		"cap": 200,
+		"evicted_oldest": evicted_burst,
+		"died": recs_b.size(),
+		"live_after_wait": live_burst_after,
+	}
+	ok = ok and live_burst <= 200 and emitted_burst == 300 \
+			and evicted_burst == 100 and recs_b.size() == 200 and live_burst_after == 0
+
+	# ---- Phase C: the radial-fall proof --------------------------------
+	# C = (0, -planet_R, 0). home = above the home-face centre; far = the
+	# +X face of the surface (C + (R, 0, 0)). Tangential velocity + fixed
+	# life -> radial motion is pure 0.5*g*t^2 on both faces; with the same
+	# seed the per-particle pairing is exact.
+	var R := Game.planet_R
+	var home := Vector3(0.0, 140.0, 0.0)
+	var far := Vector3(R, -R, 0.0)
+	pool.reset_counters()
+	pool.census_begin()
+	pool.seed_census(42)
+	pool.emit_probe(home, 40, 1.0, 3.0)
+	pool.seed_census(42)
+	pool.emit_probe(far, 40, 1.0, 3.0)
+	await _pc_wait_ms(1600)  # > 1.0 s lifetime
+	var recs_c: Array = pool.census_end()
+	var home_recs: Array = []
+	var far_recs: Array = []
+	for r in recs_c:
+		var c0v: Vector3 = r[0]
+		if c0v.distance_to(home) < 1.0:
+			home_recs.append(r)
+		else:
+			far_recs.append(r)
+	var max_pair_delta := 0.0
+	var n_pairs := 0
+	var home_radial_sum := 0.0
+	var far_radial_sum := 0.0
+	for k in home_recs.size():
+		if k >= far_recs.size():
+			break
+		var rh: Vector3 = home_recs[k][1] - home_recs[k][0]
+		var rf: Vector3 = far_recs[k][1] - far_recs[k][0]
+		var dh: float = -rh.dot(home_recs[k][2])
+		var df: float = -rf.dot(far_recs[k][2])
+		max_pair_delta = maxf(max_pair_delta, absf(dh - df))
+		home_radial_sum += dh
+		far_radial_sum += df
+		n_pairs += 1
+	var home_mean := home_radial_sum / float(n_pairs) if n_pairs > 0 else -1.0
+	var far_mean := far_radial_sum / float(n_pairs) if n_pairs > 0 else -1.0
+	# world-space displacement means (the "differ in world space" half)
+	var dhm := Vector3.ZERO
+	var dfm := Vector3.ZERO
+	for r in home_recs:
+		dhm += r[1] - r[0]
+	for r in far_recs:
+		dfm += r[1] - r[0]
+	dhm /= float(home_recs.size())
+	dfm /= float(far_recs.size())
+	var analytic := 0.5 * 9.8 * 1.0
+	out["radial"] = {
+		"records": recs_c.size(),
+		"pairs": n_pairs,
+		"max_pair_radial_delta_m": max_pair_delta,
+		"home_radial_fall_m": home_mean,
+		"far_radial_fall_m": far_mean,
+		"analytic_0.5gt2_m": analytic,
+		"home_disp_worldY": dhm.dot(Vector3(0.0, -1.0, 0.0)),
+		"far_disp_worldX_neg": dfm.dot(Vector3(-1.0, 0.0, 0.0)),
+		"home_disp_cross_far_down": dhm.dot(Vector3(-1.0, 0.0, 0.0)),
+		"far_disp_cross_home_down": dfm.dot(Vector3(0.0, -1.0, 0.0)),
+	}
+	ok = ok and n_pairs == 40 and max_pair_delta < 0.01 \
+			and home_mean > analytic * 0.9 and far_mean > analytic * 0.9 \
+			and absf(home_mean - far_mean) < analytic * 0.15 \
+			and absf(dhm.dot(Vector3(-1.0, 0.0, 0.0))) < 1.0 \
+			and absf(dfm.dot(Vector3(0.0, -1.0, 0.0))) < 1.0
+
+	# ---- Phase D: frame cost (200 sustained live) ----------------------
+	await _pc_wait_ms(2000)  # let the streaming storm settle first
+	pool.reset_counters()
+	for i in range(5):
+		pool.emit_probe(Vector3(0.0, 140.0, float(i) * 0.01), 40, 60.0, 3.0)
+	await _pc_wait_ms(150)
+	var live_cost: int = pool.live()
+	pool.step_reset()
+	var n1 := 120
+	var t1s := 0
+	for _f in range(n1):
+		var ta := Time.get_ticks_usec()
+		await get_tree().process_frame
+		t1s += Time.get_ticks_usec() - ta
+	var step_ms: float = pool.step_ms_avg()
+	pool.set_enabled(false)
+	await _pc_wait_ms(100)
+	var t2s := 0
+	for _f in range(n1):
+		var tb := Time.get_ticks_usec()
+		await get_tree().process_frame
+		t2s += Time.get_ticks_usec() - tb
+	pool.set_enabled(true)
+	out["cost"] = {
+		"live": live_cost,
+		"frames": n1,
+		"frame_ms_pool_on": t1s / n1 / 1000.0,
+		"frame_ms_pool_off": t2s / n1 / 1000.0,
+		"delta_ms": t1s / n1 / 1000.0 - t2s / n1 / 1000.0,
+		"pool_step_ms": step_ms,
+	}
+
+	out["allocs_after_census"] = pool.allocs()
+	out["allocs_delta_after_ready"] = pool.allocs() - pool.allocs_at_ready()
+	ok = ok and (pool.allocs() - pool.allocs_at_ready()) == 0 and live_cost == 200
+	out["ok"] = ok
+	print("RESULT ", JSON.stringify(out))
+	get_tree().quit()
+
+
+# AC-0039 probe (env-gated by AWECRAFT_LOGIC=sound, harness-only, never runs
+# in game): the procedural-sound arm. It asserts the SYNTHESIS is real, not
+# that a call returned: per-buffer duration / non-silent RMS / no clipping /
+# no all-ones on the GENERATED PCM, pairwise distinctness of all 9 voices
+# (fingerprint = RMS + zero-crossing rate + coarse Goertzel band summary +
+# spectral centroid), resolution of every call-site name (no silent event),
+# a fixed-voice pool proof (allocation counter flat under a 1000-trigger
+# burst, concurrent cap, trigger cost in us), and NEGATIVE tests showing the
+# checker FAILS on a silent buffer, an all-ones buffer, and an aliased
+# (copied) pair — the AC-0310-bake-guard-style "an assertion that cannot
+# fail is the failure" discipline.
+func _sound_test(_spawn: Vector3) -> void:
+	var out: Dictionary = {"mode": "sound"}
+	var ok := true
+	var t0 := Time.get_ticks_msec()
+
+	# ---- A: determinism + startup synth cost -----------------------------
+	var ta := Time.get_ticks_usec()
+	var fresh: Dictionary = {}
+	for nm in Audio.BASES:
+		fresh[nm] = Audio.synth(nm)
+	out["synth_ms"] = (Time.get_ticks_usec() - ta) / 1000.0
+	var det := true
+	for nm in Audio.BASES:
+		var again: PackedFloat32Array = Audio.synth(nm)
+		if not (again == fresh[nm]) or not (Audio.floats(nm) == fresh[nm]):
+			det = false
+	out["deterministic"] = det
+	ok = ok and det
+
+	# ---- B: per-sound buffer assertions ----------------------------------
+	var dur_s := {"block": 0.16, "step": 0.09, "hit": 0.22, "eat": 0.30,
+			"splash": 0.40, "arrow": 0.30, "bow": 0.35, "mob": 0.30, "ambient": 2.0}
+	var per: Dictionary = {}
+	for nm in Audio.BASES:
+		var f: PackedFloat32Array = Audio.floats(nm)
+		var r: Dictionary = _sound_check(f, int(Audio.RATE * float(dur_s[nm])), 0.01)
+		per[nm] = {"ok": bool(r["ok"]), "why": str(r["why"]),
+				"dur": f.size(), "rms": r["fp"]["rms"], "peak": r["fp"]["peak"],
+				"zcr": r["fp"]["zcr"], "b0": r["fp"]["b0"], "b1": r["fp"]["b1"],
+				"b2": r["fp"]["b2"], "centroid": r["fp"]["centroid"]}
+		ok = ok and bool(r["ok"])
+	out["sounds"] = per
+
+	# ---- C: pairwise distinctness (all 36 pairs) -------------------------
+	var min_d := 999.0
+	var min_pair := ""
+	var nd := 0
+	for i in Audio.BASES.size():
+		for j in range(i + 1, Audio.BASES.size()):
+			var d: float = _sound_distinct(per[Audio.BASES[i]], per[Audio.BASES[j]])
+			nd += 1
+			if d < min_d:
+				min_d = d
+				min_pair = "%s/%s" % [Audio.BASES[i], Audio.BASES[j]]
+			ok = ok and d > 0.05
+	out["distinct"] = {"pairs": nd, "min": min_d, "min_pair": min_pair}
+
+	# ---- D: every call-site name resolves (no silent event) --------------
+	var names15 := ["block", "step", "hit", "eat", "splash", "arrow", "bow",
+			"mob", "ambient", "break", "place", "door", "hurt", "pickup", "gorilla"]
+	var unresolved: Array = []
+	for nm in names15:
+		if Audio.stream(nm) == null:
+			unresolved.append(nm)
+	out["names"] = {"total": names15.size(), "unresolved": unresolved}
+	ok = ok and unresolved.is_empty()
+	var amb := Audio.stream("ambient")
+	out["ambient_loop"] = amb != null and amb.loop_mode == AudioStreamWAV.LOOP_FORWARD
+	ok = ok and bool(out["ambient_loop"])
+
+	# ---- E: NEGATIVE tests — the checker must FAIL on degenerate buffers -
+	var zero := PackedFloat32Array()
+	zero.resize(Audio.RATE)  # 1 s of silence
+	var ones := PackedFloat32Array()
+	ones.resize(Audio.RATE)
+	for i in Audio.RATE:
+		ones[i] = 1.0
+	var zc: Dictionary = _sound_check(zero, Audio.RATE, 0.01)
+	var oc: Dictionary = _sound_check(ones, Audio.RATE, 0.01)
+	var fp_hit := _sound_fingerprint(fresh["hit"])
+	var alias_d: float = _sound_distinct(fp_hit, _sound_fingerprint(fresh["hit"]))
+	out["negative"] = {"silent_rejected": not bool(zc["ok"]),
+			"silent_why": str(zc["why"]),
+			"ones_rejected": not bool(oc["ok"]), "ones_why": str(oc["why"]),
+			"alias_dist": alias_d, "alias_rejected": alias_d <= 0.05}
+	ok = ok and (not bool(zc["ok"])) and (not bool(oc["ok"])) and alias_d <= 0.05
+
+	# ---- F: trigger cost + fixed-pool proof (the AC-0038 discipline) -----
+	# Every call-site name fires once (trigger-fired proof), then a 1000-
+	# trigger burst over the pool: allocation counter must stay flat, the
+	# concurrent live count must never exceed the pool, and the voices must
+	# all be free again after the longest SFX (0.4 s) has decayed.
+	var allocs0 := Audio.alloc_count()
+	for nm in names15:
+		Audio.play(nm)
+	var N := 1000
+	var t_sum := 0.0
+	var t_max := 0.0
+	for i in N:
+		var u0 := Time.get_ticks_usec()
+		Audio.play(Audio.BASES[i % Audio.BASES.size()])
+		var du := Time.get_ticks_usec() - u0
+		t_sum += float(du)
+		t_max = maxf(t_max, float(du))
+	await _snd_wait_ms(1700)  # > the longest SFX (0.4 s splash)
+	var unfired: Array = []
+	for nm in names15:
+		if Audio.play_count(nm) < 1:
+			unfired.append(nm)
+	out["stress"] = {"plays": N,
+			"trig_us_avg": t_sum / float(N), "trig_us_max": t_max,
+			"allocs_delta": Audio.alloc_count() - allocs0,
+			"pool": Audio.pool_size(), "live_peak": Audio.peak_live(),
+			"steals": Audio.steals(), "live_after_wait": Audio.live_now(),
+			"unfired": unfired}
+	ok = ok and (Audio.alloc_count() - allocs0) == 0 \
+			and Audio.peak_live() <= Audio.pool_size() \
+			and Audio.live_now() == 0 and unfired.is_empty()
+
+	out["ok"] = ok
+	out["ms"] = Time.get_ticks_msec() - t0
+	print("RESULT ", JSON.stringify(out))
+	get_tree().quit()
+
+
+# AC-0039: one-pole wait (frames until `ms` elapsed).
+func _snd_wait_ms(ms: int) -> void:
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < ms:
+		await get_tree().process_frame
+
+
+# AC-0039: the Goertzel magnitude at `freq` over the first `mini` samples —
+# the cheap coarse-FFT band summary the fingerprint uses.
+func _sound_goertzel(f: PackedFloat32Array, mini: int, freq: float) -> float:
+	var w := TAU * freq / float(Audio.RATE)
+	var c := cos(w)
+	var coef := 2.0 * c
+	var q1 := 0.0
+	var q2 := 0.0
+	for i in mini:
+		var q0: float = f[i] + coef * q1 - q2
+		q2 = q1
+		q1 = q0
+	return sqrt(maxf(0.0, q1 * q1 + q2 * q2 - coef * q1 * q2))
+
+
+# AC-0039: the cheap fingerprint — RMS (whole buffer), peak, zero-crossing
+# rate (first 4096), a 3-band Goertzel summary (100/300/600 + 1k/2k/3k +
+# 4k/5k/6k) normalized to sum 1, and the spectral centroid over the 9 bins.
+func _sound_fingerprint(f: PackedFloat32Array) -> Dictionary:
+	var n := f.size()
+	if n == 0:
+		return {"rms": 0.0, "peak": 0.0, "zcr": 0.0, "b0": 0.0, "b1": 0.0,
+				"b2": 0.0, "centroid": 0.0, "nan": true}
+	var sumsq := 0.0
+	var peak := 0.0
+	var nan := false
+	for i in n:
+		var v: float = f[i]
+		if v != v:
+			nan = true
+			break
+		sumsq += v * v
+		peak = maxf(peak, absf(v))
+	var rms := sqrt(sumsq / float(n))
+	var m := mini(n, 4096)
+	var zc := 0
+	for i in range(1, m):
+		if f[i - 1] < 0.0 and f[i] >= 0.0:
+			zc += 1
+		elif f[i - 1] >= 0.0 and f[i] < 0.0:
+			zc += 1
+	var zcr := float(zc) / float(maxi(1, m - 1))
+	var frs: Array = [100.0, 300.0, 600.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
+	var mags: Array = []
+	for fr in frs:
+		mags.append(_sound_goertzel(f, m, float(fr)))
+	var s0: float = float(mags[0]) + float(mags[1]) + float(mags[2])
+	var s1: float = float(mags[3]) + float(mags[4]) + float(mags[5])
+	var s2: float = float(mags[6]) + float(mags[7]) + float(mags[8])
+	var tot: float = s0 + s1 + s2
+	var b0: float = s0 / tot if tot > 0.0 else 0.0
+	var b1: float = s1 / tot if tot > 0.0 else 0.0
+	var b2: float = s2 / tot if tot > 0.0 else 0.0
+	var cent := 0.0
+	for i in frs.size():
+		cent += float(frs[i]) * float(mags[i])
+	cent = cent / tot if tot > 0.0 else 0.0
+	return {"rms": rms, "peak": peak, "zcr": zcr, "b0": b0, "b1": b1, "b2": b2,
+			"centroid": cent, "nan": nan}
+
+
+# AC-0039: the buffer checker (used by the positive phase AND the negative
+# tests). Returns {"ok": bool, "why": String, "fp": fingerprint}.
+func _sound_check(f: PackedFloat32Array, want: int, floor: float) -> Dictionary:
+	var fp := _sound_fingerprint(f)
+	var okk := true
+	var why := ""
+	if f.size() != want:
+		okk = false
+		why = "dur %d != %d" % [f.size(), want]
+	elif fp["nan"]:
+		okk = false
+		why = "nan"
+	elif fp["peak"] <= 0.0:
+		okk = false
+		why = "all-zero"
+	elif fp["rms"] < floor:
+		okk = false
+		why = "silent rms %.4f < %.4f" % [fp["rms"], floor]
+	elif fp["peak"] > 1.0:
+		okk = false
+		why = "clipped peak %.3f" % fp["peak"]
+	elif fp["rms"] > 0.95:
+		okk = false
+		why = "all-ones rms %.3f" % fp["rms"]
+	elif fp["zcr"] < 0.0005 and fp["rms"] > 0.5:
+		okk = false
+		why = "dc-rail"
+	return {"ok": okk, "why": why, "fp": fp}
+
+
+# AC-0039: pairwise separation of two fingerprints (0.0 = identical copies).
+# Any single coordinate differing by >5% of its range counts as distinct —
+# a synthesizer whose outputs are copies (or one shared click) reads 0.0.
+func _sound_distinct(a: Dictionary, b: Dictionary) -> float:
+	var d := 0.0
+	d = maxf(d, absf(float(a["rms"]) - float(b["rms"])) / 0.5)
+	d = maxf(d, absf(float(a["zcr"]) - float(b["zcr"])) / 0.4)
+	d = maxf(d, maxf(absf(float(a["b0"]) - float(b["b0"])),
+			maxf(absf(float(a["b1"]) - float(b["b1"])),
+			absf(float(a["b2"]) - float(b["b2"])))))
+	d = maxf(d, absf(float(a["centroid"]) - float(b["centroid"])) / 6000.0)
+	return d

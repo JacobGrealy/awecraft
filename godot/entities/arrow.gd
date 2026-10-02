@@ -25,6 +25,9 @@ func _ready() -> void:
 	add_child(mi)
 	if vel.length() > 0.001:
 		look_at(global_position + vel, Vector3.UP)
+		# AC-0039: the whoosh on fire (non-positional bed; the arrow's
+		# radial gravity above already follows the sphere frame).
+		Audio.play("arrow")
 
 
 func _process(dt: float) -> void:
@@ -60,6 +63,10 @@ func _process(dt: float) -> void:
 				var pc: Vector3 = Vector3(pv.dot(a["basis"].x) / a["scale"].x, pv.dot(a["basis"].y), pv.dot(a["basis"].z) / a["scale"].y)
 				solid = w.get_block_key(face, int(floorf(pc.x)), int(floorf(pc.y)), int(floorf(pc.z))) != 0
 		if solid:
+			# AC-0038: the arrow burst (debris flies back off the impact).
+			if Game.particles != null:
+				Game.particles.burst_arrow(position, vel)
+			Audio.play("arrow")  # AC-0039: the landing thud (thwip tail)
 			queue_free()
 			return
 	var p = Game.player
@@ -67,5 +74,9 @@ func _process(dt: float) -> void:
 		# AC-0145 P3: the chest is along the player's LOCAL up (the
 		# continuous basis), not world +Y.
 		if position.distance_to(p.position + p.basis.y * 1.0) < 0.9:
+			Audio.play("hit")  # AC-0039: the body impact (hurt plays below)
 			p.damage_player(dmg, "arrow")
+			# AC-0038: the same burst on a body hit.
+			if Game.particles != null:
+				Game.particles.burst_arrow(position, vel)
 			queue_free()

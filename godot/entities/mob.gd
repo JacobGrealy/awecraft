@@ -143,6 +143,8 @@ func center() -> Vector3:
 func hurt(n: float, from: Vector3) -> void:
 	hp -= n
 	last_hit = Time.get_ticks_msec()
+	# AC-0039: the mob hit-growl (distinct from the player's "hit" swing SFX).
+	Audio.play("mob")
 	# AC-0377: the knockback direction is tangent-projected (and the lift
 	# is along the local up) — the pre-AC-0377 world-xz form pointed part
 	# way into the surface once the radial tilted. basis is the last
@@ -153,6 +155,9 @@ func hurt(n: float, from: Vector3) -> void:
 	if kdir.length() <= 0.0001:
 		kdir = basis.x
 	velocity += kdir.normalized() * 5.0 + mup * 3.0
+	# AC-0038: hit sparks (the impact axis is the from-side direction).
+	if Game.particles != null:
+		Game.particles.burst_hit(position + mup * 0.4, from)
 
 
 func try_kill() -> bool:

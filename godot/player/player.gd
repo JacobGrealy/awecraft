@@ -22,6 +22,8 @@ const REACH := 6.0
 # terrain steps up to ~2-3 m): 1.0 m auto-stepped, the jump (1.35 m)
 # covers the rest. The home step stays 0.5 m (the folded-net seam lip).
 const FACE_STEP := 1.0
+# AC-0039: step cadence — one "step" SFX per this much ground distance.
+const STEP_DIST := 2.3
 # AC-0145 P1: core sphere motion. The basis is an ACCUMULATED continuous
 # frame: local Y slews toward up = the EXACT radial underfoot (C = (0,-R,0)
 # global — the planet frame shifted by (0,-R,0)), the look yaw is applied as
@@ -105,6 +107,7 @@ var dead := false
 var air := 10.0
 var lava_t := 0.0
 var drown_t := 0.0
+var _step_acc := 0.0        # AC-0039: step-SFX distance accumulator
 var in_water_now := false   # AC-0191: test-readable fluid state (range arm)
 var in_lava_now := false    # AC-0191
 var fall_start := -1.0
@@ -716,6 +719,16 @@ func _physics_process_impl(dt: float) -> void:
 					if not head_solid:
 						position += b * Vector3(0.0, step_h + 0.02, 0.0)
 	move_and_slide()
+	# AC-0039: step SFX — distance cadence: one "step" per STEP_DIST metres
+	# of TANGENT-plane travel. vloc is the local (radial-up) frame, so no
+	# world axis is assumed — sphere-safe by construction.
+	if is_on_floor() and not flying and not in_water and not in_lava:
+		_step_acc += Vector2(vloc.x, vloc.z).length() * dt
+		if _step_acc >= STEP_DIST:
+			_step_acc = 0.0
+			Audio.play("step")
+	else:
+		_step_acc = 0.0
 	# AC-0276: the sprint FOV kick (+10% while effectively sprinting on
 	# the ground OR while flying - the air sprint cue, lerp ~0.15 s;
 	# reverts when the sprint ends / on landing).
@@ -1626,6 +1639,8 @@ func start_mine() -> void:
 # bow range. The procedural gun picker is a follow-up once the weapon
 # system exists.
 func _fire_bow() -> void:
+	# AC-0039: the string draw fires on every release (hit or not).
+	Audio.play("bow")
 	var held = Data.items.get(int(inv_selected()["id"]))
 	var dmg := 1.0
 	if held != null and float(held.get("dmg", 0)) > 0.0:
@@ -1970,6 +1985,12 @@ func _update_interaction(dt: float) -> void:
 			if randf() < float(d["ch"]):
 				Game.world.spawn_drop(int(d["id"]), center)
 		Audio.play("break")
+		# AC-0038: break debris (the pooled ring; block colour, radial fall).
+		if Game.particles != null:
+			var bcol := Color(0.7, 0.7, 0.7)
+			if info != null and info.has("color") and info["color"].has("side"):
+				bcol = info["color"]["side"]
+			Game.particles.burst_break(center, bcol)
 		_mine_id = -1
 		_mine_prog = 0.0
 
@@ -2333,6 +2354,10 @@ func damage_player(n: float, src: String) -> void:
 	hp -= n
 	Audio.play("hurt")
 	damaged.emit(src)
+	# AC-0038: hit sparks on the chest (the AC-0145 P3 / AC-0377 local-up
+	# offset; no attacker direction here, so the spread is isotropic).
+	if Game.particles != null:
+		Game.particles.burst_hit(position + basis.y * 1.0)
 	if hp <= 0.0:
 		hp = 0.0
 		dead = true

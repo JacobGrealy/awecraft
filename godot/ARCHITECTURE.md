@@ -39,7 +39,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 |---|---|---|---|
 | 1 | `Game` | `autoload/game.gd` | global state: `mode` (menu/play/pause/crash), `dimension`, `world_seed`, `time_of_day`, `planet_R`; the live `world`/`player`/`drops`/`entities`/`hotbar`/`console` handles; the native-extension presence check (`cpp_ext_ok`/`cpp_ext_missing`); `new_world()`/`start()`/`message()`; cursor mode |
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
-| 3 | `Audio` | `autoload/audio.gd` | procedural synth (headless has no audio device — assertions check the trigger, never the sound) |
+| 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player, `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
 | 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
@@ -134,6 +134,24 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 ├─ ui/inventory.gd        CanvasLayer — hotbar, backpack + crafting grid, armour,
 │                         hearts/food, crosshair, messages (Game.hotbar)
 ├─ ui/console.gd          CanvasLayer — in-game console (AC-0121)
+├─ Particles              entities/particle_pool.gd — the pooled particle system
+│                         (AC-0038): break debris / hit sparks / arrow burst / pickup
+│                         puff. One fixed 200-slot ring behind one MultiMesh +
+│                         MultiMeshInstance3D (this engine build has NO
+│                         InstancedMesh3D class, and MultiMesh has no `material`
+│                         property — the material rides the mesh; `use_colors` must
+│                         be set before `instance_count`). Allocated once in _ready,
+│                         ZERO allocations thereafter; reused round-robin — a burst
+│                         can never grow the pool, over-cap drops the OLDEST live
+│                         slot (the ring guarantees it is the one overwritten).
+│                         Gravity is RADIAL (the AC-0145 P3 up pattern, captured per
+│                         particle at emission); quads are unshaded camera billboards
+│                         with per-instance colour (no new light/sun convention —
+│                         DayNight.sun_direction stays the only hook). Four event
+│                         kinds share the pool, distinguished by per-slot kind +
+│                         per-instance colour (break takes the block colour).
+│                         Game.particles; kill switch AWECRAFT_PARTICLES=0; census
+│                         arm AWECRAFT_LOGIC=pcensus (harness_data.yaml)
 └─ Menu                   scenes/menu.tscn  →  ui/menu.gd — main menu + options
 ```
 
@@ -1052,6 +1070,33 @@ Match these; do not improvise a different approach in a task.
 - **Dimensions**: `Game.dimension` exists **but the nether/second dimension was never
   built** — the variable has no consumers anywhere in the tree. Treat "two worlds,
   per-dimension save, portals" as an unbuilt intention, not a feature.
+- **Sound (AC-0039 — the procedural sound layer, no asset files)**: the Windows product
+  ships **no .wav/.ogg** — every sound is synthesized in code in `autoload/audio.gd`.
+  Nine base voices (block, step, hit, eat, splash, arrow, bow, mob, ambient) are
+  generated ONCE at autoload `_ready` as deterministic 22050 Hz mono PCM (pure `static
+  func synth()` per voice, fixed RNG seeds) and cached as `AudioStreamWAV`; a shape-
+  preserving 0.9-peak limiter runs at the end of `synth()` so "no clipping" is a
+  property of the synth, not of the 16-bit clamp. `Audio.play(name)` maps call-site
+  names onto the bases — the alias table (`break`/`place`/`door` → block, `hurt`/
+  `pickup` → hit, `gorilla` → mob) exists so **no existing event can be silent** and an
+  unknown name falls back to the neutral `hit` thud. Concurrency is the AC-0038
+  discipline: a fixed 16-voice `AudioStreamPlayer` pool, round-robin, **preempt-oldest**
+  on cap, with an allocation counter that must stay flat after `_ready` (`play()` never
+  allocates). The **ambient** is a 2 s seamless loop (integer-cycle sines + Hann-
+  windowed noise) on ONE dedicated bed player outside the pool — a looping stream must
+  never occupy a one-shot voice (it would hold the slot forever). All voices are
+  **non-positional** (a 2D SFX bed): no positional audio exists, so the sphere-frame /
+  radial-up convention does not apply; if positional sound is added it MUST follow the
+  DayNight/radial rules (the arrow's radial gravity in `entities/arrow.gd` is the model).
+  Wire events at the interaction site (`Audio.play` in player.gd / arrow.gd / mob.gd);
+  the step cadence is distance-based on the player's LOCAL frame (`vloc`, radial-up —
+  sphere-safe by construction), one `step` per `STEP_DIST` (2.3 m) of tangent travel.
+  The permanent gate is the harness `sound` arm (`AWECRAFT_LOGIC=sound`, run with
+  `--audio-driver Dummy`): it asserts the GENERATED buffer (duration, non-silent RMS,
+  no clip, no all-ones), pairwise distinctness of all 9 voices (fingerprint = RMS +
+  ZCR + 9-bin Goertzel bands + spectral centroid), resolution of every call-site name,
+  the pool's flat allocation counter under a 1000-trigger burst, and NEGATIVE tests
+  proving the checker fails on silent / all-ones / aliased inputs.
 
 ## 7. Conventions
 

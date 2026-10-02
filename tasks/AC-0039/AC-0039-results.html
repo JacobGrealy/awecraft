@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0039 — results (procedural sound, no assets)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a0a;font-weight:600}.bad{color:#b00020;font-weight:600}.pend{color:#8a6d00;font-weight:600}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0039 — m13-sound — results</h1>
+<p class="meta">WS8 PROCEDURAL SOUND, no asset files. 9 voices (block, step, hit, eat, splash, arrow, bow, mob, ambient) synthesized in code at 22050 Hz, headless-asserted under Godot's dummy audio driver. Shared ticket: <code>TASKS.yaml</code> untouched (per ticketing convention).</p>
+
+<h2>Status</h2>
+<p><span class="ok">GATES COMPLETE</span> — the standing gate batch (smoke battery, genhash, farab, ladder, meshprobe, lightstate, halo, pcensus, boundary r4, satellite, r16) ran headless in <code>.scratch/AC-0039-gates/</code>; the table in <a href="#gates">§6</a> is filled from it. <b>One deviation:</b> lightstate reports <code>stragglers: 3</code> (leaks stay 0) — a direct A/B (stub audio + armless harness, everything else identical) reproduces <code>3/1</code>, so the drift is in the shared tree (post-09:15 native <code>.so</code> rebuild), <b>not</b> this ticket; see the lightstate row. No temporary probes were added — the <code>sound</code> arm is a permanent deliverable arm (harness.gd + <code>tasks/harness_data.yaml</code> row + HARNESS.md re-rendered, <code>--check</code> clean).</p>
+
+<h2>1. What is generated</h2>
+<p>All audio is <b>generated PCM in code</b> — no .wav/.ogg files are added or loaded. <code>autoload/audio.gd</code> (the pre-existing AC-0039 lane, previously a no-op stub) now owns the layer:</p>
+<ul>
+<li><b>Format:</b> mono, 22050 Hz, 16-bit PCM, packed into <code>AudioStreamWAV</code> (the ambient additionally sets <code>LOOP_FORWARD</code>, loop_end = 44100 frames).</li>
+<li><b>When:</b> generated <b>once</b> at the autoload's <code>_ready</code> by nine <i>pure, deterministic</i> <code>static func</code> synth routines (fixed RNG seeds per voice — every call is byte-identical, which is what makes the arm's buffer assertions reproducible). Measured startup cost: <b>32.9 ms total for all 9 buffers</b> (incl. the 2 s ambient; re-measured inside the arm), then <b>zero synthesis per event</b> — <code>play()</code> only touches cached data and the fixed player pool.</li>
+<li><b>Loudness safety:</b> a shape-preserving 0.9-peak limiter runs at the end of <code>synth()</code>, so "no clipping" is a property of the generated buffer, not an artifact of the 16-bit clamp.</li>
+</ul>
+<p>How a given sound is distinguished from another — the nine voices differ in <b>duration, tone-vs-noise content, frequency contour, envelope and (for the ambient) loop structure</b>:</p>
+<table>
+<tr><th>voice</th><th>dur (samples @22050)</th><th>synthesis recipe (frequency contour / noise-vs-tone / envelope)</th><th>measured fingerprint (arm)</th></tr>
+<tr><td><b>block</b><br><span class="note">break / place / door</span></td><td>0.16 s (3528)</td><td>85 Hz sine with exp decay τ=50 ms + a 6 ms high-passed noise crackle at the head (the "thock")</td><td>rms .206, peak .90, zcr .011, centroid 380 Hz, band 92% &lt;800 Hz</td></tr>
+<tr><td><b>step</b></td><td>0.09 s (1984)</td><td>60 Hz thud, exp decay τ=25 ms, 0.5 gain — the quietest, shortest, lowest voice</td><td>rms .131, peak .43, zcr .005, centroid 140 Hz, band 99% &lt;800 Hz</td></tr>
+<tr><td><b>hit</b><br><span class="note">sword / bow hit / arrow body / hurt / pickup</span></td><td>0.22 s (4851)</td><td>220→70 Hz <i>falling</i> sweep (the pitch drop is the fingerprint) + 30 ms noise burst, exp decay τ=60 ms</td><td>rms .182, peak .90, zcr .028, centroid 1061 Hz</td></tr>
+<tr><td><b>eat</b></td><td>0.30 s (6615)</td><td>150 Hz tone gated by a 2.2 Hz two-chew pulse, 20 Hz amplitude wobble + noise crunch bed, decay τ=90 ms</td><td>rms .059, peak .28, zcr .216, centroid 1863 Hz (the pulse + crunch pushes energy up)</td></tr>
+<tr><td><b>splash</b></td><td>0.40 s (8820)</td><td>one-pole low-passed white noise (~1.2 kHz corner), 5 Hz wobble, decay τ=120 ms — <i>noise-dominant</i>, the only long noise bed</td><td>rms .070, peak .48, zcr .282, centroid 1412 Hz</td></tr>
+<tr><td><b>arrow</b><br><span class="note">fire + landing thud</span></td><td>0.30 s (6615)</td><td>the "thwip": one-pole LP whose corner <i>rises</i> 300→4000 Hz over a decaying whoosh, then a 90 Hz landing thud at the tail</td><td>rms .164, peak .86, zcr .284, centroid 853 Hz, the only voice with a rising band</td></tr>
+<tr><td><b>bow</b></td><td>0.35 s (7717)</td><td>320 Hz string pluck (fast exp decay τ=50 ms) + a 5 ms creaking noise tip</td><td>rms .145, peak .90, zcr .055, centroid 1026 Hz, 10% &gt;3 kHz</td></tr>
+<tr><td><b>mob</b></td><td>0.30 s (6615)</td><td>95 Hz <i>sawtooth</i> growl (harmonic content is the fingerprint) with a 7 Hz growl wobble, decay τ=80 ms</td><td>rms .096, peak .41, zcr .009, centroid 320 Hz</td></tr>
+<tr><td><b>ambient</b></td><td>2.0 s (44100, loop)</td><td>seamless wind loop: integer-cycle sines (1 / 2.5 / 5.5 Hz rumble + 55 Hz hum — exact cycles per buffer) + Hann-windowed noise (zero at both ends → seamless seam), −14 dB on a dedicated bed player</td><td>rms .316, peak .90, zcr 0.0 (the low rumble stays positive in the first window), centroid 500 Hz, loop flag asserted</td></tr>
+</table>
+<p>Pairwise distinctness is asserted on all <b>36 pairs</b> via a cheap fingerprint (RMS + zero-crossing rate + 9-bin Goertzel band summary + spectral centroid): minimum separation <b>0.070</b> (the closest pair, step/mob, still clear of the 0.05 floor) — a synthesizer whose outputs were copies or one shared click would read 0.0.</p>
+
+<h2>2. Wiring — the 9 sounds on real events</h2>
+<p><b>All 9 are wired to real game events</b> (pre-existing <code>Audio.play</code> hooks in the codebase resolve to real voices now; three new event sites were added):</p>
+<table>
+<tr><th>voice</th><th>event site</th></tr>
+<tr><td>block</td><td>mining completion <code>player/player.gd</code> (<code>Audio.play("break")</code>), block placement (<code>"place"</code> ×2, incl. the door pair), door toggle (<code>"door"</code>)</td></tr>
+<tr><td>step</td><td><b>new:</b> distance cadence in <code>player.gd</code> physics — one <code>step</code> per <code>STEP_DIST</code> (2.3 m) of <i>tangent-plane</i> travel, measured on the player's local frame (<code>vloc</code>, radial-up) so no world axis is assumed; gated on on-floor + not flying/swimming/lava</td></tr>
+<tr><td>hit</td><td>sword attack on a mob, bow hitscan impact, arrow body impact (<b>new:</b> <code>entities/arrow.gd</code>); aliases: <code>"hurt"</code> (player damage), <code>"pickup"</code> (drop pickup ×3 sites)</td></tr>
+<tr><td>eat</td><td><code>eat_selected()</code> — the item's <code>sfx</code> field (banana's <code>"gorilla"</code> aliases to <i>mob</i> until AC-0040 refines it, so the hook is never silent)</td></tr>
+<tr><td>splash</td><td>bucket pour + bucket scoop (<code>use_bucket()</code> ×2)</td></tr>
+<tr><td>arrow</td><td><b>new:</b> the whoosh on fire (arrow <code>_ready</code> when launched) and the landing thud on solid impact / <code>queue_free</code> in <code>entities/arrow.gd</code></td></tr>
+<tr><td>bow</td><td><b>new:</b> <code>_fire_bow()</code> — the string draw fires on every release, hit or not</td></tr>
+<tr><td>mob</td><td><b>new:</b> <code>entities/mob.gd</code> <code>hurt()</code> — the hit growl (distinct from the player's swing SFX)</td></tr>
+<tr><td>ambient</td><td>the wind loop bed, started at <code>Audio._ready</code> on its own looping player (menu + game — a quiet global bed)</td></tr>
+</table>
+<p>The arm proves <b>no silent event is possible</b>: all 15 call-site names (the 9 bases + the 6 alias names) resolve to a non-null cached stream (<code>names.unresolved: []</code>), and an unknown name falls back to the neutral <i>hit</i> thud rather than vanishing. <code>play_count</code> for every name is ≥ 1 after the arm's stress (no unfired names).</p>
+<p><b>Sphere frame:</b> every voice is <i>non-positional</i> (a 2D SFX bed) — no positional audio exists in the tree, so the radial-up convention has no axis to violate. The step cadence is computed in the player's continuous local frame (radial-up by construction); the arrow keeps its radial gravity (<code>(pos + (0,R,0)).normalized()</code>); <code>DayNight.sun_direction</code> is untouched. The one design note recorded in ARCHITECTURE.md: if positional sound is ever added, it must follow the radial-up rules.</p>
+
+<h2>3. Voice cap, pool policy, allocation proof</h2>
+<p>Copying the AC-0038 pooled-particle discipline: a <b>fixed 16-voice</b> <code>AudioStreamPlayer</code> pool, allocated once in <code>_ready</code>, round-robin cursor. <b>Cap policy (preempt-oldest):</b> when the cursor lands on a still-playing voice, the new sound <i>steals</i> that slot (stop + play) — the newest event always wins, concurrency can never exceed 16, and no event is ever dropped. The <b>ambient</b> is routed to its own dedicated bed player (outside the pool) — a looping stream must never occupy a one-shot voice or it would hold the slot forever (this bug actually bit the first arm run: two voices stuck "playing" the 2 s loop; the routing fix is in).</p>
+<table>
+<tr><th>proof</th><th>value</th><th>gate</th></tr>
+<tr><td>allocation counter before vs after a 1000-trigger burst</td><td><code>allocs_delta: 0</code></td><td class="ok">zero growth</td></tr>
+<tr><td>concurrent live voices during the burst</td><td><code>live_peak: 16</code> = pool cap, never above</td><td class="ok">cap holds</td></tr>
+<tr><td>preemptions at the cap</td><td><code>steals: 887</code> (the cap is real, not decorative)</td><td class="ok">policy exercised</td></tr>
+<tr><td>voices still busy 1.7 s after the burst (longest SFX 0.4 s)</td><td><code>live_after_wait: 0</code></td><td class="ok">pool drains</td></tr>
+</table>
+
+<h2>4. Buffer assertions + the negative test</h2>
+<p>The arm (<code>AWECRAFT_LOGIC=sound</code>, <code>--audio-driver Dummy</code>, ~2 s wall) inspects the <b>generated buffer</b>, not the device:</p>
+<ul>
+<li><b>Per voice (9/9 pass):</b> exact duration in samples; RMS ≥ 0.01 (non-silent); 0 &lt; peak ≤ 1.0 (no clipping, not all-ones); no NaN; not a DC rail (zcr ≈ 0 with rms &gt; 0.5 → fail). Measured values in the §1 table.</li>
+<li><b>Determinism:</b> re-synthesizing all 9 voices byte-equals the cached buffers (<code>deterministic: true</code>) — the cache cannot drift from the generator.</li>
+<li><b>Distinctness:</b> all 36 pairs separated (min 0.070 &gt; 0.05).</li>
+<li><b>Names:</b> 15/15 resolve; the ambient stream's <code>LOOP_FORWARD</code> flag is asserted.</li>
+</ul>
+<p><b>The negative test (shown failing, as the AC-0310 bake guard was):</b> the same checker is fed degenerate inputs and must reject them — if it passed, the arm fails:</p>
+<table>
+<tr><th>degenerate input</th><th>checker verdict</th><th>result</th></tr>
+<tr><td>1 s of zeros (silent buffer)</td><td><code>ok: false</code>, <code>why: "all-zero"</code></td><td class="ok">silent_rejected: true</td></tr>
+<tr><td>1 s of all-ones (a rail, not a sound)</td><td><code>ok: false</code>, <code>why: "all-ones rms 1.000"</code></td><td class="ok">ones_rejected: true</td></tr>
+<tr><td>aliased pair: <i>hit</i> vs a copy of <i>hit</i></td><td>fingerprint distance <code>0.0</code> ≤ 0.05 → "not distinct"</td><td class="ok">alias_rejected: true</td></tr>
+</table>
+<p>An assertion that cannot fail is the failure mode — the checker is proven capable of failing on every degenerate class the ticket names (silent, aliased), plus the all-ones rail.</p>
+
+<h2>5. Trigger cost (main thread, per event)</h2>
+<p>Measured around <code>Audio.play()</code> over 1000 triggers (the audio mix runs on its own thread — this is the per-event main-thread work only): <b>avg 5.4 µs, max 18 µs per trigger</b>; startup synthesis 32.9 ms (once). Against the standing picture (AC-0387's carve work made the far lane ~35× more expensive; the R24 crossing burst reads 9.6 ms against a 10 ms gate), a 5.4 µs per-event addition is <b>~1/1800 of that budget</b> — sound adds no measurable main-thread cost to the streaming lanes. The arm's full RESULT:</p>
+<pre>RESULT {"mode":"sound","ok":true,"ms":1811,"synth_ms":32.9,"deterministic":true,
+ "distinct":{"pairs":36,"min":0.070,"min_pair":"step/mob"},
+ "names":{"total":15,"unresolved":[]},"ambient_loop":true,
+ "negative":{"silent_rejected":true,"silent_why":"all-zero",
+            "ones_rejected":true,"ones_why":"all-ones rms 1.000",
+            "alias_dist":0.0,"alias_rejected":true},
+ "stress":{"plays":1000,"trig_us_avg":5.38,"trig_us_max":18.0,
+           "allocs_delta":0,"pool":16,"live_peak":16,"steals":887,
+           "live_after_wait":0,"unfired":[]}}</pre>
+
+<h2 id="gates">6. Gates</h2>
+<table>
+<tr><th>gate</th><th>required</th><th>result</th></tr>
+<tr><td>G0 (zero SCRIPT ERROR, pristine tree)</td><td>0</td><td class="ok">0 (rc=0; the pre-existing <code>SHADER ERROR: 'transparent'</code> in chunk_lit_fluid.gdshader is in every AC-0384 gate log — not a SCRIPT ERROR, untouched by this ticket)</td></tr>
+<tr><td><b>sound</b> arm</td><td>ok true + negative rejections</td><td class="ok">ok:true (RESULT above)</td></tr>
+<tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td>all ok</td><td class="ok">ok — player moved 2.82 m + jump peak 142.42 + on_floor; interact drop+place ok; light torch_far 0→9 (torch lights the far slab); fluids sea 1719/1719 stable; genhash mode ok + 25 lines (0 SCRIPT ERROR)</td></tr>
+<tr><td>genhash</td><td>25/25 byte-identical</td><td class="ok">25/25 byte-identical to the current-tree standing set (<code>.scratch/AC-0384-gates/genhash_r2.log</code> and <code>.scratch/AC-0038-genhash-r2.log</code>, both <code>diff</code>-identical to mine; AC-0384 r1==r2 deterministic). The <code>AC-0367</code> reference file (Sep 27) predates the tree's AC-038x evolution — not the current baseline. Sound is not generation: no <code>world/*</code> or <code>data.gd</code> touched.</td></tr>
+<tr><td>farab</td><td>h_mismatch 0</td><td class="ok">ok — h_mismatch 0, slab_mismatch 0/0 (1080/1080), codec far_ok, 45 cols, seed 44</td></tr>
+<tr><td>ladder</td><td>20/20</td><td class="ok">ok — band_a 20/20 (fail 0), band_b 144/144, band_c 90/90; air_inworld, air_synth, boundary_flip, clutter, layerrank all true</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0</td><td class="ok">match_rate 1.0 — 32/32 chunks, n 1872/1872, c/i 1872, mismatch [], ac0211_ok</td></tr>
+<tr><td>halo</td><td>ok</td><td class="ok">ok — inner 0 / boundary 0 mismatches (4.03 M cells, 41 cols settled), b 226/226 slabs, b1 20/20, c 0 mismatches, d + d2 ok</td></tr>
+<tr><td>lightstate</td><td>0/0 (leaks / stragglers)</td><td class="bad">leaks 0 / <b>stragglers 3</b> (demoted 1; standing was 0 / 41-demotion). <b>A/B proven not this ticket:</b> with audio.gd reverted to the HEAD stub AND the sound arm removed from harness.gd (all else identical) lightstate reproduces <code>stragglers: 3, demoted: 1</code> exactly (<code>lightstate_ab_stub.log</code>). The last 0/41 run (AC-0384, 09:06) predates the 09:15 native <code>.so</code> rebuild — the only other tree change since. Flagged for the coordinator; no light code was touched here.</td></tr>
+<tr><td>r16 (sub-flags, both far bands)</td><td>all sub-flags, far_holes 0/0</td><td class="ok">ok — every sub-flag true (air, catch_up, height, immediate, inr, low_sync_zero, low_thread, no_downgrade, no_giant, uv_repeat, wave); inr4 holes 0 / pending 0 (418 n); far_holes 0 (band0) / 0 (band1, 137 n, 256 visible); slab1 uv_mismatch 0; built_all true (41/41); 0 SCRIPT ERROR</td></tr>
+<tr><td>boundary r4 (self-check ×1)</td><td>in band</td><td class="ok">ok — crossings 20, marker_ok, remesh_ok, col_deferred_in_footprint 0; crossing_frame p50 32 / p95 58 ms (anchor p50 27 / p95 38 is AC-0311-era; the AC-0387 carve moved far-lane costs — report value, contract ok=true)</td></tr>
+<tr><td>satellite r4</td><td>ladder + 0.25 ratio intact</td><td class="ok">ok — guard_ok, angular ratio 0.25 (4 m texel / 16 m chunk = exactly 1/4), altitude ladder all four levels hidden/rim/dissolve/full (nadir_op 0.0/0.0/0.5/1.0), res_export_ok, phase 4</td></tr>
+<tr><td>pcensus (AC-0038's four particle events)</td><td>ok</td><td class="ok">ok — four events fully released: arrow 10/10, break 12/12, hit 8/8, pickup 8/8 (live_after_wait 0 each); stress live_peak 200/200 cap, evicted 100; allocs_delta 0 (ready→after)</td></tr>
+</table>
+
+<h2>7. Constraints &amp; scope</h2>
+<ul>
+<li><b>Files changed:</b> <code>godot/autoload/audio.gd</code> (the layer), <code>godot/player/player.gd</code> (step cadence + bow SFX + <code>STEP_DIST</code>), <code>godot/entities/arrow.gd</code> (fire/land/body SFX), <code>godot/entities/mob.gd</code> (hurt SFX), <code>godot/scenes/harness.gd</code> (the <code>sound</code> arm + dispatch), <code>tasks/harness_data.yaml</code> (arm row) → <code>godot/HARNESS.md</code> re-rendered (<code>--check</code> in sync), <code>godot/ARCHITECTURE.md</code> (the sound subsystem recorded — §2 table + a §6 decision entry, per invariant 2).</li>
+<li><b>No world/*, no data.gd, no native lane</b> — sound is not generation (genhash must be byte-identical, §6) and no C++ was touched (no Windows rebuild / re-stage owed; the coordinator's full battery + Windows build are out of scope here).</li>
+<li>No .tscn changes, no render (headless-only ticket), no commits (coordinator closes out), no TASKS.yaml edit (shared ticket).</li>
+<li>Every godot run: <code>HOME=/tmp/dsh_home</code>, <code>ulimit -v 8388608</code>, <code>--audio-driver Dummy</code>, timeout-capped, one at a time; no R50, no <code>load</code> arm.</li>
+</ul>
+
+<p class="note">AC-0039 — WS8. Sound is real: the arm holds numbers against the generated PCM, and its checker is proven to fail on the degenerate classes. Logs: <code>.scratch/AC-0039-gates/</code> + <code>.scratch/ac0039-sound.log</code>.</p>
+</body></html>
