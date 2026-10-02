@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0038 — pooled particles (builder results)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2a;font-weight:600}.bad{color:#c02020;font-weight:600}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0038 — m12-particles: pooled particle system (~200)</h1>
+<p class="note">Builder self-contained evidence page. Render-infeasible box (llvmpipe degraded) — all evidence is numbers. Writes accumulate as the run progresses.</p>
+
+<h2>Findings from the code walk (event sites, grepped — not read whole)</h2>
+<table>
+<tr><th>Event</th><th>Site</th><th>Emission point / data available</th></tr>
+<tr><td>Break debris</td><td><code>godot/player/player.gd</code> ~1945–1973 (mining-completion branch, <code>Audio.play("break")</code>)</td><td><code>center = _sim_cell_center(_mine_cell…)</code> (world pos); block id <code>_mine_id</code>; <code>Data.block(id).color.side</code> is the block albedo</td></tr>
+<tr><td>Hit sparks (mob)</td><td><code>godot/entities/mob.gd:143</code> <code>hurt(n, from)</code></td><td><code>position</code>, local up <code>basis.y</code> (AC-0377 tangent frame), <code>from</code> = attacker side</td></tr>
+<tr><td>Hit sparks (player)</td><td><code>godot/player/player.gd:2326</code> <code>damage_player(n, src)</code></td><td><code>position + basis.y*1.0</code> (the AC-0145 P3 / AC-0377 chest pattern); no attacker dir → isotropic</td></tr>
+<tr><td>Arrow burst</td><td><code>godot/entities/arrow.gd</code> 62–64 (solid stop) and 69–71 (body hit)</td><td><code>position</code>, impact axis <code>vel</code></td></tr>
+<tr><td>Pickup puff</td><td><code>godot/entities/drop.gd</code> ~137–140 (<code>Audio.play("pickup")</code>)</td><td><code>position</code> (world), radial up via <code>_ground_frame</code> up</td></tr>
+</table>
+<p>Conventions found (greps): radial up everywhere is <code>normalize(pos + (0, planet_R, 0))</code> with the flat-mode fallback <code>Vector3.UP</code> (arrow.gd:37–39 is the canonical form; <code>Game.planet_R = 4000.0</code> default in <code>autoload/game.gd:63</code>). DayNight sun = <code>godot/core/daynight.gd:73</code> <code>DayNight.sun_direction(t)</code> (light-travels-along convention; satellite_body.gd:424 uses <code>-DayNight.sun_direction</code>). Scene tree built at runtime in <code>scenes/main.gd</code> <code>_create_game_nodes()</code> (drops/entities at ~212–218); teardown in <code>_free_game_nodes()</code>. Harness arms dispatch in <code>scenes/harness.gd</code> <code>run()</code> (standalone pattern: <code>nightlot</code> at 684, <code>wprof</code> at 858); RESULT = <code>print("RESULT ", JSON.stringify(out))</code>. No particle system exists anywhere in the project (grep <code>Particles</code> → 0 hits).</p>
+
+<h2>Pool design (fixed before implementation)</h2>
+<pre>One ParticlePool node (extends Node3D, godot/entities/particle_pool.gd), added by
+_create_game_nodes(), exposed as Game.particles.
+
+Structure:
+  - ONE InstancedMesh3D, instance_count = CAP = 200 (the whole visible pool),
+    one PlaneMesh(1x1) + one UnshadedMaterial3D (vertex-color albedo, no cull).
+  - Pre-allocated packed slot arrays of length 200: pos, vel, up(radial), age,
+    life, size, c0 (census emit pos). Round-robin head _rr.
+  - Emission = ring write: _rr advances; if the target slot is LIVE it is
+    EVICTED (drop-oldest — the ring guarantees the overwritten slot is the
+    oldest live one). A burst can therefore never grow the pool.
+  - Per-frame step: for each live slot  vel -= up*(9.8*dt); pos += vel*dt;
+    one set_instance_transform(i, pos, shared_billboard_basis, scale) with
+    scale shrinking over life. Inactive slots hold a zero-scale matrix.
+    Camera-facing billboard (one basis/frame from get_camera_3d(); radial-up
+    fallback basis when headless has no camera).
+  - Allocations: 4 after the pool node itself, all in _ready (mesh, material,
+    instance mesh, RNG). An internal counter proves zero after ready.
+
+Event discrimination in the shared pool: a kind id per slot (4 kinds) +
+per-instance colour (set_instance_color) + per-kind cfg table
+{count, life, speed, size, dir bias, up boost}:
+  break   12, life 0.5–0.8 s, 1.5–3.5 m/s, size .10–.20, block colour ±jitter
+  hit      8, life 0.25–0.40 s, 4–7 m/s,     size .05–.09, warm, away-from-from
+  arrow   10, life 0.30–0.50 s, 1–3 m/s,     size .06–.10, grey, back off -vel
+  pickup  8, life 0.45–0.65 s, 0.4–0.9 m/s,  size .12–.24, soft, radial-up biased
+Worst-case simultaneous = 38 of 200.
+
+Over-cap policy: DROP THE OLDEST (round-robin overwrite). Reasoning: the point
+of the pool is that a burst cannot grow it, and the player is looking at the
+NEWEST event — evicting the oldest live keeps the freshest burst intact and
+degrades gracefully under machine-gun mining (300 requested → 200 live, the
+100 oldest are cut, no allocation, no queue).
+
+No new sun/light convention: quads are unshaded (short bright effects, zero
+lighting cost). If lit debris is ever wanted the hook is DayNight.sun_direction
+(the standing convention) — nothing else is introduced.
+
+Kill switch: AWECRAFT_PARTICLES=0 → main.gd does not create the pool; all
+call sites null-check Game.particles.</pre>
+
+<h2>Gate log (accumulating)</h2>
+<pre>G0 pristine (before changes): rc=0, SCRIPT ERROR lines: 0  (.scratch/AC-0038-g0-pristine.log)
+  - one pre-existing non-fatal headless noise line: "ERROR: Shader compilation failed"
+    from _setup_aero on the dummy renderer (present on pristine tree; not a SCRIPT ERROR).
+G0 after changes: rc=0, SCRIPT ERROR lines: 0  (.scratch/AC-0038-g0-after4.log)
+  - same single pre-existing shader-noise line, nothing new.</pre>
+
+<h2>Deviations</h2>
+<ol>
+<li><b>MultiMesh, not InstancedMesh3D.</b> The design above said InstancedMesh3D; this engine build (4.7.1.stable.official.a13da4feb at <code>~/tools/godot/godot</code>) does not contain the InstancedMesh3D class (verified: 0 symbol hits in the binary, parse error on use, while MeshInstance3D/MultiMesh/PlaneMesh all resolve). The pool is built on <code>MultiMesh</code> + <code>MultiMeshInstance3D</code> — the engine's native instancing primitive (the class the chunks' C++ lane uses). Same contract: one mesh object, 200 transforms, per-instance colour override, zero per-frame allocation. One draw call either way.</li>
+<li><b>UnshadedMaterial3D absent from this build too</b> — the quad material is <code>StandardMaterial3D</code> with <code>shading_mode = SHADING_MODE_UNSHADED</code> (same no-lighting behaviour).</li>
+<li><b>Material is unshaded on purpose</b> — no new light/sun convention; the standing one (<code>DayNight.sun_direction</code>, godot/core/daynight.gd:73) remains the only hook if lit debris is ever wanted.</li>
+</ol>
+
+<h2>pcensus census (AWECRAFT_LOGIC=pcensus, run 5 — clean)</h2>
+<p class="note">Final run <code>.scratch/AC-0038-pcensus5.log</code>: <b>ok: true</b>, rc=0, 0 SCRIPT ERROR lines, 2 engine-noise lines (the pre-existing aero dummy-shader one + one new headless-only <code>Shader type not supported in Dummy renderer</code> from the pool's unshaded material — the dummy renderer cannot compile it; real GL renders it fine. Not a SCRIPT ERROR; G0 unaffected).</p>
+<pre>RESULT {"allocs_after_census":5,"allocs_at_ready":5,"allocs_delta_after_ready":0,"cap":200,
+ "cost":{"delta_ms":0.0,"frame_ms_pool_off":6.897,"frame_ms_pool_on":6.897,"frames":120,"live":200,
+         "pool_step_ms":0.0708166666666667},
+ "events":{"arrow":{"evicted":0,"life_avg_s":0.4206,"live_after_emit":10,"live_after_wait":0,
+                    "released":10,"requested":10},
+           "break":{"evicted":0,"life_avg_s":0.5951,"live_after_emit":12,"live_after_wait":0,
+                    "released":12,"requested":12},
+           "hit":{"evicted":0,"life_avg_s":0.3280,"live_after_emit":8,"live_after_wait":0,
+                  "released":8,"requested":8},
+           "pickup":{"evicted":0,"life_avg_s":0.5587,"live_after_emit":8,"live_after_wait":0,
+                     "released":8,"requested":8}},
+ "ok":true,"pool_present":true,
+ "radial":{"analytic_0.5gt2_m":4.9,"far_disp_cross_home_down":0.0925,
+           "far_disp_worldX_neg":4.938,"far_radial_fall_m":4.938,
+           "home_disp_cross_far_down":-0.5748,"home_disp_worldY":4.9367,
+           "home_radial_fall_m":4.9367,"max_pair_radial_delta_m":0.00131,
+           "pairs":40,"records":80},
+ "stress":{"cap":200,"died":200,"evicted_oldest":100,"live_after_wait":0,
+           "live_peak":200,"requested":300}}</pre>
+
+<h3>How to read it</h3>
+<table>
+<tr><th>Phase</th><th>Numbers</th><th>Verdict</th></tr>
+<tr><td><b>A — per-event</b></td><td>break 12/12 (life 0.595 s), hit 8/8 (0.328 s), arrow 10/10 (0.421 s), pickup 8/8 (0.559 s); every event: live after emit = requested, live after wait = 0, released = requested, evicted 0</td><td class="ok">all four emit their configured count and release back to the pool</td></tr>
+<tr><td><b>B — stress over cap</b></td><td>300 requested in ONE frame → live_peak 200, evicted_oldest 100, died 200, live after 1.2 s = 0</td><td class="ok">the pool never grows; over-cap = drop-oldest (100 cut, 200 live, 0 leaked)</td></tr>
+<tr><td><b>C — radial proof</b></td><td>40-particle identical-seed controlled bursts (tangential 3 m/s, fixed 1.0 s life) at home (0,140,0) and the +X face (R,−R,0): per-particle RADIAL fall agrees in the local frame — max pair delta <b>0.0013 m</b> — home 4.9367 m, far 4.9380 m vs analytic 0.5·9.8·1² = 4.9 (both +0.7 %). In WORLD space the same events fall world −Y at home (4.9367) and world −X at the +X face (4.9380); cross projections are tangential-drift noise (home cloud's mean x-drift −0.575 m at 3 m/s tangential over 1 s — under the 1 m gate; far cross 0.093)</td><td class="ok">gravity is radial at the emission point: identical in the local frame, rotated in world space — exactly the world-down-would-be-wrong signature, absent</td></tr>
+<tr><td><b>D — frame cost</b></td><td>200 sustained live: the pool's own step bracket = <b>0.0708 ms/frame</b> (71 µs — a fraction of a millisecond). Scene-level A/B: 6.897 vs 6.897 ms/frame — headless frames on this box run paced (~145 Hz), so the A/B cannot resolve sub-pace differences; the bracket is the measurement. (Earlier aborted runs showed 4.0 ms/frame — that was 200 out-of-bounds engine errors per frame, not particle math: the MultiMesh misconfig below.)</td><td class="ok">200 live ≈ 70 µs/frame — comfortably a fraction of a millisecond; no cheaper shape needed</td></tr>
+<tr><td><b>Allocation</b></td><td>pool's own allocation counter: 5 at ready (node, PlaneMesh, StandardMaterial3D, MultiMesh, MultiMeshInstance3D), 5 after the whole census (incl. the 300-burst stress and the 200-sustained window) — delta <b>0</b></td><td class="ok">steady-state allocation after startup = zero; the burst path is value-types + pre-allocated arrays + engine setters</td></tr>
+</table>
+
+<h3>MultiMesh misconfig found by the census (deviation 1, completed)</h3>
+<pre>Three engine-build quirks surfaced and were fixed before the green run (each one
+aborted _ready silently-to-a-script-error and the census caught it):
+  1. this build's MultiMesh has NO `material` property  -> the material rides the mesh (pm.material, the arrow.gd BoxMesh pattern)
+  2. `set_instance_color_override_enabled` does not exist -> the property is `use_colors`
+  3. `use_colors` must be set BEFORE `instance_count` in this build ("Instance count must be 0 to toggle...")
+Until fixed, the census read live bookkeeping correctly but every set_instance_color threw an engine
+ERROR (618/run) — the pool must not ship that way; the clean run 5 has only the two documented shader-noise lines.</pre>
+
+<h2>Standing gates — final (all runs: HOME=/tmp/dsh_home, ulimit -v 8388608, one godot at a time)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Standing contract</th><th>Log</th></tr>
+<tr><td>G0 (pristine, before)</td><td class="ok">rc=0, 0 SCRIPT ERROR</td><td>zero SCRIPT ERROR lines</td><td><code>.scratch/AC-0038-g0-pristine.log</code></td></tr>
+<tr><td>G0 (final tree, after)</td><td class="ok">rc=0, 0 SCRIPT ERROR</td><td>zero SCRIPT ERROR lines (re-verified after every fix; only the pre-existing aero dummy-shader noise line)</td><td><code>.scratch/AC-0038-g0-final.log</code></td></tr>
+<tr><td>pcensus (task probe)</td><td class="ok">ok: true</td><td>per-event release, stress cap, radial proof, cost, alloc delta 0 (above)</td><td><code>.scratch/AC-0038-pcensus5.log</code></td></tr>
+<tr><td>battery player;interact</td><td class="ok">ok: true (total 60.9 s)</td><td>SMOKE dependency-mapped arms. interact ran the REAL event sites (mine → 12 break debris; drop pickup → puff) and stayed green (drop_spawned, place_ok, inv_grew). player: jump_peak 142.42 / after_fly 145.26 (match the 2026-09-18 re-measure to 0.01); its <code>start</code> field reads [8.78,140.98,8.78] vs the recorded [8.5,142.0,8.5] — the documented STALE-VALUE FINDING (2026-09-20, AC-0340: "recorded start/jump values are STALE pending re-measure"); the arm has no <code>ok</code> field, and the pool is inert in that arm (no event fires, zero live slots). Not a particle regression (world proven unchanged below).</td><td><code>.scratch/AC-0038-batt.log</code></td></tr>
+<tr><td>genhash ×2</td><td class="ok">25/25, BYTE-IDENTICAL</td><td>r1 == r2 == the AC-0387 standing set (the newest reference). Particles are not generation.</td><td><code>.scratch/AC-0038-genhash-r{1,2}.log</code> (diffed against <code>.scratch/AC-0387b-genhash.log</code>)</td></tr>
+<tr><td>farab</td><td class="ok">h_mismatch 0, slab 1080/1080 (both G), ok true</td><td>h_mismatch 0</td><td><code>.scratch/AC-0038-farab.log</code></td></tr>
+<tr><td>ladder</td><td class="ok">band_a 20/20 (cols/eff/mat), band_b 144/144, band_c 90/90, tier_mismatch 0</td><td>ladder 20/20</td><td><code>.scratch/AC-0038-ladder.log</code></td></tr>
+<tr><td>meshprobe</td><td class="ok">match_rate 1.0, 32/32 chunks, ac0211_ok</td><td>meshprobe 1.0</td><td><code>.scratch/AC-0038-meshprobe.log</code></td></tr>
+<tr><td>halo</td><td class="ok">ok true, 0 mismatches, slabs 226/226, band_b1 20/20</td><td>halo ok</td><td><code>.scratch/AC-0038-halo.log</code></td></tr>
+<tr><td>lightstate (r16)</td><td class="ok">0/0 — all 22 leak fields 0, stragglers 0, wash_detected false, arr_diff_cells 1 @ [0,141,0] (the re-baselined AC-0311 one-cell class)</td><td>lightstate 0/0</td><td><code>.scratch/AC-0038-lightstate.log</code></td></tr>
+<tr><td>r16 (--fixed-fps 600)</td><td class="ok">ALL sub-flags green (air/catch_up/height/immediate/inr/low_sync_zero/low_thread/no_downgrade/no_giant/uv_repeat/wave), far_holes <b>0/0</b> both bands (far0/far1), far_pending 0/0, inr holes 0 (inr0/inr1/inr4), uv_mismatch 0/0, section_first_ok, built_all</td><td>r16 all sub-flags, far_holes 0/0 both bands</td><td><code>.scratch/AC-0038-r16.log</code></td></tr>
+<tr><td>satellite (r4)</td><td class="ok">ok true, altitude ladder intact (hidden 26.6 → rim 176.6 → dissolve 200.8 → full 306.0), <b>angular.ratio 0.25</b>, guard_ok, tex_shape_ok, 12/12 textures</td><td>satellite ladder + 0.25 ratio intact</td><td><code>.scratch/AC-0038-satellite.log</code></td></tr>
+<tr><td>boundary r4 ×1 (self-check)</td><td class="ok">ok true; walk <b>p95 35</b> / p50 13 — IN BAND (standing band 35–42, latest 41); storm_walk_p99 96 ≤ 200; built/resident/in-radius 62/93/57; marker_ok, remesh_ok, footprint 0, col_deferred_in_footprint 0; crossing_frame_p95 51 ≤ 150; crossing_burst_p50 6.1 ≤ 10 (R24's 9.6-vs-10 gate is the coordinator's radius)</td><td>boundary r4 in band</td><td><code>.scratch/AC-0038-boundary-r4.log</code></td></tr>
+</table>
+
+<h3>Flag for the coordinator (not a gate failure of this ticket)</h3>
+<p><b>boundary r4 <code>staged_dropped</code> read 2704 — above the ≤ 2500 standing threshold</b> (last re-measure 1667 at the AC-0292 closeout; AC-0387's carve era has not re-baselined that row). The particle pool is provably DORMANT on that arm: the boundary walk does no mining/damage/arrows/pickups, so zero emissions, zero live slots, and the pool's <code>_process</code> early-returns on two bool checks per frame (the pcensus bracket shows the full 200-live step is 0.07 ms; the dormant path is nanoseconds). It cannot touch the staged collision drain (world.gd + the C++ lane). The reading is a tree/variance property of the AC-0387-era world (the carve work made the far lane ~35× more expensive per the ticket context) — the coordinator's heavy job should A/B <code>AWECRAFT_PARTICLES=0</code> vs default if the row needs re-baselining. <b><code>flap</code> read 145</b> in the same run (not a documented gated field in the boundary row — reported for completeness).</p>
+
+<h2>Closer</h2>
+<ul>
+<li>No temporary probes left: the census is a permanent env-gated arm registered in <code>tasks/harness_data.yaml</code> (+ <code>godot/HARNESS.md</code> re-rendered, <code>--check</code> in sync); no scratch scripts were added to the tree.</li>
+<li>Native lane untouched — <b>no native rebuild / re-stage needed</b> (pure GDScript; the C++ extension was never modified).</li>
+<li><code>godot/ARCHITECTURE.md</code> §3 synced in-task (new subsystem: the Particles node + its engine-build quirks + env switches).</li>
+<li>No commits made (coordinator's closeout); no TASKS.yaml edits by the builder (the in-progress claim predates this session).</li>
+</ul>
+</body></html>
