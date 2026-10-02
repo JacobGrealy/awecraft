@@ -341,5 +341,138 @@ zero-pixel condition is proven fixed numerically (centre haze 0, terrain-dominan
 TASKS.yaml untouched (shared ticket); the user is waiting to rebuild and test — the tree is ready for exactly
 that.</li>
 </ul>
+
+<h2>13. In-game diagnostic (the user's direct request, 2026-10-02)</h2>
+<p>The user's newest screenshot (terrain + sky healthy, one large smooth <em>pale</em> surface curving beneath
+the terrain) cannot be separated from one still image into <strong>(a) the satellite body finally drawing but
+too pale</strong> vs <strong>(b) the AC-0385 cloud shell at 67.8 % coverage seen from above</strong> — and two
+previous rounds already guessed wrong. The user asked directly: <em>"is there any logging you could add to help
+you figure out why it's not working on my pc?"</em> The deliverable is therefore a build that
+<strong>tells us the answer from inside the running game on their machine</strong>: one greppable line per
+event, prefix <code>SATDIAG</code>, to stdout <strong>and</strong> appended to <code>user://satdiag.txt</code>
+(windowed-build fallback). All code lives in <code>godot/world/satellite_body.gd</code> — pure observation
+(reads state, writes no render state); the single behaviour branch is the user-facing A/B toggle below,
+default off, so with <code>AWECRAFT_SATDIAG=0</code> the output is byte-identical to the fix-only tree.</p>
+
+<h3>13.1 What it reports (each item exists because it is a way this fails silently)</h3>
+<table>
+<tr><th>#</th><th>Reported</th><th>Failure class it exposes</th></tr>
+<tr><td>1</td><td>Player radial altitude <code>|pos−C|−R</code> + band value <code>S=smoothstep(500,2000,alt)</code>, every 2 s, plus the live thresholds <code>h_first/h_full</code></td><td>"the dissolve is keeping it invisible at the user's altitude" — the altitude the user is actually in vs the band they expect it in</td></tr>
+<tr><td>2</td><td>Body phase + texture source (res / cache / baked), the choosing predicate, and the bake reason</td><td>a silent fall-through to baking (the pre-AC-0384 signature)</td></tr>
+<tr><td>3</td><td>All 12 textures non-null <strong>with their sizes</strong></td><td>a null or mis-sized texture draws white/garbage</td></tr>
+<tr><td>4</td><td>Material shader non-null: resource path, <code>get_code()</code> non-empty, per-material binding count</td><td><strong>a ShaderMaterial with a null shader renders pure white and is invisible to every gate we own</strong></td></tr>
+<tr><td>5</td><td>Mesh vertex count + two AABBs (the custom ±(R+SEA) cull cube, and face-0's geometry AABB)</td><td>an ArrayMesh Godot refuses to build leaves an empty/degenerate mesh (the AC-0235 hand-set-AABB class); note 4.7's <code>Mesh.get_aabb()</code> reports the geometry AABB, not the custom one</td></tr>
+<tr><td>6</td><td>Computed nadir opacity + the <code>u_fog_far</code>/<code>u_render_edge</code> values actually in use</td><td>whether the world-space-distance dissolve is fading the body out at the user's range</td></tr>
+<tr><td>7</td><td>Node visible / in-tree / position / scale</td><td>a hidden or misplaced node</td></tr>
+<tr><td>8</td><td><strong>The cloud shell too</strong>: all 3 layers' altitude (h=400/330/275 → r=R+h), <code>u_coverage</code>, tint, visibility, shader bound</td><td>the body-vs-clouds ambiguity itself — the two surfaces are told apart from the report alone</td></tr>
+</table>
+<p>It prints <strong>immediately when configured</strong> (decision line at <code>configure()</code>; textures/shader/mesh
+burst at LOADED or FAILED) and <strong>periodically</strong> (state + clouds every 2 s — never per-frame), plus
+<strong>one line on every crossing into/out of the 500–2000 band</strong> (<code>band: ENTERED/EXITED</code>).
+Env knobs (all optional, default = the user experience): <code>AWECRAFT_SATDIAG=0</code> (silence),
+<code>AWECRAFT_SAT_BODY=0</code> (start body hidden), <code>AWECRAFT_SATDIAG_PERIOD</code>,
+<code>AWECRAFT_SATDIAG_ALT</code> (test the reporting pipeline without flying — the line is labelled
+<code>alt_src=env</code>), <code>AWECRAFT_SATDIAG_BAND="lo,hi"</code>.</p>
+
+<h3>13.2 The ambiguity-settling measurement (one sentence for the user)</h3>
+<div class="box green"><strong>Toggle:</strong> press <strong>F7 in-game</strong> to hide the pale sphere and press it again to bring it
+back (or start the build with the environment variable <code>AWECRAFT_SAT_BODY=0</code> to begin hidden) — if the pale
+surface disappears, it is the satellite body; if it stays, it is the cloud shell. F7 is unbound elsewhere (checked
+the input map + player handler); the env var and the key flip the same <code>_body_off</code> flag, and
+<code>_tick_view</code>'s visibility expression reduces to the original <code>h_band &gt; h_first</code> with the flag
+off.</div>
+
+<h3>13.3 Verified output — actual lines from this tree (headless 4.7.1, logs in <code>.scratch/AC-0384-gates/</code>)</h3>
+<p>All runs: <strong>0 SCRIPT ERROR</strong>. The arm run is <code>AWECRAFT_LOGIC=satellite</code> (world r4 unless
+noted); verification knobs where noted.</p>
+<pre>
+# startup (sat_final_r4.log)
+SATDIAG diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=false period=2.0s band=[500,2000]
+SATDIAG configure: planet_id=0 seed=44 R=4000 SEA=126 hmax=384 src=res predicate=ResourceLoader.res reason=-
+# configured-state burst, at LOADED
+SATDIAG config: phase=LOADED src=res via=import reason=- textures=12/12 [1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024]
+SATDIAG config: shader=path=res://core/satellite_body.gdshader code_nonempty=true code_bytes=5810 mats_with_shader=12/12
+SATDIAG config: mesh faces=12 verts=28812 aabb_custom=min=(-4126,-4126,-4126) size=(8252,8252,8252) aabb_geom=min=(0,2382,-2918) size=(2918,1744,5835) node_vis=false pos=(0,-4000,0) scale=(1.00,1.00,1.00) body_off=false
+# periodic state, below the band (alt 0, spawn) and at the r4 ladder "full" level (alt 306)
+SATDIAG state: t=3.8 configured=1 phase=LOADED alt=0.0(player) S=0.000 h_first=126.6 h_full=206.0 op_nadir=0.000 fog_far=69.6 render_edge=80.0 body_off=false vis=false in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG state: t=5.3 configured=1 phase=LOADED alt=306.0(player) S=0.000 h_first=126.6 h_full=206.0 op_nadir=1.000 fog_far=69.6 render_edge=80.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.562 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+# REAL in-band altitude: r40 run — the arm's dissolve ladder level is alt 739.4 (inside 500-2000)
+SATDIAG band: ENTERED alt=739.4 S=0.068 band=[500,2000]
+SATDIAG state: t=6.0 configured=1 phase=LOADED alt=739.4(player) S=0.068 h_first=165.3 h_full=782.0 op_nadir=0.500 fog_far=570.7 render_edge=656.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+# ABOVE the band: AWECRAFT_SATDIAG_ALT=2600 (labelled env override — op_nadir still tracks the real player)
+SATDIAG state: t=5.5 configured=1 phase=LOADED alt=2600.0(env) S=1.000 h_first=126.6 h_full=206.0 op_nadir=1.000 fog_far=69.6 render_edge=80.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+# in-band env override (alt 1200) verified the same way: alt=1200.0(env) S=0.450
+# band EXITED (r40, AWECRAFT_SATDIAG_BAND=700,850, period 0.2 — full transition cycle on real altitudes)
+SATDIAG band: ENTERED alt=739.4 S=0.170 band=[700,850]
+SATDIAG band: EXITED alt=882.0 S=1.000 band=[700,850]
+# the A/B toggle (AWECRAFT_SAT_BODY=0): banner shows body_off=true, and at the r4 "full" level (alt 306, where
+# the body WOULD be fully drawn, op_nadir=1.000) the node stays hidden:
+SATDIAG state: t=5.4 configured=1 phase=LOADED alt=306.0(player) S=0.000 h_first=126.6 h_full=206.0 op_nadir=1.000 fog_far=69.6 render_edge=80.0 body_off=true vis=false in_tree=true pos=(0,-4000,0) scale=1.000
+</pre>
+<p><small>Altitudes shown: 0 and 306 (r4 ladder, below band), 739.4 (r40 ladder dissolve, <strong>in band</strong>,
+real player), 1200 (env, in band), 2600 (env, <strong>above band</strong>, S=1.000), 882.0 (r40 ladder full, band
+exit under the shifted band). The r4 ladder sits below 500 by construction (h_full=206 at r4), so the r40 run
+supplies the real in-band sample; the env-override knob exists so the user themselves can prove the pipeline
+works without flying.</small></p>
+
+<h3>13.4 What it does NOT check, and why</h3>
+<ul>
+<li><strong>Actual pixels on the user's screen.</strong> The console is a text stream, and this box is headless —
+the report gives every <em>input</em> to the render (source, textures, shader, mesh, opacity, visibility, cloud
+state) and the A/B toggle supplies the one pixel-level measurement (does the surface exist when the body is
+hidden?).</li>
+<li><strong>Shader COMPILE success on the user's GPU.</strong> A 4.x <code>Shader</code> exposes no compile state to
+GDScript (verified: no such API in 4.7.1). A compile failure the engine itself prints to the same console as
+<code>SHADER ERROR</code> / "failed to compile" lines — the user is asked to note any such lines alongside the
+SATDIAG block. We do report the null-shader case explicitly, because that is the pure-white signature that is
+invisible to every gate we own.</li>
+<li><strong>Camera, sky, AeroWash.</strong> Out of scope: the only ambiguity is body-vs-clouds, and both sides of
+it are reported. (If the report comes back fully healthy and the pale surface is neither, the next suspect is the
+aero stack — the clouds line already rules the shell in or out.)</li>
+<li><strong>The C++ generation lane.</strong> genhash 25/25 covers it separately; the diagnostic is a runtime
+reporter, not a generator test.</li>
+</ul>
+
+<h3>13.5 Gates on the delivered tree (this round, diagnostic ON by default unless noted)</h3>
+<table>
+<tr><th>Gate</th><th>Standing value</th><th>This run</th><th></th></tr>
+<tr><td>G0 (headless load, <code>--quit</code>)</td><td>0 SCRIPT ERROR</td><td>0 (diagnostic on <em>and</em> with <code>AWECRAFT_SATDIAG=0</code> — the silent run also printed 0 SATDIAG lines)</td><td class="ok">PASS</td></tr>
+<tr><td>genhash ×2</td><td>25/25 byte-identical</td><td>r1==r2, and 25/25 byte-identical to the latest verified set (<code>.scratch/AC-0386-gates/genhash_r1.log</code>)</td><td class="ok">PASS</td></tr>
+<tr><td>satellite (r4)</td><td>ok, ratio 0.25, ladder 4/4, res_export_ok</td><td>ok=true, ratio 0.25, hidden/rim/dissolve/full all correct, res_export_ok=true</td><td class="ok">PASS</td></tr>
+<tr><td>farab</td><td>h_mismatch 0</td><td>h_mismatch 0, slab 0/0 @ G4+G8 (1080/1080), byte-equal to AC-0386 (water 6/7/28 there too)</td><td class="ok">PASS</td></tr>
+<tr><td>ladder</td><td>band_a_ok 20/20</td><td>20/20, ok=true</td><td class="ok">PASS</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0</td><td>1.0, ok=true</td><td class="ok">PASS</td></tr>
+<tr><td>halo</td><td>ok</td><td>ok=true</td><td class="ok">PASS</td></tr>
+<tr><td>lightstate (R16)</td><td>0/0</td><td>ok=true, double_lod 0/0, stragglers 0</td><td class="ok">PASS</td></tr>
+<tr><td>r16 (<code>--fixed-fps 600</code>)</td><td>far_holes 0/0 both bands</td><td>ok=true, far_holes 0/0 both bands</td><td class="ok">PASS</td></tr>
+<tr><td>boundary r4</td><td>in-band</td><td>ok=true, p95 32 ms</td><td class="ok">PASS</td></tr>
+</table>
+
+<h3>13.6 Findings from instrumenting this (4.7.1 quirks, for the record)</h3>
+<ul>
+<li>Godot 4.7 auto-renames duplicate sibling names on <code>add_child</code>: of the three cloud layers only the
+first keeps <code>CloudLayer</code>; the rest become <code>@MeshInstance3D@N</code>. Cloud discovery therefore matches
+by the material's shader path, not the node name.</li>
+<li><code>Mesh.get_aabb()</code> on an ArrayMesh reports the <strong>geometry</strong> AABB, not the custom one set
+via <code>set_custom_aabb</code> (the AC-0235 cull fix is unaffected — the culler uses the custom value). The
+diagnostic reports both.</li>
+<li>A typed assignment <code>var m: ShaderMaterial = node.material_override</code> <strong>throws</strong> on a
+mismatch (the player model carries a StandardMaterial3D override) — the cloud scan uses <code>as</code> casts.</li>
+<li>No temp probes left; G0 re-verified on the final tree (0 SCRIPT ERROR); the only file touched this round is
+<code>godot/world/satellite_body.gd</code>.</li>
+</ul>
+
+<h3>13.7 Coordinator's next step + housekeeping note</h3>
+<ul>
+<li>Rebuild the Windows export from this tree and send it to the user with one instruction:
+<em>"Run it, fly up to the altitude where the pale surface appears, and paste the SATDIAG lines from the console
+(or the file in <code>%APPDATA%/Godot/app_userdata/AweCraft/satdiag.txt</code>); then press F7 and say whether the
+pale surface disappeared."</em></li>
+<li>Housekeeping: the AC-0384 <code>notes:</code> block in TASKS.yaml is corrupted — 18,339 entries whose tail is
+~18k single characters (a prior write bug); the last coherent note (the 2026-10-02 screenshot analysis) was
+recovered from the character-joined tail and matches this ticket's brief. Not repaired here (shared ticket;
+TASKS.yaml is mutated only through <code>tasks.py</code>).</li>
+</ul>
 </body>
 </html>

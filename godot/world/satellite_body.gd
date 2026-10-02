@@ -152,9 +152,68 @@ var last_fog_far := 0.0
 var last_render_edge := 0.0
 var _cam: Node = null
 
+# AC-0384 DIAGNOSTIC (user request, 2026-10-02: "is there any logging you
+# could add to help you figure out why it's not working on my pc?"). The
+# user runs an exported Windows build and cannot debug; one still screenshot
+# already failed twice to separate "the body drawing too pale" from "the
+# AC-0385 cloud shell seen from above", so this reports THE FACTS from
+# inside the running game: one greppable line per event, prefix SATDIAG,
+# to stdout AND appended to user://satdiag.txt (the windowed-build
+# fallback). Pure observation: it reads state and never writes render
+# state. The single behaviour branch is the user-facing A/B toggle
+# (_body_off, default off) - with the diagnostic silent (AWECRAFT_SATDIAG=0)
+# and the toggle untouched, the output is byte-identical.
+# Env (all optional):
+#   AWECRAFT_SATDIAG=0      silence all diagnostic output (default: on)
+#   AWECRAFT_SAT_BODY=0     start with the body HIDDEN (A/B test: if the
+#                           pale surface disappears it is the body, if it
+#                           stays it is the cloud shell)
+#   AWECRAFT_SATDIAG_PERIOD=<s>  state-report period (default 2.0 s -
+#                           keep it a few seconds, never per-frame)
+#   AWECRAFT_SATDIAG_ALT=<m>     report THIS altitude instead of the
+#                           player's (tests the reporting pipeline without
+#                           flying; the line is labelled alt_src=env)
+#   AWECRAFT_SATDIAG_BAND="lo,hi"  the reported band (default "500,2000")
+# In-game: F7 toggles the body off/on (the A/B key).
+var _satdiag := true
+var _body_off := false
+var _satdiag_file: FileAccess = null
+var _last_ppos := Vector3.ZERO
+var _satdiag_acc := -1.0
+var _satdiag_period := 2.0
+var _satdiag_alt_override := -1.0
+var _satdiag_band_lo := 500.0
+var _satdiag_band_hi := 2000.0
+var _satdiag_in_band := false
+var _satdiag_band_init := false
+
 
 func _ready() -> void:
 	_shader = load("res://core/satellite_body.gdshader")
+	# AC-0384 diagnostic: read the env knobs once, open the fallback log
+	# file (the windowed build may not keep a console), print the banner
+	# with the user's trigger instructions.
+	var sd: String = OS.get_environment("AWECRAFT_SATDIAG").to_lower()
+	_satdiag = sd != "0" and sd != "off"
+	_body_off = ["0", "off", "hidden"].has(OS.get_environment("AWECRAFT_SAT_BODY").to_lower())
+	if _satdiag:
+		var per: String = OS.get_environment("AWECRAFT_SATDIAG_PERIOD")
+		if per != "" and per.to_float() > 0.0:
+			_satdiag_period = per.to_float()
+		var aov: String = OS.get_environment("AWECRAFT_SATDIAG_ALT")
+		if aov != "":
+			_satdiag_alt_override = aov.to_float()
+		var band: String = OS.get_environment("AWECRAFT_SATDIAG_BAND")
+		if band != "" and band.contains(","):
+			var lo := band.split(",")[0].to_float()
+			var hi := band.split(",")[1].to_float()
+			if lo < hi:
+				_satdiag_band_lo = lo
+				_satdiag_band_hi = hi
+		_satdiag_file = FileAccess.open("user://satdiag.txt", FileAccess.READ_WRITE)
+		if _satdiag_file != null:
+			_satdiag_file.seek_end(0)
+		_satline("diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=%s period=%.1fs band=[%.0f,%.0f]" % [str(_body_off), _satdiag_period, _satdiag_band_lo, _satdiag_band_hi])
 
 
 func _reset_counters() -> void:
@@ -213,7 +272,11 @@ func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> vo
 		else:
 			_bake_reason = "non-canonical seed %d (no shipped textures)" % seed
 			_src_predicate = "bake.no-shipped"
-		_start_bake()
+			_start_bake()
+	# AC-0384 diagnostic: the load/bake decision, loud at decision time
+	# (a silent fall-through to baking is the failure class this exists
+	# to make visible).
+	_satline("configure: planet_id=%d seed=%d R=%.0f SEA=%d hmax=%d src=%s predicate=%s reason=%s" % [planet_id, seed, R, SEA, HMAX, _load_src if _load_src != "" else "baked", _src_predicate, _bake_reason if _bake_reason != "" else "-"])
 
 
 func _cache_dir() -> String:
@@ -376,6 +439,7 @@ func _bake_main_step() -> void:
 
 
 func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
+	_last_ppos = ppos  # AC-0384 diagnostic: cached for the _process report
 	var h_band: float = (ppos + Vector3(0.0, R, 0.0)).length() - R
 	var RB: float = R + float(SEA)
 	var ff: float = DayNight.fog_far(render_radius, fog_pct)
@@ -401,7 +465,10 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 	last_h_full = h_full
 	last_fog_far = ff
 	last_render_edge = edge
-	var vis := h_band > h_first
+	# AC-0384 diagnostic: the A/B toggle (F7 / AWECRAFT_SAT_BODY) forces
+	# the body off so the user can tell body from cloud shell. Default
+	# (_body_off = false) is exactly the original expression.
+	var vis := h_band > h_first and not _body_off
 	if visible != vis:
 		visible = vis
 	if vis:
@@ -922,6 +989,7 @@ func _finish_bake() -> void:
 		"guard": guard.duplicate(),
 	}
 	print("SATELLITE bake done: %s" % str(bake_stats))
+	_satline_config()  # AC-0384 diagnostic: the configured-state burst
 
 
 func _fail(why: String) -> void:
@@ -937,6 +1005,8 @@ func _fail(why: String) -> void:
 		"bake_reason": _bake_reason,
 	}
 	print("SATELLITE bake FAILED (predicate=%s via=%s): %s" % [_src_predicate, _res_load_via, why])
+	_satline("config: phase=FAILED reason=%s predicate=%s via=%s" % [why, _src_predicate, _res_load_via])
+	_satline_config()  # AC-0384 diagnostic: the partial state, still useful
 
 
 func force_rebake() -> void:
@@ -956,6 +1026,14 @@ func force_rebake() -> void:
 
 
 func _process(_delta: float) -> void:
+	# AC-0384 diagnostic: one bounded state report every couple of
+	# seconds (AWECRAFT_SATDIAG_PERIOD; the default is 2 s - never
+	# per-frame), plus a line on every band crossing.
+	if _satdiag:
+		_satdiag_acc += _delta
+		if _satdiag_acc >= _satdiag_period:
+			_satdiag_acc = 0.0
+			_satdiag_tick()
 	# the FULL frame delta while the bake runs (the hitch that matters -
 	# the main-thread slice cost is _step_*; the frame delta includes the
 	# streaming work that shares the main thread).
@@ -968,3 +1046,157 @@ func _process(_delta: float) -> void:
 			if dms > _frame_max_ms:
 				_frame_max_ms = dms
 		_last_bake_tick = now
+
+
+# ---- AC-0384 diagnostic (see the _satdiag header block) ----
+
+func _satline(line: String) -> void:
+	# An empty line means a report builder aborted mid-way - never emit
+	# a bare prefix (it reads as a hung report, not as a failure).
+	if not _satdiag or line.strip_edges().is_empty():
+		return
+	var full := "SATDIAG " + line
+	print(full)
+	# Fallback (the windowed build may not keep a console): the same
+	# line appended to a file, opened once in _ready (no truncate).
+	if _satdiag_file != null and _satdiag_file.is_open():
+		_satdiag_file.store_string(full + "\n")
+
+
+func _satdiag_tick() -> void:
+	var alt := 0.0
+	var alt_src := "none"
+	if _satdiag_alt_override >= 0.0:
+		alt = _satdiag_alt_override
+		alt_src = "env"
+	elif configured:
+		alt = (_last_ppos + Vector3(0.0, R, 0.0)).length() - R
+		alt_src = "player"
+	var s := smoothstep(_satdiag_band_lo, _satdiag_band_hi, alt)
+	var in_band := configured and alt >= _satdiag_band_lo and alt <= _satdiag_band_hi
+	# Band crossings - the transitions the user is looking at.
+	if _satdiag_band_init and in_band != _satdiag_in_band:
+		_satline("band: %s alt=%.1f S=%.3f band=[%.0f,%.0f]" % ["ENTERED" if in_band else "EXITED", alt, s, _satdiag_band_lo, _satdiag_band_hi])
+	_satdiag_in_band = in_band
+	_satdiag_band_init = true
+	# The nadir opacity (the per-fragment opacity the user is seeing):
+	# the player's distance to the closest body point, through the
+	# mirrored smoothstep the shader computes (the AC-0384 fix).
+	var op := -1.0
+	if configured and phase == Phase.LOADED and last_fog_far > 0.0:
+		var dc := (_last_ppos - Vector3(0.0, -R, 0.0)).length()
+		op = opacity_at(maxf(dc - (R + float(SEA)), 0.0))
+	_satline("state: t=%.1f configured=%d phase=%s alt=%.1f(%s) S=%.3f h_first=%.1f h_full=%.1f op_nadir=%.3f fog_far=%.1f render_edge=%.1f body_off=%s vis=%s in_tree=%s pos=(%.0f,%.0f,%.0f) scale=%.3f" % [
+		float(Time.get_ticks_msec()) / 1000.0, int(configured), Phase.keys()[phase], alt, alt_src, s,
+		last_h_first, last_h_full, op, last_fog_far, last_render_edge,
+		str(_body_off), str(visible), str(is_inside_tree()), position.x, position.y, position.z, scale.x])
+	_satline(_satdiag_clouds())
+
+
+func _satdiag_clouds() -> String:
+	# The cloud shell (AC-0385) - the other half of the body-vs-clouds
+	# disambiguation: its altitude, coverage uniform and visibility.
+	# Matched by the material's SHADER PATH, not the node name: Godot
+	# auto-renames duplicate siblings on add_child, so in the live tree
+	# only the first layer keeps the name "CloudLayer" (the rest become
+	# @MeshInstance3D@N).
+	var rt := get_tree()
+	if rt == null or rt.root == null:
+		return "clouds: no-tree"
+	var found: Array = []
+	var q: Array = [rt.root]
+	while q.size() > 0:
+		var nd: Node = q.pop_back()
+		for ch in nd.get_children():
+			if ch is MeshInstance3D:
+				# `as` (not a typed assignment): other meshes in the tree
+				# (the player model) carry a StandardMaterial3D override,
+				# and a typed assign on the mismatch would throw.
+				var m := ch.material_override as ShaderMaterial
+				if m != null and m.shader != null and m.shader.resource_path.ends_with("cloud_layer.gdshader"):
+					found.append(ch)
+			q.append(ch)
+	if found.is_empty():
+		return "clouds: none (the AC-0385 shell is not in the tree)"
+	found.sort_custom(func(a, b): return a.scale.x > b.scale.x)  # highest shell first
+	var parts: Array = []
+	for n in found.size():
+		var mi: MeshInstance3D = found[n]
+		var rsh: float = mi.scale.x
+		var m: ShaderMaterial = mi.material_override
+		var cov := -1.0
+		var tint := "none"
+		if m != null and m.shader != null:
+			cov = float(m.get_shader_parameter("u_coverage"))
+			tint = str(m.get_shader_parameter("u_cloud_tint"))
+		parts.append("c%d{vis=%s r=%.0f h=%.0f cov=%.3f shader=true tint=%s}" % [n, str(mi.visible), rsh, rsh - float(R), cov, tint])
+	return "clouds: n=%d %s" % [found.size(), " ".join(parts)]
+
+
+func _satline_config() -> void:
+	if not _satdiag:
+		return
+	# All 12 textures: non-null + sizes (a null texture is the
+	# white/garbage class that is invisible to every gate we own).
+	var tn := 0
+	var tsizes := ""
+	for t in textures:
+		if t != null and t is Texture2D:
+			tn += 1
+			tsizes += "%dx%d " % [int(t.get_width()), int(t.get_height())]
+		else:
+			tsizes += "NULL "
+	# The SHADER: a ShaderMaterial with a null shader renders pure white
+	# (invisible to every gate we own), so report it explicitly: the
+	# resource path and the code non-empty. (A 4.x Shader exposes no
+	# compile state from GDScript; a compile FAILURE the engine itself
+	# prints to the console as a SHADER ERROR / "failed to compile" line,
+	# which the user will see next to these - check for it.)
+	var sh := "NULL-SHADER"
+	if _shader != null:
+		sh = "path=%s code_nonempty=%s code_bytes=%d" % [
+			_shader.resource_path if _shader.resource_path != "" else "<inline>",
+			str(_shader.code.length() > 0), _shader.code.length()]
+	var msh := 0
+	for m in shader_mats:
+		if m != null and m.shader != null:
+			msh += 1
+	# The MESH: vertex count + AABB (an empty/degenerate mesh draws
+	# nothing or garbage; the AC-0235 note owns the hand-set AABB).
+	# Two AABBs: the CUSTOM one (the enclosing ±(R+SEA) cube _build_face
+	# sets - the value the culler uses) and the GEOMETRY one of face 0
+	# (a zero/absurd geometry AABB is the "Godot refused the mesh"
+	# signature; note 4.7's Mesh.get_aabb() reports the geometry AABB,
+	# not the custom one).
+	var verts := 0
+	var aabb_geom := "none"
+	for mi in face_nodes:
+		if mi == null or not is_instance_valid(mi):
+			continue
+		var mesh: ArrayMesh = mi.mesh
+		if mesh != null and mesh.get_surface_count() > 0:
+			var arrs: Array = mesh.surface_get_arrays(0)
+			if arrs.size() > 0:
+				# PackedVector3Array: .size() is the vertex count already.
+				verts += int(arrs[Mesh.ARRAY_VERTEX].size())
+			if aabb_geom == "none":
+				var ab: AABB = mesh.get_aabb()
+				aabb_geom = "min=(%.0f,%.0f,%.0f) size=(%.0f,%.0f,%.0f)" % [ab.position.x, ab.position.y, ab.position.z, ab.size.x, ab.size.y, ab.size.z]
+	var RB: float = R + float(SEA)
+	var aabb_custom := "min=(%.0f,%.0f,%.0f) size=(%.0f,%.0f,%.0f)" % [-RB, -RB, -RB, RB * 2.0, RB * 2.0, RB * 2.0]
+	_satline("config: phase=%s src=%s via=%s reason=%s textures=%d/12 [%s]" % [
+		Phase.keys()[phase], _load_src if _load_src != "" else "baked", _res_load_via if _res_load_via != "" else "-", _bake_reason if _bake_reason != "" else "-", tn, tsizes.strip_edges()])
+	_satline("config: shader=%s mats_with_shader=%d/12" % [sh, msh])
+	_satline("config: mesh faces=%d verts=%d aabb_custom=%s aabb_geom=%s node_vis=%s pos=(%.0f,%.0f,%.0f) scale=(%.2f,%.2f,%.2f) body_off=%s" % [
+		face_nodes.size(), verts, aabb_custom, aabb_geom, str(visible), position.x, position.y, position.z, scale.x, scale.y, scale.z, str(_body_off)])
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# AC-0384 diagnostic: the A/B key. F7 hides the body so the user can
+	# see whether the pale surface is the body (disappears) or the cloud
+	# shell (stays). _tick_view reconciles `visible` on the next frame.
+	var k := event as InputEventKey
+	if k != null and k.pressed and not k.echo and k.keycode == KEY_F7:
+		_body_off = not _body_off
+		visible = (not _body_off) and (last_h_band > last_h_first)
+		_satline("toggle: F7 body_off=%s visible=%s" % [str(_body_off), str(visible)])
