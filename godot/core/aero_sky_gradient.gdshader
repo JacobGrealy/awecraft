@@ -22,6 +22,11 @@ uniform float haze_amount : hint_range(0.0, 1.0) = 0.35;
 // AC-0242: same pre-decode as the dome had - Forward+ displays
 // unshaded/sky output one sRGB curve brighter without it.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0386: the space transition. u_space is the flight band's S (main.gd
+// _update_sky - the SAME smoothstep(500, 2000, radial altitude) the
+// controls use, so the sky darkens exactly where the controls hand over).
+uniform float u_space : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 space_color : source_color = vec3(0.0078, 0.0118, 0.0392);
 
 void sky() {
 	vec3 dir = normalize(EYEDIR);
@@ -34,10 +39,17 @@ void sky() {
 	}
 	float hz = exp(-abs(h) * 9.0) * haze_amount;
 	col = mix(col, haze_color, hz);
+	// AC-0386: the atmosphere thins with the radial altitude. The zenith
+	// darkens first (weight S), the horizon last (weight S^2 - the grazing
+	// column of air keeps its blue longest). S = 0 is bit-identical to the
+	// pre-AC-0386 sky; S = 1 makes the whole dome space.
+	float ws = mix(u_space * u_space, u_space, u);
+	col = mix(col, space_color, ws);
 	float sd = dot(dir, sun_dir);
 	float up = clamp(sd, 0.0, 1.0);
 	float disc = smoothstep(0.99894, 0.99985, sd) * sun_amount;
-	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount;
+	// the sun's GLOW is scattering - it dies with the air; the disc stays.
+	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount * (1.0 - u_space);
 	col = col + (sun_core * disc) + (sun_halo * glow);
 	// sky shader COLOR is a vec3 (unlike spatial ALBEDO)
 	COLOR = mix(col, pow(col, vec3(2.2)), u_srgb_pre); // AC-0242

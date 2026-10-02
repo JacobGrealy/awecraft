@@ -60,7 +60,23 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 ├─ Harness                scenes/harness.gd   all AWECRAFT_LOGIC/AWECRAFT_BATTERY arms;
 │                                             inert during normal play (AC-0140)
 ├─ DirectionalLight3D     "sun" — modulated by Game.time_of_day
-├─ WorldEnvironment
+├─ WorldEnvironment       the SKY PASS (main.gd `_ready` + per-frame `_update_sky`):
+│                         the Environment's Sky carries core/aero_sky_gradient.gdshader
+│                         — the day/night gradient + sun/moon disc (the DayNight sun
+│                         convention, shared with the satellite body AC-0382 and the
+│                         clouds AC-0385), and AC-0386's SPACE TRANSITION:
+│                         `u_space` = the flight band's own smoothstep over the radial
+│                         altitude (|pos - C| - R, the band window read off player.gd —
+│                         one number, one home; the sky darkens exactly where the
+│                         controls hand over). The atmospheric gradient (incl. horizon
+│                         haze) mixes to `Aero.SPACE_SKY` with weight S at the zenith /
+│                         S² at the horizon (the grazing column of air keeps its blue
+│                         longest); S=0 is bit-identical to the pre-AC-0386 sky. The
+│                         sun's glow (scattering) fades ×(1-S); the disc stays. The
+│                         space gradient touches the BACKGROUND ONLY — the fog color,
+│                         `env.background_color` and the satellite's `u_air` stay the
+│                         DayNight.sky_display reference at every altitude (no double-
+│                         darkening: the ground seen from orbit is depth-fog only).
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
 │                         AC-0385): three concentric transparent SphereMeshes at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
@@ -75,6 +91,25 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         never player distance — so it cannot pop at the
 │                         satellite body's emergence. (Was: three flat
 │                         player-following QuadMeshes, AC-0235.)
+├─ Stars                  core/star.gdshader — the star field (main.gd
+│                         `_build_star_mesh`): a 320-unit shell re-centered on the
+│                         camera POSITION each frame, rotation never set — fixed in
+│                         world orientation, zero parallax (a skybox in disguise);
+│                         500 stars with per-star size/hue/brightness in UV2.
+│                         AC-0386: `u_opacity = mix(1-day, 1, u_space)` (bit-identical
+│                         to the pre-AC-0386 (1-day) below the flight band; fully on
+│                         above it, day AND night — the above-the-sky-limit look) +
+│                         planet-disc occlusion: a star whose direction ray-hits the
+│                         body disc (sphere (0,-R,0), radius R + SEA = the Satellite-
+│                         Body's own radius) is hidden — the 320-unit shell sits in
+│                         front of the disc, so without it the dots painted on top of
+│                         the planet. `u_cam_pos` is an explicit uniform (the headless
+│                         dummy renderer rejects the CAMERA_POSITION builtin, the
+│                         AC-0036 precedent).
+├─ AeroWash               core/aero_wash.gdshader — the screen air-tint: a
+│                         camera-following additive quad 0.12 m in front of the eye
+│                         (WASH_AMOUNT 0.03). AC-0386: `wash_amount ×(1 - u_space)`
+│                         — the lens wash fades with the atmosphere; the quad stays up.
 ├─ World                  world/world.tscn  →  world/world.gd
 │  │                      chunk manager: streaming bands, LOD tiers, scheduler/drain,
 │  │                      chunk pool, fluid ticking, edit flush, drops + mob spawning

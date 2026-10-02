@@ -23,6 +23,16 @@ uniform float u_opacity = 1.0;
 uniform float quad_size = 0.85;  // retest 6: 0.70 made the field sub-pixel dim
 // AC-0242: unshaded output needs the compat pre-decode like the chunks.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0386: the planet occludes the field - a star whose direction hits
+// the body disc (sphere centred (0,-R,0), radius R + SEA = the
+// SatelliteBody's own radius, where its rim dissolve starts blending to
+// the air colour) is not visible (the 320-unit shell sits in front of
+// the disc, so without this the dots painted on top of the planet).
+// u_cam_pos is explicit (the headless dummy renderer rejects the
+// CAMERA_POSITION builtin - the AC-0036 precedent). Radius 0 = off.
+uniform vec3 u_planet_center = vec3(0.0, 0.0, 0.0);
+uniform float u_planet_radius = 0.0;
+uniform vec3 u_cam_pos = vec3(0.0, 0.0, 0.0);
 
 varying vec3 v_center;  // star center in world space (stable per star)
 
@@ -86,6 +96,20 @@ void fragment() {
 	// so lift by one sRGB curve first - the pre-decode below then
 	// round-trips to the designed brightness (identity on compatibility).
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(0.4545)), u_srgb_pre);
-	ALPHA = shape * u_opacity;
+	// AC-0386: ray-sphere occlusion by the planet disc (per STAR, at its
+	// center direction - the quads are ~2-unit point sprites).
+	float occl = 1.0;
+	if (u_planet_radius > 0.0) {
+		vec3 oc = u_planet_center - u_cam_pos;
+		vec3 sdir = normalize(v_center - u_cam_pos);
+		float tca = dot(oc, sdir);
+		if (tca > 0.0) {
+			float d2 = dot(oc, oc) - tca * tca;
+			if (d2 < u_planet_radius * u_planet_radius) {
+				occl = 0.0;
+			}
+		}
+	}
+	ALPHA = shape * u_opacity * occl;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

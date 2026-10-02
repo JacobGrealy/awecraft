@@ -43,6 +43,12 @@ const MOON_HALO := Color8(148, 196, 255)
 const CLOUD := Color8(255, 255, 255)
 const HAZE := Color8(186, 233, 250)
 
+# AC-0386: the SPACE sky - what the sky pass mixes toward as it crosses
+# the flight band (player.gd BAND_WALK_MAX..BAND_FLY_MIN over the radial
+# altitude). A near-black with the faintest blue: the deep-space read,
+# not a crushed pure black.
+const SPACE_SKY := Color8(2, 3, 10)
+
 const CLOUD_AMOUNT_DAY := 0.75
 const CLOUD_AMOUNT_NIGHT := 0.3
 const HAZE_AMOUNT_DAY := 0.4
