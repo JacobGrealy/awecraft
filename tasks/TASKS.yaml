@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-01T19:12
+  updated_at: 2026-10-01T20:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -4296,10 +4296,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T23:24
-  updated_at: 2026-08-31T17:23
+  updated_at: 2026-10-01T19:12
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -22588,11 +22588,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: done
+  status: open
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T19:11
-  completed_at: 2026-10-01T19:11
+  updated_at: 2026-10-01T20:03
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
@@ -22684,7 +22684,48 @@ intake:
     IN AN EXPORT IS INVISIBLE TO EVERY GATE WE OWN. That sentence is the most valuable thing this ticket
     produced, and it applies to the two new asks filed from the same report (AC-0385 clouds, AC-0386 sky-to-space):
     both are visual, both are unverifiable by our headless arms in the same way, and both will need their
-    evidence built deliberately rather than assumed.'
+    evidence built deliberately rather than assumed.
+
+
+    REOPENED 2026-10-01 BY THE USER, WHO REBUILT AND STILL SEES A WHITE PLANET ON WINDOWS. My previous
+    fix was a real latent bug but it was NOT the cause of this symptom, and I claimed a fix on evidence
+    that did not actually test the user''s path - the lesson from this very ticket applies to my own work:
+    the PCK probe proved the PREDICATE and the import-loadability, and the arm proved which branch was
+    taken, but NOTHING I ran ever showed a non-white pixel. A green arm is not a picture.
+
+    WHAT I HAVE NOW RULED OUT, by probing the shipped binary directly (strings/grep on the newest export):
+    `satellite_body.gdshader` is PRESENT, `satellite_body.gd` is PRESENT, and the texture paths `assets/satellite/satellite_face00`
+    through `satellite_face11` are PRESENT. So the assets ship, the shader ships, and the script ships
+    - this is NOT a missing-resource or import-path problem in the export, and the res://-predicate fix,
+    while it closed a genuine editor-versus-export hole, is orthogonal to what the user sees.
+
+    WHAT I HAVE ALSO CHECKED IN CODE: the material binding exists and is correct in form - `sm.set_shader_parameter("tex",
+    textures[f])` followed by `mi.material_override = sm`, one ShaderMaterial per face, with the per-frame
+    uniforms (u_fog_far, u_render_edge, u_clear_dist, u_air, u_day, u_day_gain, u_sun) all pushed. The
+    shader samples a single `sampler2D tex`, and an UNSET sampler in Godot returns white - so a null texture
+    would look exactly like this - but the binding line is only reached with a loaded texture, which the
+    in-tree arm confirms it obtains.
+
+    THE LEADING HYPOTHESIS, which resolves this report AND the user''s second one at once: the white ball
+    the user sees may not be the satellite body at all but an OPAQUE WHITE LAYER IN FRONT OF IT - the
+    cloud layer or the atmosphere/heightmap sky - which would explain (a) a plain white planet, (b) "the
+    satellite LOD never loads" (it loads and is occluded), and (c) "the clouds do not wrap the planet"
+    (because they are not a shell around it but a sheet or ball covering it). The three reports from the
+    first session may therefore be ONE root cause in the cloud/sky/atmosphere path rather than three.
+    That is the first thing to test, and it is testable by geometry and coverage rather than by a render:
+    what primitive is the cloud layer, at what radius, with what alpha, and what does it cover from a
+    player at orbital altitude.
+
+    THE DECISIVE NEXT EVIDENCE is the user''s own eyes, since renders are infeasible on this box: a screenshot
+    of the white planet (the coordinator has vision and can read a PNG directly) and the console output
+    of the debug build (which now prints the new `push_warning` and `bake.res-missing` markers, plus any
+    shader compile error Godot itself reports). Ask for both. DO NOT close this ticket on a code reading
+    again - close it on a picture or on a measurement that would look different if the bug were fixed.
+
+    CONSTRAINTS FOR WHOEVER TAKES IT: genhash 25/25 byte-identical (a render layer touches no generation);
+    the satellite arm''s ladder and its 0.25 texel-to-chunk ratio intact; the standing set green; renders
+    remain unavailable to BUILDERS and no builder may open an image - the coordinator looks, and if a
+    numeric form of the evidence is needed, build it as coverage/geometry/alpha numbers instead.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
@@ -22794,6 +22835,80 @@ intake:
     CONTEXT: read tasks/AC-0145/AC-0145-piece2-results.html (the radial altitude model and the 6-DOF band,
     including the fog figures that justify the 2000 m edge), tasks/AC-0310/AC-0310-results.html (the tier
     that opens above the atmosphere) and tasks/AC-0382/AC-0382-results.html (the sun convention).
+
+    '
+  comments: []
+- id: AC-0387
+  title: carve-missing-from-low-and-medium-lods
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-01T20:03
+  updated_at: 2026-10-01T20:03
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Distant terrain should look like the terrain I am about to walk into. Right now
+    the low and medium LODs are much taller than they should be, because the valleys carved into the land
+    are missing from them - so the ground visibly drops as I get closer and the detail streams in.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER (2026-10-01, Windows build, while playing): "I think we need to include the carving
+    pass on low, medium, and high LODs - right now the low and medium LODs are much taller than they should
+    be after they have valleys carved into them." The user''s diagnosis is that the carve runs only on
+    the LOD they are standing in, so the coarser tiers show UN-CARVED terrain, which is taller wherever
+    a valley exists.
+
+    WHY THIS IS A CONTRACT VIOLATION AND NOT A LOOK ISSUE: `godot/world/AGENTS.md` states the rule plainly
+    - "a far/h-only column''s `H` *is* the height the full path would produce, because promotion must
+    never shift terrain. Never re-derive or round a value another lane computes independently - compare
+    and assert equality, the way the arms do." If the carve is part of the height a column settles at,
+    then a tier that skips it is producing a DIFFERENT H for the same column, which is exactly the drift
+    that rule forbids: the terrain changes shape as residency changes, and the player sees the ground
+    move. AC-0367 put vanilla''s carve INSIDE the density function (the deep void 236,845 -> 21,173 cells,
+    generation 11% cheaper) - so establish FIRST whether the carve is part of `dens_at` (in which case
+    every tier that runs the density function already has it and the discrepancy is elsewhere, for example
+    a coarse-tier height resample or an H-only lane) or a separate pass applied after, in which case the
+    tiers that skip it are the bug. The answer changes the fix completely, so measure before changing
+    anything.
+
+    WHAT TO MEASURE, since "taller" is a claim that can be quantified rather than eyeballed: pick a region
+    with real valleys, and for the same columns compare the LOD tiers'' heights against the full path''s
+    - the count and magnitude of the differences, the worst column, and whether the disagreement is exactly
+    the carved depth. Then say whether the discrepancy is (a) the carve missing from coarse tiers, (b)
+    a coarse tier sampling the height at a lower resolution and thereby missing valleys narrower than
+    its sample spacing (which is a different, arguably legitimate LOD property that needs a different
+    answer), or (c) something else. This distinction matters more than the fix: (a) is a correctness bug,
+    (b) is a sampling design question, and shipping (a)''s fix for (b) or vice versa would be wrong.
+
+    THEN THE FIX, in whichever class it turns out to be, with the promotion contract intact: a far column''s
+    H must equal the full path''s, so if the carve belongs in H it must be in every tier that produces
+    H; if it does not, the coarse tiers must be shown to be sampling the same field rather than a cheaper
+    one. Then verify by measurement, not by looking - the count of disagreeing columns before and after,
+    and the promotion invariant (AC-0309/AC-0368''s instruments measured exactly this class of seam, and
+    the crossface and boundary arms exist).
+
+    WATCH THE COST: if the carve must run on every tier, say what it costs (AC-0366''s price list is the
+    standing reference at 5,502 us/chunk, and AC-0381 re-measured generation at 4,880-4,960 us/chunk =
+    10-11% cheaper). A correctness fix that doubles far generation is a real trade and must be priced
+    rather than discovered later.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless the change deliberately moves it, in which case rebase
+    with attribution and say what a player would see change; the standing set green (G0 zero SCRIPT ERROR,
+    farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes
+    0/0 both bands, boundary r4 in band, the battery); the promotion contract in ARCHITECTURE.md section
+    6 read before touching promotion; and if the native lane is touched, rebuild + re-stage including
+    the Windows DLL.
+
+    CONTEXT: read godot/world/AGENTS.md (the bit-exactness contract), godot/ARCHITECTURE.md section 6
+    (the promotion contract), gdext/src/gen.cpp''s dens_at (jUST the carve region - do not read the file
+    whole), and AC-0367''s results page for what moved into the density function.
 
     '
   comments: []
