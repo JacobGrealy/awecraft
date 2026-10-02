@@ -18,8 +18,15 @@ owes, and the traps that cost the most.
 
 - **Bit-exactness is the contract.** Terrain and light must match the reference path exactly: a
   far/h-only column's `H` *is* the height the full path would produce, because promotion must never
-  shift terrain. Never re-derive or round a value another lane computes independently — compare and
-  assert equality, the way the arms do.
+  shift terrain. AC-0387 made the far lane actually compute it: `gen_far`/`gen_veg_cells` run the
+  full path's per-column sequence (cave-lattice dens_at scan + aquifer + carver — the
+  `carved_top_pass`) so the H is the full path's CARVED top and the top row is the post-carve top
+  block; the `farab` gate re-pointed at the `carved_tops` binding (the full path's own heff — an
+  independent C++ path, not a re-derivation the far lane shares) and is negative-tested (it fails
+  on the un-carved build — h_mismatch 3 / 217 bad columns on the 45-column battery). The skip=1
+  band-A fill stays un-carved (solid 0..surface_h) — a pre-existing, documented demote/promote
+  seam, out of AC-0387's scope. Never re-derive or round a value another lane computes independently
+  — compare and assert equality, the way the arms do.
 - **A far column is never seeded as all air**, and a far→full promotion re-seeds the **whole**
   column top-down. A stale all-air seam mis-carries sky (a real bug the probe found). The promotion
   contract lives in `../ARCHITECTURE.md` §6 — read it before touching promotion.

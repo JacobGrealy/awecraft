@@ -105,7 +105,7 @@ quits.
 | Source | Role |
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
-| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4) + the **AC-0292 P4 families** (vanilla pillars in the deep branch, big ore veins, the 3-D biome field → deepslate/dripstone/sculk/moss surface rules + the post-carve drip pass — see the AC-0292 bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b: builds only the 3 surface fields + H/biome/top-block, NO slabs, ~92 µs/col vs ~1.7 ms full) |
+| `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4) + the **AC-0292 P4 families** (vanilla pillars in the deep branch, big ore veins, the 3-D biome field → deepslate/dripstone/sculk/moss surface rules + the post-carve drip pass — see the AC-0292 bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b; **AC-0387: the H is now the CARVED top** — the lane runs the full path's per-column sequence (cave-lattice dens_at scan + aquifer + the AC-0290 carver) on a mask so the far/veg H IS the height the full path would produce (the promotion contract); the 3 surface fields + the 8 cave-lattice fields + the aquifer table + the carver plan are built per chunk — the AC-0387 price, measured 95 → 3,353 µs/chunk vs 5,651 µs full on the 2026-10-01 box; still NO slabs) |
 | `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
@@ -695,9 +695,12 @@ Match these; do not improvise a different approach in a task.
   height = **8-block Y cells** (Bedrock's resolution; `GY_CELLS_CAVE = 48`, FieldC 7×49×7 =
   2401 pts, same xz cells as the coarse lattice) — while the SURFACE + ORE fields (f_sc/f_sh/
   f_sr, f_ore1-3) stay on the original 48-block-y coarse lattice (`GY_CELLS = 8`, 441 pts); the
-  split is what keeps H / the far payload / the skip payload bit-exact by construction (the cave
-  lattice is built and read ONLY on the full path — never by gen_far / gen_veg_cells /
-  column_heights16). The in-column AND veg-margin scans read every cave input trilinearly off
+  split is what keeps the SURFACE H bit-exact by construction (the cave lattice never feeds the
+  3 surface fields / the heights pass / column_heights16). AC-0387: the FAR lanes (gen_far /
+  gen_veg_cells) now BUILD the cave lattice too (the carved_top_pass runs the full path's
+  per-column dens_at scan + aquifer + carver so the far/veg H is the full path's CARVED top —
+  the promotion contract, pre-AC-0387 they emitted the un-carved surface_h, which this ticket
+  measured wrong on 866/102,400 columns, worst a 91-block canyon). The in-column AND veg-margin scans read every cave input trilinearly off
   the cave lattice (the dense per-block vn3 calls LEFT the scan at AC-0359 — per-chunk
   generation 5076→2884 µs, the scan stage 4373→1291 µs); the dense sources `density_layer` /
   `density_entrance` stay bound as the genprobe lockstep references. The deep zone is now
@@ -731,9 +734,12 @@ Match these; do not improvise a different approach in a task.
   (`k ≥ K_CUT`): vanilla applies the spag3d/noodle terms at all depths, but the shallow branch
   must stay bit-identical or the AC-0360 near-surface seal (32,249→0 void) comes back — the
   deviation is recorded. Built and read ONLY on the full path (skip==0) and in the deep band,
-  so the heightmap H (surface_h of the 3 SURFACE fields) / the far / the skip payloads stay
-  bit-exact by construction (thash `8df7aeb4…0dc4f11` byte-identical before/after + farab
-  `h_mismatch` 0 prove it). The dense source functions are `AweGen::density_cave` (the cheese),
+  so the heightmap H (surface_h of the 3 SURFACE fields) / the skip payload stay bit-exact by
+  construction (thash `8df7aeb4…0dc4f11` byte-identical before/after + farab `h_mismatch` 0
+  prove it). AC-0387 moved the FAR payload's H off that heightmap: the far lane now runs the
+  same per-column sequence (the `carved_top_pass`), so the far H is the full path's carved
+  top — the full/far H identity holds by construction (genhash 25/25 unchanged — the hash
+  covers the full path only, which this ticket does not touch). The dense source functions are `AweGen::density_cave` (the cheese),
   `AweGen::spag2d_density / spag3d_density / spagrough_density / noodle_density` (the vanilla
   tunnels) and `AweGen::density_layer / density_entrance / dens_at` (the router's layer /
   entrance family / the 9-arg router itself); the genprobe arm mirrors those exact expressions
@@ -870,7 +876,9 @@ Match these; do not improvise a different approach in a task.
   regenerate → read-back, far at edit time).
 - **Demotion + lane ownership (AC-0312)**: the keep-all-LOD DATA retention is RETIRED —
   a column leaving the real band is swapped to the h-only far form (`generate_far`
-  payload, bit-exact no-cave H + `no_caves`) with `clear_data()`: **band A** keeps its
+  payload, the CARVED top H — the height the full path would produce (AC-0387) — +
+  `no_caves` (the payload carries no cave data: it is the silhouette)) with
+  `clear_data()`: **band A** keeps its
   OLD high-LOD mesh resident + visible (no re-materialization owed — the build pick
   skips meshed columns; the next promotion's full regen re-converges the delta),
   **bands B/C** flip to the ready stored low (else the low obligation re-opens and

@@ -78,4 +78,185 @@ boundary r4 (self-check, ONE run):      ok=true, marker_ok=true, remesh_ok=true,
 6. GATES: G0 0 SCRIPT ERROR; farab h_mismatch 0; genhash 25/25 unchanged; boundary r4 ok (20-chunk walk
    22.61s, p95 33ms, 36 crossings, remesh_ok); ladder hit a slow satellite rebuild (not completed in-budget,
    standing gate — coordinator to confirm 20/20); meshprobe/halo/lightstate/r16 = coordinator's battery.</pre>
+<div class="warn"><b>STATUS UPDATE (2026-10-02): the user chose the FULL FIX ("take the full fix, whatever it costs").</b> Sections 8–14 record the fix, the before/after measurement, the repaired gate (negative-tested), the standing gates on the final binary, and the fill-window numbers. §1–7 above are the pre-fix investigation, kept as the mechanism record.</div>
+
+<h2>8. The fix (what the code does now)</h2>
+<p>All in <code>gdext/src/gen.cpp</code> (the C++ lanes), no game-code changes. The promotion contract in
+<code>godot/world/AGENTS.md</code> — "a far/h-only column's H <i>is</i> the height the full path would produce" —
+now holds by construction: both far lanes run the full path's per-column sequence and emit the result.</p>
+<ul>
+ <li><b>New <code>carved_top_pass</code> (inserted before <code>gen_far</code>).</b> Builds exactly what the full path's scan reads —
+ the 8 cave-lattice <code>FieldC</code>'s on the FULL second sp (2,401 pts) with the bit-exact <code>gen_flat</code> build calls
+ (cheese seed+301, spag2d/spag3d/spagrough/noodle, layer seed+302, entrance seed+306, pillar), the aquifer table, and the
+ carver plan. Per column it re-runs the top-down <code>dens_at</code> scan operation-for-operation with the full path
+ (p_keep=nullptr), fills a 384-cell mask (solid → stone; !solid → <code>aqu_block</code> — the slab-cached per-column aquifer
+ result, bit-identical to the full path's per-cell calls), then runs <code>carver_carve_column</code> (the AC-0290 plan,
+ p_water=nullptr) → <code>he2</code> = the carved top. The top-block id follows the full path's final-row rule (carver
+ re-skin: grass/sand/snow, sand if <code>he2 ≤ sea+1</code> &amp;&amp; biome≠1, bedrock if <code>he2 &lt; 1</code>; otherwise the fill
+ top row: bedrock y&lt;5, deepslate y&lt;64, else the biome surface block). A 20×20 margin scan (pre-carve, no carver — the
+ veg margin never sees carve) feeds the veg lane's cross-column tree checks.</li>
+ <li><b><code>gen_far</code> (skip=2).</b> Coarse sp + the 3 surface fields + <code>col_heights_pass</code> (unchanged) + the full spc +
+ <code>carved_top_pass(with_margin=false)</code>. The payload now carries <b>H = carved top</b> and <b>top = post-carve top block</b>
+ (biome/bcode unchanged). No slabs, as before.</li>
+ <li><b><code>gen_veg_cells</code>.</b> Same addition with <code>with_margin=true</code>. Tree bases now stand on the carved top
+ (in-column: the <code>solid_ids[topid]</code> check at the carved top + hcol = carved H; margin: the 20×20 pre-carve scan).
+ The H2 gate is unchanged. Flowers (clutter — air in both emits) read the same carved top.</li>
+ <li><b><code>gen_flat</code> out-params + <code>carved_tops</code> binding (the gate's reference).</b> <code>gen_flat</code> gains optional
+ <code>p_heff</code>/<code>p_topblk</code> out-params (nullptr by default → the full path is bit-identical; captured just before
+ <code>return flat</code>). New binding <code>carved_tops(cx,cz,s,h,sea,face,R)</code> → 768 B = 256 × (heff u16 LE + topblk u8) —
+ the full path's own effective top + top block, an independent code path from the far lane (no circularity).</li>
+</ul>
+<p class="note">Deliberate scope line: <code>generate_resl(skip=1)</code> (the band-A materialization fill) is UNCHANGED — it still
+fills solid 0..surface_h un-carved. That seam (band-A fill vs the full column) is pre-existing and documented; the far
+PAYLOAD and the far/veg geometry are what the user saw, and they are now the carved top. The full path (skip=0) is
+untouched → genhash 25/25 (§11).</p>
+
+<h2>9. Measurement — before vs after (probe arm, seed 44, 20×20 chunks = 400 chunks / 102,400 columns)</h2>
+<p>Temp env-gated probe arm (pure C++ calls; added + removed in this task per AC-0140): <code>generate_far</code> vs
+(a) <b>strict</b> — the full path's own carved top via <code>carved_tops</code>, and (b) <b>decoded</b> — the full column's topmost
+non-zero cell (water/veg/dripstone included). Pre-fix build (R1) vs fixed build (R2); logs
+<code>.scratch/AC-0387-probe-{before,after}.log</code>.</p>
+<table>
+ <tr><th></th><th>pre-fix</th><th>post-fix</th></tr>
+ <tr><td>strict mismatch (far H ≠ full-path carved top)</td><td class="bad">866 (investigation; 0.85%)</td><td class="ok">0 of 102,400 (taller 0, shorter 0)</td></tr>
+ <tr><td>decoded mismatch — far H &gt; full-column top</td><td class="bad">800 (hist peak ≤9 blocks, tail to 91)</td><td class="ok">0, max_disc 0</td></tr>
+ <tr><td>worst case (chunk −6,−3 col 5,0 — the 91-block canyon)</td><td class="bad">far 147 / top 56 (deepslate)</td><td class="ok">far 56 / heff 56 / top 56</td></tr>
+ <tr><td>decoded far H &lt; full-column top ("standing on ground")</td><td>25,356</td><td>25,588</td></tr>
+ <tr><td>…classified (top block): water / leaves / dripstone / roses / dandelions</td><td>2,546 / 19,187 / 2,477 / 530 / 616</td><td>2,546 / 19,376 / 2,520 / 530 / 616</td></tr>
+ <tr><td>land columns (H &gt; sea+1)</td><td>97,439</td><td>96,883 (−556 carved below sea)</td></tr>
+ <tr><td>lane cost, per chunk: far / veg / full</td><td>95 / 114 / 5,366 µs</td><td>3,353 / 3,390 / 5,651 µs</td></tr>
+</table>
+<ul>
+ <li><b>Every disagreeing column is fixed.</b> Strict 866→0 and decoded-taller 800→0; the 91-block canyon is now
+ 56/56/56. No far column is taller than the full path would make it — the user's "ground drops when detail streams in"
+ is gone.</li>
+ <li><b>The "shorter" residual is all legitimate:</b> everything there stands ON the ground — trees (leaves 19,376), ocean
+ water surface (2,546), dripstone speleothems (2,520), flowers (1,146). The far silhouette (a single H per column) never
+ carried any of these; the investigation's 2,888 flagged columns are the dripstone+flower-class subset of the same
+ standing-on-ground population. The +232 delta vs pre-fix (leaves 19,187→19,376, dripstone 2,477→2,520) is carve moving
+ where trees/dripstone stand.</li>
+ <li><b>556 land columns carved below sea</b> — consistent with the farab water census moving 4→6 slabs (§11): the far EMIT
+ fills H+1..sea whenever the payload H &lt; sea (the <code>St = max(H, sea)</code> rule — the emit sees only the payload, so there
+ is no AC-0342 pre-carve gate), so carved-land-below-sea columns draw a water surface in the far band. The real band-A
+ fill stays dry (its own AC-0342 rule) — a pre-existing skip-lane seam, untouched by this fix.</li>
+ <li><b>Cost (vs the ticket's references 5,502 µs AC-0366 / 4,880–4,960 AC-0381; this box measured the full path at
+ 5,366–5,651):</b> the far lane pays the scan+carver on a mask instead of a slab — 95→3,353 µs (×35), veg 114→3,390. The
+ full path is +5% (5,366→5,651 — the out-param capture is free; the delta is box noise). Both far lanes now cost ~60%
+ of the full path — the ticket's "+3,000–4,500 µs" estimate came in at ~+3,300.</li>
+</ul>
+
+<h2>10. The gate — repaired and negative-tested</h2>
+<p><b>The standing <code>farab</code> gate was passing by construction</b> (§3): check (1) compared the far H to the
+UN-CARVED heights pass — both sides <code>surface_h</code> — so it could not see this seam. Repairs (all in
+<code>godot/scenes/harness.gd</code> + the <code>carved_tops</code> binding):</p>
+<ul>
+ <li><b>(1) re-pointed:</b> the far payload's H u16 + TOP row are now bit-compared to <code>carved_tops</code> — the full path's
+ own heff + top block (independent C++ code path, no circularity). Per-chunk <code>h_mismatch</code> + per-column
+ <code>h_bad_h</code>/<code>h_bad_top</code> counts + <code>h_first</code>.</li>
+ <li><b>(2) the mesh A/B reference moved with it:</b> <code>_farab_carved_slabs</code> builds the skip-fill shape AT THE CARVED
+ TOP (the exact skip-fill cell rules with H → the payload's H and the top row → the payload's top id; water at the far
+ EMIT's St rule; the same <code>veg_cells</code> tree payload stamped, first-writer-wins) → <code>io.palettize_flat</code> dict slabs →
+ <code>low_emit_avg</code> vs the far payload's <code>h_avg_emit</code> at G=4 and G=8. Byte-identical to the old reference wherever the
+ carve is a no-op — the identity keeps its pre-fix teeth on the un-carved columns.</li>
+ <li><b>(4a) hardened:</b> the full path's top block at the carved top == the payload TOP row, every (x,z).</li>
+ <li><b>(4b) reported, never gated:</b> post-fix a pierce (full top &lt; far H) is structurally impossible; the field must
+ read 0.</li>
+</ul>
+<p><b>NEGATIVE TEST</b> (build R3 = pre-fix far lanes + the repaired gate, i.e. the tree as it was):
+<code>.scratch/AC-0387-farab-negative2.log</code> → <span class="bad">ok:false, h_mismatch 3</span> (of the 45 battery chunks),
+<code>h_bad_h 217</code> columns, <code>h_bad_top 166</code>, <code>h_first "c-5,-4 bad_h=35"</code>, <code>mat_surf_diff 1</code> (166 cells;
+first <code>x14,z4 H=150 fulltop=4 payloadtop=1</code> — an un-carved grass at 150 where the carve ends in sand at 4),
+<code>mat_pierce_cells 193</code>. The repaired gate <b>would have caught this bug at the battery's first run</b>. (The (2)
+slab identity reads 0/0 on both builds — it is the EMITTER identity on a given payload surface; the teeth against the
+carve are (1)/(4a).) On the fixed build: <span class="ok">ok:true, h_mismatch 0, mat_surf_diff 0, mat_pierce 0</span> (§11).</p>
+
+<h2>11. Standing gates on the final binary (R4, 2026-10-02 01:31, this box)</h2>
+<table>
+ <tr><th>gate</th><th>result</th><th>standing / note</th></tr>
+ <tr><td>G0 (<code>--quit</code>, final tree, probe arm removed)</td><td class="ok">0 SCRIPT ERROR</td><td>zero-SCRIPT-ERROR semantics</td></tr>
+ <tr><td><code>farab</code> (repaired)</td><td class="ok">ok:true — h_mismatch 0, slab_mismatch 0/0 (1080/1080), mat_surf_diff 0, mat_pierce 0, mat_uplift 3,359, water_slabs 6/7, codec bit0/v4 ok, cols 45</td><td>water 4/5→6/7: the +2 are the carved-below-sea water surfaces (§9); uplift 3,286→3,359</td></tr>
+ <tr><td><code>genhash</code></td><td class="ok">25/25 byte-identical (chunk (0,0) <code>46c20b07…</code> = the AC-0311 P2 reference)</td><td>NO REBASE — the hash covers the full path only, and the full path is bit-identical (out-params nullptr by default). The ticket's expected rebase is 0 moved lines, deliberately.</td></tr>
+ <tr><td><code>oceansurface</code> (AC-0291/0342/0374 census)</td><td class="ok">ok:true — dry_zero_water 0, surface_ok_at_sea 1080/1080, open_wet 0, total_water 30,019 / lava 1,058</td><td>identical standing values — the census runs the full path, which is untouched</td></tr>
+ <tr><td><code>crossface</code></td><td class="ok">ok:true — walk + fly crossed, light never unlit, seam traversable</td><td>~4 min (the far lane now feeds the face stream)</td></tr>
+ <tr><td><code>r16</code> (<code>--fixed-fps 600</code>, ~6.3 min)</td><td class="ok">ok:true — all sub-flags green; far_holes 0/0 BOTH bands; inr holes 0/0/0; uv_mismatch 0; air_ok/uv_repeat_ok/wave_ok true; built_all</td><td>far band now built from the carved payload</td></tr>
+ <tr><td><code>lightstate</code></td><td class="ok">leaks 0/0, low_on_high 0, holes 0</td><td>standing 0/0</td></tr>
+ <tr><td><code>meshprobe</code></td><td class="ok">match_rate 1.0, mismatch [], ac0211_ok</td><td>standing 1.0</td></tr>
+ <tr><td><code>halo</code></td><td class="ok">a: 0 mismatches (4,030,464 cells), b: 226/226 slabs, payload_bad 0, b1 20/20</td><td>ok</td></tr>
+ <tr><td><code>boundary</code> r4 (one self-check run)</td><td class="ok">ok:true, remesh_ok, marker_ok — walk 21.76 s (pre-fix 22.61 s), frame p50/p95 13/31 ms (pre-fix p95 33), storm_walk_p99 116 (≤200 ✓), crossing_frame_p95 57 (≤150 ✓)</td><td>but the SYNCHRONOUS sweep gate <code>crossing_burst_p50</code> ≤ 10 now reads <span class="bad">34.8</span> — §12</td></tr>
+ <tr><td><code>ladder</code></td><td class="ok">ok:true — band_a 20/20 (band_a_fail []), band_b 144/144, band_c 90/90, tier_mismatch 0, sky_bad_alpha 0, boundary_flip 90</td><td>census moved vs the AC-0331 standing text (155/94/sky 72, canvas 1888px→2144px): part attributable to the fix (same-region farab A/B: water_slabs 4→6, uplift 3,286→3,359 — the far payloads in the ladder world's far ring changed), part unattributed tree drift (the standing text declares "the byte-identity + identity gates are the invariants, not the numbers"). The identity gates — including band-A's per-cell top-block == payload-top — are all green.</td></tr>
+</table>
+<p class="note">Full battery + the Windows DLL rebuild (<code>build_windows.sh</code> MinGW cross) are the coordinator's — but the
+Windows rebuild is MANDATORY for shipping: the fix lives in the C++ lanes; a pre-fix DLL would ship the bug.
+Native rebuild + re-stage were done by this task (R4, <code>godot/bin/libchunkio.so</code> 1,671,744 B).</p>
+
+<h2>12. The fill window (the ticket's WATCH item)</h2>
+<ul>
+ <li><b>Per-chunk lane cost</b> (the fill-window currency): far 95→3,353 µs, veg 114→3,390 µs, full 5,366→5,651 µs (§9).
+ Worker-side throughput on the far band is now ~3.4 ms/chunk instead of ~0.1 ms — the forward-lane wall is
+ far-lane-bound (~3.1–4.5 s of worker wall per crossing in the boundary run — a throughput field, never gated).</li>
+ <li><b>The synchronous recenter sweep (the AC-0348 gate) is the real regression:</b> <code>crossing_burst_p50</code>
+ <span class="bad">34.8 ms</span> (historical 5.3–7.0; standing gate ≤ 10; max 52.7). Direct attribution: the worst crossing runs
+ 15 synchronous <code>generate_far</code> edge calls × 3.35 ms = 50.3 ms — the measured sweep is 51.9 ms (residual = the
+ resident-set walk). The sweep used to be dominated by the walk; now it is dominated by the far lane. This is the
+ AC-0369 note coming due ("if a later run shows P50 creeping toward 10, that is a real regression and the sweep
+ path… is the place to look").</li>
+ <li><b>Mitigation (follow-up owed — NOT in this ticket's scope; it touches <code>world.gd</code>'s recenter, not the lanes):</b>
+ the recenter sweep RECOMPUTES the far payload for edge columns whose far payload is already RESIDENT (the demote
+ handoff keeps the payload; it is a pure f(seed, cx, cz) — the stored copy is bit-identical to the recomputation).
+ Reusing the stored payload instead of recomputing restores the pre-fix sweep cost (~5–7 ms); alternatively the edge
+ far regen moves to the worker lane. Either is a small, well-scoped change against a now-measured 34.8 ms.</li>
+ <li><b>Satellite bake:</b> 196,196 chunks × 3.35 ms ≈ <b>11.0 min</b> of pure generation (pre-fix ≈ 19 s). The bake is
+ frame-sliced (per-frame step stays in budget; a cached bake still reads ~1.2 s wall — crossface log), so the price is
+ bake WALL time on a fresh world, not frame cost. The ladder run above includes it and stayed green.</li>
+ <li><b>The drain-bound fill window (AC-0364 ~20±4 s)</b> stayed in budget: the boundary footprint is complete
+ (missing 0), the walk is 21.76 s, frame p95 31 ms — the window is now worker-bound on far-lane cost, not
+ main-thread-bound.</li>
+</ul>
+
+<h2>13. What the player sees change (new worlds; seed 44 as the witness)</h2>
+<ul>
+ <li>The far/medium silhouette now MATCHES the carved ground: 866/102,400 columns (0.85%) no longer float 1–91 blocks
+ above the real surface; the worst 91-block canyon is gone. The user's "the ground visibly drops as detail streams in"
+ is exactly this set — it is now zero.</li>
+ <li>Far-band TREES stand on the carved top (they no longer float above carved valleys). Same veg payload, same H2
+ gate — only the base height moved.</li>
+ <li>556 land columns carved below sea now draw a water surface in the FAR band (the emit's St rule); the near band-A
+ fill of those columns stays dry (pre-existing skip-lane seam, unchanged) — so at the band seam those specific
+ columns can show far-water / near-dry. Small, and honest to what each layer carries.</li>
+ <li>UNCHANGED: full-column generation (bit-identical — genhash 25/25), the near band, caves as seen up close, the save
+ format (the far payload is never saved — existing saves regenerate their far band from the seed and see the fix
+ automatically).</li>
+</ul>
+
+<h2>14. Deliverable report (≤15 lines)</h2>
+<pre>1. FULL FIX DONE (gdext/src/gen.cpp only): new carved_top_pass runs the full path's per-column
+   sequence (cave-lattice dens_at scan + aquifer + carver) on a mask; gen_far emits H = the full
+   path's carved top + post-carve top block; gen_veg_cells bases trees/flowers on the carved top.
+   A carved_tops binding exposes the full path's own heff/top-block for the gate.
+2. VERIFIED BY MEASUREMENT (400 chunks / 102,400 cols, seed 44): far-H mismatches 866 → 0 (strict
+   vs the full path's carved top; decoded-taller 800 → 0); the 91-block canyon (chunk -6,-3) is now
+   56/56/56. The 25,588 "shorter" columns are all standing-on-ground (trees 19,376 / water 2,546 /
+   dripstone 2,520 / flowers 1,146) — legitimate far-silhouette residual.
+3. THE GATE WAS THE OTHER HALF: farab (1) compared far H to the UN-CARVED heights pass (passed by
+   construction). Re-pointed at carved_tops + the (2) mesh reference rebuilt at the carved top.
+   NEGATIVE-TESTED: on the pre-fix build the repaired gate reads ok:false, h_mismatch 3, h_bad_h 217 —
+   it would have caught this bug at the battery's first run.
+4. GENHASH: 25/25 UNCHANGED — the hash covers the full path only; the full path is bit-identical
+   (out-params nullptr by default). Rebase cost: 0 lines.
+5. COST: far 95 → 3,353 us/chunk, veg 114 → 3,390, full 5,366 → 5,651 (+5%, box noise). Within the
+   ticket's +3,000-4,500 us estimate.
+6. GATES (final binary): G0 0 SCRIPT ERROR; farab ok (h_mismatch 0, 1080/1080 slabs, mat_surf_diff 0);
+   genhash 25/25; oceansurface census identical (dry_zero_water 0, surface_ok_at_sea 1080/1080);
+   crossface ok; r16 all sub-flags + far_holes 0/0 both bands; lightstate 0/0; meshprobe 1.0; halo ok;
+   ladder 20/20 ok (band_a_fail []); boundary r4 ok, remesh_ok, marker_ok, walk 21.76 s, p95 31 ms.
+7. FILL WINDOW: the synchronous recenter sweep (AC-0348 gate crossing_burst_p50 &lt;= 10) now reads
+   34.8 ms (15 sync generate_far x 3.35 ms per worst crossing) — a real, attributed regression;
+   mitigation owed as a follow-up (reuse the resident far payload in the recenter sweep — it is a
+   pure f(seed,cx,cz) — or move the edge far regen to the worker). Satellite bake: ~11 min gen on a
+   fresh world (frame-sliced; not frame-cost).
+8. DOCS synced in-task: ARCHITECTURE.md (the far lane carves; the lattice statement corrected),
+   world/AGENTS.md (the promotion contract is now computed, and the gate's teeth), harness_data.yaml
+   farab row re-rendered + --check clean. Probe arm removed; G0 re-verified on the pristine tree.
+9. NATIVE rebuild + re-stage DONE (Linux .so staged). The Windows DLL rebuild (build_windows.sh)
+   is the coordinator's but MANDATORY before shipping — the fix is in the C++ lanes.</pre>
 </body></html>

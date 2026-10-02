@@ -582,14 +582,19 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			get_tree().quit()
 			return
 		if logic == "farab":
-			# AC-0284b: the FAR (h-only) column A/B battery (the permanent
-			# gate): (1) the far payload's H u16 is bit-exact with the
-			# heights pass (the promotion-consistency contract); (2)
-			# h_avg_emit is BYTE-IDENTICAL to low_emit_avg on the same
-			# column's skip-filled slabs, every slab, both the sky and the
-			# deep-ore color (the halo byte-identity gate); (3) the v6
-			# bit-1 codec round-trip (~1 KB) + the 284a bit-0 slab shape +
-			# the legacy v4 shape all decode. Pure C++ — no world build.
+			# AC-0284b (AC-0387 RE-POINTED): the FAR (h-only) column A/B
+			# battery (the permanent gate): (1) the far payload's H u16 +
+			# top row are bit-exact with the FULL path's carved top +
+			# final top block (carved_tops — the promotion contract: a
+			# far/h-only column's H IS the height the full path would
+			# produce; the pre-AC-0387 heights-pass reference was
+			# un-carved on BOTH sides and passed by construction over the
+			# 91-block canyon); (2) h_avg_emit is BYTE-IDENTICAL to
+			# low_emit_avg on the same column's skip-fill shape at the
+			# CARVED top, every slab, both the sky and the deep-ore color
+			# (the halo byte-identity gate); (3) the v6 bit-1 codec
+			# round-trip (~1 KB) + the 284a bit-0 slab shape + the legacy
+			# v4 shape all decode. Pure C++ — no world build.
 			await _farab_test()
 			get_tree().quit()
 			return
@@ -11429,11 +11434,13 @@ func _farab_test() -> void:
 	var sea := int(Data.SEA)
 	var seed := int(Game.world_seed)
 	var g: Variant = WorldGen.gen_cpp()
+	var io: Variant = ChunkIO.io_cpp()
 	var mc: Variant = _ChunkScriptM.mesh_cpp()
 	var fcc: PackedFloat32Array = world._lod_fcc_get()
 	var out: Dictionary = {
 		"ok": false, "seed": seed, "fcc_tiles": int(world.lod_fcc_tiles),
-		"cols": 0, "h_mismatch": 0, "slab_cmp": 0, "slab_mismatch": 0,
+		"cols": 0, "h_mismatch": 0, "h_bad_h": 0, "h_bad_top": 0,
+		"slab_cmp": 0, "slab_mismatch": 0,
 		# AC-0312: band B (8x8) identity + the water exception's
 		# accounting + the skip=1-vs-full materialization identity.
 		"slab_cmp8": 0, "slab_mismatch8": 0, "water_slabs": 0,
@@ -11459,7 +11466,20 @@ func _farab_test() -> void:
 		[11, -2], [-13, 4], [2, 13],
 		[-1, 5], [0, 4], [-2, 5], [12, -17],
 	]
-	# ---- (1) the far payload's H u16 LE == the heights pass (u16).
+	# ---- (1) the far payload's H u16 LE == the FULL path's CARVED top,
+	# and the payload's TOP row == the full path's final top block.
+	# AC-0387 RE-POINTED: the pre-AC-0387 gate compared the far H to the
+	# UN-CARVED heights pass (column_heights16) — both sides were
+	# surface_h, so h_mismatch 0 passed BY CONSTRUCTION while the player
+	# saw a 91-block ground-drop (the 866/102,400-column seam). A gate
+	# that cannot see the defect it stands next to reads as coverage.
+	# Now the reference is carved_tops — the full path's own per-column
+	# heff + top block (gen_flat skip=0: the real cave lattice + aquifer
+	# + carver + drip + veg — an INDEPENDENT C++ path, not a re-derivation
+	# the far lane shares), per the promotion contract: a far/h-only
+	# column's H IS the height the full path would produce.
+	# NEGATIVE-TESTED on the deliberately reverted build (results §8 —
+	# the repaired gate fails on the pre-fix tree).
 	for cxy in cols:
 		var cx: int = int(cxy[0])
 		var cz: int = int(cxy[1])
@@ -11469,8 +11489,22 @@ func _farab_test() -> void:
 			Debug.result(out)
 			get_tree().quit()
 			return
-		if pay.slice(0, 512) != g.column_heights16(cx, cz, seed, H):
+		var ct: PackedByteArray = g.carved_tops(cx, cz, seed, H, sea)
+		var hm := 0
+		var tm := 0
+		for i in range(256):
+			var hv := int(pay[2 * i]) | (int(pay[2 * i + 1]) << 8)
+			var tv := int(ct[3 * i]) | (int(ct[3 * i + 1]) << 8)
+			if hv != tv:
+				hm += 1
+			if int(pay[768 + i]) != int(ct[3 * i + 2]):
+				tm += 1
+		if hm > 0 or tm > 0:
 			out["h_mismatch"] += 1
+			out["h_bad_h"] += hm
+			out["h_bad_top"] += tm
+			if out.get("h_first", "") == "":
+				out["h_first"] = "c%d,%d bad_h=%d bad_top=%d" % [cx, cz, hm, tm]
 		out["cols"] += 1
 	# ---- (2) the mesh A/B — h_avg_emit vs low_emit_avg on the
 	# skip-filled slabs, every slab, the sky from the payload's H.
@@ -11491,7 +11525,15 @@ func _farab_test() -> void:
 			var cz: int = int(cxy[1])
 			var pay: PackedByteArray = g.generate_far(cx, cz, seed, H, sea)
 			var veg: PackedByteArray = g.veg_cells(cx, cz, seed, H, sea)
-			var resl1: Array = g.generate_resl(cx, cz, seed, H, sea, 1, PackedByteArray())
+			# AC-0387 RE-POINTED: the reference surface is the skip-fill
+			# shape at the CARVED top — the payload now describes the
+			# carved surface (the height the full path would produce),
+			# not the un-carved skip fill. Synthesized from the exact
+			# skip-fill cell rules with H -> the payload's H and the top
+			# row -> the payload's top id (byte-identical to the real
+			# skip slab wherever the carve is a no-op — the identity
+			# keeps its old teeth on the un-carved columns).
+			var resl1: Array = _farab_carved_slabs(io, g, pay, cx, cz, seed, H, sea)
 			for si in range(H / 16):
 				var sky: PackedByteArray = _farab_sky8(pay, si) if is8 else _farab_sky(pay, si)
 				var ore := PackedByteArray()
@@ -11502,7 +11544,7 @@ func _farab_test() -> void:
 				# the identity is the proof (the water-topped cell 126-127
 				# / 124-127 is kept whole, so the water census below must
 				# stay non-vacuous: the far ocean keeps its surface).
-				var a: Dictionary = mc.low_emit_avg(resl1[0], si, gridn, fcc, sky, wtlx, wtly, wpx, sea)
+				var a: Dictionary = mc.low_emit_avg(resl1, si, gridn, fcc, sky, wtlx, wtly, wpx, sea)
 				var b: Dictionary = mc.h_avg_emit(pay.slice(0, 512), pay.slice(512, 768), pay.slice(768, 1024), ore, veg, si, gridn, fcc, sky, sea, H, wtlx, wtly, wpx, sea)
 				var an_w: PackedVector3Array = a.get("wv", PackedVector3Array())
 				if an_w.size() > 0:
@@ -11561,24 +11603,27 @@ func _farab_test() -> void:
 	var rd0: Dictionary = ChunkIO.decode_column(blob0, seed, H)
 	out["codec"]["v4_ok"] = not bool(rd0.get("no_caves", false)) and not bool(rd0.get("far", false)) \
 		and rdb.size() > 0 and rd0.get("data", PackedByteArray()) == flat0
-	# ---- (4) AC-0312: the MATERIALIZATION IDENTITY.
-	# (4a) HARD (ok): the skip=1 fill's SURFACE ROW (y == H) == the far
-	#     payload's TOP row for every (x, z). The payload's top is
-	#     "the fill loop's y == he row, verbatim — the same cell the
-	#     skip path fills at y == H", so a mismatch is a C++ regression
-	#     (the band-A mesh would draw a surface the payload/light
-	#     contract does not describe), not a deviation.
+	# ---- (4) the MATERIALIZATION IDENTITY (AC-0312; AC-0387 RE-POINTED).
+	# (4a) HARD (ok): the FULL path's final TOP BLOCK at the carved top
+	#     (carved_tops — gen_flat skip=0's actual flat cell at heff,
+	#     after drip + veg) == the far payload's TOP id for every
+	#     (x, z). Pre-AC-0387 this compared the skip=1 fill's y == H row
+	#     against the payload's top (the un-carved surface identity); the
+	#     payload now carries the CARVED top, so the reference is the
+	#     full path's own top block — an independent C++ path. A
+	#     mismatch means the far lane's top rule drifts from the full
+	#     path's fill/re-skin rule (the coarse mesh would draw a surface
+	#     block the real column does not have).
 	# (4b) REPORTED (honest deviation, never part of ok): the FULL
-	#     column's (skip=0, cave-field-carved) terrain top vs the
-	#     no-cave H. The far representation draws the no-cave H BY
-	#     DESIGN (no caves, ever, in a draw band — the pre-existing
-	#     AC-0284b property, band A merely materializes the same H as
-	#     blocks). full_top < H = a surface-band cave-field PIERCE —
-	#     band A would draw solid where the real column has a hole
-	#     (the spec-flagged risk: detected here, recorded in the
-	#     results, never silent). full_top > H = the surface-band cave
-	#     term's rugged uplift (informational). The volume below the
-	#     surface is never compared (caves are the point of the far
+	#     column's decoded top (topmost non-zero cell — water/veg/
+	#     dripstone included) vs the far H. Post-AC-0387 the far H IS
+	#     the full path's carved top, so full_top < H (a PIERCE — the
+	#     far draws solid where the real column's top is air) is
+	#     structurally impossible and must read 0; full_top > H is the
+	#     stuff that stands ABOVE the ground (ocean fill, stalagmites,
+	#     trees) — informational, the legitimate residual the far
+	#     silhouette does not carry. The volume below the surface is
+	#     never compared (caves are the point of the far
 	#     representation). slabs_flat layout: 4096 bytes/slab,
 	#     cell = y*256 + z*16 + x.
 	var io4: Variant = ChunkIO.io_cpp()
@@ -11587,9 +11632,8 @@ func _farab_test() -> void:
 		var cz: int = int(cxy[1])
 		var paym: PackedByteArray = g.generate_far(cx, cz, seed, H, sea)
 		var reslf: Array = g.generate_resl(cx, cz, seed, H, sea, 0, PackedByteArray())
-		var resl1m: Array = g.generate_resl(cx, cz, seed, H, sea, 1, PackedByteArray())
+		var ctm: PackedByteArray = g.carved_tops(cx, cz, seed, H, sea)
 		var ff: PackedByteArray = io4.slabs_flat(reslf[0])
-		var fs: PackedByteArray = io4.slabs_flat(resl1m[0])
 		out["mat_cmp"] += 1
 		var surf_bad := 0
 		var pierce := 0
@@ -11600,12 +11644,13 @@ func _farab_test() -> void:
 			var lz := i / 16
 			var hv := int(paym[2 * i]) | (int(paym[2 * i + 1]) << 8)
 			var pt := int(paym[768 + i])
-			# (4a) the fill's y == H block == the payload's top id.
-			var fsv := int(fs[hv * 256 + lz * 16 + lx])
+			# (4a) the full path's top block at the carved top == the
+			# payload's top id.
+			var fsv := int(ctm[3 * i + 2])
 			if fsv != pt:
 				surf_bad += 1
 				if first == "":
-					first = "x%d,z%d H=%d fill=%d top=%d" % [lx, lz, hv, fsv, pt]
+					first = "x%d,z%d H=%d fulltop=%d payloadtop=%d" % [lx, lz, hv, fsv, pt]
 			# (4b) the full column's top vs the no-cave H.
 			var tf := -1
 			for y in range(H - 1, -1, -1):
@@ -11638,6 +11683,80 @@ func _farab_test() -> void:
 		and int(out["slab_cmp8"]) == int(cols.size()) * (H / 16) \
 		and wr.x >= 0 and int(out["water_slabs"]) > 0
 	Debug.result(out)
+
+
+# AC-0387: the (2) reference — the skip-fill shape at the CARVED top.
+# The exact skip-fill cell rules (gen_flat skip=1) per column with H
+# replaced by the payload's H (the carved top) and the top row by the
+# payload's top id: bedrock band y<5, the water fill at the FAR EMIT's
+# St rule (St = max(H, sea) — the emit sees only the payload, so no
+# AC-0342 pre-carve gate), the top row, the 3-deep dirt band, then the
+# stone/ore/
+# deepslate cells from stone_ore_slab (the bit-exact stone_ore chain the
+# skip fill writes). Byte-identical to the real skip slab wherever the
+# carve (and the carve in the 20x20 tree neighborhood) is a no-op — the
+# (2) identity keeps its pre-AC-0387 teeth on the un-carved columns.
+# The flat (H*256, cell = y*256 + z*16 + x) is
+# encoded through io.palettize_flat (the shared flat->paletted codec —
+# every data landing's conversion point), so low_emit_avg receives the
+# SAME dict-slab shape ({bs,n,b,p,i,nc}) generate_resl returns, with
+# the bitset-first meshing fast path included. Block ids: 1 grass,
+# 2 dirt, 3 stone, 4 sand, 5 water, 11 bedrock, 24 lava (gen.cpp B_*).
+func _farab_carved_slabs(io: Variant, g: Variant, pay: PackedByteArray, cx: int, cz: int, seed: int, H: int, sea: int) -> Array:
+	var nsl := H / 16
+	var flat: PackedByteArray = PackedByteArray()
+	flat.resize(H * 256)
+	var rock: Array = []
+	for si in range(nsl):
+		rock.append(g.stone_ore_slab(cx, cz, seed, H, si))
+	for i in range(256):
+		var lx := i % 16
+		var lz := i / 16
+		var he := int(pay[2 * i]) | (int(pay[2 * i + 1]) << 8)
+		var top := int(pay[768 + i])
+		var bm := int(pay[512 + i])
+		var rbase := lz * 16 + lx
+		for y in range(H):
+			# The surface the FAR EMIT draws (h_avg_emit's reconstruction
+			# — the identity's contract), op-for-op: bedrock band -> the
+			# St rule (St = max(H, sea): water fills H+1..sea whenever
+			# H < sea — the far emit sees only the payload, so NO
+			# AC-0342 pre-carve gate: a land column the carve drops
+			# below sea draws its water surface here) -> top row ->
+			# 3-deep dirt/sand band -> stone_ore below -> the !solid
+			# rule above the surface (y < 8 lava, else air).
+			var cell := 0
+			if y < 5:
+				cell = 11
+			elif y >= he + 1 and y <= sea:
+				cell = 5
+			elif y == he:
+				cell = top
+			elif y >= he - 3 and y < he:
+				cell = 4 if bm == 1 else 2
+			elif y < he:
+				cell = int(rock[y / 16][(y % 16) * 256 + rbase])
+			elif y < 8:
+				cell = 24
+			flat[y * 256 + rbase] = cell
+	# The TREE cells — the same veg_cells payload the far emit draws
+	# (the skip fill writes these same cells into the slab with the
+	# flat[i] == 0 guard, first-writer-wins in the payload's order; the
+	# AC-0387 fix made the bases the carved top, so the payload and the
+	# slab's surface agree). Flowers are clutter (air in both emits'
+	# recount — they never flip a cell, so they are not listed).
+	var vegp: PackedByteArray = g.veg_cells(cx, cz, seed, H, sea)
+	for k in range(vegp.size() / 4):
+		var v4 := int(vegp[4 * k]) | (int(vegp[4 * k + 1]) << 8) \
+			| (int(vegp[4 * k + 2]) << 16) | (int(vegp[4 * k + 3]) << 24)
+		var tx := v4 & 0xF
+		var tz := (v4 >> 4) & 0xF
+		var ty := (v4 >> 8) & 0x3FF
+		var tid := v4 >> 24
+		var tpos := ty * 256 + tz * 16 + tx
+		if tpos < flat.size() and flat[tpos] == 0:
+			flat[tpos] = tid
+	return io.palettize_flat(flat, nsl)
 
 
 # AC-0284b: the far payload's halo sky (64 bytes — the 4x4x4 cell is lit

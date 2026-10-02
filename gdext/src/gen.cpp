@@ -2753,17 +2753,259 @@ static inline uint8_t rock_base(int face, int y, int x, int z, int bx, int bz,
 	return (uint8_t)B_STONE;
 }
 
+// AC-0387: the CARVED-TOP pass — the far/h-only lanes' H (gen_far's
+// payload, gen_veg_cells' tree/flower bases) is now the height the FULL
+// path (gen_flat skip=0) would produce for the same column — the
+// promotion contract in godot/world/AGENTS.md ("a far/h-only column's H
+// IS the height the full path would produce, because promotion must
+// never shift terrain"). The pre-AC-0387 lanes emitted the un-carved
+// surface_h, which this ticket measured wrong on 866/102,400 columns —
+// worst a 91-block canyon (the user's ground-drop; the results page).
+//
+// Per in-chunk column this reproduces the full path's per-column sequence
+// on the parts that decide the top height (the block ids cannot change
+// it — every carvable solid behaves identically in the cut-through and
+// the he2 walk):
+//   1. the top-down dens_at scan (C48 cave lattice + the pillar max) ->
+//      the solid flags + he (topmost solid, pre-carve) — gen_flat
+//      3234-3292 op-for-op;
+//   2. the mask fill: solidf cells -> B_STONE, the !solid cells at
+//      y <= he -> the SAME aqu_block call the full path's fill makes (the
+//      aquifer's BARRIER STONE is the only solid it adds; its water/lava
+//      are excluded from the top in both lanes, so the block details
+//      never reach he2 — the mask is bit-exact for the carve);
+//   3. the chunk carver plan (build_carver_plan — pure f(seed, cx, cz))
+//      applied through the SAME carver_carve_column the full path calls
+//      -> he2 (the carved top = the payload's H).
+// The top-BLOCK id follows the post-carve top verbatim: the carver
+// re-skin rule where the carve dropped the top (1673-1680), the fill
+// top-row rule otherwise (3336-3382: bedrock band first, then deepslate,
+// then the biome top with the sea+1 sand rule). The scan20 grid gives
+// gen_veg_cells' margin columns the full path's margin scan top (3647-
+// 3686 — PRE-carve: the carver only ever runs on the 256 in-chunk
+// columns, so a margin column's tree base is the density top, not the
+// carve). The aquifer state (AqColState) is per-column and slab-cached —
+// the per-cell results are a pure f(cell, column, slab), so the y-order
+// here (1..he, ascending — the full path's fill order) reads identically.
+//
+// COST: this folds the cave-lattice build + the aquifer + the dens_at
+// scan + the carver into the far/veg lanes (the AC-0387 price — the
+// naive form was estimated +3,000-4,500 us/chunk against the 5,502 /
+// 4,880-4,960 full-path references; the measured cost is in the results
+// page). The stage atomics (field/aquifer/scan/carve) carry the far
+// lanes' share in the same counters the full path uses.
+static void carved_top_pass(const Field &f_sc, const Field &f_sh, const Field &f_sr,
+		double ystep, int bx, int bz, int cx, int cz, int64_t seed, int hmax,
+		int sea, int face, double R, const SpTable &sp,
+		const std::vector<int> &heights, const std::vector<int> &bcode,
+		bool with_margin, std::vector<int> &top, std::vector<uint8_t> &topid,
+		std::vector<int> &scan20) {
+	double ystep_cave = (double)hmax / GY_CELLS_CAVE;
+	// The 8 cave-lattice fields — the SAME builds as gen_flat's full path
+	// (cheese + the 4 vanilla tunnel sources + layer + entrance + pillar;
+	// the vein/biome/ore fields are block-detail only — they never decide
+	// the top height, so they are not built here).
+	long long t_field = now_us();
+	FieldC f_cheese{}, f_layer{}, f_entr{};
+	FieldC f_s2d{}, f_s3d{}, f_spr{}, f_nod{};
+	FieldC f_pillar{};
+	build_field_vn_c(f_cheese, ystep_cave, seed + 301,
+			CHEESE_XZ_SCALE, CHEESE_Y_SCALE, CHEESE_XZ_SCALE,
+			CHEESE_FIRST_OCT, CHEESE_AMPS, CHEESE_AMPS_N, sp);
+	build_field_eval_c(f_s2d, ystep_cave,
+			[&](double x, double y, double z) {
+				return spag2d_density(x, y, z, seed);
+			}, sp);
+	build_field_eval_c(f_s3d, ystep_cave,
+			[&](double x, double y, double z) {
+				return spag3d_density(x, y, z, seed);
+			}, sp);
+	build_field_eval_c(f_spr, ystep_cave,
+			[&](double x, double y, double z) {
+				return spagrough_density(x, y, z, seed);
+			}, sp);
+	build_field_eval_c(f_nod, ystep_cave,
+			[&](double x, double y, double z) {
+				return noodle_density(x, y, z, seed);
+			}, sp);
+	build_field_vn_c(f_layer, ystep_cave, seed + 302,
+			LAYER_XZ_SCALE, LAYER_Y_SCALE, LAYER_XZ_SCALE,
+			LAYER_FIRST_OCT, LAYER_AMPS, LAYER_AMPS_N, sp);
+	build_field_vn_c(f_entr, ystep_cave, seed + 306,
+			ENTR_XZ_SCALE, ENTR_Y_SCALE, ENTR_XZ_SCALE,
+			ENTR_FIRST_OCT, ENTR_AMPS, ENTR_AMPS_N, sp);
+	build_field_eval_c(f_pillar, ystep_cave,
+			[&](double x, double y, double z) {
+				return pillar_density(x, y, z, seed);
+			}, sp);
+	g_t_field_us.fetch_add(now_us() - t_field, std::memory_order_relaxed);
+	// The aquifer table (same call as gen_flat's full path) — the barrier
+	// stone's source (the only aquifer solid the mask fill can see).
+	AquTable aq;
+	long long ta = now_us();
+	aqu_table_build(face, R, cx, cz, seed, sea, aq);
+	g_t_aquifer_us.fetch_add(now_us() - ta, std::memory_order_relaxed);
+	// The chunk carver plan (same call; the feature census is not needed).
+	std::vector<CarveEll> carves;
+	build_carver_plan(cx, cz, seed, carves, nullptr);
+
+	top.resize(256);
+	topid.resize(256);
+	scan20.resize(400);
+	// The mask flat: hmax*256, the (y<<8)|(z<<4)|x layout. Per column only
+	// the column's own cells are written (y 1..he) and read (the carver's
+	// ax/az are fixed per call), so the buffer needs no per-column reset.
+	std::vector<uint8_t> flat((size_t)hmax * 256, 0);
+	std::vector<uint8_t> solidf((size_t)hmax, 0);
+	for (int lz = 0; lz < 16; lz++) {
+		for (int lx = 0; lx < 16; lx++) {
+			int idx = lz * 16 + lx;
+			int H = heights[idx];
+			int bm = bcode[idx];
+			int x = bx + lx;
+			int z = bz + lz;
+			double gx = (double)lx / 4.0;
+			double gz = (double)lz / 4.0;
+			AqColState aqst;
+			// 1. the top-down dens_at scan (gen_flat 3234-3292 op-for-op;
+			// p_keep = nullptr here — the far/veg lanes generate the full
+			// column, so every slab is "kept").
+			long long t_scan = now_us();
+			int he = -1;
+			int top_y = H + 11;
+			if (top_y > hmax - 1)
+				top_y = hmax - 1;
+			for (int y = top_y; y >= 1; y--) {
+				double gy_c = (double)y / ystep_cave;
+				double cave = tril_c(f_cheese, gx, gy_c, gz);
+				double ent = entrance_from_latt(tril_c(f_entr, gx, gy_c, gz), (double)y);
+				bool deep = (H - y >= K_CUT);
+				double lay = deep ? tril_c(f_layer, gx, gy_c, gz) : 0.0;
+				double s2d = deep ? tril_c(f_s2d, gx, gy_c, gz) : 64.0;
+				double s3d = deep ? tril_c(f_s3d, gx, gy_c, gz) : 64.0;
+				double spr = deep ? tril_c(f_spr, gx, gy_c, gz) : 64.0;
+				double nod = deep ? tril_c(f_nod, gx, gy_c, gz) : 64.0;
+				bool s0 = dens_at(H, y, cave, ent, lay, s2d, s3d, spr, nod) > 0.0;
+				bool s = s0;
+				if (H - y >= K_CUT
+						&& tril_c(f_pillar, gx, gy_c, gz) >= PILLAR_CHOICE_TH)
+					s = true; // the pillar max (deep branch only)
+				solidf[y] = s ? 1 : 0;
+				if (s && he < 0)
+					he = y;
+			}
+			if (he < 0)
+				he = 0; // a fully-caved column (bedrock is the surface)
+			g_t_scan_us.fetch_add(now_us() - t_scan, std::memory_order_relaxed);
+			// 2. the mask fill (y 1..he — the only cells the carve + the
+			// he2 walk can see: above he there is no carvable solid in the
+			// full path either — solidf ends at he and the barrier stone
+			// is gated y < he).
+			size_t base = (size_t)(lz << 4) | lx;
+			for (int y = 1; y <= he; y++) {
+				size_t k = (size_t)(y << 8) | base;
+				if (solidf[y]) {
+					flat[k] = (uint8_t)B_STONE; // any carvable solid behaves
+					// identically in the cut-through + the he2 walk
+				} else {
+					AquOut aout;
+					aqu_block(face, R, x, y, z, he, cx, cz, aq, seed, sea, aout, aqst);
+					flat[k] = aout.block; // 0 / WATER / LAVA / B_STONE (barrier)
+				}
+			}
+			// 3. the carver (the SAME call the full path makes).
+			long long t_carve = now_us();
+			int he2 = carver_carve_column(flat, lx, lz, x, z, he, sea, bm,
+					carves, hmax, nullptr);
+			g_t_carve_us.fetch_add(now_us() - t_carve, std::memory_order_relaxed);
+			top[idx] = he2;
+			// The post-carve top-block id (the full path's final block at
+			// he2 — the drip/veg passes only ever write 0 cells, so they
+			// cannot touch it).
+			if (he2 < he) {
+				// The carver re-skin rule (1673-1680), verbatim.
+				uint8_t t = (uint8_t)B_GRASS;
+				if (bm == 1)
+					t = (uint8_t)B_SAND;
+				else if (bm == 0)
+					t = (uint8_t)B_SNOW_GRASS;
+				if (he2 <= sea + 1 && bm != 1)
+					t = (uint8_t)B_SAND;
+				topid[idx] = (he2 >= 1) ? t : (uint8_t)B_BEDROCK;
+			} else {
+				// The fill top-row rule (3336-3382): the bedrock band
+				// first, then deepslate, then the biome top.
+				if (he < BEDROCK_BAND)
+					topid[idx] = (uint8_t)B_BEDROCK;
+				else if (he < DEEPSLATE_Y)
+					topid[idx] = (uint8_t)B_DEEPSLATE;
+				else {
+					uint8_t t = (uint8_t)B_GRASS;
+					if (bm == 1)
+						t = (uint8_t)B_SAND;
+					else if (bm == 0)
+						t = (uint8_t)B_SNOW_GRASS;
+					if (he <= sea + 1 && bm != 1)
+						t = (uint8_t)B_SAND;
+					topid[idx] = t;
+				}
+			}
+			scan20[(lz + 2) * 20 + (lx + 2)] = he;
+		}
+	}
+	// The margin ring (the 20x20 neighborhood the veg lane scans) — the
+	// full path's margin column scan (3647-3686), op-for-op: the same
+	// router inputs at the margin's own xz (the fields' 1-cell margin
+	// covers bx-2..bx+17 on both lattices), H2 = the margin's surface_h,
+	// NO carver (the carver only runs on the 256 in-chunk columns).
+	if (with_margin) {
+		for (int glz = -2; glz < 18; glz++) {
+			for (int glx = -2; glx < 18; glx++) {
+				if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16)
+					continue; // the in-chunk entries hold he (above)
+				int H2 = surface_h(bx + glx, bz + glz, f_sc, f_sh, f_sr, ystep, bx, bz);
+				double gx2 = (double)glx / 4.0;
+				double gz2 = (double)glz / 4.0;
+				int hcol = 0;
+				int top2 = H2 + 11;
+				if (top2 > hmax - 1)
+					top2 = hmax - 1;
+				for (int y = top2; y >= 1; y--) {
+					double gy2 = (double)y / ystep_cave;
+					double cave = tril_c(f_cheese, gx2, gy2, gz2);
+					double ent = entrance_from_latt(tril_c(f_entr, gx2, gy2, gz2), (double)y);
+					bool deep2 = (H2 - y >= K_CUT);
+					double lay = deep2 ? tril_c(f_layer, gx2, gy2, gz2) : 0.0;
+					double s2d = deep2 ? tril_c(f_s2d, gx2, gy2, gz2) : 64.0;
+					double s3d = deep2 ? tril_c(f_s3d, gx2, gy2, gz2) : 64.0;
+					double spr = deep2 ? tril_c(f_spr, gx2, gy2, gz2) : 64.0;
+					double nod = deep2 ? tril_c(f_nod, gx2, gy2, gz2) : 64.0;
+					bool sv = dens_at(H2, y, cave, ent, lay, s2d, s3d, spr, nod) > 0.0;
+					if (H2 - y >= K_CUT
+							&& tril_c(f_pillar, gx2, gy2, gz2) >= PILLAR_CHOICE_TH)
+						sv = true; // the pillar max (deep branch only)
+					if (sv) {
+						hcol = y;
+						break;
+					}
+				}
+				scan20[(glz + 2) * 20 + (glx + 2)] = hcol;
+			}
+		}
+	}
+}
+
 // AC-0284b: the FAR (h-only) column — the skip arg value 2 (see the file
-// header). NO slabs, NO cave field, NO ore fields: only the 256 H (u16
-// LE), the 256 biome bcodes and the 256 TOP-BLOCK ids (the bit-exact
-// fill-loop top-row formula: the surface block from biome/H, the same
-// cell the skip path fills at y == H — the halo's 4x4 avg emitter
-// (AweMesh.h_avg_emit) reconstructs the exact skip-fill surface from it).
-// The H is bit-exact with the full path's H (the shared col_heights_pass
-// above — the promotion-consistency contract: a promoted far column's
-// full regen keeps the same H, the halo terrain never shifts). The 1024-
-// byte payload is what the v6 codec (flag bit 1) stores in place of the
-// slab section (~1 KB on disk — AC-0287's save filter drops it entirely).
+// header). NO slabs, NO ore fields: only the 256 H (u16 LE), the 256
+// biome bcodes and the 256 TOP-BLOCK ids. AC-0387: the H is the CARVED
+// top (the carved_top_pass — the height the full path would produce for
+// the same column; the promotion contract: a promoted far column's full
+// regen keeps the same H, the halo terrain never shifts — the pre-
+// AC-0387 un-carved surface_h was wrong on 866/102,400 columns, worst a
+// 91-block canyon) and the top id is the post-carve top block (the fill
+// top-row / carver re-skin rule, bit-exact). The 1024-byte payload is
+// what the v6 codec (flag bit 1) stores in place of the slab section
+// (~1 KB on disk — AC-0287's save filter drops it entirely).
 static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax,
 		int sea, int face = 0, double R = 4000.0) {
 	int bx = cx * 16;
@@ -2771,12 +3013,12 @@ static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax,
 	double ystep = (double)hmax / GY_CELLS;
 	long long t0 = now_us();
 	g_t_cols_far.fetch_add(1, std::memory_order_relaxed);
-	// AC-0311 piece 2: the (d, δ) table — the far lane builds only the 441
-	// coarse-lattice points (the spec's part-1 +14% far-lane budget).
+	// The 3 SURFACE fields on the COARSE table (441 pts — the H's physics,
+	// the bit-exact surface_h of the heights pass — unchanged by AC-0387),
+	// then the carved_top_pass on the FULL 2401-pt table (the 8 cave-
+	// lattice fields — the same builds as the full path).
 	SpTable sp;
 	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, true, sp);
-	// Only the 3 SURFACE fields (the 2-octave 441-pt builds — the H's
-	// physics). The cave + ore fields are never read here.
 	long long t_field = now_us();
 	Field f_sc, f_sh, f_sr;
 	build_field(f_sc, ystep, seed, 220.0, SURF_YSCALE, 220.0, 0.0, 0.0, 0.0, sp);
@@ -2788,24 +3030,24 @@ static std::vector<uint8_t> gen_far(int cx, int cz, int64_t seed, int hmax,
 	std::vector<int> bcode(256);
 	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
 	g_t_heights_us.fetch_add(now_us() - t_ht, std::memory_order_relaxed);
+	// AC-0387: the CARVED top per column (no margin ring needed here).
+	SpTable spc;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, false, spc);
+	std::vector<int> top;
+	std::vector<uint8_t> topid;
+	std::vector<int> scan20;
+	carved_top_pass(f_sc, f_sh, f_sr, ystep, bx, bz, cx, cz, seed, hmax, sea,
+			face, R, spc, heights, bcode, false, top, topid, scan20);
 	std::vector<uint8_t> out(1024, 0);
 	for (int i = 0; i < 256; i++) {
-		int H = heights[i];
+		int H = top[i]; // the carved top (the full path's height for this column)
 		out[2 * i] = (uint8_t)(H & 0xFF);
 		out[2 * i + 1] = (uint8_t)((H >> 8) & 0xFF);
 		out[512 + i] = (uint8_t)bcode[i];
-		// Top block — the fill loop's y == he row with he = H, verbatim
-		// (the skip fill writes exactly this at the surface).
-		uint8_t top = B_GRASS;
-		if (bcode[i] == 1)
-			top = B_SAND;
-		else if (bcode[i] == 0)
-			top = B_SNOW_GRASS;
-		if (H <= sea + 1 && bcode[i] != 1)
-			top = B_SAND;
-		if (H < DEEPSLATE_Y)
-			top = B_DEEPSLATE; // AC-0292: the fill top row matches (H<64 -> deepslate)
-		out[768 + i] = top;
+		// Top block — the post-carve top (the fill top-row / carver
+		// re-skin rule, computed in the pass — bit-exact with the full
+		// path's block at the carved top).
+		out[768 + i] = topid[i];
 	}
 	g_t_far_us.fetch_add(now_us() - t0, std::memory_order_relaxed);
 	return out;
@@ -2841,6 +3083,20 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 	std::vector<int> heights(256);
 	std::vector<int> bcode(256);
 	col_heights_pass(f_sc, f_sh, f_sr, ystep, bx, bz, seed, heights, bcode);
+	// AC-0387: the CARVED bases — every in-chunk column's tree/flower
+	// base is the full path's carved top (the full path plants on heff,
+	// gen_flat 3638-3640 — the pre-AC-0387 lane used the un-carved
+	// surface_h, so a far-band tree on a carved column stood on the
+	// ridge the canyon carve removed: the same seam as the far H), the
+	// margin ring is the full path's margin scan top (3647-3686,
+	// pre-carve — the carver only runs on the 256 in-chunk columns).
+	SpTable spc;
+	sp_table_build(face, sp_col_index(face, cx), sp_col_index(face, cz), R, false, spc);
+	std::vector<int> top;
+	std::vector<uint8_t> topid;
+	std::vector<int> scan20;
+	carved_top_pass(f_sc, f_sh, f_sr, ystep, bx, bz, cx, cz, seed, hmax, sea,
+			face, R, spc, heights, bcode, true, top, topid, scan20);
 	// seen: 0 = air, 1 = a tree cell (first-writer-wins, the veg loop's
 	// write order), -1 = FLOWER-OVERWRITTEN (see below). The flower
 	// pass runs AFTER the trees and writes rose/dandelion at
@@ -2884,7 +3140,19 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 				dens = 0.02; // plains or snow
 			if (hv >= dens)
 				continue;
-			int hcol = H2; // the lazy margin = the heightmap surface exactly
+			// AC-0387: the tree base — in-chunk: the full path's CARVED
+			// top (the full path plants on heff, gen_flat 3638-3640; the
+			// ground check at 3690-3699 rides the post-carve top id);
+			// margin: the full path's margin scan top (3647-3686).
+			int hcol;
+			if (glx >= 0 && glx < 16 && glz >= 0 && glz < 16) {
+				int vi = glz * 16 + glx;
+				if (!solid_ids[topid[vi]])
+					continue; // the full path's ground check (3695)
+				hcol = top[vi];
+			} else {
+				hcol = scan20[(glz + 2) * 20 + (glx + 2)];
+			}
 			if (hcol < 1)
 				continue;
 			int tth = 4 + (int)(hash2i(t2x, t2z, seed + 66) * 3.0);
@@ -2930,20 +3198,19 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 	}
 	// The flower pass (after the trees — see the seen[] comment): the
 	// in-column grass tops with the hash gates hit grow a flower at
-	// (x, H + 1, z), overwriting whatever tree cell landed there.
+	// (x, fh + 1, z), overwriting whatever tree cell landed there.
+	// AC-0387: the base is the full path's CARVED top (gen_flat 3738-
+	// 3758: fh = heff, the gate is flat[fh] == B_GRASS — the post-carve
+	// top id carries it, incl. the deepslate/bedrock no-flower rows the
+	// pre-AC-0387 formula could not see), not the un-carved surface.
 	for (int lz = 0; lz < 16; lz++) {
 		for (int lx = 0; lx < 16; lx++) {
 			int idx = lz * 16 + lx;
-			int fh = heights[idx];
+			int fh = top[idx];
 			if (fh > sea && fh < hmax - 2) {
-				uint8_t top = B_GRASS;
-				if (bcode[idx] == 1)
-					top = B_SAND;
-				else if (bcode[idx] == 0)
-					top = B_SNOW_GRASS;
-				if (fh <= sea + 1 && bcode[idx] != 1)
-					top = B_SAND;
-				if (top == B_GRASS) {
+				if (topid[idx] != (uint8_t)B_GRASS)
+					continue;
+				{
 					// AC-0311 piece 2: the flower rolls re-key onto the
 					// global arc integers of the 4-block lattice cell.
 					int64_t f2x, f2z;
@@ -2992,9 +3259,15 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 // f(world coords, seed) — a regenerated slab is bit-exact, no
 // cross-slab state exists). The surface slab is always kept (the span
 // contains the tower's top), so the effective surface + veg always land.
+// AC-0387: the optional out-params expose the per-column carved top
+// (heff — post carver; the drip/veg passes only write 0 cells, so the
+// block at heff is final) and the final block id at heff — the
+// independent full-path reference for the farab re-point. nullptr = the
+// pre-AC-0387 behaviour (every existing caller).
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
 		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr,
-		int face = 0, double R = 4000.0) {
+		int face = 0, double R = 4000.0, std::vector<int> *p_heff = nullptr,
+		std::vector<uint8_t> *p_topblk = nullptr) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
@@ -3760,6 +4033,18 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 	}
 	g_t_veg_us.fetch_add(now_us() - t_veg, std::memory_order_relaxed);
 	(void)nsl;
+	// AC-0387: the carved-top capture (after the drip + veg passes — the
+	// final state; both only write 0 cells, so the block at heff is the
+	// full path's final top block, and heff (the carver's return) is the
+	// carved top the far lane must reproduce).
+	if (p_heff != nullptr)
+		*p_heff = heff;
+	if (p_topblk != nullptr) {
+		p_topblk->resize(256);
+		for (int i = 0; i < 256; i++) {
+			(*p_topblk)[i] = flat[((size_t)heff[i] << 8) | ((i / 16) << 4) | (i % 16)];
+		}
+	}
 	return flat;
 }
 
@@ -3988,6 +4273,7 @@ public:
 		// (256 H u16 LE + 256 biome + 256 top-block id; see gen_far).
 		// generate_resl with skip == 2 returns it as resl[2] too.
 		ClassDB::bind_method(D_METHOD("generate_far", "cx", "cz", "s", "h", "sea", "face", "R"), &AweGen::generate_far, DEFVAL(0), DEFVAL(4000.0));
+		ClassDB::bind_method(D_METHOD("carved_tops", "cx", "cz", "s", "h", "sea", "face", "R"), &AweGen::carved_tops, DEFVAL(0), DEFVAL(4000.0));
 		// AC-0284b: the u16 LE heightmap (512 bytes — the legacy u8
 		// column_heights wraps above 255; the farab H battery compares
 		// the far payload against THIS).
@@ -4303,6 +4589,28 @@ public:
 		out.resize((int)f.size());
 		if (!f.empty())
 			std::memcpy(out.ptrw(), f.data(), f.size());
+		return out;
+	}
+
+	// AC-0387: the FULL path's carved top per column — 256 x (heff u16
+	// LE + the final block id at heff) = 768 bytes. The independent
+	// reference for the farab re-point: the far payload's H/top is
+	// compared against this (gen_flat skip=0, the real full path —
+	// cave lattice + aquifer + carver + drip + veg all for real), not
+	// against a re-derivation the far lane shares.
+	PackedByteArray carved_tops(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_face = 0, double p_R = 4000.0) const {
+		std::vector<int> heff;
+		std::vector<uint8_t> topblk;
+		(void)awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, 0, nullptr, nullptr,
+				p_face, p_R, &heff, &topblk);
+		PackedByteArray out;
+		out.resize(768);
+		for (int i = 0; i < 256; i++) {
+			int h = heff[i];
+			out[3 * i] = (uint8_t)(h & 0xFF);
+			out[3 * i + 1] = (uint8_t)((h >> 8) & 0xFF);
+			out[3 * i + 2] = topblk[i];
+		}
 		return out;
 	}
 
