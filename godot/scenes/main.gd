@@ -84,6 +84,7 @@ func _ready() -> void:
 	sky_mat = ShaderMaterial.new()
 	sky_mat.shader = load("res://core/aero_sky_gradient.gdshader")
 	sky_mat.set_shader_parameter("u_srgb_pre", _srgb_pre)  # AC-0242
+	sky_mat.set_shader_parameter("space_color", AeroLib.SPACE_SKY)  # AC-0386
 	_sky_res.sky_material = sky_mat
 	env.sky = _sky_res
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -232,6 +233,11 @@ func _create_game_nodes(range_mode: bool = false) -> void:
 	_star_mat.shader = load("res://core/star.gdshader")
 	_star_mat.set_shader_parameter("u_opacity", 1.0)
 	_star_mat.set_shader_parameter("u_srgb_pre", _srgb_pre)  # AC-0242
+	# AC-0386: the planet-disc occlusion defaults (radius 0 = off until
+	# _update_sky knows the world exists).
+	_star_mat.set_shader_parameter("u_planet_center", Vector3.ZERO)
+	_star_mat.set_shader_parameter("u_planet_radius", 0.0)
+	_star_mat.set_shader_parameter("u_cam_pos", Vector3.ZERO)
 	_star_node = MeshInstance3D.new()
 	_star_node.name = "Stars"
 	_star_node.mesh = _build_star_mesh()
@@ -1170,20 +1176,45 @@ func _update_sky() -> void:
 	# :3222).
 	var day := DayNight.day(t)
 	_ChunkScriptM.set_day_factor(day)
+	# AC-0386: the space transition, driven by the SAME radial altitude
+	# (alt_rad = |pos - C| - R, C = (0,-R,0)) and the SAME smoothstep
+	# window the flight band uses (player.gd BAND_WALK_MAX..BAND_FLY_MIN)
+	# — the sky darkens exactly where the controls hand over, one number,
+	# one home (the constants are read off the live player, never
+	# duplicated). S = 0 below the band: the whole AC-0386 path is
+	# bit-identical to the pre-change sky/stars/wash.
+	var space_t := 0.0
+	var space_center := Vector3.ZERO
+	var space_radius := 0.0
+	if player != null and world != null:
+		var Rf := float(Game.planet_R)
+		if Rf > 0.0:
+			var alt_rad := (player.position + Vector3(0.0, Rf, 0.0)).length() - Rf
+			space_t = smoothstep(player.BAND_WALK_MAX, player.BAND_FLY_MIN, alt_rad)
+			space_center = Vector3(0.0, -Rf, 0.0)
+			space_radius = Rf + float(Data.SEA)
+	var star_cam: Camera3D = null
 	if _star_node != null:
-		var scam: Camera3D = null
 		if player != null:
-			scam = player.get_node_or_null("Camera3D")
-		if scam != null:
+			star_cam = player.get_node_or_null("Camera3D")
+		if star_cam != null:
 			# AC-0133 fix (web parity, index.html :3248): position copy ONLY —
 			# the field's rotation is never set, so it stays fixed in world
 			# orientation (fixed to the sky, not to the screen).
-			_star_node.global_position = scam.global_position
+			_star_node.global_position = star_cam.global_position
 			_star_node.visible = true
 		else:
 			_star_node.visible = false
 	if _star_mat != null:
-		_star_mat.set_shader_parameter("u_opacity", 1.0 - day)
+		# AC-0386: mix(1-day, 1, S) - below the band it is the pre-AC-0386
+		# (1-day) (bit-identical: night stars at ground level preserved);
+		# above it the space sky is black at every time of day, so the
+		# field is fully on (the MC-style above-the-sky-limit look).
+		_star_mat.set_shader_parameter("u_opacity", (1.0 - day) + day * space_t)
+		# AC-0386: the planet disc (radius R + SEA) occludes the field.
+		_star_mat.set_shader_parameter("u_planet_center", space_center)
+		_star_mat.set_shader_parameter("u_planet_radius", space_radius)
+		_star_mat.set_shader_parameter("u_cam_pos", star_cam.global_position if star_cam != null else Vector3.ZERO)
 
 	var ppos := Vector3.ZERO
 	var plvl := 0.0
@@ -1243,6 +1274,13 @@ func _update_sky() -> void:
 		for k in u.keys():
 			if k != "cloud_color" and k != "cloud_amount":
 				sky_mat.set_shader_parameter(k, u[k])
+		sky_mat.set_shader_parameter("u_space", space_t)  # AC-0386
+	# AC-0386: the screen wash is an air-in-front-of-the-lens tint - it
+	# fades with the atmosphere (one uniform per frame; the quad stays up).
+	if aero and aero_wash != null:
+		var wm: ShaderMaterial = aero_wash.material_override
+		if wm != null:
+			wm.set_shader_parameter("wash_amount", AeroLib.WASH_AMOUNT * (1.0 - space_t))
 	if not cloud_layers.is_empty():
 		var u2 := AeroLib.sky_uniforms(t)
 		# AC-0235 retest 2: clouds go dark at night (MC-style).
