@@ -194,5 +194,152 @@ probe), <code>awecraft.pck</code> (the export pack, 5.4 MB). Temporary probe <co
 <code>tasks/harness_data.yaml</code>, <code>godot/HARNESS.md</code> (re-rendered), <code>godot/OPS.md</code> (rule).</li>
 <li>No commit (per the ticket); TASKS.yaml untouched (shared ticket).</li>
 </ul>
+
+<h2>8. Round 3 (2026-10-01, the screenshot run): the body NEVER rendered — the verified root cause</h2>
+<div class="box red"><strong>Supersedes the framing above for the user-visible symptom.</strong> The export-predicate
+fix (sections 1–7) was real and is kept, but the user's screenshot — read by the coordinator as "the body
+renders, washed out by a saturated haze ramp" — was verified against the exact engine source and
+<strong>disproves that reading: the satellite body produced zero pixels in every build.</strong> The haze was
+never washed out; the body was never drawn.</div>
+<p>The root cause was verified against the exact engine (Godot 4.7.1.stable.official.a13da4feb, tag
+<code>4.7.1-stable</code>, commit <code>a13da4feb</code>):</p>
+<ul>
+<li><strong>forward_plus</strong> (<code>servers/rendering/renderer_rd/shaders/forward_clustered/scene_forward_clustered.glsl</code>):
+the user's <code>fragment()</code> is spliced at the <code>#CODE : FRAGMENT</code> marker (line 1351)
+<strong>inside the built-in <code>fragment_shader()</code></strong>, where
+<code>view_highp = -normalize(vertex_interp)</code> (line 1222),
+<code>VERTEX → vertex = vertex_interp</code> (the fragment's <em>view-space</em> position, camera at the
+origin) and <code>NORMAL → normal_highp</code> (the <em>world-space</em> normal —
+<code>model_normal_matrix</code> in the vertex stage). The rename map
+(<code>scene_shader_forward_clustered.cpp</code>, <code>VIEW → view_highp</code>, line 799) applies to all user stages.
+So in the user's fragment(): <code>VIEW</code> is a <strong>unit</strong> vector (fragment→camera, view space), and
+<code>VERTEX</code> is the view-space <em>position</em>.</li>
+<li>Therefore the old line <code>float d = length(VIEW);</code> was <strong>identically 1.0</strong>, and
+<code>op = smoothstep(u_fog_far, u_render_edge, 1.0)</code> was <strong>identically 0</strong>
+(<code>u_fog_far = DayNight.fog_far = (rr+1)·16·0.875 ≥ 28</code> in every configuration).
+<code>if (op ≤ 0.001) discard;</code> then fired for <strong>100% of fragments</strong>.</li>
+<li>The Compatibility renderer has the same semantics
+(<code>drivers/gles3/shaders/scene.glsl</code>: <code>view = -normalize(vertex_interp)</code>), so this is not
+renderer-specific.</li>
+</ul>
+<p>Consequences:</p>
+<ul>
+<li>The "saturated distance ramp" hypothesis cannot be the cause — with <code>d ≡ 1</code> the haze terms are
+never even reached. "The body renders fine and its colour is the sky" is false: the body does not render at all.</li>
+<li>The pale blue-grey ball in the screenshot is therefore <strong>not this body</strong>. The only planet-scale
+objects are the AeroWash quad (<code>WASH_COLOR = Color8(168,238,255)</code> — pale blue —
+<code>WASH_AMOUNT 0.03</code>, <code>top_glow</code>) and the three cloud-deck quads
+(6144/5120/4096 m, <code>CLOUD_H</code> 400/330/275, following the player's XZ, <code>main.gd</code> AC-0235) —
+from orbital altitude a large soft-edged pale plane with white puffs against a flat blue-teal aero sky matches
+the screenshot. The ball's identity is the coordinator's to confirm on the next screenshot; the puffs are
+AC-0385 territory. (No other planet-scale spherical geometry exists in the code — grepped.)</li>
+<li>The user's first report, "the satellite LOD never loads", is literally true in the pixel sense.</li>
+<li>The arm stayed green for the same reason as the other three instruments: it mirrors the <strong>.gd side</strong>
+(<code>opacity_at(d)</code> with the true distance — the .gd is correct) and never looks at pixels. The .gd
+thresholds were never the bug; the shader's use of the builtins was. Method lesson, fourth time: a green arm
+is not a picture — and here even the "picture" was a different object.</li>
+</ul>
+
+<h2>9. The fix (<code>godot/core/satellite_body.gdshader</code>, fragment stage only) + the physical model</h2>
+<ul>
+<li><strong>Distance</strong>: <code>p_w = (INV_VIEW_MATRIX·(VERTEX,1)).xyz</code> (world fragment position),
+<code>cam_w = CAMERA_POSITION_WORLD</code>, <code>d = length(p_w − cam_w)</code> — the true camera distance
+(equivalently <code>length(VERTEX)</code>). The existence/dissolve ladder (<code>op = smoothstep(u_fog_far,
+u_render_edge, d)</code>) is unchanged in form and now actually works.</li>
+<li><strong>Limb term, world space</strong>: <code>cosv = clamp(dot(normalize(cam_w − p_w), NORMAL), 0, 1)</code>;
+<code>haz_a = (1 − cosv)²</code>. The old dot mixed a <em>view-space</em> direction with the
+<em>world-space</em> normal — camera-orientation-dependent garbage (at mid-disc, nadir-down camera it
+computed 0.8706 where the true value is 0.5849 — the limb haze was ~10× weaker even where evaluated).</li>
+<li><strong>Which physical model, and why</strong>: the physically right driver is the ray's path length
+through the air shell, a function of the impact parameter <code>b</code> (perpendicular distance from the
+planet centre to the view ray; exactly <code>b = RB·√(1 − cosv²)</code> for a sphere — max at the limb where
+<code>b → RB</code>, min at the disc centre where <code>b → 0</code>). The options: (a) the impact parameter —
+the right driver; (b) the fragment's own altitude relative to the shell — vacuous: the body is one spherical
+shell, there is no per-fragment altitude variation against the shell; (c) a mis-scaled existing term —
+<strong>this is what it was, in the wrong sense</strong>: <code>(1 − cosv)²</code> is already a monotone function
+of <code>b</code> (0 at the disc centre, 1 at the limb — verified numerically below), i.e. it <em>is</em> the
+impact-parameter limb effect; it was never mis-scaled — it was <strong>evaluated in the wrong space</strong>
+(and the distance term fed it <code>d ≡ 1</code>). So the fix keeps the AC-0310 term family — <code>haz_a</code>
+(limb, now world-space) + <code>haz_d = 1 − smoothstep(u_render_edge, u_clear_dist, d)</code> (proximity: hugs
+the render edge so the near region reads as the fog colour and dissolves under the drawn disc on descent) —
+and corrects the spaces. A full Beer–Lambert <code>1 − e^(−σ·L(b))</code> would need two physical parameters
+the game does not have (shell outer radius, extinction); if the limb wants a sharper falloff that is a
+follow-up with new constants, not a bounded fix — and the contract (no-pop continuity at the fog wall) is
+written around the current family.</li>
+<li>Everything else untouched: uniforms, day/night re-weighting, .gd, arm, bake — no new shader parameters, so
+no <code>.gd</code> or harness change was needed.</li>
+</ul>
+
+<h2>10. Numeric verification (<code>.scratch/AC-0384/verify_haze.py</code> — re-runnable, built to fail)</h2>
+<p>Renders are unavailable and no image is opened, so the shader terms are computed numerically, exactly as
+the 4.7.1 engine compiles them (GLSL smoothstep/pow/clamp/mix mirrored), across the disc (centre/mid/limb),
+R = 4000, SEA = 126, RB = 4126:</p>
+<table>
+<tr><th>scenario</th><th>centre haz</th><th>mid haz</th><th>limb haz</th><th>note</th></tr>
+<tr><td><strong>BEFORE</strong> (old shader, as compiled)</td><td colspan="3">op ≡ 0 → <strong>discard of 100% of fragments — the body is invisible; there are no "haze weights"</strong> (d ≡ length(VIEW) = 1)</td><td>the real "before"</td></tr>
+<tr><td>orbital R50 (h = 4000; ff 714, edge 816, clear 3264; disc 58.95°)</td><td><strong>0.0000</strong></td><td>0.1723 (29.5°)</td><td><strong>1.0000</strong></td><td>screenshot regime; centre shows pure terrain</td></tr>
+<tr><td>orbital R50 low (h = 3500, centre just past clear: d = 3374)</td><td>0.0000</td><td>0.1837</td><td>1.0000</td><td>haz_d only engages below 4·edge</td></tr>
+<tr><td>full ladder R50 (h = 1042 = h_full + 100)</td><td>0.9951</td><td>1.0000</td><td>1.0000</td><td>by design: emerging from the fog wall — the no-pop dissolve, NOT the bug</td></tr>
+<tr><td>orbital R4 (harness default, h = 600)</td><td>0.0000</td><td>0.4610</td><td>1.0000</td><td>small edge → haze clears sooner</td></tr>
+</table>
+<p><strong>(a) HAZE WEIGHT</strong>: at the disc centre 0.0000 (≤ 0.05 asserted), at the limb 1.0000
+(≥ 0.99 asserted), monotone across the disc (200-sample profile asserted). BEFORE/AFTER: before = no
+fragments at all; after = 0.0000 centre / 1.0000 limb at the screenshot regime.</p>
+<p><strong>(b) TEXTURE DOMINANCE at the disc centre</strong>, on the real baked face texture
+(<code>assets/satellite/satellite_face00.png</code>, 40×40 fragment patch, 0–3° from the nadir):
+baked-texture×dayfactor variance <strong>23794.6</strong>; new-shader output variance <strong>23794.3
+(ratio 1.000 — the output IS the texture)</strong>. The check is built to fail on the bug conditions and both
+replayed failures were asserted: BUG-2 (haz ≡ 1, "washed out"): output variance <strong>0.0</strong> (constant
+air colour) → fails; BUG-1 (old shader): zero surviving fragments → fails. A body whose output is constant
+across the disc is exactly the fail condition; a passing check must fail on it, and this one does.</p>
+<p>Optional data-driven image for the coordinator's eye: <code>tasks/AC-0384/haze_disc_AC0384.png</code> —
+256×256 grayscale haze weight across the disc (orbital R50): black centre (terrain) → white limb (air).</p>
+
+<h2>11. Gates (this round, fixed tree; one godot at a time, <code>ulimit -v 8388608</code> wrappers; logs
+<code>.scratch/AC-0384-gates/r3_*.log</code>)</h2>
+<ul>
+<li><strong>G0</strong>: zero <code>SCRIPT ERROR</code> lines on the final pristine tree (rc 0) — run after the
+temp probes were removed.</li>
+<li><strong>genhash</strong>: 25/25 byte-identical to the previous run's log (chunk (0,0)
+<code>46c20b07…</code> = the AC-0311 piece-2 tip); GENMS 127 (machine spread, not a gate). A shader touches no
+generation.</li>
+<li><strong>satellite r4</strong>: <code>ok:true</code> — ladder hidden (visible=false, nadir_op 0) / rim
+(nadir_op 0, rim_op 1.0) / <strong>dissolve (nadir_op 0.5)</strong> / full (nadir_op 1.0);
+<strong>0.25 texel-to-chunk ratio intact</strong>; 12/12 meshes+textures; guard ok; res_export ok.</li>
+<li><strong>farab</strong>: <code>ok:true</code>, <strong>h_mismatch 0</strong>, slab_cmp 1080/1080.</li>
+<li><strong>ladder</strong>: <code>ok:true</strong>, band_a <strong>20/20</strong> (fail_n 0), boundary_flip ok,
+air/clutter/layerrank ok.</li>
+<li><strong>meshprobe</strong>: <code>ok:true</code>, <strong>match_rate 1.0</strong>, mismatch [].</li>
+<li><strong>halo</strong>: ok — all sections (a/b/b1/c), mismatches 0.</li>
+<li><strong>lightstate LS16</strong>: double_lod <strong>0/0</strong>, holes_pre 0, holes_demote_ring 0, grid
+20 cells leaks 0 (total 0), stragglers 0.</li>
+<li><strong>r16</strong>: <code>ok:true</code>, built_all true, <strong>far_holes 0 (far0) and 0 (far1) — 0/0
+both bands</strong>.</li>
+<li><strong>boundary r4</strong> (the builder's one self-check probe): <code>ok:true</code>, p50 13 (flat), p95
+33 (at/below the 35–55 transient band), crossing_frame_p95 39 ≤ 75, crossing_burst_max 15.0 ≤ 15, max_ms 172
+(below the documented noisy band). flap 95 / staged_dropped 2504 sit INSIDE the spread of the two pre-change
+runs on the identical tree (flap 169/172, dropped 2755/2490) — variance, not a regression; the change touches
+a render tier and no streaming/scheduling code.</li>
+</ul>
+
+<h2>12. Artifacts, state, and what the coordinator owes</h2>
+<ul>
+<li>Changed file (this round): <code>godot/core/satellite_body.gdshader</code> (fragment stage + header note).
+New artifact: <code>tasks/AC-0384/haze_disc_AC0384.png</code>. Re-runnable numeric check:
+<code>.scratch/AC-0384/verify_haze.py</code>. Gate logs: <code>.scratch/AC-0384-gates/r3_*.log</code>.
+Temporary probes (the engine-source tarball + extraction used for the builtin-space verification) removed; G0
+re-run on the pristine tree after removal.</li>
+<li>One caveat the user's rebuild will settle: headless runs never compile the shader pipeline (dummy
+renderer), so the shader's GPU compile is last-checked by the Windows build. Every builtin used
+(<code>VERTEX</code>, <code>NORMAL</code>, <code>INV_VIEW_MATRIX</code>, <code>CAMERA_POSITION_WORLD</code>)
+was verified against the 4.7.1 source fragment-stage scope, and G0 is clean.</li>
+<li><strong>Expectation for the next user screenshot</strong>: the textured planet body should now appear
+(terrain disc, hazy limb, day/night quadrant from the AC-0382 moving sun) where the pale ball was. If a pale
+ball REMAINS on top, it is the AeroWash/cloud-deck layer (AC-0385 family), not the body — the body's
+zero-pixel condition is proven fixed numerically (centre haze 0, terrain-dominant output).</li>
+<li>Linux lane staged; <strong>full battery + Windows rebuild are the coordinator's</strong>; no commit;
+TASKS.yaml untouched (shared ticket); the user is waiting to rebuild and test — the tree is ready for exactly
+that.</li>
+</ul>
 </body>
 </html>

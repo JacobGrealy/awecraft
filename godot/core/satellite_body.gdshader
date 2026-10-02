@@ -13,6 +13,20 @@
 #      hazy, and the distance term hugs the render edge so that just
 #      outside the disc's edge (whose fragments are 100% fogged) the
 #      body reads as the fog colour itself: continuous across the edge.
+#      AC-0384: both haze inputs and the distance were being evaluated
+#      with the wrong BUILTIN SPACES (Godot 4.7.1, verified in the
+#      engine source, forward_plus scene_forward_clustered.glsl):
+#      the fragment's VIEW is the NORMALIZED fragment->camera
+#      direction in VIEW space, so `d = length(VIEW)` was identically
+#      1.0 - op was identically 0 and the body discarded EVERY
+#      fragment (it never rendered; the user's "white planet" is a
+#      different layer, not this body); and the old limb dot mixed a
+#      view-space direction with the world-space NORMAL (camera-
+#      orientation dependent). Now everything is world space:
+#      p_w from INV_VIEW_MATRIX * VERTEX (VERTEX is the view-space
+#      position, camera at the origin), cam_w = CAMERA_POSITION_WORLD,
+#      d = the true camera distance, cosv = the true fragment->camera
+#      / normal angle.
 #  (3) DAY/NIGHT (AC-0382 - the moving sun): the baked pixels carry the
 #      piece-1 FIXED-sun lambert. Its dominant term is the dot of the
 #      fragment's RADIAL direction with the bake sun - constant for
@@ -56,13 +70,31 @@ uniform vec3 u_sun;
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
 void fragment() {
-	float d = length(VIEW);
+	// World-space geometry (AC-0384 - the builtin spaces, verified in
+	// the 4.7.1 engine source): VERTEX here is the fragment's VIEW-space
+	// position (the camera sits at the origin), so INV_VIEW_MATRIX takes
+	// it to world; CAMERA_POSITION_WORLD is the camera in world space;
+	// NORMAL is world space (the body is translation-only). The old
+	// `d = length(VIEW)` was identically 1.0 (VIEW is a unit vector) -
+	// see the header note: the body discarded every fragment.
+	vec3 p_w = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	vec3 cam_w = CAMERA_POSITION_WORLD;
+	float d = length(p_w - cam_w);
 	float op = smoothstep(u_fog_far, u_render_edge, d);
 	if (op <= 0.001) {
 		discard;
 	}
-	float cosv = clamp(dot(normalize(-VIEW), NORMAL), 0.0, 1.0);
+	// The limb term, in world space: (1 - cosv) is a monotone function
+	// of the ray's impact parameter (perpendicular distance from the
+	// planet centre to the view ray) - 0 at the disc centre (b = 0, the
+	// ray's shortest path through the air shell) and 1 at the limb
+	// (b = the body radius, the grazing ray's longest path).
+	float cosv = clamp(dot(normalize(cam_w - p_w), NORMAL), 0.0, 1.0);
 	float haz_a = pow(1.0 - cosv, 2.0);
+	// The proximity term hugs the render edge: just outside the disc's
+	// edge the fragments are 100% fogged, so the body must read as the
+	// fog colour there (continuous across the edge), and on descent the
+	// near region dissolves to the air colour under the drawn disc.
 	float haz_d = 1.0 - smoothstep(u_render_edge, u_clear_dist, d);
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
 	float sun_l = clamp(dot(u_sun, NORMAL) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
