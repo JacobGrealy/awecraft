@@ -1,88 +1,133 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled, fog_disabled;
+render_mode unshaded, transparent, cull_back, fog_disabled;
+// (the dummy/headless renderer rejects `transparent` and logs a
+// SHADER ERROR - the same accepted condition satellite_body.gdshader
+// has lived with since AC-0310; the shipped forward_plus compiles it.)
 
 // AC-0235: the procedural cloud layer (replaces the clouds that the old
-// AeroSky dome painted in view-direction space). A flat quad at CLOUD_H
-// follows the player's XZ (MC-style cloud layer); the PATTERN is anchored
-// to world XZ, so it parallaxes correctly while the player moves, and
-// scrolls by u_wind * u_cloud_time (main.gd advances u_cloud_time each
-// frame). Fog is disabled so the layer stays crisp at the horizon (the
-// dome clouds were fog_disabled too).
-// AC-0235 retest 3/4: the layer is now MULTI (main.gd builds 3 quads at
-// different heights, each with its own u_scale feature size, u_wind drift
-// speed and coverage multiplier) - height/size/speed vary per layer like
-// a real cloud deck. u_wind default = the top layer (the slowest).
-uniform vec2 u_wind = vec2(0.005, 0.002);  // blocks per second of drift (top-layer default; main.gd sets a per-layer wind - retest 6: graded slow, top essentially static)
+// AeroSky dome painted in view-direction space). AC-0385: the layer is now
+// a SPHERICAL SHELL around the planet (three concentric SphereMeshes at
+// R + 275 / 330 / 400, centred at (0, -R, 0) - the same altitudes the old
+// quads hovered at) instead of three flat 6144/5120/4096-block quads that
+// followed the player's XZ. From orbit the old quads read as sparse puffs
+// on a flat sheet (3.1-5.7% of the planet disc had day alpha > 0.2 at any
+// altitude - tasks/AC-0385/AC-0385-results.html); the shell wraps the
+// planet (67.8% of the globe, even across latitude bands).
+// The PATTERN is still world-anchored: it is sampled on the unit direction
+// from the planet centre, so it parallaxes correctly and scrolls by a
+// rotation about world Y (u_drift * u_cloud_time; main.gd advances
+// u_cloud_time each frame and derives u_drift from the old per-layer wind,
+// so the drift speeds are the old ones in blocks/sec, now angular).
+// The feature sizes stay in BLOCKS (u_scale3 = 2*pi*(R+h)/feature is set
+// by main.gd per layer). Fog stays disabled (depth fog is tuned for the
+// local 238-714 m band; a 4300 m shell would be erased by it).
+// AC-0385 coverage: the old window smoothstep(0.62, 0.88, base) sat 1.3
+// std above the fbm mean (0.485, std 0.107) - that is what made the puffs
+// sparse. The window is now 0.50-0.58 (+0.14 to +0.79 std) and the fine
+// octave modulates the alpha (in AC-0235 it was computed into `n` and
+// never used). Day coverage is 67.8% of the globe at alpha > 0.2 (bands
+// 66.6-68.3%; longest clear streak p95 7.2 deg), night 37.3%.
+// AC-0385 lighting: lit by the SAME DayNight.sun_direction convention
+// AC-0382 wired into the satellite body (u_sun = direction TO the sun;
+// u_day = 0.18 + 0.82*day; u_day_gain = 0.82*day - the satellite's exact
+// uniform set, pushed per frame by main.gd). Lighting multiplies the
+// ALBEDO, never the ALPHA - the weather coverage is a function of world
+// direction and time-of-day only, so the shell can never pop as the
+// player moves or climbs (the no-pop argument at the satellite body's
+// emergence). The grazing fade thins the mass to the silhouette, where
+// the body's own limb haze is strongest (no double-counted white rim).
+uniform vec3 u_center = vec3(0.0, -4000.0, 0.0);  // planet centre (main.gd)
+uniform float u_scale3 = 107.92;  // 2*pi*(R+h)/feature, per layer (main.gd)
+uniform float u_drift = 0.00122;  // rad/s about world Y, per layer (main.gd)
 uniform float u_cloud_time = 0.0;
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.5;
 uniform vec3 u_cloud_tint : source_color = vec3(1.0);
-// AC-0235 retest 5: pattern cell size in BLOCKS (bigger = bigger features).
-// Per layer: 256 (top), 160 (mid), 110 (low).
-uniform float u_scale = 0.00390625;  // 1/256 - shader uniform defaults must be constant literals
+uniform vec3 u_sun = vec3(0.0, 1.0, 0.0);
+uniform float u_day : hint_range(0.0, 2.0) = 1.0;
+uniform float u_day_gain : hint_range(0.0, 2.0) = 0.82;
 // AC-0242: unshaded output needs the compat pre-decode like the chunks.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 
-varying vec2 v_uv;
-varying vec2 v_wxz;  // world XZ (spatial shaders have no WORLD_POSITION builtin)
+varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
 void vertex() {
-	v_uv = UV;
-	v_wxz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+	v_wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
 void fog_fragment() {
 }
 
-float ahash(vec2 p) {
-	p = fract(p * vec2(234.34, 435.345));
+float ahash(vec3 p) {
+	p = fract(p * vec3(234.34, 435.345, 341.345));
 	p += dot(p, p + 34.23);
-	return fract(p.x * p.y);
+	return fract(p.x * p.y * p.z);
 }
 
-float anv(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
+float anv(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
 	f = f * f * (3.0 - 2.0 * f);
-	float a = ahash(i);
-	float b = ahash(i + vec2(1.0, 0.0));
-	float c = ahash(i + vec2(0.0, 1.0));
-	float d = ahash(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+	float c000 = ahash(i);
+	float c100 = ahash(i + vec3(1.0, 0.0, 0.0));
+	float c010 = ahash(i + vec3(0.0, 1.0, 0.0));
+	float c110 = ahash(i + vec3(1.0, 1.0, 0.0));
+	float c001 = ahash(i + vec3(0.0, 0.0, 1.0));
+	float c101 = ahash(i + vec3(1.0, 0.0, 1.0));
+	float c011 = ahash(i + vec3(0.0, 1.0, 1.0));
+	float c111 = ahash(i + vec3(1.0, 1.0, 1.0));
+	float x00 = mix(c000, c100, f.x);
+	float x10 = mix(c010, c110, f.x);
+	float x01 = mix(c001, c101, f.x);
+	float x11 = mix(c011, c111, f.x);
+	return mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
 }
 
-// AC-0235 retest 5: 5 octaves (was 4) - the extra octave is what smooths
-// the blocky aliased edges the user saw (the pattern cell is coarse; the
-// sub-detail had to be finer to round the lobes).
-float fbm2(vec2 p) {
+// 5 octaves, same structure as the old 2-D fbm (AC-0235 retest 5).
+float fbm(vec3 p) {
 	float v = 0.0;
 	float a = 0.5;
 	for (int i = 0; i < 5; i++) {
 		v += a * anv(p);
-		p = p * 2.03 + vec2(17.1, 9.2);
+		p = p * 2.03 + vec3(17.1, 9.2, 4.7);
 		a *= 0.5;
 	}
 	return v;
 }
 
 void fragment() {
-	// world-anchored sampling (parallax) + wind scroll.
-	// AC-0235 retest 5: three frequencies blended (base lobe + mid detail +
-	// fine grain) instead of two - the fine octave dissolves the flat
-	// stepped edges into soft billowy contours. The coverage window stays
-	// on the base lobe so the FRACTION of sky covered does not drift as
-	// the detail octaves shift.
-	vec2 p = v_wxz * u_scale + u_wind * u_cloud_time;
-	float base = fbm2(p * 1.3);
-	float mid = fbm2(p * 2.2 + vec2(13.7, 7.3));
-	float fine = fbm2(p * 4.1 + vec2(71.3, 33.9));
-	float n = base * 0.55 + mid * 0.30 + fine * 0.15;
-	float cl = smoothstep(0.62, 0.88, base);
+	// World-anchored direction from the planet centre (parallax + wrap).
+	vec3 n = normalize(v_wp - u_center);
+	// Wind drift: rotate the sampling direction about world Y. The old
+	// 2-D wind was a translation; on the sphere the equivalent is a
+	// rotation (east-west drift, polar stagnation for free).
+	float ang = u_drift * u_cloud_time;
+	float ca = cos(ang);
+	float sa = sin(ang);
+	vec3 dr = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z);
+	vec3 q = dr * u_scale3;
+	// Three frequencies, as in AC-0235 retest 5 - now in 3-D so the
+	// pattern is continuous over the whole globe (no UV seam, no flat
+	// projection).
+	float base = fbm(q * 1.3);
+	float mid = fbm(q * 2.2 + vec3(13.7, 7.3, 5.9));
+	float fine = fbm(q * 4.1 + vec3(71.3, 33.9, 21.7));
+	// AC-0385: coverage window 0.50-0.58 (was 0.62-0.88 - see header).
+	float cl = smoothstep(0.50, 0.58, base);
 	cl = smoothstep(0.0, 0.55, cl) * cl;
 	cl *= 0.75 + 0.25 * (0.55 * base + 0.45 * mid);
-	// fade the layer boundary so the quad edge never reads as a wall
-	vec2 e = abs(v_uv - 0.5) * 2.0;
-	float edge = 1.0 - smoothstep(0.86, 1.0, max(e.x, e.y));
-	ALBEDO = u_cloud_tint;
-	ALPHA = cl * edge * u_coverage;
+	cl *= 0.85 + 0.15 * fine;
+	// Grazing fade: thin the mass where the shell is seen edge-on, so the
+	// silhouette stays clean where the satellite body's own limb haze is
+	// strongest (no double white rim at the limb from orbit).
+	vec3 V = normalize(CAMERA_POSITION_WORLD - v_wp);
+	float graze = smoothstep(0.02, 0.18, max(dot(n, V), 0.0));
+	ALPHA = cl * graze * u_coverage;
+	// AC-0382 sun convention (the satellite body's exact uniform set):
+	// u_sun is the direction TO the sun, the light travels along
+	// DayNight.sun_direction. Noon (sun_l=1) is unchanged; the night
+	// floor 0.18 matches the satellite's pre-AC-0382 night.
+	float sun_l = clamp(dot(n, u_sun), 0.0, 1.0);
+	float light = u_day - u_day_gain * (1.0 - sun_l);
+	ALBEDO = u_cloud_tint * light;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

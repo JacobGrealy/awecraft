@@ -202,6 +202,9 @@ func _create_game_nodes(range_mode: bool = false) -> void:
 			Settings.apply_world()
 			if _harness_env_set():
 				world.render_radius = 4
+	# AC-0385: re-place the cloud shell now that Game.planet_R is final
+	# (a save can change the planet radius after _setup_aero ran).
+	_place_clouds()
 
 	drops = Node.new()
 	drops.name = "Drops"
@@ -996,31 +999,38 @@ func _setup_aero() -> void:
 		AeroLib.apply_grade(env)
 	# AC-0235: the procedural cloud deck. AC-0235 retest 5: THREE
 	# layers with varying height, feature size and drift speed
-	# (user: vary height/size/speed) - the pattern is world-anchored
-	# in the shader, so following the player's XZ does not smear it.
-	# h = layer altitude, scale = feature size in blocks, cov =
-	# coverage multiplier (lower layers are thinner, faster).
+	# (user: vary height/size/speed). AC-0385: the geometry is now a
+	# SPHERICAL SHELL per layer (unit SphereMesh scaled to R+h and
+	# centred at (0, -R, 0)) instead of flat player-following quads -
+	# the clouds wrap the planet from orbit. h = layer altitude,
+	# scale = feature size in BLOCKS (the shader converts to angular
+	# frequency: 2*pi*(R+h)/scale), wind = the old blocks/sec drift,
+	# converted to an angular drift about world Y (|wind|/(R+h) rad/s),
+	# cov = coverage multiplier (lower layers are thinner, faster).
+	# The placement follows Game.planet_R, which is only final after
+	# the world loads - _create_game_nodes() re-places on every
+	# (re)creation.
 	if AeroLib.clouds_on():
 		var CL := [
-			{"h": AeroLib.CLOUD_H, "size": 6144.0, "scale": 256.0, "wind": Vector2(0.005, 0.002), "cov": 1.00},
-			{"h": 330.0, "size": 5120.0, "scale": 160.0, "wind": Vector2(0.012, 0.005), "cov": 0.75},
-			{"h": 275.0, "size": 4096.0, "scale": 110.0, "wind": Vector2(0.025, 0.010), "cov": 0.55},
+			{"h": AeroLib.CLOUD_H, "scale": 256.0, "wind": Vector2(0.005, 0.002), "cov": 1.00},
+			{"h": 330.0, "scale": 160.0, "wind": Vector2(0.012, 0.005), "cov": 0.75},
+			{"h": 275.0, "scale": 110.0, "wind": Vector2(0.025, 0.010), "cov": 0.55},
 		]
 		for cl in CL:
 			var cm := ShaderMaterial.new()
 			cm.shader = load("res://core/cloud_layer.gdshader")
 			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
-			cm.set_shader_parameter("u_wind", cl["wind"])
-			cm.set_shader_parameter("u_scale", 1.0 / float(cl["scale"]))
-			var q := QuadMesh.new()
-			q.size = Vector2(cl["size"], cl["size"])  # reaches the camera far plane (4096) down to ~5 deg elevation
+			var sp := SphereMesh.new()
+			sp.radius = 1.0
+			sp.radial_segments = 96
+			sp.rings = 48
 			var ln := MeshInstance3D.new()
 			ln.name = "CloudLayer"
-			ln.mesh = q
+			ln.mesh = sp
 			ln.material_override = cm
-			ln.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 			add_child(ln)
-			cloud_layers.append({"node": ln, "mat": cm, "h": cl["h"], "cov": cl["cov"]})
+			cloud_layers.append({"node": ln, "mat": cm, "h": cl["h"], "scale": cl["scale"], "wind": cl["wind"], "cov": cl["cov"]})
+		_place_clouds()
 	if AeroLib.wash_on():
 		aero_wash_mesh = QuadMesh.new()
 		var wm := ShaderMaterial.new()
@@ -1035,6 +1045,25 @@ func _setup_aero() -> void:
 		aero_wash.material_override = wm
 		aero_wash.visible = false
 		add_child(aero_wash)
+
+func _place_clouds() -> void:
+	# AC-0385: the cloud shell wraps the planet. Unit spheres scaled to
+	# R+h and centred at (0, -R, 0) (the surface plane y=0 is the top of
+	# the planet, so h stays the same altitude above it the quads used).
+	# u_scale3 converts the per-layer feature size (in blocks) to the
+	# angular frequency on the shell; u_drift converts the old blocks/sec
+	# wind to rad/s about world Y (|wind|/(R+h)). Idempotent - called
+	# from _setup_aero and on every _create_game_nodes.
+	var Rf := float(Game.planet_R)
+	var c := Vector3(0.0, -Rf, 0.0)
+	for cl in cloud_layers:
+		var rsh := Rf + float(cl["h"])
+		var ln: MeshInstance3D = cl["node"]
+		ln.position = c
+		ln.scale = Vector3.ONE * rsh
+		cl["mat"].set_shader_parameter("u_center", c)
+		cl["mat"].set_shader_parameter("u_scale3", TAU * rsh / float(cl["scale"]))
+		cl["mat"].set_shader_parameter("u_drift", cl["wind"].length() / rsh)
 
 func _aero_camera() -> Camera3D:
 	if camera != null and camera.is_inside_tree():
@@ -1060,11 +1089,10 @@ func _process(delta: float) -> void:
 			_stats_acc = 0.0
 			_refresh_stats()
 	_update_sky()
-	# AC-0235: cloud layer follows the player's XZ; the drift
-	# clock advances per frame (clamped like the day clock).
-	for cl in cloud_layers:
-		if player != null:
-			cl["node"].position = Vector3(player.position.x, float(cl["h"]), player.position.z)
+	# AC-0385: the cloud shell is world-fixed (it wraps the planet and
+	# no longer follows the player); only the drift clock advances
+	# (clamped like the day clock).
+	if not cloud_layers.is_empty():
 		_cloud_time += minf(delta, 0.05)
 	if aero:
 		var ac := _aero_camera()
@@ -1220,10 +1248,20 @@ func _update_sky() -> void:
 		# AC-0235 retest 2: clouds go dark at night (MC-style).
 		var cday := DayNight.day(t)
 		var ctint := Color8(46, 50, 66).lerp(Color(u2["cloud_color"]), cday)
+		# AC-0385: lit by the SAME DayNight sun convention AC-0382 wired
+		# into the satellite body - u_sun = direction TO the sun (the
+		# light travels along sun_direction), u_day/u_day_gain the
+		# satellite's exact day/night weight set (satellite_body.gd).
+		var cloud_sun := -DayNight.sun_direction(t)
+		var cloud_day := 0.18 + 0.82 * cday
+		var cloud_day_gain := 0.82 * cday
 		for cl in cloud_layers:
 			cl["mat"].set_shader_parameter("u_cloud_time", _cloud_time)
 			cl["mat"].set_shader_parameter("u_coverage", float(u2["cloud_amount"]) * float(cl["cov"]))
 			cl["mat"].set_shader_parameter("u_cloud_tint", ctint)
+			cl["mat"].set_shader_parameter("u_sun", cloud_sun)
+			cl["mat"].set_shader_parameter("u_day", cloud_day)
+			cl["mat"].set_shader_parameter("u_day_gain", cloud_day_gain)
 
 func _update_fog() -> void:
 	if OS.get_environment("AWECRAFT_NO_FOG") == "1" or not bool(Settings.values.get("fog_enabled", true)):

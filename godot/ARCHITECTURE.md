@@ -61,6 +61,20 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                                             inert during normal play (AC-0140)
 ├─ DirectionalLight3D     "sun" — modulated by Game.time_of_day
 ├─ WorldEnvironment
+├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
+│                         AC-0385): three concentric transparent SphereMeshes at
+│                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
+│                         (main.gd `_place_clouds()` re-places after the world
+│                         loads, since Game.planet_R is only final then). 3-D
+│                         value noise on the unit direction from the centre
+│                         (u_scale3 = 2π(R+h)/feature keeps feature sizes in
+│                         blocks); wind = rotation about world Y; sun-lit with
+│                         the AC-0382 DayNight convention (u_sun = -sun_dir).
+│                         Weather, not generation (genhash-neutral); fog_disabled;
+│                         alpha depends on world direction + time-of-day only,
+│                         never player distance — so it cannot pop at the
+│                         satellite body's emergence. (Was: three flat
+│                         player-following QuadMeshes, AC-0235.)
 ├─ World                  world/world.tscn  →  world/world.gd
 │  │                      chunk manager: streaming bands, LOD tiers, scheduler/drain,
 │  │                      chunk pool, fluid ticking, edit flush, drops + mob spawning

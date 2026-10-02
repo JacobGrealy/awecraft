@@ -2,9 +2,12 @@ class_name Aero
 extends RefCounted
 
 # AC-0235: the sky dome is gone (sky pass now); the cloud layer
-# plane hovers at this height (surface tops ~128-145; 400 puts the
-# layer ~260 above the ground - distant, MC-like; 160 read as
-# clouds hovering over the field, user retest 19:40).
+# hovers at this height (surface tops ~128-145; 400 puts the layer
+# ~260 above the ground - distant, MC-like; 160 read as clouds
+# hovering over the field, user retest 19:40). AC-0385: it is now
+# the TOP SHELL's altitude - a spherical shell at radius R + CLOUD_H
+# centred on the planet (main.gd _place_clouds), so the same altitude
+# is 260 above the ground everywhere on the globe.
 const CLOUD_H := 400.0
 
 const GLOW_ENABLED := true
