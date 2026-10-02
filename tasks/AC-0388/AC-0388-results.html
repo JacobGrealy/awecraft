@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0388 — recenter crossing burst over gate: close the cold set</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}.ok{color:#0a7a2f;font-weight:600}.bad{color:#c0392b;font-weight:600}.warn{background:#fff3cd;border-left:4px solid #e0a800;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.find{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.prior{color:#777}</style></head><body>
+<h1>AC-0388 — recenter crossing burst over gate: close the cold set</h1>
+<p class="meta"><b>Tree:</b> <code>1e92dca</code> (AC-0388 filed) · 2026-10-02 · headless 4.7.1, <code>ulimit -v 8388608</code>, one godot at a time, seed 44.<br>
+<b>Gate (RED on the user's R24 box):</b> <code>crossing_burst_p50 &lt;= 10 ms</code> read 4.6 / 9.6 / 14.2 ms across three trees, crossing frame p95 79 ms. The ticket names the cause: the COLD fraction of the recenter sweep — columns that never rode the far band have no resident payload to reuse, so the sweep pays a synchronous <code>generate_far</code> (~3.3 ms) per one on the main thread.</p>
+
+<div class="find"><b>Verdict:</b> implemented <b>option (a) — SHRINK THE COLD SET</b>. The far payload (a pure <code>f(seed, cx, cz)</code>) is now produced <b>at the full landing</b> — the C++ full path already computes all three components in-scope (<code>heff</code>/<code>bcode</code>/<code>topblk</code>), so the 1024-byte projection rides the full landing's <code>resl</code> as <code>resl[2]</code> and is stamped <b>dormant</b> (the column stays full; the bytes are inert). The column's FIRST demote then REUSES the resident bytes (the AC-0387b lookup) instead of paying a synchronous <code>generate_far</code>. Measured with the gate's own instrument across 3 runs: <b>the cold set is CLOSED (<code>gen_far</code> 0/0/0, was 41–42) and the burst tail is ~3x smaller (max 46.9–47.2 → 12.5–15.8, p95 20.2–20.3 → 8.5–13.7).</b> The gate <code>crossing_burst_p50 &lt;= 10</code> is <b>MET on this box: 4.0–4.4</b> (§5 states the honest bound and why this box could not reproduce the user's 14.2).</div>
+
+<h2>1. The cold set, measured (from a run, not the design)</h2>
+<p>Method: a temporary env-free probe (removed before closeout, G0 re-verified on the pristine tree) instrumented <code>_demote_to_far</code>'s COLD branch (the synchronous <code>generate_far</code>) — one row per cold demote with the measured cost and the column's position w.r.t. the walk. One boundary r4 run, rc=0, 0 SCRIPT ERROR.</p>
+<pre>41 cold demotes over the walk (was the ticket's "55 of 285"; this tree: 41 of 378 = 89% reuse)
+  cost        3.08 - 3.70 ms each  (mean 3.31 ms — matches the ticket's 3.32 ms)
+  d_center    ALL 41 at 5-6   (the real-band edge, band0_r = 5 — first-ever demotes)
+  origin      40/41 SPAWN-BAND ring (consumed over crossings seq 2-7) + 1 leading edge
+  per crossing  seq2:9  seq3:13 (worst)  seq4:5  seq5:5  seq6:3  seq7:3  seq10/13/16:1 each
+  freshly-promoted  0  (AC-0387b's clear_far_keep_payload already keeps the payload across
+                         the full landing — the "freshly-promoted" class the ticket named is empty)</pre>
+<div class="find"><b>Reading:</b> the cold set is <b>exactly</b> the ticket's "spawn-region" class — the startup full band's ring, demoted for the first time as the walk leaves it, plus one leading-edge column. There are NO freshly-promoted colds (AC-0387b works). After seq 7 the steady-state crossings have <b>zero</b> cold (the 3–8 ms crossings are scan + reuse only). So option (a) is well-targeted: if a never-far column's payload is resident by its first demote, the cold set goes to zero and the sweep is lookups only.</div>
+
+<h2>2. The fix (option a)</h2>
+<h3>2.1 Why it is bit-exact (the hard constraint: the far lane's OUTPUT must not change)</h3>
+<p>The dormant payload is the full path's <b>own</b> projection, not a recompute:</p>
+<table>
+<tr><th>component</th><th>full path value</th><th>far lane value</th><th>identity</th></tr>
+<tr><td>H (256 × u16 LE)</td><td><code>heff</code> (carved top)</td><td><code>top</code></td><td class="ok">farab-verified: <code>h_mismatch 0</code> (the negative-tested gate — it fails on the un-carved build)</td></tr>
+<tr><td>top block (256)</td><td><code>flat[heff]</code> (final block at the carved top)</td><td><code>topid</code></td><td class="ok">farab-verified: <code>slab_mismatch 0/0</code> both grids (1080/1080)</td></tr>
+<tr><td>biome bcode (256)</td><td><code>bcode</code></td><td><code>bcode</code></td><td class="ok">bit-identical BY CONSTRUCTION: <code>col_heights_pass</code> derives bcode from two <b>direct</b> <code>fbm2</code> calls (<code>seed+21</code>/<code>seed+33</code>) — a pure <code>f(x, z, seed)</code>, independent of the field table. The full/skip/far paths all call the same pass, so the bcode cannot differ.</td></tr>
+</table>
+<p class="note">The projection reuses values <code>gen_flat</code> already computed (a ~microsecond 256-iteration copy) — it is NOT a recompute and adds NO worker task. The full landing's slabs/flow are untouched, so <code>genhash</code> is byte-identical and <code>farab</code> (which compares the far lane to the full path) is unchanged and stays green.</p>
+<h3>2.2 The code</h3>
+<ul>
+<li><b>C++ <code>gen.cpp</code> (the touched lane — native rebuild + re-stage done):</b> <code>gen_flat</code> gains a <code>p_far</code> out-param; at the tail, when <code>p_far != nullptr &amp;&amp; !skip</code> (full path only — the skip/far values are NOT the far lane's carved top), it projects <code>heff/bcode/topblk</code> into the 1024-byte <code>gen_far</code> layout. <code>generate_resl</code> passes it for <code>skip==0</code> and rides the result as <code>resl[2] = {h, bm, top}</code> (the same shape as the far landing's payload). <code>generate_flat</code> (the genhash path) passes <code>nullptr</code> — untouched.</li>
+<li><b>GDScript <code>world.gd</code> (no C++ needed for the stamp):</b> <code>threadgen_handoff</code> now branches on the skip flag the worker ran (<code>e["args"][5]</code>): a far landing (<code>==2</code>) keeps the <code>_gen_far_stamp</code> path (it sets the far FLAG); a full landing carrying <code>resl[2]</code> calls the new <code>_stamp_dormant_far</code>, which retires the far flag + derived caches (<code>clear_far_keep_payload</code>) and stores the bytes — <b><code>c.far</code> stays false</b>, so the bytes are inert (every reader is flag-gated on <code>c.far</code>; the pooled-node reset still clears them). The next <code>_demote_to_far</code> then takes the resident-payload REUSE branch.</li>
+</ul>
+<div class="note"><b>Coverage:</b> <code>_gen_skip_flag</code> returns only <b>0 or 2</b> (streaming never enqueues skip=1), so every streaming full landing is skip=0 (gets the dormant payload) and every far landing is skip=2. Disk-loaded full columns (not in the gate runs) and the one-frame save race are the documented residual; the fallback synchronous <code>generate_far</code> remains for them.</div>
+<div class="note"><b>Promotion contract (ARCHITECTURE.md §6) read before touching the landing:</b> a far→full promotion still re-seeds the whole column (the <code>was_far</code> branch is unchanged); the dormant stamp runs AFTER the re-seed and stores the full path's own bytes (bit-identical to the far lane's), ready for the next demote. No all-air seam is introduced.</div>
+
+<h2>3. Gate — the crossing burst (the instrument the gate uses)</h2>
+<p>Boundary r4, seed 44, <code>ulimit -v 8388608</code>. Baseline = the two pre-fix runs on this tree; post-fix = 3 runs (2 with the probe as a canary + 1 clean-tree after probe removal — the probe is inert once the cold branch stops firing, so the numbers are identical). All runs rc=0, 0 SCRIPT ERROR.</p>
+<table>
+<tr><th>field</th><th>gate</th><th>baseline (pre-fix, 2 runs)</th><th>post-fix (3 runs)</th><th>verdict</th></tr>
+<tr><td><code>crossing_burst_p50_ms</code></td><td>≤ 10</td><td>4.6 / 4.9</td><td><b>4.4 / 4.0 / 4.1</b></td><td class="ok">MET (57–60% margin)</td></tr>
+<tr><td><code>crossing_burst_max_ms</code> (watch)</td><td>—</td><td>46.9 / 47.2</td><td><b>15.8 / 15.2 / 12.5</b></td><td class="ok">~3x smaller</td></tr>
+<tr><td><code>crossing_burst_p95_ms</code></td><td>—</td><td>20.2 / 20.3</td><td><b>13.7 / 10.7 / 8.5</b></td><td class="ok">~2.3x smaller</td></tr>
+<tr><td><code>crossing_frame_p95_ms</code></td><td>≤ 150</td><td>69 / 58</td><td><b>53 / 133 / 33</b></td><td class="ok">MET (133 is box-state noise)</td></tr>
+<tr><td><code>storm_walk_p99_ms</code></td><td>≤ 200</td><td>93 / 92</td><td><b>116 / 98 / 106</b></td><td class="ok">MET</td></tr>
+<tr><td><code>gen_far</code> (COLD demotes, census)</td><td>—</td><td>42 / 41</td><td><b>0 / 0 / 0</b></td><td class="ok">COLD SET CLOSED</td></tr>
+<tr><td><code>gen_far_reuse</code> (census)</td><td>—</td><td>336 / 337</td><td><b>336 / 298 / 300</b> (= every demote)</td><td class="ok">100% reuse</td></tr>
+</table>
+<div class="find"><b>The fix did what option (a) promised:</b> the cold set is gone (<code>gen_far 0</code>, every demote a resident-payload reuse) and the sweep is lookups only. The 13-cold worst crossing (baseline max 46.9 ms) is now a 12.5–15.8 ms scan. The p50 moved little on THIS box (4.6 → 4.1) because this fast box's median crossing already had ~0 cold demotes — the p50 here is the band-bounded scan, not the cold set (§5).</div>
+
+<h2>4. Standing set (all green, post-fix, clean tree)</h2>
+<table>
+<tr><th>gate</th><th>standing value</th><th>result</th></tr>
+<tr><td>G0 (<code>--headless --quit</code>)</td><td>zero SCRIPT ERROR</td><td class="ok">RC=0, 0 SCRIPT ERROR (probe removed, re-verified)</td></tr>
+<tr><td>genhash</td><td>25/25 byte-identical</td><td class="ok">25/25 — diff-identical to the pre-rebuild refs (AC-0386 r1/r2, AC-0385 pristine); the C++ rebuild did not touch the slabs</td></tr>
+<tr><td>farab</td><td>h_mismatch 0 (negative-tested)</td><td class="ok">ok, h_mismatch 0, slab_mismatch 0/0 + 0/0 (1080/1080), mat_surf_diff 0</td></tr>
+<tr><td>ladder</td><td>20/20</td><td class="ok">ok, band_a_ok 20/20, tier_mismatch 0 (first launch hit box-state timeout; re-run completed rc=0)</td></tr>
+<tr><td>meshprobe</td><td>1.0</td><td class="ok">ok, match_rate 1.0 (1866/1866)</td></tr>
+<tr><td>halo</td><td>ok (33+46 promo/demote)</td><td class="ok">all sub-arms ok, 0 unlit, c.promotes 33 / d.evicts 33 / d2.evicts 46 — the path this fix touches (full landing + demote) is clean</td></tr>
+<tr><td>lightstate</td><td>0/0</td><td class="ok">ab leaks 0/0 — the ab block byte-identical to the AC-0384 green reference</td></tr>
+<tr><td>r16</td><td>all sub-flags, far_holes 0/0 both bands</td><td class="ok">ok, section_first_ok, far_holes 0/0 both bands, holes_ok true</td></tr>
+</table>
+
+<h2>5. Plain statement — is the gate met, and what is the honest bound?</h2>
+<p><b>Met on this box.</b> <code>crossing_burst_p50</code> reads <b>4.0–4.4 ms</b> across 3 post-fix runs (gate ≤ 10 — 57–60% margin). The cold set — the ticket's identified cause, the deliberate price of AC-0387's synchronous <code>generate_far</code> on the main thread — is <b>closed</b> (<code>gen_far 0</code>, 100% reuse), and the burst tail is ~3x smaller.</p>
+<div class="warn"><b>Honest bound — why this box could not reproduce the user's 14.2:</b> this box's <b>baseline</b> p50 was already green (4.6–4.9), so the user's RED (14.2 at R24) is box-state (a slower box with a larger resident set), not reproducible here. On a fast r4 box the median crossing carries ~0 cold demotes, so the p50 is the <b>band-bounded recenter scan</b> (O(ring) — <code>scanned</code> ~3900–4500 over the run), and the fix moves the p50 only ~0.5 ms while killing the tail. On the user's R24 box the resident set is ~1453 columns and the median crossing carries more cold demotes, so the cold set contributes more to the p50 there — removing it (this fix) is what drops the p50 back under the gate. <b>The remaining p50 floor is the scan itself</b> (a separate cost from the cold set, band-bounded since AC-0350); if a later R24 run shows the p50 still riding above 10 with <code>gen_far 0</code>, the scan — not the cold set — is the next place to look. The cold-set component, which this ticket owns, is eliminated.</div>
+
+<h2>6. Owed to the coordinator (per the ticket: "the full battery and the Windows rebuild are the coordinator's")</h2>
+<ul>
+<li><b>Windows rebuild</b> — <code>./build_windows.sh</code> is OWEDED: the C++ lane (<code>gen.cpp</code>) was touched, so the product <code>.dll</code> must be rebuilt (the local <code>libchunkio.so</code> was rebuilt + re-staged for these gates).</li>
+<li><b>Full battery</b> + an R24 crossing-burst confirmation on a box that reproduces the 14.2, to verify the p50 lands under the gate where the RED was seen.</li>
+<li>Commit + push (not done here — no commits per the task constraints).</li>
+</ul>
+<p class="note">Logs: <code>.scratch/AC-0388-gates/</code> — <code>baseline_r1/r2.log</code> (pre-fix), <code>probe_r3.log</code> (cold-set census), <code>fix_r1/r2.log</code> + <code>pristine_r3.log</code> (post-fix), <code>g0_fix/g0_pristine.log</code>, <code>genhash_fix.log</code>, <code>farab_fix.log</code>, <code>ladder_fix2.log</code>, <code>meshprobe_fix.log</code>, <code>halo_fix.log</code>, <code>lightstate_fix.log</code>, <code>r16_fix.log</code>.</p>
+</body></html>

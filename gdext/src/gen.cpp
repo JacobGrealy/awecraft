@@ -3267,7 +3267,7 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
 		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr,
 		int face = 0, double R = 4000.0, std::vector<int> *p_heff = nullptr,
-		std::vector<uint8_t> *p_topblk = nullptr) {
+		std::vector<uint8_t> *p_topblk = nullptr, std::vector<uint8_t> *p_far = nullptr) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
@@ -4045,6 +4045,24 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			(*p_topblk)[i] = flat[((size_t)heff[i] << 8) | ((i / 16) << 4) | (i % 16)];
 		}
 	}
+	// AC-0388: the far payload projection (FULL path only — the skip/far
+	// paths' values are NOT the far lane's carved top). The same 1024-byte
+	// layout gen_far emits: 256 x (heff u16 LE + bcode + the final top
+	// block at heff). heff + the top block are the farab-verified
+	// full-path reference for the far H/top (h_mismatch 0 / slab 0-0);
+	// bcode is bit-identical by construction (col_heights_pass's two
+	// direct fbm2 calls — a pure f(x, z, seed), table-independent). A pure
+	// projection of values this call already computed (~microseconds).
+	if (p_far != nullptr && !skip) {
+		p_far->resize(1024);
+		for (int i = 0; i < 256; i++) {
+			int h = heff[i];
+			(*p_far)[2 * i] = (uint8_t)(h & 0xFF);
+			(*p_far)[2 * i + 1] = (uint8_t)((h >> 8) & 0xFF);
+			(*p_far)[512 + i] = (uint8_t)bcode[i];
+			(*p_far)[768 + i] = flat[((size_t)heff[i] << 8) | ((i / 16) << 4) | (i % 16)];
+		}
+	}
 	return flat;
 }
 
@@ -4568,7 +4586,9 @@ public:
 		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
 		std::vector<uint8_t> ffl;
-		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl, p_face, p_R);
+		std::vector<uint8_t> far_pay;
+		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl, p_face, p_R,
+			 nullptr, nullptr, &far_pay);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
 		if (p_skip == 0) {
@@ -4577,6 +4597,32 @@ public:
 			Array fl;
 			fl.resize(p_h / 16); // all null (the skip paths mark no flow)
 			resl.append(fl);
+		}
+		// AC-0388: the FULL landing carries the far payload (the full
+		// path's own projection — heff/bcode/topblk, a pure f(seed, cx,
+		// cz)) as resl[2] = {h, bm, top} (the same shape as the far
+		// landing's payload; the full landing's resl[0] is real slabs, so
+		// the handoff stamps it DORMANT — c.far stays false). The
+		// column's first demote then REUSES the resident bytes (the
+		// AC-0387b lookup) instead of paying a synchronous generate_far in
+		// the recenter sweep (the AC-0388 cold set). Skip paths (band A /
+		// the un-carved fill) carry nothing — their values are not the
+		// far lane's carved top.
+		if (p_skip == 0 && far_pay.size() == 1024) {
+			Dictionary fp;
+			PackedByteArray ph;
+			ph.resize(512);
+			std::memcpy(ph.ptrw(), far_pay.data(), 512);
+			PackedByteArray pb;
+			pb.resize(256);
+			std::memcpy(pb.ptrw(), far_pay.data() + 512, 256);
+			PackedByteArray pt;
+			pt.resize(256);
+			std::memcpy(pt.ptrw(), far_pay.data() + 768, 256);
+			fp["h"] = ph;
+			fp["bm"] = pb;
+			fp["top"] = pt;
+			resl.append(fp);
 		}
 		return resl;
 	}

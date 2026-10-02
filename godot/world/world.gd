@@ -5881,6 +5881,32 @@ func threadgen_poll() -> void:
 # max H, the low dispatch's deep-cell guard for the ore precompute). The
 # caller stamps the umbrella (no_caves) from the skip flag — a far column
 # is cave-less by representation.
+# AC-0388: the FULL landing's far payload (resl[2] = the C++ full path's
+# own projection: heff u16 LE + bcode + top block — a pure f(seed, cx,
+# cz); the C++ site owns the bit-exactness argument). Stamped DORMANT:
+# the far FLAG + derived caches are retired (the column stays FULL — the
+# bytes are inert, every reader is flag-gated on c.far) and the bytes are
+# stored, so the column's FIRST _demote_to_far is a resident-payload
+# REUSE (crx_gen_far_reuse) instead of a synchronous generate_far in the
+# recenter sweep (the AC-0388 cold set — 41 x 3.31 ms over a 20-crossing
+# walk, all of it the spawn band's first demotes). The pooled-node reset
+# still clears the bytes with the column.
+func _stamp_dormant_far(c: Node3D, fp: Dictionary) -> void:
+	var fh: PackedByteArray = fp.get("h", PackedByteArray())
+	if int(fh.size()) != 512:
+		c.clear_far_keep_payload()
+		return
+	c.clear_far_keep_payload()
+	c.far_h = fh
+	c.far_biome = fp.get("bm", PackedByteArray())
+	c.far_top = fp.get("top", PackedByteArray())
+	var mh := 0
+	for i in range(0, 512, 2):
+		var v := int(c.far_h[i]) | (int(c.far_h[i + 1]) << 8)
+		if v > mh:
+			mh = v
+	c.far_hmax = mh
+
 func _gen_far_stamp(c: Node3D, resl: Array) -> bool:
 	if resl == null or int(resl.size()) < 3 or not (resl[2] is Dictionary):
 		return false
@@ -5988,8 +6014,20 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	# _demote_to_far reuses it instead of paying a synchronous
 	# generate_far in the recenter sweep (the AC-0387 crossing-burst
 	# regression, 34.8 ms p50). The pool reset still clears the bytes
-	# with the column.
-	if not _gen_far_stamp(c, resl):
+	# with the column. AC-0388: the FULL landing now CARRIES the payload
+	# too (resl[2] — the full path's own projection; bit-exactness is the
+	# C++ site's contract + the farab reference it projects) and stamps
+	# it DORMANT, so a never-far column's first demote (the spawn band +
+	# leading edge — the AC-0388 cold set) is a resident-payload lookup.
+	# args[5] is the skip flag the worker ran (0 = full, 1 = band A,
+	# 2 = far) — the far landing keeps the _gen_far_stamp path (it sets
+	# the far FLAG); a full landing with a payload never does.
+	if int(e["args"][5]) == 2:
+		if not _gen_far_stamp(c, resl):
+			c.clear_far_keep_payload()
+	elif int(resl.size()) > 2 and resl[2] is Dictionary:
+		_stamp_dormant_far(c, resl[2])
+	else:
 		c.clear_far_keep_payload()
 	# AC-0309 D2: the far (h-only) tier ends at the patch edge too.
 	_patch_far_mask(c)
