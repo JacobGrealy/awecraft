@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-02T11:33
+  updated_at: 2026-10-02T11:34
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0388
 - AC-0159
 - AC-0112
 - AC-0113
@@ -23174,4 +23175,77 @@ intake:
     p99 improved from 116 to 81. The reuse''s equivalence is proven by a probe that double-called the
     lane on 400 chunks with ZERO byte mismatches, and it now reports itself through the standing gen_far_reuse
     census field (230 of 285 demotes reused), so a zero there means the regression has silently returned.'
+  comments: []
+- id: AC-0388
+  title: recenter-crossing-burst-over-gate
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-02T11:34
+  updated_at: 2026-10-02T11:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Walking across the world, the moment the streaming ring recenters should not
+    stutter - and right now it does, because the ground generation that makes the far terrain match the
+    carved world is expensive and the recenter sweep pays for it on the main thread.
+
+
+    2) Technical Details:
+
+    THE GATE IS RED AND IT IS A REAL COST, NOT A FLAP. The standing R24 crossing-burst gate is `crossing_burst_p50
+    <= 10 ms`. Across my own capped stages it has read 4.6 ms (tree eee561e, immediately after AC-0387''s
+    reuse fix), 9.6 ms (tree fb9644d), and 14.2 ms (tree 7e3614e), with the crossing frame p95 at 79 ms.
+    The trend is upward and the last value is 42% over the gate. This is the deliberate price of AC-0387:
+    making the far lane produce the CARVED top - which the user chose knowing it costs "whatever it costs"
+    - took the far lane from 95 to ~3,330 us/chunk, roughly 35x, and the recenter sweep is where a synchronous
+    burst of that work lands on the main thread.
+
+    WHAT IS ALREADY DONE, so this ticket does not redo it: AC-0387''s follow-up made the sweep REUSE the
+    resident far payload instead of recomputing it (the payload is a pure function of seed, cx, cz and
+    is never saved), which took the burst from 34.8 ms back to 6.7 ms at the time, with the reuse proven
+    byte-identical on 400 chunks (0 mismatches) and now reported through the standing `gen_far_reuse`
+    census field so a silent relapse shows up as a zero. The remaining cost is the COLD fraction: columns
+    that never rode the far band and therefore have no resident payload to reuse - measured at 55 cold
+    recomputes out of 285 demotes (81% reuse) in that run, at 3.32 ms each.
+
+    THEREFORE THE WORK IS ONE OF THESE, and the first step is to measure which: (a) SHRINK THE COLD SET
+    - the 55 cold recomputes are spawn-region and freshly-promoted columns; if the far payload can be
+    produced at the moment a column is demoted FROM a full chunk (rather than recomputed later), the cold
+    set approaches zero and the sweep becomes lookups only; (b) MOVE THE REMAINING COLD WORK OFF THE MAIN
+    THREAD - the thread-generation lane exists and the AC-0382 satellite bake proved a WorkerThreadPool
+    slot is available for a pure C++ call, so a cold far payload could be produced there with the sweep
+    accepting a one-frame-old far column; (c) IF NEITHER CLOSES IT, say so with numbers and propose the
+    honest bound, because the alternative - quietly raising a gate that exists to catch exactly this -
+    is what this project forbids.
+
+    NOTE THE SECOND THREAD-GEN / DRAIN CONTEXT: AC-0381''s review found DRAIN at 57.6-59.9% of the worst-20
+    frames and the engine-side gap at 62.6-71.9% of the max frames with no counter reaching inside it,
+    so anything that adds main-thread work here lands next to the largest unattributed share of the worst
+    frames. That is an argument for (b) if (a) does not close the gap.
+
+    MEASURE WITH THE SAME INSTRUMENT THE GATE USES - `crossing_burst_p50`, its max, the crossing frame
+    p95, and the storm p99 - and report them across at least two runs, because this value has moved by
+    3x across my stages for reasons that are not all explained (the same run-to-run variance this session
+    has met repeatedly, where a field riding a variable process flaps and must be reported as a range
+    rather than a single number). Say plainly whether the gate is met afterwards, and if it is not, what
+    the honest bound is and why.
+
+    CONSTRAINTS: the far lane''s OUTPUT must not change - H stays the full path''s carved top and the
+    repaired farab gate stays green with h_mismatch 0 (it is negative-tested and would catch a regression);
+    genhash 25/25 byte-identical; the standing set green - G0 zero SCRIPT ERROR (not rc=0), ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band; the promotion contract in ARCHITECTURE.md section 6 read before touching promotion; native
+    rebuild + re-stage mandatory if the C++ lane is touched; the full battery and the Windows rebuild
+    are the coordinator''s.
+
+    CONTEXT: read tasks/AC-0387/AC-0387-results.html sections 15-18 (the reuse fix, the cold-set numbers,
+    the census field), tasks/AC-0381/AC-0381-results.html (the DRAIN and engine-gap shares), and grep
+    world.gd for the recenter sweep, `_demote_to_far` and `gen_far_reuse`.
+
+    '
   comments: []
