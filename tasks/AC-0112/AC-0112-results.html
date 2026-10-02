@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0112 results — held-item positioning per-type catalogue (REVIEW)</title>
+<style>
+body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}
+code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}
+.ok{color:#1a7f37;font-weight:600}.bad{color:#b42318;font-weight:600}.note{font-size:13px;color:#555}
+.key{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}
+.warn{background:#fff8e6;border-left:4px solid #e0c56d;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}
+.meta{color:#555;font-size:14px}
+</style></head><body>
+<h1>AC-0112 — held-item positioning per-type catalogue (REVIEW, audit only — no code change)</h1>
+<p class="meta">Review of <code>godot/player/player.gd</code> <code>_update_held</code> + the <code>sway_root</code>/<code>hand_root</code>/held-node transforms, per the ticket notes (verbatim in <code>spec.html</code>). Rendered evidence is infeasible on this box (degraded llvmpipe); all numbers below are headless. Line references are to <code>godot/player/player.gd</code> at HEAD unless stated otherwise.</p>
+
+<div class="key"><b>TL;DR</b> — The hand has <b>4 render nodes</b> covering <b>5 held-item branches</b>: empty fist; block (box mesh); cross/flower (shares the box node); flat item sprite (~35 item ids, incl. the bow, which has a <code>tool</code> key but falls through to the sprite branch); voxel tool (4 tool types, 16 item ids). Five values couple the branches: <code>HAND_BASE_POS</code>+sway and the <code>hand_root</code> swing (all branches), <code>HELD_ITEM_SCALE</code> (block+sprite), the hard-coded <code>held_box.position (0,0,−0.18)</code> (block+cross, same node), and <code>TOOL_POSE_POS</code>/<code>TOOL_POSE_ROT</code> (all 4 tool types). The regression history (AC-0073 → AC-0085 → AC-0097) shows each tool-centric ticket moving the other branches through exactly those shared values. Recommended split: a per-branch pose table (one row per branch/tool-type) consumed by <code>_update_held</code>/<code>_setup_held_tool</code>; the hand hierarchy, sway, swing timing and viewmodel lighting stay shared. A numeric baseline table (live run + independent constant-based recomputation agreeing to ≤1.2 mm) is in §5 for AC-0113 to assert against.</div>
+
+<h2>1. Catalogue — every held-item type, from the code</h2>
+<p>Dispatch: the selected slot <code>(sel, id, n, ui_mode)</code> is hashed at :222-225; on change, <code>_update_held(id, n)</code> (:1015) hides <b>all four</b> nodes (:1017-1024) and shows exactly one branch. Only one type is ever visible — there is a single hand. Branch logic: empty (:1016, :1025-1026) → block (<code>Data.block(id)</code> non-null, :1027-1037) → tool (<code>Data.items[id]["tool"]</code> in <code>[pick, axe, shovel, sword]</code>, :1038-1043) → sprite (any other item, :1044-1067).</p>
+
+<table>
+<tr><th>#</th><th>Branch</th><th>How it is distinguished (code)</th><th>Node(s)</th><th>Geometry / texture</th><th>Transform chain, rest pose</th></tr>
+<tr><td>1</td><td><b>Empty fist</b></td>
+<td><code>ui_mode == ""</code> and <code>(id == 0 or n &lt;= 0)</code> (:1016, :1025-1026)</td>
+<td><code>held_fist</code> (:998-1009)</td>
+<td><code>BoxMesh</code> 0.18×0.3×0.24 m, unshaded, skin color :1002; mesh is origin-centered</td>
+<td>camera → <code>sway_root</code>(<code>HAND_BASE_POS</code>+sway) → <code>hand_root</code>(identity) → fist <code>(0, −0.05, 0)</code> (:1007), scale 1. Swing: <b>punch</b> arc (:1438-1439 → :1516-1518)</td></tr>
+<tr><td>2</td><td><b>Block (box)</b></td>
+<td><code>Data.block(id)</code> non-null and <b>not</b> (<code>cross</code> and not <code>thin</code>) (:1027-1034). All solid blocks: 1-4, 6-21, 23, 25, 26/27 (closed door), 30, 32-36, plus 22 <b>torch</b> (<code>cross:true, thin:true</code> → routed to box, data.gd:215)</td>
+<td><code>held_box</code> (:976-988)</td>
+<td>Unit cube, corner-anchored 0..1 (<code>VoxelMath.FACES</code>, <code>godot/core/math.gd:3-10</code>; <code>HeldMeshes.box_mesh</code>, <code>godot/core/held_mesh.gd:83-117</code>), atlas-textured per face</td>
+<td>…→ <code>held_box</code> <code>(0, 0, −0.18)</code> (:1035), scale <code>HELD_ITEM_SCALE</code> = 0.33 (:985, :145). Swing: <b>item</b> arc</td></tr>
+<tr><td>3</td><td><b>Cross (flower etc.)</b></td>
+<td><code>cross == true</code> and <code>thin == false</code> (:1029). Block ids with that flag (data.gd): 5 water, 18 rose, 19 dandelion, 24 lava, 28 banana, 29/31 open door. (Water/lava/open-door ids normally never reach the hand — no item entries — but the code path is uniform for any held block id.)</td>
+<td><code>held_box</code> — <b>the same node as branch 2</b> (:1030-1031)</td>
+<td>Two 1×1 unit quads in an X (<code>XQ_A</code>/<code>XQ_B</code>, <code>held_mesh.gd:3-4, 120-145</code>), alpha-scissor, corner-anchored 0..1</td>
+<td>Identical to branch 2: <code>(0, 0, −0.18)</code>, scale 0.33 — box and cross share the node, the position and the scale. Swing: <b>item</b> arc</td></tr>
+<tr><td>4</td><td><b>Item sprite</b></td>
+<td>Item with no <code>tool</code> key, or <code>tool</code> not in the tool list (:1040-1044). Ids (data.gd:64-113): 100-108, 110, 126 (banana), 127-138 (armor), 139-141 (buckets), <b>142 bow</b> (<code>tool:"bow"</code> — has a tool key but is <b>not</b> in the 4-tool list, so it falls through to the sprite branch), 143-147</td>
+<td><code>held_sprite</code> (:989-995)</td>
+<td><code>Sprite3D</code>, billboard, nearest-filter; texture = atlas tile (32 px, <code>Data.TILE_PX</code> data.gd:51) or a tint quad fallback (:1046-1049). <code>pixel_size</code> is never set → engine default 1/100 (inference, §6)</td>
+<td>…→ <code>held_sprite</code> <code>(0,0,0)</code> — <b>position is never set after build</b>, i.e. it sits at the <code>hand_root</code> pivot — scale 0.33 (:990). Effective width 32×0.01×0.33 ≈ 0.1056 m. Swing: <b>item</b> arc</td></tr>
+<tr><td>5</td><td><b>Voxel tool</b> (4 types)</td>
+<td><code>tool ∈ [pick, axe, shovel, sword]</code> (:1042). 16 ids (data.gd:73-89): pick 111-114, axe 115-118, shovel 119-122, sword 109, 123-125</td>
+<td><code>held_tool</code> (:1010-1012) + children <code>head</code>/<code>handle</code> (:1390-1399)</td>
+<td>32×32 voxel grid per type (<code>TOOL_GRIDS</code> :1158-1295; <code>#</code>=head, other non-<code>.</code>=handle); boxes at cell centers, size <code>vox</code> (:1298-1333); head tinted by <code>Data.item_tint(id)</code>, handle <code>HANDLE_C</code> (:146)</td>
+<td>…→ <code>held_tool</code> <code>TOOL_POSE_POS (0.2, −0.3, 0)</code> + <code>TOOL_POSE_ROT (0.632, 2.639, −0.2)</code> (:1405-1406, :1154-1155; Godot YXZ Euler — verified numerically, §5). <b>Computed:</b> voxel size = <code>TOOL_TARGET_DIAG[type]</code> ÷ √(bw²+bh²+1), bbox over <b>all</b> non-<code>.</code> cells of the grid (:1356-1376). Swing: <b>item</b> arc</td></tr>
+</table>
+<p class="note">Asymmetry worth knowing: the banana <b>item</b> 126 renders as a flat sprite in the hand, while the banana <b>entity</b> uses <code>HeldMeshes.cross_mesh(28)</code> (<code>godot/entities/banana.gd:31-32</code>, same for <code>drop.gd:18-22</code>) — the same object has two representations, and only the in-world one is a cross.</p>
+
+<h2>2. The shared state — every value more than one branch depends on</h2>
+<p>This is the list the ticket exists for: each row is a place where tuning one type moves another.</p>
+<table>
+<tr><th>Shared value</th><th>Where</th><th>Branches coupled</th><th>How a tuning of one type moves the others</th></tr>
+<tr><td><code>sway_root.position = HAND_BASE_POS + sway</code> (:142, :971, :1547-1558)</td><td>player.gd</td><td>all 5</td><td><code>HAND_BASE_POS</code> is the anchor of the whole hand; any change re-positions fist, block, cross, sprite and tools together. (AC-0085 moved it for the tools; the page admits the cubes moved with it.)</td></tr>
+<tr><td><code>hand_root</code> position/rotation — swing (:1491-1528)</td><td>player.gd</td><td>all 5</td><td>One swing function rotates the pivot under <b>everything</b> held. Two arcs exist — punch (−0.45a, 0, 0) for the empty fist, item (−0.85a, 0, −0.12a) for all items — so all 4 tool types, every block, every sprite and the bow swing on the same arc. AC-0085 changed translation-swing to rotation-swing for the tools and thereby changed the motion of every other held item.</td></tr>
+<tr><td><code>HELD_ITEM_SCALE</code> = 0.33 (:145; applied :985, :990)</td><td>player.gd</td><td>block + cross + sprite</td><td>One constant sizes the box, the cross (same node) and every sprite. History: 0.35 → 0.70 (AC-0073) → 0.33 (AC-0097). Tuning a flower size moves every block and every icon.</td></tr>
+<tr><td><code>held_box.position = (0, 0, −0.18)</code> (:1035)</td><td>player.gd</td><td>block + cross (same node)</td><td>Hard-coded once for all blocks; introduced in AC-0073 specifically to fix near-plane clipping of the <b>×2-scaled</b> flowers — a tool/flower fix that only made sense for blocks because they share the node. Any per-block z-offset is currently impossible.</td></tr>
+<tr><td><code>TOOL_POSE_POS</code> / <code>TOOL_POSE_ROT</code> (:1154-1155, applied :1405-1406)</td><td>player.gd</td><td>all 4 tool types</td><td>One pose for pick, axe, shovel and sword (the grids themselves are per-type). AC-0073 and AC-0085 each re-composed these two constants for all four tools at once.</td></tr>
+<tr><td><code>TOOL_TARGET_DIAG</code> dict + voxel formula (:143, :1373-1376)</td><td>player.gd</td><td>all 4 tool types</td><td>Per-type values, but one shared formula and one shared dict; changing the formula (e.g. the bbox rule at :1357-1370, which spans head+handle) rescales all four.</td></tr>
+<tr><td><code>_vm_mats</code> light modulation (:1094-1128)</td><td>player.gd</td><td>all 5 (appearance)</td><td>Every viewmodel material's albedo is modulated by one light level each frame — a shared state, but color, not position.</td></tr>
+<tr><td>Camera near plane / FOV</td><td>engine + camera setup</td><td>all (visibility)</td><td>Not in player.gd, but AC-0073's near-clip fix exists because scaling held geometry at 0.70 pushed the quad's near face onto the near plane and the renderer dropped it. Size/position tuning in any branch is only safe against this implicit constraint.</td></tr>
+</table>
+
+<h2>3. Regression history — what each ticket changed and what it disturbed (cited)</h2>
+<h3>AC-0073 — "held tool orientation + held scale ×2" (<code>tasks/AC-0073/AC-0073-results.html</code>)</h3>
+<p><b>Aimed at:</b> the four voxel tools (head toward crosshair, swing arcs through center) and the held items generally (×2 scale, per its title). <b>Changed</b> (results page "What changed" table): <code>TOOL_TARGET_DIAG</code> ×2 (per-type dict); <code>TOOL_POSE_ROT</code> (−0.42, 0.55, −0.9) → (0.467168, 2.956413, −0.394178); <code>TOOL_POSE_POS</code> (0.03, −0.03, −0.02) → (0, 0, 0); <code>_apply_swing</code> tool branch; <code>HELD_ITEM_SCALE</code> <b>0.35 → 0.70</b> (the shared constant); and <code>held_box.position</code> — "(never set; geometry 0..1 anchored at hand origin)" → <b>(0, 0, −0.18)</b>, which the page marks as a required <i>"near-clip fix … to make ×2 flowers/blocks actually render"</i>. <b>Disturbed:</b> every block and every sprite (both scaled 2× and re-centered in z through shared values, with no per-type alternative), while the fist was explicitly left unchanged ("reads fine next to ×2 items" — deviations section). The tool pose was tuned on the same two shared constants the next ticket would re-tune.</p>
+<h3>AC-0085 — "swing = rotate, vertical at rest, handle off camera" (<code>tasks/AC-0085/AC-0085-results.html</code>)</h3>
+<p><b>Aimed at:</b> the four voxel tools (rest pose vertical, handle below viewport; swing as a rotation about the shoulder). <b>Changed</b> (results page "Files changed"): <code>HAND_BASE_POS</code> (0.45, −0.42, −0.8) → <b>(0.45, −0.62, −0.7)</b>; <code>TOOL_POSE_ROT</code> (0.467, 2.956, −0.394) → (0.632, 2.639, −0.2); <code>TOOL_POSE_POS</code> (0, 0, 0) → (0.2, −0.3, 0); <code>_apply_swing</code> position-lerp → rotation-arc; <code>hand_pose_rot()</code> accessor; plus harness re-tuning in <code>main.gd</code> (swing arm: position → rotation thresholds; toolpose arm: rot_delta/vert_ok/below_ok). <b>Disturbed:</b> the page documents it itself — "<b>Held cubes lower.</b> Same <code>HAND_BASE_POS</code> lowering moves the held box/fist/sprite down with the hand." Fist, block, cross and sprite all moved 0.2 m down / 0.1 m in z because of a tool-pose ticket, and the swing motion of <b>all</b> item types changed character (translation → rotation) because the pivot is shared. Its "before" numbers also cite AC-0070/AC-0073's toolpose outputs as the baseline it replaced.</p>
+<h3>AC-0097 — depth-on-top + scale per user (git commit <code>3816ad1</code>; no <code>tasks/AC-0097/</code> folder exists in the repo)</h3>
+<p><b>Changed</b> (commit message): <code>no_depth_test</code> on all viewmodel materials; sprite <code>material_override</code> now carries the tile; <b><code>HELD_ITEM_SCALE</code> 0.70 → 0.33 "(block + sprite) per user"</b>. <b>Disturbed:</b> the third move of the same shared scale in three tickets (0.35 → 0.70 → 0.33); block and sprite moved together by definition. Evidence is the commit message only — the results folder is absent.</p>
+<div class="warn"><b>The pattern, as evidence:</b> three consecutive tickets, each aiming at the tools (or the viewmodel generally), each reaching for the same ≤5 shared values in §2, each moving the branches it was not about — and each re-tuning the harness arms in lockstep (AC-0085's "Harness re-tuning notes"), so the instruments track the shared constants rather than the types. A fourth live observation from this review: the <code>toolpose</code> arm still asserts the AC-0073-era scale — <code>harness.gd:20063</code> expects <code>held_box_scale_x</code>/<code>held_sprite_scale_x</code> ≈ <b>0.70</b>, while the code is 0.33 since AC-0097. My live run (below) reads the top-level <code>ok:false</code> with <code>scale_ok:false</code> while all four tool rows are <code>ok:true</code>: the stale expectation sits <i>inside</i> the instrument. Fixing that row (to 0.33, or to a per-branch value once AC-0113 lands) belongs with AC-0113 or a hygiene ticket.</div>
+
+<h2>4. Recommended split — per-type knobs without duplicating the chain (do NOT implement; this is AC-0113's baseline)</h2>
+<p><b>The smallest change is a per-branch pose table in <code>player.gd</code>, e.g. a <code>HELD_POSE</code> dictionary with one row per branch — <code>fist</code>, <code>block</code>, <code>cross</code>, <code>sprite</code>, <code>pick</code>, <code>axe</code>, <code>shovel</code>, <code>sword</code> — each row carrying <code>pos</code>, <code>rot</code> (for the tool rows) and <code>scale</code> — consumed at the two points where branches already branch: <code>_update_held</code> (sets the node's local transform from its row, replacing the shared <code>HELD_ITEM_SCALE</code> and the hard-coded <code>(0, 0, −0.18)</code>; box and cross get separate rows, so no node split is needed — only one node is visible at a time) and <code>_setup_held_tool</code> (replaces the two <code>TOOL_POSE_*</code> constants with the per-type row, sitting next to the already-per-type <code>TOOL_GRIDS</code>/<code>TOOL_TARGET_DIAG</code>).</p>
+<ul>
+<li><b>Moves (per-type):</b> scale of box / cross / sprite (splits <code>HELD_ITEM_SCALE</code> into three rows); local position of box and cross (currently one hard-coded value for both); <code>TOOL_POSE_POS</code>/<code>TOOL_POSE_ROT</code> become four rows; optionally the swing arc amplitude per branch in <code>_apply_swing</code> (it already has two kinds — punch vs item — the table just generalizes the existing split).</li>
+<li><b>Stays shared:</b> the <code>sway_root</code>/<code>hand_root</code> hierarchy and <code>HAND_BASE_POS</code> (that is the hand, not the item — one hand in the scene, and it is where AC-0085's fix correctly belongs as a hand-level value), the sway function and its constants, swing timing (<code>SWING_DURATION</code>, loop logic, <code>swing_kind_for_selected</code>), <code>_vm_mats</code> lighting, the <code>no_depth_test</code> material handling, and the <code>HeldMeshes</code> builders. Also stays: the dispatch at :219-225.</li>
+<li><b>Invariant it establishes:</b> tuning any type = editing that type's row; no other row reads the same constant. Then re-baseline the numbers in §5 per row, and have the headless arms assert them (extend the existing <code>toolpose</code>/<code>held</code> arm pattern to all five branches, and fix the stale 0.70 at <code>harness.gd:20063</code> in the same change).</li>
+</ul>
+
+<h2>5. Numeric transform baseline (for AC-0113 to assert unchanged per type)</h2>
+<p><b>Convention:</b> camera space, metres, at rest (no swing, no walk sway) and at swing apex (hand arc at its peak, a = sin(π/2) = 1). Tool part positions are <b>part-mesh AABB centers</b> — the convention of the existing instrument (<code>_toolpose_centroid</code>, <code>godot/scenes/harness.gd:20040-20045</code>: <code>mesh.get_aabb().get_center()</code> through the part's global transform, into <code>cam</code> space). Euler convention verified as Godot's default YXZ by matching live data (§5.2). Camera frame at spawn is identity for this chain (the chain is a pure camera-relative parent chain; camera position and the player basis cancel in <code>cam.to_local</code>).</p>
+<h3>5.1 Live run — <code>AWECRAFT_LOGIC=toolpose</code>, headless, 2026-10-02 (this review; pre-existing arm, no code added; memory-capped, single process)</h3>
+<pre>RESULT {"depth":{"box":true,"fist":true,"sprite":true,"tool":true},"depth_ok":true,
+"held_box_scale_x":0.33,"held_sprite_scale_x":0.33,"ok":false,"scale_ok":false,   ← scale_ok false = STALE 0.70 expectation at harness.gd:20063
+"tool_111":{"apex_handle":[0.657,-0.817,-0.431],"apex_head":[0.556,-0.852,-0.595],"arc_ok":true,"bbox_diag":1.224,
+ "handle_below_cam":true,"idle_handle":[0.696,-0.925,-0.67],"idle_head":[0.583,-0.838,-0.805],
+ "rest_dx":-0.112,"rest_dy":0.087,"rot_delta":0.858,"type":"pick","vertical_ok":true,"ok":true},
+"tool_115":{"apex_handle":[0.64,-0.822,-0.373],"apex_head":[0.541,-0.858,-0.696],"bbox_diag":1.1,
+ "idle_handle":[0.684,-0.974,-0.636],"idle_head":[0.559,-0.768,-0.877],"rot_delta":0.858,"type":"axe","ok":true},
+"tool_119":{"apex_handle":[0.717,-0.796,-0.328],"apex_head":[0.488,-0.876,-0.7],"bbox_diag":1.1,
+ "idle_handle":[0.762,-0.981,-0.587],"idle_head":[0.508,-0.783,-0.893],"rot_delta":0.858,"type":"shovel","ok":true},
+"tool_123":{"apex_handle":[0.744,-0.786,-0.267],"apex_head":[0.623,-0.829,-0.465],"bbox_diag":0.796,
+ "idle_handle":[0.794,-1.017,-0.54],"idle_head":[0.659,-0.911,-0.702],"rot_delta":0.858,"type":"sword","ok":true}}</pre>
+<table>
+<tr><th>tool</th><th>idle head</th><th>idle handle</th><th>apex head</th><th>apex handle</th><th>arc (rad)</th><th>bbox diag</th></tr>
+<tr><td>pick 111</td><td>[0.583, −0.838, −0.805]</td><td>[0.696, −0.925, −0.670]</td><td>[0.556, −0.852, −0.595]</td><td>[0.657, −0.817, −0.431]</td><td>0.858</td><td>1.224</td></tr>
+<tr><td>axe 115</td><td>[0.559, −0.768, −0.877]</td><td>[0.684, −0.974, −0.636]</td><td>[0.541, −0.858, −0.696]</td><td>[0.640, −0.822, −0.373]</td><td>0.858</td><td>1.10</td></tr>
+<tr><td>shovel 119</td><td>[0.508, −0.783, −0.893]</td><td>[0.762, −0.981, −0.587]</td><td>[0.488, −0.876, −0.700]</td><td>[0.717, −0.796, −0.328]</td><td>0.858</td><td>1.10</td></tr>
+<tr><td>sword 123</td><td>[0.659, −0.911, −0.702]</td><td>[0.794, −1.017, −0.540]</td><td>[0.623, −0.829, −0.465]</td><td>[0.744, −0.786, −0.267]</td><td>0.858</td><td>0.796</td></tr>
+</table>
+<p>Non-tool branches, camera space (computed from the code constants; these nodes have no live-run counterpart in the current arms, so a per-branch assertion arm would also need to add them):</p>
+<table>
+<tr><th>branch</th><th>anchor point</th><th>rest</th><th>apex (item swing)</th><th>extent</th></tr>
+<tr><td>box (corner-anchored unit cube ×0.33)</td><td>cube 0-corner</td><td>(0.45, −0.62, −0.88)</td><td>(0.45, −0.755, −0.819)</td><td>0.33 m edge</td></tr>
+<tr><td>cross (X of two 1×1 quads ×0.33, same node/pos/scale)</td><td>cube 0-corner</td><td>(0.45, −0.62, −0.88)</td><td>(0.45, −0.755, −0.819)</td><td>x 0.45..0.78, y −0.62..−0.29, z −0.88..−0.55 (rest)</td></tr>
+<tr><td>sprite (billboard, at hand pivot)</td><td>origin</td><td>(0.45, −0.62, −0.70)</td><td>(0.45, −0.62, −0.70) — at the pivot, so the arc rotates it in place</td><td>≈ 0.1056 m wide (32 px × 0.01 × 0.33; pixel_size = engine default, §6)</td></tr>
+<tr><td>fist (centered 0.18×0.3×0.24 box)</td><td>center</td><td>(0.45, −0.67, −0.70)</td><td>(0.444, −0.653, −0.663) item / (0.45, −0.665, −0.678) punch</td><td>as given</td></tr>
+</table>
+<h3>5.2 Provenance — the numbers came from a REAL run, and independently from reading the constants</h3>
+<p>The table above is from an actual headless run of the pre-existing <code>toolpose</code> arm on this tree (no probe, no edits). Separately, I recomputed every tool centroid purely from the code (<code>HAND_BASE_POS</code> + <code>TOOL_POSE_POS/ROT</code> composed as YXZ basis, part centers = union-AABB midpoint of the per-type grid in the <b>combined</b> head+handle bbox frame that :1357-1372 uses, voxel = <code>TOOL_TARGET_DIAG</code> ÷ √(bw²+bh²+1)): all 8 vectors (4 tools × idle head/handle) and the apex heads match the live run to ≤ 0.0012 m (sum 0.0043). Two implications: (a) the pose is <b>fully determined by the player.gd constants + grids</b> — there is no hidden runtime state in the chain, so AC-0113 can assert these numbers headlessly per type; (b) the YXZ + AABB-center + combined-bbox-center combination is the exact convention to reuse in any new arm. What the run does <b>not</b> cover: near-plane culling (needs a real renderer; documented phenomenon in AC-0073), on-screen projection (camera FOV/aspect), and walk sway (time-varying, ≤ 0.006 m x / ≤ 0.015 m y per <code>SWAY_AMP_*</code>).</p>
+<h3>5.3 Note on AC-0085's reported numbers</h3>
+<p>AC-0085's results page reports e.g. pick idle head [0.559, −0.859, −0.801] vs today's live [0.583, −0.838, −0.805] — up to ~4 cm apart, while the chain code (grids, pose constants, arm code) is verified byte-identical between AC-0085's commit (<code>28d8960</code>) and HEAD. The difference cannot be pinned down from the repo (the arm moved from <code>main.gd</code> to <code>harness.gd</code> in AC-0140 and transient sway/swing state at capture is a candidate); it does not affect the baseline above, which is self-consistent (live = recomputation) and reproducible by re-running the arm.</p>
+
+<h2>6. Evidence gaps — what could not be settled by reading alone</h2>
+<ul>
+<li><b>Sprite <code>pixel_size</code>:</b> never set anywhere in code → the width 0.1056 m assumes Godot's <code>Sprite3D</code> default of 1/100. A one-line probe (<code>p.held_sprite.pixel_size</code>) in any arm would settle it; nothing else in this review depends on it.</li>
+<li><b>Near-plane / FOV:</b> camera near distance and FOV live in the camera setup, not in player.gd; the AC-0073 near-clip incident shows size tuning is coupled to them. A render is infeasible here; a numeric probe of the camera's <code>near</code>/<code>fov</code> values is the cheap substitute if AC-0113 needs the constraint.</li>
+<li><b>Holdability of block-only ids:</b> water (5), lava (24), open doors (29/31) have no <code>Data.items</code> entries, so in normal play they likely never occupy a hand slot; the code path treats them uniformly if they did. Not resolvable from the positioning code alone.</li>
+<li><b>"TOOL_POSE_RETUNE"</b> (named in the ticket notes) does not exist in the tree — <code>git log -S</code> finds no commit containing it in player.gd; the live symbols are <code>TOOL_POSE_ROT</code>/<code>TOOL_POSE_POS</code> (:1154-1155). Treated as the notes' shorthand for the current constants.</li>
+<li><b>AC-0097 evidence:</b> no <code>tasks/AC-0097/</code> folder in the repo; the scale change is documented only in commit <code>3816ad1</code>'s message.</li>
+</ul>
+
+<h2>7. Gates &amp; constraint compliance</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td>G0 (<code>HOME=/tmp/dsh_home … godot --headless --path godot --quit</code>, memory cap 8 GB)</td><td class="ok">0 <code>SCRIPT ERROR</code> lines</td></tr>
+<tr><td><code>AWECRAFT_LOGIC=toolpose</code> live run (this review's baseline)</td><td>exit 0; RESULT as in §5.1. Top-level <code>ok:false</code> is the stale 0.70 scale expectation at <code>harness.gd:20063</code> (<code>scale_ok:false</code>), <b>not</b> a regression from this review — all four tool rows <code>ok:true</code>, <code>depth_ok:true</code></td></tr>
+<tr><td>Constant-based recomputation vs live run (§5.2)</td><td class="ok">≤ 0.0012 m on all 8 tool vectors (YXZ, AABB-center convention)</td></tr>
+<tr><td>Product code changes</td><td class="ok">none — zero file edits to <code>godot/</code> or <code>gdext/</code>; no probe added or left behind (nothing to re-verify beyond the G0 above)</td></tr>
+<tr><td>TASKS.yaml / git / R50 / <code>load</code> arm</td><td class="ok">untouched; no commit; R50 and <code>load</code> not run; renders not attempted (infeasible on this box)</td></tr>
+<tr><td>Godot process discipline</td><td>2 runs total (toolpose arm, then G0), one at a time, both memory-capped, no pre-existing godot process found</td></tr>
+<tr><td>Note on tree state</td><td>The shared checkout had pre-existing dirty files from other sessions (<code>game.gd</code>, <code>drop.gd</code>, <code>main.gd</code>, <code>TASKS.yaml</code>); this review created or modified none of them — the only file written is this page.</td></tr>
+</table>
+<p class="note">Deliverable for AC-0113: the catalogue (§1), the shared-state list (§2), the per-branch numbers (§5) and the split recommendation (§4). AC-0113's gate should re-run <code>toolpose</code> (extended per-branch), assert §5 unchanged for every branch it does not retune, and update <code>harness.gd:20063</code> in the same change.</p>
+</body></html>

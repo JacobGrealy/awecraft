@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T18:01
+  updated_at: 2026-10-02T18:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0112
 - AC-0113
 - AC-0098
 - AC-0088
@@ -5087,11 +5086,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T11:01
-  updated_at: 2026-08-31T17:23
-  completed_at: null
+  updated_at: 2026-10-02T18:39
+  completed_at: 2026-10-02T18:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a developer I want a review that catalogs per-type held positioning so tuning
@@ -5102,7 +5101,45 @@ intake:
     / tool / flower/cross / empty fist) has been tuning shared TOOL_POSE / scale / hand_root transforms
     (player.gd TOOL_POSE_RETUNE, hand_root). Subsequent tasks regress previous types (e.g. AC-0073, AC-0085).
     Scope: godot/player/player.gd _update_held + hand/hand_root/sway_root/tool nodes + HeldMeshes. Catalog
-    per type current pose, propose independent per-type transforms.'
+    per type current pose, propose independent per-type transforms.
+
+
+    CLOSED - the review is complete and it produced the thing the ticket actually needed, which is the
+    LIST OF SHARED VALUES rather than a description of the problem. THE CATALOGUE: five branches over
+    four nodes, distinguished in _update_held (player.gd:1015-1067) - the empty fist (no item or ui_mode),
+    a block drawn as a box mesh (Data.block, non-cross or thin, torches included), a block drawn as a
+    CROSS mesh (cross and not thin: ids 5, 18, 19, 24, 28, 29, 31) WHICH SHARES THE BOX NODE, an item
+    sprite (everything else, about 35 ids - and the bow, id 142, is a genuine finding here because it
+    carries tool:"bow" yet falls through to the sprite branch), and the voxel tool (16 ids whose tool
+    is pick, axe, shovel or sword). THE COUPLING VALUES, which are the reason regressions keep happening
+    and are now written down exhaustively: HAND_BASE_POS plus its sway and the hand_root swing affect
+    ALL FIVE branches; HELD_ITEM_SCALE affects block, cross and sprite; the hard-coded held_box.position
+    of (0,0,-0.18) affects block and cross; TOOL_POSE_POS and TOOL_POSE_ROT affect all four tools; and
+    the shared TOOL_TARGET_DIAG voxel formula and _vm_mats lighting cut across the rest. THE REGRESSION
+    HISTORY IS EVIDENCE RATHER THAN COMPLAINT, read from the tickets themselves: AC-0073 retuned the tool
+    pose, doubled the target diagonal and took the shared scale from 0.35 to 0.70 while adding the box
+    position, which moved every block and sprite because the near clip forced the recentre; AC-0085 moved
+    HAND_BASE_POS, re-set the tool pose and converted the swing from translation to rotation, and its
+    OWN RESULTS PAGE admits that the held box, fist and sprite all moved down with the hand; and AC-0097
+    then took the scale from 0.70 to 0.33. That is three consecutive tickets each aiming at one type and
+    moving others, which is exactly the pattern this review exists to make legible. THE RECOMMENDED SPLIT
+    IS DELIBERATELY MINIMAL and NOT implemented, because AC-0113 owns the fix and would have nothing to
+    compare against if the review also rewrote the code: one HELD_POSE table with a row per branch and
+    tool type, consumed where the pose is currently assembled, with per-type position, rotation and scale
+    moving into the table while the hand hierarchy, the sway, the swing timing and the lighting stay shared.
+    THE NUMERIC TABLE IS THE STRONGEST ARTEFACT and it was CROSS-CHECKED TWO WAYS, which is the difference
+    between a measurement and a reading: the eight tool vectors came from a real headless run of the pre-existing
+    toolpose arm, and they agree to within 1.2 mm with an independent recomputation from the code constants
+    using the documented YXZ and AABB-centre conventions; the box, sprite and fist rows are computed from
+    constants and labelled as such rather than presented as measured. THE REVIEW ALSO FOUND A RED STANDING
+    ARM ON THE MAIN TREE, which was not its job but matters: the toolpose arm''s top-level ok is false
+    solely because its assertion still expects the 0.70 scale that AC-0097 replaced with 0.33, so an instrument
+    has been reporting a failure that no longer means anything - the seventh stale or wrong-measuring
+    instrument this session has found, and the second that is currently RED. It is handed to AC-0113 rather
+    than fixed here, because the fix ticket will be retuning these very poses and must re-establish the
+    assertion in the same task, which is the project''s rule for a standing value that a change moves.
+    NO PRODUCT CODE WAS CHANGED, which is the correct outcome for a review ticket: zero edits, no probe
+    left behind, G0 at zero SCRIPT ERROR, godot run twice one at a time and memory-capped.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549812'
@@ -5118,7 +5155,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-08-24T11:04
-  updated_at: 2026-08-31T17:23
+  updated_at: 2026-10-02T18:39
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -5130,7 +5167,21 @@ intake:
     position/scale/rotation per held type (block / tool / flower-cross / fist) in player.gd — no shared
     TOOL_POSE leak. Retune so each type is correctly framed (MC first-person): block centered, tool handle
     bottom-right, flower upright, fist centered. Keep AC-0067 on-top, AC-0070 voxel, AC-0060 sway, AC-0085
-    swing. Verify per-type pose harness at rest + AWECRAFT_LOGIC=swing.'
+    swing. Verify per-type pose harness at rest + AWECRAFT_LOGIC=swing.
+
+
+    NOTE FOR THE FIX TICKET, from AC-0112''s review (2026-10-02): the toolpose arm is RED ON THE MAIN
+    TREE and has been since AC-0097. Its top-level ok is false solely because it still asserts the 0.70
+    HELD_ITEM_SCALE that AC-0097 replaced with 0.33 (the assert is at harness.gd around line 20063), so
+    an instrument is reporting a failure that no longer means anything - the seventh stale instrument
+    this session has found and the second that is currently red. This ticket will be retuning exactly
+    these poses, so the assertion must be re-established HERE in the same task, with attribution, rather
+    than left red or silently deleted. Also worth carrying into the fix: AC-0112''s catalogue records
+    that the cross-mesh branch SHARES the box node with the block branch, that the bow (id 142) carries
+    tool:"bow" yet falls through to the sprite branch, and that the coupling values to split are HAND_BASE_POS
+    and its sway, HELD_ITEM_SCALE, the hard-coded held_box.position of (0,0,-0.18), TOOL_POSE_POS/ROT,
+    and the shared TOOL_TARGET_DIAG formula. The recommended shape is one HELD_POSE table with a row per
+    branch and tool type, with the hand hierarchy, sway, swing timing and lighting staying shared.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549814'
