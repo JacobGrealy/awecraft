@@ -1,12 +1,10 @@
 meta:
-  updated_at: 2026-10-01T20:04
+  updated_at: 2026-10-02T04:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0384
-- AC-0387
-- AC-0093
 - AC-0038
 - AC-0039
 - AC-0159
@@ -4298,11 +4296,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T23:24
-  updated_at: 2026-10-01T19:12
-  completed_at: null
+  updated_at: 2026-10-02T04:07
+  completed_at: 2026-10-02T04:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want broken block drops to spin in place, not orbit in a circle,
@@ -4312,7 +4310,25 @@ intake:
     2) Technical Details: BUG: broken blocks (item drops from world/entities/drop.gd) spin while moving
     around circular path (orbit). Should spin in place (rotate on own axis at fixed position, with only
     pickup-attract movement). Fix drop.gd rotation/translation: spin = local rotation, not orbital translation.
-    Verify render drop spins without circling. Related to AC-0083 textured drops.'
+    Verify render drop spins without circling. Related to AC-0083 textured drops.
+
+
+    CLOSED - a clean little bug with a satisfying diagnosis. The drops were orbiting because of the PIVOT,
+    not the rotation: `_mesh.rotation.y += dt*2.0` was always a valid local spin, but the box and cross
+    geometry is built in a unit cube centred at (0.5,0.5,0.5) while the mesh origin sat at the cube''s
+    CORNER, so the box centre travelled a circle of radius 0.22426 around the drop''s true position. That
+    is why the symptom looked like a rotation bug and was not one - and it is the reason the ticket''s
+    own advice ("fix drop.gd rotation/translation") had to be read as a hypothesis rather than an instruction.
+    THE FIX is the pivot: reparent the mesh under a node at the box centre and offset the mesh by (-0.15,-0.15,-0.15),
+    then spin the pivot. MEASURED AT REST: box-centre drift 0.007071 -> 0.000000 per tick, orbit radius
+    0.22426 -> 0.00002 (noise), and the spin rate UNCHANGED at 0.03333 per tick - so the drop still turns
+    exactly as fast, it just stops travelling. The node''s own position, which is what the pickup magnet
+    reads, was never touched, and the interact arm ran a real drop end to end (spawned, inventory grew,
+    placed). Note the verification form, since the ticket asked to "verify render drop spins without circling"
+    and renders are infeasible here: the numeric form of that instruction is that at rest POSITION stays
+    fixed while ROTATION advances, which is exactly what was measured before and after. The coordinator''s
+    stage on eee561e read genhash 25/25 byte-identical in two runs, boundary r4 ok, and the battery complete,
+    with G0 at zero SCRIPT ERROR on the pristine tree and a temporary arm removed in-task.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549817'
@@ -22593,7 +22609,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T20:03
+  updated_at: 2026-10-01T21:42
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -22727,7 +22743,37 @@ intake:
     CONSTRAINTS FOR WHOEVER TAKES IT: genhash 25/25 byte-identical (a render layer touches no generation);
     the satellite arm''s ladder and its 0.25 texel-to-chunk ratio intact; the standing set green; renders
     remain unavailable to BUILDERS and no builder may open an image - the coordinator looks, and if a
-    numeric form of the evidence is needed, build it as coverage/geometry/alpha numbers instead.'
+    numeric form of the evidence is needed, build it as coverage/geometry/alpha numbers instead.
+
+
+    SCREENSHOT RECEIVED FROM THE USER 2026-10-01 (tasks/AC-0384/user-screenshot-20261001.png, 1920x1200)
+    AND IT OVERTURNS MY DIAGNOSIS. Read by the coordinator with vision, which is the only instrument that
+    could have settled this. WHAT IT ACTUALLY SHOWS: the player is at orbital altitude - only TWO terrain
+    chunks are drawn, a small one at the centre of frame carrying the player marker and a large brown
+    one at the lower right - and the planet IS being drawn, as a smooth PALE BLUE-GREY BALL with a slightly
+    darker lower-left quadrant and a scattering of small WHITE PUFFS distributed around it. The sky is
+    a flat blue-teal with a faint radial gradient. FPS 50, VRAM 305 MB renderer, sync 15157/62997 MB.
+    THEREFORE, with high confidence: (1) THE WHITE PLANET IS A WASHED-OUT HAZE, NOT A MISSING TEXTURE.
+    The body renders, and its colour is the sky''s own air colour rather than terrain, because the shader''s
+    haze is driven by a DISTANCE ramp - `d = length(VIEW)` pushed through the slant-path and clear-dist
+    terms - and at orbital range that ramp SATURATES, so the haze weight is at maximum across the WHOLE
+    DISC instead of only at the limb. The haze was designed as a limb effect (a long path through the
+    air shell near the horizon) and it has become a full-disc effect at exactly the range the body is
+    meant to be seen from, which is why the body reads as a uniform pale ball with no terrain in it. That
+    also explains why the export fix changed nothing the user could see: the textures were loading all
+    along, and no amount of correct loading can survive being blended into the sky colour. (2) THE CLOUD
+    REPORT IS CONFIRMED EXACTLY as the user described - sparse white PUFFS on a shell rather than a continuous
+    layer wrapping the planet, which is a cloud-system property (AC-0385) and not a satellite-body defect.
+    (3) A THIRD OBSERVATION FALLS OUT OF THE SAME IMAGE and is worth recording before it becomes a mystery:
+    at that altitude only two terrain chunks are drawn at all, so the world below the player is largely
+    absent - which is the far lane''s coverage and relates to the LOD work in AC-0387 rather than to the
+    body. THE METHOD LESSON, and it is the same one three times now: the arm measured the ladder (hidden
+    / rim / dissolve / full) and read green because it computes the values the SHADER is handed, not the
+    pixels the shader produces, and a green arm is not a picture. The bake guard measured texture bytes;
+    the arm measured thresholds; the export probe measured loadability - and none of them could see that
+    the body''s colour is the sky. When a visual feature cannot be rendered on the build box, the only
+    instrument that reaches it is a human being with a screenshot, and asking for one should have been
+    the FIRST move on this ticket rather than the last.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
@@ -22847,11 +22893,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-01T20:03
-  updated_at: 2026-10-01T20:03
-  completed_at: null
+  updated_at: 2026-10-02T04:07
+  completed_at: 2026-10-02T04:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Distant terrain should look like the terrain I am about to walk into. Right now
@@ -22912,5 +22958,33 @@ intake:
     (the promotion contract), gdext/src/gen.cpp''s dens_at (jUST the carve region - do not read the file
     whole), and AC-0367''s results page for what moved into the density function.
 
-    '
+
+
+    CLOSED - the user chose the full fix and it is done, measured, gated, and it did not ship a regression.
+    COORDINATOR VERIFICATION on my own capped stage of commit eee561e (every arm rc 0, zero SCRIPT ERROR):
+    genhash 25/25 byte-identical in two runs with the chunk-(0,0) tip still 46c20b07, which is a satisfying
+    result for a change this large - the hash covers the full path only and the full path is bit-identical,
+    so the far lane was rebuilt around it at zero rebase cost; **farab ok with h_mismatch 0 and h_bad_h
+    0** on the REPAIRED gate (the builder proved it fails on the pre-fix build at h_mismatch 3 and 217
+    bad columns, so it is not a threshold everything passes); r16 with no reds and far_holes 0/0 in both
+    bands; boundary r4 ok at p50 13 / p95 30 with a crossing burst p50 of **4.6 ms**, better than the
+    builder''s own 6.7 and comfortably inside the standing <=10; the battery complete. THE PLAYER-VISIBLE
+    OUTCOME: the far and medium silhouettes now match the carved ground, where 866 columns (0.85%) used
+    to sit up to 91 blocks too high and 752 of them by 9 or more - the worst canyon at chunk -6,-3 read
+    far H 147 against an actual top of 56 and now reads 56/56/56. Far-band trees stand on carved tops
+    because gen_veg_cells uses the same carved pass. THE PROCESS WIN WORTH KEEPING: this ticket''s investigation
+    found that the standing farab gate could not see the defect it stood next to, because it compared
+    the far height against the UN-CARVED heights pass and therefore passed by construction while the player
+    watched the ground drop. It now compares against the full path''s own heff through a separate C++
+    binding, deliberately not a helper the two lanes share, and it is negative-tested. That is the sixth
+    instrument this session found to be measuring the wrong thing - and unlike the previous five, this
+    one was repaired and PROVEN able to fail rather than merely documented. THE COST IS THE USER''S CHOICE,
+    HONOURED AND MEASURED: the far lane went 95 -> ~3,330 us/chunk, roughly 60% of a full chunk instead
+    of a fifth, which is inside the +3,000-4,500 the investigation predicted. And the regression that
+    price caused - the recenter sweep''s crossing burst at 34.8 ms against a 10 ms gate - was fixed by
+    REUSING the resident payload rather than by moving cost to a worker, with the burst back to 6.7 measured
+    by the builder and 4.6 by me, the frame p95 unchanged at 31 so nothing was merely relocated, and storm
+    p99 improved from 116 to 81. The reuse''s equivalence is proven by a probe that double-called the
+    lane on 400 chunks with ZERO byte mismatches, and it now reports itself through the standing gen_far_reuse
+    census field (230 of 285 demotes reused), so a zero there means the regression has silently returned.'
   comments: []
