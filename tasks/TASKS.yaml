@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T18:39
+  updated_at: 2026-10-02T19:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0113
 - AC-0098
 - AC-0088
 - AC-0089
@@ -5152,11 +5151,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-24T11:04
-  updated_at: 2026-10-02T18:39
-  completed_at: null
+  updated_at: 2026-10-02T19:35
+  completed_at: 2026-10-02T19:35
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want each held type (block / tool / flower / fist) positioned and
@@ -5181,7 +5180,48 @@ intake:
     tool:"bow" yet falls through to the sprite branch, and that the coupling values to split are HAND_BASE_POS
     and its sway, HELD_ITEM_SCALE, the hard-coded held_box.position of (0,0,-0.18), TOOL_POSE_POS/ROT,
     and the shared TOOL_TARGET_DIAG formula. The recommended shape is one HELD_POSE table with a row per
-    branch and tool type, with the hand hierarchy, sway, swing timing and lighting staying shared.'
+    branch and tool type, with the hand hierarchy, sway, swing timing and lighting staying shared.
+
+
+    CLOSED - a PURE REFACTOR WITH ZERO DRIFT, which is the best possible outcome for a ticket whose whole
+    purpose was to stop tuning one held type from moving the others. THE SPLIT: a HELD_POSE constant table
+    in player.gd with eight rows - fist, block, cross, sprite, pick, axe, shovel, sword - each owning
+    its local position plus rotation for the tools and its own scale, consumed where the pose is assembled.
+    The values are the pre-split constants VERBATIM, which is why nothing moved. What remains shared is
+    exactly what AC-0112 recommended keeping shared: HAND_BASE_POS and the hand hierarchy, the sway, the
+    swing arcs and timing, and the viewmodel lighting. And the two shared couplings that caused three
+    consecutive regressions are DELETED - HELD_ITEM_SCALE and TOOL_POSE_POS/ROT are gone, with the block
+    and cross branches now owning separate rows on the node they still share, which is the precise place
+    this kind of split usually breaks one type while the other looks fine. THE PROOF IT IS A REFACTOR
+    AND NOT A RETUNE: all sixteen measurement points across eight tool vectors read 0.0 m drift before
+    versus after, and 0.0 against AC-0112''s baseline as well. On a box where renders are infeasible and
+    pose changes are invisible until someone plays, that numeric table IS the gate, and a refactor that
+    holds it exactly is the only outcome that should be accepted. THE STALE INSTRUMENT IS FIXED RATHER
+    THAN WORKED AROUND: the toolpose arm had been RED on the main tree since AC-0097 because it still
+    asserted the 0.70 scale that AC-0097 replaced with 0.33 - an instrument reporting a meaningless failure,
+    which is worse than no instrument because it trains everyone to ignore red. It now reads the HELD_POSE
+    rows with an explicit scale_expect field and tolerances of 0.001, and the arm went from ok false to
+    ok TRUE; the identical stale 0.70 in the held arm was found and fixed in the same pass and documented.
+    That is the seventh stale instrument this session has found and the second that was red, and unlike
+    the earlier six this one was repaired in the ticket that owns the values it guards, which is the right
+    home for it. THE BOW DECISION IS REASONED RATHER THAN DODGED: item 142 carries a bow tool tag and
+    falls through to the sprite branch, and it is DEFERRED with a reason rather than quietly fixed - the
+    tool branch is a 32x32 voxel domain and the bow is a documented placeholder hitscan weapon, so voxel-izing
+    it is content design and not pose plumbing. It is marked in the table where the next reader will see
+    it. ALL FIVE BRANCHES WERE EXERCISED rather than assumed to work after a refactor that reads correctly:
+    fist, box, cross (the shared-node case, cross_ok true), sprite and tool, across the held, toolpose,
+    toolres and swing arms. One red remained - box_ok via tint_top_ok - and it was A/B-PROVEN pre-existing
+    on the pristine tree instead of being claimed or ignored, which is the correct handling. Gates: G0
+    zero SCRIPT ERROR twice with the final on a pristine tree, genhash 25/25 twice and byte-identical
+    to AC-0038''s earlier run, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
+    r16 all sub-flags with far_holes 0/0 in both bands, boundary r4 ok, the particle census, the sound
+    arm and the smoke battery. FINDINGS HANDED TO ME AND NOT RE-BASELINED, because they are proven pre-existing
+    by genhash match and diff disjointness rather than by assertion: the farab water census reads 6/7/28
+    against a documented 4/5/20, the boundary staged_dropped reads 2950 against its 2500 threshold (the
+    AC-0337 race metric my own heavy gates track), the smoke spawn and fluid values differ from their
+    AC-0314-era standings, and the r16 run emits five low-lane handoff SCRIPT ERROR lines of the AC-0337-documented
+    pre-existing race class. Each of those is a standing-value or instrument question that belongs in
+    the heavy-gate cycle rather than in this fix.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549814'

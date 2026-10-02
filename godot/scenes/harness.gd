@@ -19922,7 +19922,10 @@ func _held_test() -> void:
 				boxd = {"tris": idx2.size() / 3, "faces": spans, "tint_top_ok": tint_top_ok, "tint_side_ok": tint_side_ok, "atlas_same": mat2_ok}
 	res["box_ok"] = box_ok
 	res["box_1"] = boxd
-	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3(0.7, 0.7, 0.7) and p.held_sprite != null and p.held_sprite.scale == Vector3(0.7, 0.7, 0.7)
+	# AC-0113: same stale AC-0073-era 0.70 expectation as the toolpose arm
+	# (0.33 since AC-0097) — re-established against the player's HELD_POSE
+	# rows instead of the copied constant.
+	res["scale_ok"] = p.held_box != null and p.held_box.scale == Vector3.ONE * float(p.HELD_POSE["block"]["scale"]) and p.held_sprite != null and p.held_sprite.scale == Vector3.ONE * float(p.HELD_POSE["sprite"]["scale"])
 	var depth: Dictionary = {}
 	var depth_ok := true
 	p.sel = main._slot_of(p, 18)
@@ -20060,8 +20063,18 @@ func _toolpose_test() -> void:
 		res["held_sprite_scale_x"] = roundf(p.held_sprite.scale.x * 1000.0) / 1000.0
 	else:
 		res["held_sprite_scale_x"] = -1.0
-	var scale_ok := absf(float(res["held_box_scale_x"]) - 0.70) <= 0.05 and absf(float(res["held_sprite_scale_x"]) - 0.70) <= 0.05
+	# AC-0113: RE-ESTABLISHED a stale assertion. This line asserted the
+	# AC-0073-era 0.70 HELD_ITEM_SCALE; AC-0097 replaced it with 0.33, so the
+	# arm's top-level ok had been red on the main tree (scale_ok false while
+	# all four tool rows were green) — an instrument reporting a failure that
+	# no longer meant anything. The expectation now reads the player's
+	# HELD_POSE rows (AC-0113's per-branch table) instead of a copied
+	# constant, so the instrument tracks the source of the scale.
+	var exp_box_scale := float(p.HELD_POSE["block"]["scale"])
+	var exp_spr_scale := float(p.HELD_POSE["sprite"]["scale"])
+	var scale_ok := absf(float(res["held_box_scale_x"]) - exp_box_scale) <= 0.001 and absf(float(res["held_sprite_scale_x"]) - exp_spr_scale) <= 0.001
 	res["scale_ok"] = scale_ok
+	res["scale_expect"] = [exp_box_scale, exp_spr_scale]
 	ok = ok and scale_ok
 	var old_diag := {111: 0.612, 115: 0.55, 119: 0.55, 123: 0.398}
 	var exp_type := {111: "pick", 115: "axe", 119: "shovel", 123: "sword"}

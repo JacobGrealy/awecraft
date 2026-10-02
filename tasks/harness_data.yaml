@@ -246,7 +246,7 @@ modes:
     tests: |-
       tool orientation + scale ×2 + depth-disable (AC-0073/0067/0085)
     result_fields: |-
-      `ok`, `held_box_scale_x` (≈0.70), `held_sprite_scale_x`, `scale_ok`, `tool_…` {`position_ok`,`arc_ok`,`vertical_ok`,`handle_below_cam`,`bbox_diag`,`diag_2x_ok`,`depth_disabled`,`ok`}, `depth` {tool,box,fist,sprite}, `depth_ok`
+      `ok`, `held_box_scale_x`, `held_sprite_scale_x`, `scale_ok` (AC-0113 re-established: expects the player's `HELD_POSE` block/sprite row scales — 0.33 since AC-0097; the pre-AC-0113 0.70 expectation was AC-0073-era and held the arm red), `scale_expect` (AC-0113: the [block, sprite] expectations read from `HELD_POSE`), `tool_…` {`position_ok`,`arc_ok`,`vertical_ok`,`handle_below_cam`,`bbox_diag`,`diag_2x_ok`,`depth_disabled`,`ok`}, `depth` {tool,box,fist,sprite}, `depth_ok`
     envs: —
     wall: ~15 s (not re-run 08-24)
     notes: handle y < −0.55

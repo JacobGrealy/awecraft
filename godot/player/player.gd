@@ -141,8 +141,27 @@ var _tool_mats := {}
 var _held_key := ""
 const HAND_BASE_POS := Vector3(0.45, -0.62, -0.7)
 const TOOL_TARGET_DIAG := {"pick": 1.224, "axe": 1.10, "shovel": 1.10, "sword": 0.796}
-# AC-0097 (user 2026-09-11): held block is 0.33 scale (was 0.70).
-const HELD_ITEM_SCALE := 0.33
+# AC-0113: per-branch held-pose table (the split AC-0112's review
+# recommended, tasks/AC-0112/AC-0112-results.html §4). One row per branch —
+# fist, block, cross, sprite — and per tool type; each row owns the node's
+# LOCAL position (rotation for the tool rows) and scale, so tuning one type
+# can no longer move another through a shared constant. box and cross share
+# the held_box node; only one is ever visible, so separate rows need no node
+# split. Values are the pre-split constants verbatim — the AC-0112 §5 numeric
+# baseline (eight tool vectors) holds unchanged.
+# SHARED on purpose (stays out of this table): HAND_BASE_POS + the
+# sway_root/hand_root hierarchy, the sway, the swing arcs and timing, and the
+# viewmodel lighting — that is the hand, not the item.
+const HELD_POSE := {
+	"fist": {"pos": Vector3(0.0, -0.05, 0.0), "scale": 1.0},
+	"block": {"pos": Vector3(0.0, 0.0, -0.18), "scale": 0.33},  # 0.33 since AC-0097 (0.70 was AC-0073's); z -0.18 since AC-0073 (near-clip fix)
+	"cross": {"pos": Vector3(0.0, 0.0, -0.18), "scale": 0.33},
+	"sprite": {"pos": Vector3(0.0, 0.0, 0.0), "scale": 0.33},  # AC-0113: the bow (id 142, tool:"bow") routes here today; tool-branch membership explicitly deferred
+	"pick": {"pos": Vector3(0.2, -0.3, 0.0), "rot": Vector3(0.632, 2.639, -0.2), "scale": 1.0},
+	"axe": {"pos": Vector3(0.2, -0.3, 0.0), "rot": Vector3(0.632, 2.639, -0.2), "scale": 1.0},
+	"shovel": {"pos": Vector3(0.2, -0.3, 0.0), "rot": Vector3(0.632, 2.639, -0.2), "scale": 1.0},
+	"sword": {"pos": Vector3(0.2, -0.3, 0.0), "rot": Vector3(0.632, 2.639, -0.2), "scale": 1.0},
+}
 const HANDLE_C := Color(0.47, 0.33, 0.18)
 const SWORD_HANDLE_C := Color(0.52, 0.36, 0.22)
 const SWING_DURATION := 0.2
@@ -982,12 +1001,12 @@ func _build_held() -> void:
 	# was still occluded by the world).
 	hbmat.no_depth_test = true
 	held_box.material_override = hbmat
-	held_box.scale = Vector3.ONE * HELD_ITEM_SCALE
+	held_box.scale = Vector3.ONE * float(HELD_POSE["block"]["scale"])  # AC-0113: the box node's default row; the cross row applies when a cross is held
 	held_box.position = Vector3.ZERO
 	held_box.visible = false
 	hand_root.add_child(held_box)
 	held_sprite = Sprite3D.new()
-	held_sprite.scale = Vector3.ONE * HELD_ITEM_SCALE  # AC-0097: matches the held block (0.33)
+	held_sprite.scale = Vector3.ONE * float(HELD_POSE["sprite"]["scale"])  # AC-0113: per-branch row (was the shared HELD_ITEM_SCALE, 0.33 since AC-0097)
 	held_sprite.billboard = 1
 	held_sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	held_sprite.no_depth_test = true
@@ -1004,7 +1023,7 @@ func _build_held() -> void:
 	fmat.no_depth_test = true # AC-0097: see the hbmat note above
 	held_fist.material_override = fmat
 	_vm_mats.append([fmat, fmat.albedo_color])
-	held_fist.position = Vector3(0.0, -0.05, 0.0)
+	held_fist.position = HELD_POSE["fist"]["pos"]  # AC-0113: per-branch row
 	held_fist.visible = false
 	hand_root.add_child(held_fist)
 	held_tool = Node3D.new()
@@ -1026,13 +1045,19 @@ func _update_held(id: int, n: int) -> void:
 		return
 	var binfo = Data.block(id)
 	if binfo != null:
+		# AC-0113: box and cross share the held_box node but carry SEPARATE
+		# pose rows — the split point where one hard-coded value used to move
+		# both branches at once (AC-0112 §2).
 		if bool(binfo.get("cross", false)) and not bool(binfo.get("thin", false)):
 			held_box.mesh = HeldMeshes.cross_mesh(id)
 			held_box.material_override = _vm_kind_mat("cross", HeldMeshes.cross_material())
+			held_box.position = HELD_POSE["cross"]["pos"]
+			held_box.scale = Vector3.ONE * float(HELD_POSE["cross"]["scale"])
 		else:
 			held_box.mesh = HeldMeshes.box_mesh(id)
 			held_box.material_override = _vm_kind_mat("box", HeldMeshes.box_material())
-		held_box.position = Vector3(0.0, 0.0, -0.18)
+			held_box.position = HELD_POSE["block"]["pos"]
+			held_box.scale = Vector3.ONE * float(HELD_POSE["block"]["scale"])
 		held_box.visible = true
 		return
 	var it = Data.items.get(id)
@@ -1064,6 +1089,8 @@ func _update_held(id: int, n: int) -> void:
 		# wallshot arm). The override material must carry the tile itself.
 		_vm_sprite_mat.albedo_texture = held_sprite.texture
 		held_sprite.material_override = _vm_sprite_mat
+		held_sprite.position = HELD_POSE["sprite"]["pos"]  # AC-0113: per-branch row (was never set — the hand pivot)
+		held_sprite.scale = Vector3.ONE * float(HELD_POSE["sprite"]["scale"])
 		held_sprite.visible = true
 
 
@@ -1151,8 +1178,8 @@ func _tint_tex(col: Color) -> ImageTexture:
 	return t
 
 
-const TOOL_POSE_ROT := Vector3(0.632, 2.639, -0.2)
-const TOOL_POSE_POS := Vector3(0.2, -0.3, 0.0)
+# AC-0113: TOOL_POSE_ROT / TOOL_POSE_POS (one shared pose for all four tool
+# types) are now the per-type rows in HELD_POSE above.
 
 
 const TOOL_GRIDS := {
@@ -1402,8 +1429,12 @@ func _setup_held_tool(id: int, type: String) -> void:
 	_tool_voxel_count = head_cells.size() + handle_cells.size()
 	_tool_diag = target
 	held_tool_type = type
-	held_tool.position = TOOL_POSE_POS
-	held_tool.rotation = TOOL_POSE_ROT
+	# AC-0113: the per-type pose row (the shared TOOL_POSE_POS/ROT became
+	# four rows in HELD_POSE; scale was always the node default 1.0).
+	var pose: Dictionary = HELD_POSE[type]
+	held_tool.position = pose["pos"]
+	held_tool.rotation = pose["rot"]
+	held_tool.scale = Vector3.ONE * float(pose["scale"])
 	held_tool.visible = true
 
 
