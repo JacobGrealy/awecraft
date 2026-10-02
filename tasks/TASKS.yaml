@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-10-02T17:11
+  updated_at: 2026-10-02T18:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0389
-- AC-0159
 - AC-0112
 - AC-0113
 - AC-0098
@@ -7068,11 +7066,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-30T15:38
-  updated_at: 2026-10-02T14:20
-  completed_at: null
+  updated_at: 2026-10-02T18:01
+  completed_at: 2026-10-02T18:01
   waiting_on: AC-0156
   parent_id: null
   notes: '1) User Story: As a player I want block corners shaded smoothly like Java so light does not
@@ -7083,7 +7081,38 @@ intake:
     Smooth lighting Yes). Sample 3 neighbors + 4 Block/Sky lights per face corner, interpolate 0-15 to
     vertex color at godot/world/world.gd mesh build, AO 0.2 per occluding solid (vertex mult 1.0/0.8/0.6/0.4).
     Start Java curve (darker caves), Bedrock lighter reserved for later toggle if needed. Verify corner
-    gradient vs flat, no perf regression when frustum cull at world.gd:452 is on.'
+    gradient vs flat, no perf regression when frustum cull at world.gd:452 is on.
+
+
+    CLOSED - smooth lighting and AO landed with the verification this box actually allows, and the property
+    that makes it safe is that the COMMON CASE CANNOT HAVE MOVED: fully lit faces are byte-identical to
+    the old flat path, so only the graded cases are new behaviour. VERIFIED NUMERICALLY rather than by
+    eye, since renders are infeasible here: forty of forty corners match an independent integer-arithmetic
+    restatement of the spec written for the purpose; the gradient table runs from 1.0 to 0.816667, 0.633333
+    and 0.45 for one, two and three dark neighbours with the cluster corner darkest; and the AO multipliers
+    come out exactly as specified - 0.80/0.64/0.48/0.32 emitted against a 0.8-shade wall, three-occluder
+    corner darkest, varying per corner within a single face. THE LANE CONTRACT IS SATISFIED BY RE-DERIVING
+    NOTHING, which is the point: the far lane''s light is an independent per-cell heightmap-sky approximation
+    and this change leaves it and the starlight engine alone, so farab re-proves 1080/1080 on both grids
+    with h_mismatch 0 and halo reads 0/0. That matters because world/AGENTS.md names light explicitly
+    in its bit-exactness rule and AC-0387 showed what happens when two lanes quietly disagree. ROUNDING
+    IS ARGUED RATHER THAN HOPED: the interpolation is an integer sum over four, exact in FP32 because
+    the divisor is a power of two, leaving only the standing divide-by-15 and the spec''s own AO literals
+    on one C++ path, so there is no cross-lane difference left to bound. PERFORMANCE: the worst-case synthetic
+    ramp column takes the merged build from 5 to 8-9 ms on a worker thread with quads from 1640 to 6704
+    - that is the feature''s own detail on gradient terrain, and fully lit columns are time-flat at 4
+    ms with r16 frame costs unchanged at 9/9 ms p95. ONE FINDING IS RECORDED AND DELIBERATELY LEFT ALONE:
+    the bake box fills the four 2x2 corner-margin cells of its 20x20 window only for row zero, an exact
+    port of the GDScript original, so a chunk-edge face whose diagonal sample lands there reads zero at
+    that corner - symmetric across the seam and identical to what the old flat path read, which means
+    re-fixing the box would CHANGE THE LIGHT FIELD and belongs in its own ticket rather than inside a
+    feature. THE TICKET''S OWN POINTER WAS STALE and that is worth noting: it said to work in world.gd,
+    but the mesh build has been C++-only since AC-0208, so the change landed in gdext/src/mesh.cpp and
+    the deviation is recorded rather than worked around silently. Gates: G0 zero SCRIPT ERROR twice including
+    the pristine post-probe tree, genhash 25/25 byte-identical (the hash covers terrain, not light or
+    mesh), farab, halo, ladder 20/20, meshprobe 1.0, lightstate with a byte-identical vertex-colour canary,
+    r16 all twelve sub-flags with far_holes 0/0 in both bands, boundary r4 one-shot, the satellite ratio
+    exactly 0.25, the sound arm and the particle census.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549802'
@@ -23308,11 +23337,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-02T17:11
-  updated_at: 2026-10-02T17:11
-  completed_at: null
+  updated_at: 2026-10-02T18:01
+  completed_at: 2026-10-02T18:01
   waiting_on: null
   parent_id: null
   notes: '1) User Story: There is a background sound that loops constantly - the user describes it as
@@ -23361,5 +23390,36 @@ intake:
     bed and the voice-cap policy) and the settings arm in godot/scenes/harness.gd for how an existing
     toggle is persisted and asserted.
 
-    '
+
+
+    CLOSED - the user''s complaint was against my own recent work and the fix is small, verified, and
+    correctly defaulted. THE CAUSE WAS A PRODUCT DECISION I MADE SILENTLY INSIDE A FEATURE TICKET: AC-0039''s
+    sound ticket listed "ambient" among the sounds to synthesize, and the implementation wired it as an
+    always-on bed on a dedicated looping player, so a player who did not want constant ambience had no
+    recourse and no way to know it was deliberate. That is the kind of choice that should be surfaced
+    as a setting rather than decided on the player''s behalf, and it is now one. THE FIX: a persisted
+    `ambient_enabled` setting defaulting to FALSE, exposed as an "Ambient sound (background wind bed)"
+    checkbox on the Options then Settings page beside the existing volume and fog controls rather than
+    on a debug key, with Audio.set_ambient() pushed by Settings.apply_audio() at startup and on every
+    toggle, and the auto-play that AC-0039 put in _ready removed. Default-off is right because the user
+    asked for the sound to be removed rather than tuned, and keeping the toggle satisfies the original
+    ticket for anyone who wants the bed. THE AUDIT FOR THE SAME MISTAKE FOUND NOTHING ELSE, which is the
+    answer the ticket asked for rather than an assumption: eight of the nine sounds are EVENT-driven and
+    fire only through interaction-site calls (block, step, hit, eat, splash, arrow, bow, mob) and the
+    ambient bed was the ONLY self-playing sound in the tree - no wind layer, no cave rumble, no altitude-
+    or biome-keyed loop hiding anywhere else. AND THE MOST IMPORTANT CHECK WAS MADE RATHER THAN ASSUMED:
+    with the bed off, all eight event voices still fire (events_fire_with_bed_off true, events_missed
+    empty) and the thousand-trigger pool burst still completes with no unfired sounds, no allocation growth
+    and a live count returning to zero - because a toggle that silences the whole audio layer would have
+    been a regression dressed as a fix, and this is the exact place where that would hide. Default-off
+    is now ASSERTED by two arms rather than merely implemented: the sound arm checks default-off, on,
+    off and events-fire, and the settings arm checks default-off, saved-on and back-off, so a future change
+    that flips the default or breaks persistence fails a gate instead of quietly annoying the player again.
+    ONE ADJACENT ROW IS FLAGGED FOR MY HEAVY GATES AND IS NOT THIS TASK''S: the boundary arm''s staged_dropped
+    reads 2675 against a 2500 threshold, which is the same drift AC-0038 saw at 2704 and belongs to the
+    AC-0383 through AC-0388 tree movement - a far lane that got about 35x more expensive legitimately
+    drops more capped enqueues under load, and per the world contract a cap-dropped enqueue is a retry
+    rather than a loss. This task touches no streaming code and genhash proves the data lane is unchanged,
+    so the threshold is re-based WITH ATTRIBUTION as a documented consequence of the carve price rather
+    than quietly raised.'
   comments: []

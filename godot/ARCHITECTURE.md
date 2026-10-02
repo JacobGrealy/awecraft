@@ -39,7 +39,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 |---|---|---|---|
 | 1 | `Game` | `autoload/game.gd` | global state: `mode` (menu/play/pause/crash), `dimension`, `world_seed`, `time_of_day`, `planet_R`; the live `world`/`player`/`drops`/`entities`/`hotbar`/`console` handles; the native-extension presence check (`cpp_ext_ok`/`cpp_ext_missing`); `new_world()`/`start()`/`message()`; cursor mode |
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
-| 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player, `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
+| 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
 | 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
@@ -1084,7 +1084,15 @@ Match these; do not improvise a different approach in a task.
   on cap, with an allocation counter that must stay flat after `_ready` (`play()` never
   allocates). The **ambient** is a 2 s seamless loop (integer-cycle sines + Hann-
   windowed noise) on ONE dedicated bed player outside the pool — a looping stream must
-  never occupy a one-shot voice (it would hold the slot forever). All voices are
+  never occupy a one-shot voice (it would hold the slot forever). **AC-0389: the bed is
+  TOGGLEABLE and DEFAULT OFF** — the user reported the AC-0039 always-on loop as a
+  defect, so `audio.gd` no longer auto-plays it in `_ready`; the persisted setting
+  `Settings.values["ambient_enabled"]` (default `false`) is pushed by
+  `Settings.apply_audio()` → `Audio.set_ambient()` at main `_ready` and on every
+  Options toggle (the Settings-page "Ambient sound" checkbox, `menu.gd`). The 8 EVENT
+  voices never read the flag: `play()` gates only the bed branch, so the SFX pool is
+  untouched either way (the sound arm's D2 asserts the events fire with the bed off).
+  All voices are
   **non-positional** (a 2D SFX bed): no positional audio exists, so the sphere-frame /
   radial-up convention does not apply; if positional sound is added it MUST follow the
   DayNight/radial rules (the arrow's radial gravity in `entities/arrow.gd` is the model).

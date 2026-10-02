@@ -34,6 +34,11 @@ const DEFAULTS := {
 	# AC-0152: Bedrock Realms default — Simulate 4 (taxicab diamond, 41 chunks).
 	"sim_dist": 4,
 	"volume": 100,
+	# AC-0389: the ambient sound bed (AC-0039's looping wind) — OFF by
+	# default: the user reported the always-on loop as a defect; the
+	# toggle keeps the feature for those who want ambience. apply_audio()
+	# pushes it to Audio.set_ambient (the SFX pool is never affected).
+	"ambient_enabled": false,
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
@@ -182,6 +187,9 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), 2, RENDER_MAX)
 		"volume":
 			values[k] = roundi(clampf(float(v), 0.0, 100.0))
+		# AC-0389: the ambient bed toggle (plain bool, no range).
+		"ambient_enabled":
+			values[k] = bool(v)
 		"fullscreen":
 			values[k] = bool(v)
 		"hunger_enabled":
@@ -268,6 +276,9 @@ func reset_defaults() -> void:
 
 func apply_audio() -> void:
 	Audio.set_volume(float(values["volume"]))
+	# AC-0389: the ambient bed toggle rides the same apply step (main
+	# _ready at startup + every Options audio change).
+	Audio.set_ambient(bool(values["ambient_enabled"]))
 
 
 func apply_window(win: Window) -> void:

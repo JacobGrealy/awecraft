@@ -45,6 +45,9 @@ var debug_check: CheckBox
 var fogstart_slider: HSlider
 var fogstart_val: Label
 var fog_enabled_check: CheckBox
+# AC-0389: the ambient sound bed toggle (default OFF) — Settings-page
+# row, the code-created checkbox pattern (fog_enabled above).
+var ambient_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -214,6 +217,18 @@ func _ready() -> void:
 	opt_vbox.add_child(fog_enabled_check)
 	if hi + 5 < opt_vbox.get_child_count():
 		opt_vbox.move_child(fog_enabled_check, hi + 6)
+	# AC-0389: the ambient sound bed (AC-0039's looping wind) — user-facing
+	# audio setting on the Settings page (next to the other toggles),
+	# persisted like every other setting (Settings "ambient_enabled",
+	# default OFF).
+	ambient_check = CheckBox.new()
+	ambient_check.name = "AmbientCheck"
+	ambient_check.text = "Ambient sound (background wind bed)"
+	ambient_check.add_theme_font_size_override("font_size", 15)
+	ambient_check.toggled.connect(_on_ambient_toggled)
+	opt_vbox.add_child(ambient_check)
+	if hi + 6 < opt_vbox.get_child_count():
+		opt_vbox.move_child(ambient_check, hi + 7)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -579,6 +594,8 @@ func _sync_controls() -> void:
 	overlay_light_check.button_pressed = bool(Settings.values.get("overlay_light", false))
 	overlay_collision_check.button_pressed = bool(Settings.values.get("overlay_collision", false))
 	fog_enabled_check.button_pressed = bool(Settings.values.get("fog_enabled", true))
+	# AC-0389: the ambient bed toggle (default OFF).
+	ambient_check.button_pressed = bool(Settings.values.get("ambient_enabled", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -882,3 +899,13 @@ func _on_fog_enabled_toggled(on: bool) -> void:
 	Settings.set_value("fog_enabled", on)
 	fogstart_slider.editable = on
 	fogstart_slider.modulate.a = 1.0 if on else 0.45
+
+
+# AC-0389: the ambient sound bed toggle (default OFF). set_value persists
+# to the cfg like every other setting; apply_audio pushes the volume AND
+# the toggle to Audio in one step (the SFX pool is never touched by it).
+func _on_ambient_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("ambient_enabled", on)
+	Settings.apply_audio()

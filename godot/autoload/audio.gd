@@ -36,6 +36,16 @@ const _ALIAS := {
 }
 
 var volume := 100.0
+# AC-0389: the ambient bed toggle. DEFAULT OFF: the AC-0039 bed was wired
+# always-on and the user reported it as a defect — an always-on loop is
+# something a player cannot un-notice. The setting (Settings
+# "ambient_enabled") persists like the other settings and
+# Settings.apply_audio()
+# pushes it here at startup and on every toggle. The 8 EVENT voices are
+# untouched by this flag: a toggle that silenced the SFX pool would be a
+# regression dressed as a fix (the sound arm asserts the events fire with
+# the bed off).
+var ambient_enabled := false
 
 var _pool: Array = []        # AudioStreamPlayer, fixed size VOICE_POOL
 var _next := 0               # round-robin cursor
@@ -66,18 +76,34 @@ func _ready() -> void:
 	# The ambient bed: ONE extra player (outside the SFX pool), the 2 s wind
 	# loop on LOOP_FORWARD, quiet (-14 dB). Non-positional: a global bed, so
 	# no sphere-frame / world-axis assumption is involved.
+	# AC-0389: NOT started here — the bed is OFF by default; Settings
+	# .apply_audio() (main _ready) starts it only when the persisted
+	# "ambient_enabled" says so.
 	_ambient_player = AudioStreamPlayer.new()
 	_allocs += 1
 	_ambient_player.stream = _streams["ambient"]
 	_ambient_player.volume_db = -14.0
 	add_child(_ambient_player)
-	_ambient_player.play()
 	apply()
 
 
 func set_volume(v) -> void:
 	volume = clampf(float(v), 0.0, 100.0)
 	apply()
+
+
+# AC-0389: the ambient bed toggle. Starts / stops the dedicated bed player
+# (the 8-event SFX pool is never touched — see the ambient branch in
+# play()). Called by Settings.apply_audio() from main _ready and from the
+# Options "Ambient sound" checkbox on every toggle.
+func set_ambient(on: bool) -> void:
+	ambient_enabled = bool(on)
+	if _ambient_player == null:
+		return
+	if ambient_enabled and not _ambient_player.playing:
+		_ambient_player.play()
+	elif not ambient_enabled and _ambient_player.playing:
+		_ambient_player.stop()
 
 
 func apply() -> void:
@@ -109,7 +135,12 @@ func play(name) -> void:
 	# exactly the leak the fixed pool exists to prevent). Route it to the
 	# dedicated bed player instead.
 	if base == "ambient":
-		if _ambient_player != null and not _ambient_player.playing:
+		# AC-0389: the bed honors the toggle. With it OFF (the default) a
+		# play("ambient") trigger still counts in _plays (the bookkeeping
+		# above) but never starts the loop; with it ON the trigger keeps
+		# re-arming the bed as before. The event pool below is untouched
+		# either way.
+		if ambient_enabled and _ambient_player != null and not _ambient_player.playing:
 			_ambient_player.play()
 		return
 	var i := _next

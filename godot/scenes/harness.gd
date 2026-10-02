@@ -1676,6 +1676,19 @@ func _settings_test() -> void:
 	var fog_lo_ok := int(Settings.values["fog_start_pct"]) == 0
 	# Leave the fog setting at its default.
 	Settings.set_value("fog_start_pct", 87)
+	# AC-0389: the ambient bed toggle — DEFAULT OFF (the user reported the
+	# always-on loop; the sound arm owns the bed-side assertions), bool
+	# clamp, save + reload (set_value writes the cfg, load_settings reads
+	# it back — the same round-trip discipline as fog_enabled above).
+	# Leave the setting at its default (off) afterwards.
+	Settings.load_settings()
+	var amb_default_off := bool(Settings.values["ambient_enabled"]) == false
+	Settings.set_value("ambient_enabled", true)
+	Settings.load_settings()
+	var amb_saved_on := bool(Settings.values["ambient_enabled"]) == true
+	Settings.set_value("ambient_enabled", false)
+	Settings.load_settings()
+	var amb_back_off := bool(Settings.values["ambient_enabled"]) == false
 	# AC-0332: the far-tier mesh floor pair (AC-0331's kernel seam) —
 	# the defaults (on, 0), the plain 0..24 clamp (no sentinel: -1 is an
 	# INTERNAL sentinel the toggle derives, never a storable value), the
@@ -1749,6 +1762,9 @@ func _settings_test() -> void:
 		"chunks": {"default_3": chunks_default_ok, "set7_reloaded": chunks_saved_ok, "clamp_hi_100": chunks_hi_ok, "clamp_lo_1": chunks_lo_ok},
 		# AC-0232 (dither dropped in AC-0241): the fog slider round-trip + clamp.
 		"fog": {"default_87": fog_default_ok, "set60_reloaded": fog_saved_ok, "clamp_lo_0": fog_lo_ok},
+		# AC-0389: the ambient bed toggle — default OFF, save + reload
+		# round-trip (the bed-side assertions live in the sound arm).
+		"ambient": {"default_off": amb_default_off, "saved_on": amb_saved_on, "back_off": amb_back_off},
 		# AC-0332: the far-tier mesh floor pair — defaults (on, 0), the
 		# 0..24 clamp (YFLOOR_MAX), the toggle round-trip, the apply step
 		# (set_value -> apply_yfloor -> note_yfloor, via the stub), the
@@ -1758,7 +1774,7 @@ func _settings_test() -> void:
 			"toggle_off_on": yf_toggle_off_ok and yf_toggle_on_ok, "apply_step": yf_apply_ok,
 			"apply_calls": [yf_apply_1, yf_apply_2], "dev_row_present": yrow_present,
 			"sync_set5": yrow_sync_ok, "toggle_dim": yrow_dim_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
 	})
 
 
@@ -31027,7 +31043,10 @@ func _pcensus_test(_spawn: Vector3) -> void:
 # burst, concurrent cap, trigger cost in us), and NEGATIVE tests showing the
 # checker FAILS on a silent buffer, an all-ones buffer, and an aliased
 # (copied) pair — the AC-0310-bake-guard-style "an assertion that cannot
-# fail is the failure" discipline.
+# fail is the failure" discipline. AC-0389 adds the ambient-toggle checks:
+# the bed is OFF by default, Audio.set_ambient drives it on/off, and the
+# 8 event voices still fire (triggers land, pool drains) with the bed off
+# — a toggle that silenced the effect pool is a regression, not a fix.
 func _sound_test(_spawn: Vector3) -> void:
 	var out: Dictionary = {"mode": "sound"}
 	var ok := true
@@ -31088,6 +31107,41 @@ func _sound_test(_spawn: Vector3) -> void:
 	out["ambient_loop"] = amb != null and amb.loop_mode == AudioStreamWAV.LOOP_FORWARD
 	ok = ok and bool(out["ambient_loop"])
 
+	# ---- D2: AC-0389 — the ambient bed toggle (default OFF) -------------
+	# The AC-0039 bed was wired always-on and the user reported it as a
+	# defect. Assert: (1) it is OFF by default (the auto-play is gone);
+	# (2) Audio.set_ambient drives the toggle state on/off; (3) with the
+	# bed OFF the 8 EVENT voices still fire and the pool still drains —
+	# a toggle that silenced the effect pool would be a regression, so
+	# this is verified, not assumed. Headless: no audio device — the arm
+	# asserts the toggle state and the trigger bookkeeping, never the
+	# sound (the player's .playing is driver-dependent, so the toggle's
+	# own state is the assertion; .playing is only read for the default
+	# check, where nothing has ever started it).
+	var amb_default_off := (not Audio.ambient_enabled) and (not Audio.ambient_playing())
+	Audio.set_ambient(true)
+	var amb_on := Audio.ambient_enabled
+	Audio.set_ambient(false)
+	var amb_off := not Audio.ambient_enabled
+	var EVENTS := ["block", "step", "hit", "eat", "splash", "arrow", "bow", "mob"]
+	var ev_pre := {}
+	for nm in EVENTS:
+		ev_pre[nm] = Audio.play_count(nm)
+	for nm in EVENTS:
+		Audio.play(nm)
+	await _snd_wait_ms(500)  # > the longest SFX (0.4 s splash)
+	var ev_missed: Array = []
+	for nm in EVENTS:
+		if Audio.play_count(nm) != int(ev_pre[nm]) + 1:
+			ev_missed.append(nm)
+	out["ambient_toggle"] = {
+		"default_off": amb_default_off, "on": amb_on, "off": amb_off,
+		"events_fire_with_bed_off": ev_missed.is_empty(),
+		"events_missed": ev_missed,
+		"bed_off_during_events": not Audio.ambient_enabled}
+	ok = ok and amb_default_off and amb_on and amb_off \
+		and ev_missed.is_empty()
+
 	# ---- E: NEGATIVE tests — the checker must FAIL on degenerate buffers -
 	var zero := PackedFloat32Array()
 	zero.resize(Audio.RATE)  # 1 s of silence
@@ -31127,12 +31181,15 @@ func _sound_test(_spawn: Vector3) -> void:
 	for nm in names15:
 		if Audio.play_count(nm) < 1:
 			unfired.append(nm)
+	# AC-0389: this burst now runs with the bed OFF (the default) — the
+	# flat-allocation / live-drain proof doubles as the "the 1000-trigger
+	# pool proof holds with the ambient off" evidence (bed_off reports it).
 	out["stress"] = {"plays": N,
 			"trig_us_avg": t_sum / float(N), "trig_us_max": t_max,
 			"allocs_delta": Audio.alloc_count() - allocs0,
 			"pool": Audio.pool_size(), "live_peak": Audio.peak_live(),
 			"steals": Audio.steals(), "live_after_wait": Audio.live_now(),
-			"unfired": unfired}
+			"unfired": unfired, "bed_off": not Audio.ambient_enabled}
 	ok = ok and (Audio.alloc_count() - allocs0) == 0 \
 			and Audio.peak_live() <= Audio.pool_size() \
 			and Audio.live_now() == 0 and unfired.is_empty()

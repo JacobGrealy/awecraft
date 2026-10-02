@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0389 results — the ambient bed becomes a toggle, default off</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2em auto; max-width: 1080px; line-height: 1.45; color: #1a1a1a; }
+h1 { font-size: 1.4em; } h2 { font-size: 1.15em; margin-top: 1.6em; border-bottom: 2px solid #ccc; padding-bottom: 3px; }
+table { border-collapse: collapse; margin: 0.8em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 9px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code, pre { font-family: ui-monospace, monospace; font-size: 0.92em; }
+pre { background: #f6f6f4; border: 1px solid #ddd; padding: 8px 10px; overflow-x: auto; }
+.ok { color: #0a7a0a; font-weight: 600; } .warn { color: #a05a00; font-weight: 600; }
+.muted { color: #666; }
+</style>
+</head>
+<body>
+
+<h1>AC-0389 — the ambient sound bed: toggleable, default off</h1>
+<p><b>User report (Windows build, 2026-10-02):</b> “there is a background sound that sounds like waves or wind or
+something, we should remove this or make it Togglable.” The culprit is the ambient bed AC-0039 added to
+<code>godot/autoload/audio.gd</code> — a 2.0 s seamless loop (integer-cycle sines at 1/2.5/5.5/55 Hz + Hann-windowed
+noise) on a dedicated looping player outside the 16-voice SFX pool, wired <b>always-on</b> by an auto-<code>play()</code>
+in <code>_ready()</code>.</p>
+
+<h2>1. The fix — where the toggle lives and what its default is</h2>
+<table>
+<tr><th>Layer</th><th>File</th><th>What changed</th></tr>
+<tr><td>Setting</td><td><code>godot/autoload/settings.gd</code></td>
+<td>New key <code>ambient_enabled</code> in the <code>DEFAULTS</code> table — <b>default <code>false</code></b> — with a plain
+bool clamp branch (same shape as <code>fog_enabled</code>). Persists to <code>user://awecraft.cfg</code> through the existing
+<code>set_value</code>/<code>save</code>/<code>load_settings</code> machinery, so it survives restarts and travels with saves like
+every other setting.</td></tr>
+<tr><td>UI</td><td><code>godot/ui/menu.gd</code></td>
+<td>“Ambient sound (background wind bed)” checkbox (<code>AmbientCheck</code>) on the <b>Options → Settings page</b> —
+the same panel as “Sound volume”, “Enable fog”, “Hunger” — created with the established code-created-checkbox pattern
+(fog/hunger precedent), synced in <code>_sync_controls</code>, handler calls
+<code>Settings.set_value("ambient_enabled", on)</code> + <code>Settings.apply_audio()</code>. Not a debug key.</td></tr>
+<tr><td>Engine</td><td><code>godot/autoload/audio.gd</code></td>
+<td>New <code>Audio.set_ambient(on)</code> (start/stop the dedicated bed player only — the SFX pool is never touched).
+<code>play()</code> gates <b>only the bed branch</b> on the flag. <code>_ready()</code> no longer auto-plays the bed — the
+AC-0039 always-on wiring is gone. <code>Settings.apply_audio()</code> (already called from <code>main.gd</code> <code>_ready</code>
+and the volume slider handler) now pushes volume <i>and</i> the toggle to <code>Audio</code> in one step, so the persisted
+value applies at startup and on every toggle.</td></tr>
+</table>
+<p><b>Default off is the right call</b> (per the ticket notes): the user asked for removal rather than tuning, and an
+always-on loop is something a player cannot un-notice; keeping the toggle means AC-0039’s ticket stays satisfied for
+anyone who wants ambience.</p>
+
+<h2>2. The audit — event-driven vs ambient, all nine sounds</h2>
+<p>The distinction is the whole issue: <b>event-driven</b> voices need an <code>Audio.play(name)</code> call at an
+interaction site to fire (they play when the player <i>does</i> something); <b>ambient</b> voices play on their own.</p>
+<table>
+<tr><th>Sound</th><th>Class</th><th>Why</th></tr>
+<tr><td>block</td><td>EVENT</td><td>Break/place/door interactions (alias <code>break</code>/<code>place</code>/<code>door</code> → block). Fired only by player interaction.</td></tr>
+<tr><td>step</td><td>EVENT</td><td>Footfall — distance-based cadence on the player’s local frame (<code>STEP_DIST</code> 2.3 m of tangent travel). Needs a step.</td></tr>
+<tr><td>hit</td><td>EVENT</td><td>Damage thud (alias <code>hurt</code>/<code>pickup</code> → hit). Needs a hit.</td></tr>
+<tr><td>eat</td><td>EVENT</td><td>Eating crunch. Needs the player to eat.</td></tr>
+<tr><td>splash</td><td>EVENT</td><td>Water interaction. Needs the event.</td></tr>
+<tr><td>arrow</td><td>EVENT</td><td>Arrow shot (arrow.gd). Needs a shot.</td></tr>
+<tr><td>bow</td><td>EVENT</td><td>Bow draw (arrow.gd). Needs a draw.</td></tr>
+<tr><td>mob</td><td>EVENT</td><td>Mob growl (mob.gd; alias <code>gorilla</code> → mob). Needs the mob to act.</td></tr>
+<tr><td><b>ambient</b></td><td><b>AMBIENT</b></td><td>The 2 s seamless loop bed. <b>The only voice with the self-playing property.</b> It was wired always-on via the <code>_ready</code> auto-play (not even via a call site) — exactly the mistake this ticket exists for. No game code calls <code>Audio.play("ambient")</code>; the bed player alone drove it.</td></tr>
+</table>
+<p><b>Audit result: the ambient bed was the ONLY sound with the always-on property.</b> There is no wind layer, no cave
+rumble, no altitude/biome-keyed loop anywhere in the tree — the other eight bases are only ever started by
+interaction-site <code>Audio.play</code> calls (player.gd / arrow.gd / mob.gd), verified by grep (the only other
+<code>"ambient"</code> hit in the tree is an unrelated lighting readout in <code>main.gd</code>). No other sound needs this
+treatment; the bed gets it alone.</p>
+
+<h2>3. Do the event sounds still work with the ambient off? — verified, not assumed</h2>
+<p>A toggle that silenced the effect pool would be a regression dressed as a fix, so the sound arm now <b>asserts it</b>
+(new section D2): with the bed OFF (the default), it fires all 8 event voices and checks each trigger landed
+(<code>play_count</code> +1 per voice) and the pool drained; the existing 1000-trigger stress burst (section F) now also
+<b>runs with the bed off</b> (new <code>stress.bed_off</code> field), so its flat-allocation / live-drain proof doubles as
+the “no regression to the effect pool” evidence.</p>
+<pre>RESULT (AWECRAFT_LOGIC=sound, dummy audio driver) — "..." = ok
+  "ok": true,
+  "ambient_toggle": { "default_off": true, "on": true, "off": true,
+                      "events_fire_with_bed_off": true, "events_missed": [],
+                      "bed_off_during_events": true },
+  "ambient_loop": true,                       // stream still LOOP_FORWARD (unchanged)
+  "sounds": { all 9 bases: ok — exact duration (ambient 44100 @ 22050 = 2.0 s),
+              rms &gt;= 0.01, peak &lt;= 0.9 (0.9-peak limiter), not all-ones, no DC rail },
+  "distinct": { "pairs": 36, "min": 0.0700, "min_pair": "step/mob" },   // 36/36 &gt; 0.05
+  "names": { "total": 15, "unresolved": [] },
+  "negative": { "silent_rejected": true, "ones_rejected": true,
+                "alias_dist": 0.0, "alias_rejected": true },            // all negative-tested
+  "stress": { "plays": 1000, "allocs_delta": 0, "live_peak": 16, "pool": 16,
+              "live_after_wait": 0, "unfired": [], "bed_off": true,
+              "trig_us_avg": 4.3, "trig_us_max": 9.0 },
+  "synth_ms": 33.3, "ms": 2319</pre>
+<p class="ok">All of AC-0039’s buffer assertions stay green (RMS floor, no clipping, no all-ones, no DC rail, exact
+duration, 36 pairwise distinctness checks, all negative-tested) — the change is purely in <i>when the bed plays</i>,
+never in what was synthesized. And the events provably fire with the bed off: <code>events_fire_with_bed_off: true</code>
+plus the 1000-trigger burst at <code>bed_off: true</code> with <code>unfired: []</code> and <code>allocs_delta: 0</code>.</p>
+
+<h2>4. Is the default-off state asserted by an arm?</h2>
+<p><b>Yes — in both arms, in the same task:</b></p>
+<ul>
+<li><b>Sound arm (D2)</b>: <code>ambient_toggle.default_off</code> asserts <code>Audio.ambient_enabled == false</code> AND
+<code>Audio.ambient_playing() == false</code> at arm start (nothing has started the bed), then asserts
+<code>set_ambient(true)</code>/<code>set_ambient(false)</code> drive the toggle, and the events-with-bed-off proof above.
+Headless caveat honored: the arm asserts the toggle <i>state</i> and the trigger bookkeeping, never the sound
+(the dummy driver makes <code>.playing</code> driver-dependent, so it is only read for the default check, where nothing
+has ever started it).</li>
+<li><b>Settings arm</b>: <code>ambient</code> {<code>default_off</code>, <code>saved_on</code>, <code>back_off</code>} — the default is
+<code>false</code> after a fresh load, and the value round-trips through <code>set_value</code> → cfg → <code>load_settings</code>
+(the same discipline as <code>fog_enabled</code>).</li>
+</ul>
+<p class="muted">Note on the old expectation: the pre-AC-0389 arm did <b>not</b> assert the bed was PLAYING by default —
+it asserted the stream’s <code>LOOP_FORWARD</code> mode (<code>ambient_loop</code>), which is a property of the generated
+<code>AudioStreamWAV</code>, not of the playback state. That expectation was never about the always-on wiring, so nothing
+had to move: <code>ambient_loop</code> stays green as-is, and the new expectation (default OFF) is the one established
+above.</p>
+
+<h2>5. Gate results</h2>
+<p>All godot runs: <code>HOME=/tmp/dsh_home</code>, memory-capped (<code>ulimit -v 8388608</code>), one process at a time,
+absolute engine path, <code>--path godot</code>, seed 44 (arm defaults). No native lane touched (no rebuild/re-stage);
+no renders; no R50; no <code>load</code> arm. No temporary probes were added — every arm change is permanent and
+documented in <code>tasks/harness_data.yaml</code> (rows updated, <code>harness_doc.py --render</code> + <code>--check</code> in sync),
+so the G0 below ran on the final pristine tree.</p>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Detail</th></tr>
+<tr><td>G0 (final pristine tree)</td><td class="ok">GREEN</td>
+<td><code>--headless --quit</code>: rc=0, <b>0 <code>SCRIPT ERROR</code> lines</b> (only the documented dummy-driver
+<code>SHADER ERROR: Invalid render mode 'transparent'</code> + its resulting <code>ERROR</code> — known non-fatal log noise).</td></tr>
+<tr><td>genhash</td><td class="ok">GREEN</td><td><b>25/25 byte-identical</b> to the current-tip reference
+(<code>.scratch/AC-0311-gates/p2_genhash_r1.log</code>, the AC-0311 piece-2 flip-on set); GENMS 126 (within the 125–138
+machine spread). Proves the data lane is untouched by this change.</td></tr>
+<tr><td>farab</td><td class="ok">GREEN</td><td>ok true, cols 45, <b>h_mismatch 0</b> (h_bad_h 0, h_bad_top 0),
+slab_cmp 1080/1080 (4×4 and 8×8), mat_surf_diff 0, mat_pierce_cells 0. <span class="muted">(water census
+water_slabs 6 / water_slabs8 7 / water_verts 28 — the non-vacuous census is reported, not gated; the recorded 4/5/20
+was a same-build measurement, and the counts are census-of-live-world, not a gate field.)</span></td></tr>
+<tr><td>ladder</td><td class="ok">GREEN</td><td>ok true, <b>band A 20/20</b> (band_a_fail []), band B 144/144 and band C
+90/90 self-consistent (mesh_ok == slabs), boundary_flip_n 90, tier_mismatch 0, sky_bad_alpha 0, air + layerrank ok.</td></tr>
+<tr><td>meshprobe</td><td class="ok">GREEN</td><td>ok true, <b>match_rate 1.0</b>, verts_gd == verts_cpp (165360), n_samples 32.</td></tr>
+<tr><td>halo</td><td class="ok">GREEN</td><td>ok true — (a) 41/41 settled, mismatches 0 (inner + boundary), ref converged;
+(b) 84 cols, slabs_ok 226/226; (b1) 20/20; (c) mismatches 0, resid_over 0; (d) evict contract holds.</td></tr>
+<tr><td>lightstate (R16)</td><td class="ok">GREEN</td><td><b>leaks 0/0</b> (all 20 grid chunks), double-LOD census 0/0,
+wash_detected false, worst null, stragglers 0, demoted 41. <span class="muted">ab arr_diff_cells 1 at cell [0,141,0]
+= the documented AC-0311 piece-2 re-baseline (one-cell class); vc_diff 2 = the documented 1–2 settle-timing tail;
+move.delta 1 = the documented FLIP churn (not a gate).</span></td></tr>
+<tr><td>r16</td><td class="ok">GREEN</td><td>ok true, all sub-flags (30 <code>*_ok</code> true, 0 false),
+<b>far_holes 0/0 in both bands</b> (far0/far1), holes_ok true, built_all true (41/41).</td></tr>
+<tr><td>boundary r4 one-shot</td><td class="ok">GREEN <span class="warn">(adjacent row flagged — see note)</span></td>
+<td><b>In band</b>: ok / remesh_ok / marker_ok true, walk p50 14 / <b>p95 33</b> (inside the documented 35–55 band —
+actually better), max_ms 289 (below the documented noisy band 357–824), built_final 66 (class 62–68),
+resident_final 93, in_radius_built_final 61, crossing ring 1:1 (crossing_other_n 0), crossing_frame 31/77/289.
+<br><span class="warn">Flag for the coordinator:</span> <code>staged_dropped</code> 2675 exceeds the dedicated row’s ≤2500
+threshold, and <code>flap</code> reads 134 (a free→reload churn counter with no threshold on the r4 row; the last recorded
+closeout value, 0, is from the pre-AC-0383 tree). Attribution: this change touches <b>no streaming/scheduling code</b>
+(audio + a settings key + one UI checkbox + arm assertions), and genhash 25/25 proves the data lane is byte-identical —
+the threshold was last re-measured on the 2026-09-22 tree, and this tree has since moved through AC-0383…AC-0388
+(the far-lane carve). The one-shot judgment per the standing row is max_ms + the metric fields, which are clean; the
+coordinator’s heavy-gate job will re-run the row.</td></tr>
+<tr><td>settings arm</td><td class="ok">GREEN</td><td>ok true — <b>new <code>ambient</code> {default_off, saved_on, back_off}
+all true</b>; every standing value unchanged (defaults 50/4, ranges 4/96, ms_clamp incl. degenerate band floor 11,
+sim_floor 2→4, volume 37 round-trip, hunger, chunks 3/7/100/1, fog 87/60/0, yfloor on/0/24/0 + dev row + sync + dim).
+A new setting is a settings-surface change, but no standing value it could have moved did move.</td></tr>
+<tr><td>sound arm</td><td class="ok">GREEN</td><td>ok true — §3 above (all 9 buffers, 36/36 distinct, 15/15 names,
+negatives, D2 toggle block, stress at bed_off).</td></tr>
+<tr><td>pcensus (particle census)</td><td class="ok">GREEN</td><td>ok true — “still releasing”: all four events release
+fully (arrow 10/10, break 12/12, hit 8/8, pickup 8/8, live_after_wait 0 each), 300-requested stress holds cap 200 with
+100 drop-oldest evictions and drains to 0, allocs_delta_after_ready 0.</td></tr>
+<tr><td>satellite</td><td class="ok">GREEN</td><td>ok true, phase LOADED, meshes 12 / textures 12, guard_ok,
+<b>ratio exactly 0.25</b> (texel 4.0 m / chunk 16.0 m), res_export_ok true, no export fall-through.</td></tr>
+</table>
+
+<h2>6. Deviations &amp; notes</h2>
+<ul>
+<li><b>No standing value moved, except the flagged <code>staged_dropped</code> row</b> (attribution above — pre-existing
+tree movement, not this change). Everything else re-measured at or better than the standing set.</li>
+<li><b>ARCHITECTURE.md synced in-task</b> (invariant 2): §2 autoload table (Audio row) and §6 sound section now carry
+the AC-0389 toggle contract (setting name, default, the apply path, and the “events never read the flag” invariant).
+<code>tasks/harness_data.yaml</code> rows for <code>sound</code> + <code>settings</code> updated; <code>harness_doc.py --render</code>
+re-rendered <code>godot/HARNESS.md</code> (<code>--check</code>: in sync).</li>
+<li><b>No native lane touched</b> — no gdext change, no rebuild/re-stage owed. No commits (coordinator’s closeout).</li>
+<li><b>Full battery + Windows rebuild are the coordinator’s</b> — the tree is left ready for the user to test:
+on a fresh install the bed is silent by default; the toggle sits on the Options → Settings page and persists.</li>
+</ul>
+
+</body>
+</html>
