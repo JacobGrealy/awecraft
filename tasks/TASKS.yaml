@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-02T04:07
+  updated_at: 2026-10-02T05:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -31,7 +31,6 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
-- AC-0385
 - AC-0386
 intake:
 - id: AC-0278
@@ -22782,11 +22781,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T14:33
-  completed_at: null
+  updated_at: 2026-10-02T05:48
+  completed_at: 2026-10-02T05:48
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The clouds do not wrap the planet - from orbit the cloud layer does not read
@@ -22829,7 +22828,37 @@ intake:
     and tasks/AC-0382/AC-0382-results.html (the sun-tracking shading, which is the same DayNight convention
     clouds should use rather than a second one).
 
-    '
+
+
+    CLOSED - the user''s report was a wrong-primitive bug, not a tuning problem, and the fix is measured
+    rather than asserted. WHAT THE CLOUDS WERE: three flat QuadMesh sheets 6144/5120/4096 blocks across
+    at heights 400/330/275, snapped to the player''s XZ every frame - a local weather plane that followed
+    the player around, which is exactly why a screenshot from orbit showed scattered white puffs with
+    no layer to them. WHAT THEY ARE NOW: three world-fixed SphereMesh shells at R+275/330/400 centred
+    on the planet, with the same 5-octave fbm evaluated in 3-D on the unit direction (feature sizes held
+    in blocks via 2pi(R+h)/feature, wind now a rotation about Y at the same blocks per second), the coverage
+    window retuned from 0.62-0.88 to 0.50-0.58, and a grazing fade that thins the shell toward the silhouette.
+    THE NUMBERS THAT MAKE "IT WRAPS" MEAN SOMETHING: globe coverage above alpha 0.2 went 3.0% -> 67.8%
+    (mean alpha 0.015 -> 0.371), and the nadir-disc coverage is now 67.8-68.2% AT EVERY ALTITUDE from
+    500 m to 30 km - that altitude-independence is precisely the difference between a shell and a plane,
+    and it is the property the old version failed at every height. All 18 latitude bands sit in 66.6-68.3%,
+    so there is no polar gap; the longest clear streak has a p95 of 7.2 degrees; night coverage is 37.3%.
+    The old sheet''s footprint was 48.9% of the globe while being only 3% cloudy, so both its geometry
+    and its sparseness were wrong. THE THREE-LAYER COMPOSITE IS NOW WRITTEN DOWN, because three things
+    can all read as pale from altitude and the next person must not have to work out which owns what:
+    AeroWash is the ambient screen tint, the satellite body keeps its texture and fog-wall dissolve and
+    limb haze and 0.25 ratio untouched, and clouds own the weather - with the shell''s grazing fade thinning
+    exactly where the body''s haze is strongest so the two do not double into a brighter rim. The cloud
+    alpha deliberately never depends on player distance, so the clouds introduce no pop where the body
+    emerges. TWO HONEST CAVEATS: the coverage window is one knob that wants a human eye, and the engine
+    draw order between the cloud shell and the body''s haze cannot be confirmed without a render - so
+    the coordinator has asked the user to look. ALSO RECORDED, because it was my mistake and it cost a
+    build: my commit for this change FAILED SILENTLY because I named godot/world/aero.gd instead of godot/core/aero.gd,
+    and although the staged-list check printed empty I committed anyway and the script continued to rebuild
+    and stage the OLD tree. The fix was to kill the useless run, re-stage with the correct path, push
+    the guard into the command itself (test -n "$(git diff --cached --name-only)" && git commit ...) so
+    an empty stage cannot produce a no-op commit, and redo the rebuild - which is why the final Windows
+    build stamp is 09f4d2e and not b1c9bdb.'
   comments: []
 - id: AC-0386
   title: sky-transitions-to-space
