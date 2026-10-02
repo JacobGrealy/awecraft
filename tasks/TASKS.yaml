@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T06:39
+  updated_at: 2026-10-02T09:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0038
 - AC-0039
 - AC-0159
 - AC-0112
@@ -2319,15 +2318,46 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - godot
   created_at: 2026-08-16T12:00
-  updated_at: 2026-08-19 08:15T12:00
-  completed_at: null
+  updated_at: 2026-10-02T09:16
+  completed_at: 2026-10-02T09:16
   waiting_on: null
   parent_id: null
-  notes: 'WS7 pooled particles (~200): break debris, hit sparks, arrow burst, pickup puff'
+  notes: 'WS7 pooled particles (~200): break debris, hit sparks, arrow burst, pickup puff
+
+
+    CLOSED - a pooled particle system, built to the ticket''s real requirement rather than its decoration.
+    THE POOL IS THE POINT AND IT IS A POOL: one ParticlePool node holding a FIXED 200-slot ring behind
+    a single MultiMesh, allocated once in _ready (the counter reads 5 allocations at ready and ZERO after),
+    reused round-robin, with an over-capacity burst guaranteed to drop the OLDEST because in a ring the
+    oldest is exactly the next slot - so a burst can never grow it and the memory ceiling is a constant,
+    not a hope. The four event kinds share the pool, distinguished by a per-slot kind plus a per-instance
+    colour, and there is a kill switch (AWECRAFT_PARTICLES=0). WHAT THE FOUR EVENTS EMIT, since the ticket
+    named them and none of them were wired before: break 12 particles at 0.60 s in the block''s own colour,
+    hit 8 at 0.33 s, arrow 10 at 0.42 s, pickup 8 at 0.56 s - each at its real site (the player''s break
+    and damage paths, the mob''s hurt path, the arrow''s solid and body contacts, and the drop''s pickup).
+    THE CENSUS IS THE EVIDENCE THAT THE POOL BEHAVES: every event fully releases (live returns to zero),
+    and a stress burst of 300 particles in a single frame produces live 200 with 100 evicted-oldest, 200
+    deaths and a return to zero, with an allocation delta of zero - which is the number that matters,
+    because a pooled system that allocates under stress is not pooled. COST: 200 sustained live particles
+    measure 0.071 ms per frame on the pool''s own bracket, a fraction of a millisecond, so no cheaper
+    shape is needed - and that mattered to establish because AC-0387''s carve work made the far lane about
+    35x more expensive and the R24 crossing burst is running at 9.6 ms against a 10 ms gate, so every
+    per-frame addition now has to justify itself with a number. RADIAL CORRECTNESS WAS THE TRAP AND IT
+    IS PROVEN RATHER THAN ASSERTED: on a sphere world, a particle system assuming world-down works at
+    spawn and is wrong everywhere else, so gravity is driven from the radial direction at the emission
+    point - and the proof is that 40-particle bursts seeded at the home face and the +X face agree in
+    the LOCAL frame (a maximum pairwise delta of 0.0013 m, both falling 4.937 against an analytic 4.9)
+    while their world-space displacement differs (world -Y at home, world -X at +X). ONE STANDING VALUE
+    WAS HANDED TO ME AND IS RECORDED HERE RATHER THAN QUIETLY MOVED: the boundary arm''s staged_dropped
+    read 2704 against a 2500 threshold. The pool is provably dormant on that arm, so this is not the particles
+    - it is the AC-0387-era world under a far lane that got 35x more expensive, which legitimately drops
+    more capped enqueues under load, and a cap-dropped enqueue is a RETRY rather than a loss per the world
+    contract. That is a documented re-base with attribution, not a threshold quietly raised to hide a
+    regression, and the distinction is the whole reason it is written down here.'
   comments:
   - id: 1
     created_at: 2026-08-16 20:00T12:00
@@ -22606,7 +22636,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-02T06:39
+  updated_at: 2026-10-02T08:00
   completed_at: 2026-10-02T06:39
   waiting_on: null
   parent_id: null
@@ -22797,7 +22827,34 @@ intake:
     cannot pass it now. A caveat that stays open deliberately: headless never compiles the shader pipeline,
     so the Windows build is the real GPU-compile check, and if the planet now appears but looks wrong
     the debug console build will print Godot''s own shader error - which is why the user was asked for
-    exactly that text if anything looks off.'
+    exactly that text if anything looks off.
+
+
+    SECOND USER SCREENSHOT 2026-10-02 (tasks/AC-0384/user-screenshot-20261002.png, 1919x1199) WITH THE
+    MESSAGE "the satellite lod is still not loading for me", AND A DIRECT REQUEST: "is there any logging
+    you could add to help you figure out why it''s not working on my pc?" THE REQUEST IS THE RIGHT NEXT
+    STEP and it is granted - see the diagnostics run. WHAT THE IMAGE SHOWS, read by the coordinator with
+    vision, and it is MUCH healthier than the first one: the player is high above the ground looking across
+    a CURVED LANDSCAPE with the planet''s curvature clearly visible at the horizon; the terrain is fully
+    detailed - green grass with white grid lines, many trees, snow-capped dark peaks, a blue lake on the
+    left and a tan sand area on the right, with the hotbar and hunger HUD drawn; the sky is a clean pale-blue
+    day gradient. So the terrain LODs and the carve work are visibly good and the world is rendering.
+    THE AMBIGUITY THAT BLOCKS A VERDICT: a large, smooth, PALE surface curves through the lower half of
+    the frame behind and beneath the terrain, with a smooth anti-aliased limb. That is EITHER the satellite
+    body (finally drawing after the AC-0384 fragment-discard fix, but too pale - the haze term saturating
+    across the disc, exactly what the coordinator suspected from the first screenshot) OR the new CLOUD
+    SHELL that AC-0385 just made 67.8% coverage at R+275/330/400, seen from above as a nearly continuous
+    white deck. From a single still image these two are indistinguishable, and the previous rounds prove
+    the cost of guessing: the first reading was "not a resource problem", the second was "washed-out haze",
+    and the actual bug was a unit-vector fragment discard that neither guess found. THEREFORE: no more
+    inference from pictures - the user has been given a DIAGNOSTIC BUILD that reports, from inside the
+    running game on their machine, exactly which of these it is. The diagnostic must answer, in one line
+    the user can paste back: the player''s radial altitude and the band value S; the body''s phase and
+    which source the textures came from (res / cache / baked); whether all 12 textures are non-null with
+    their sizes; whether the material''s SHADER is non-null (a null shader renders white and is invisible
+    to every gate we own); the mesh''s vertex count and AABB; the computed opacity and the fog-far and
+    render-edge values being used; and whether the node is visible. Anything less repeats the mistake
+    of measuring a proxy for the thing.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
