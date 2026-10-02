@@ -226,6 +226,20 @@ func clear_far() -> void:
 	far_veg = PackedByteArray()
 	far_mat = false
 	far_eff = {}
+# AC-0387b: a full landing retires the far FLAG + the derived caches but
+# KEEPS the payload bytes (far_h/far_biome/far_top/far_hmax). The payload
+# is a pure f(seed, cx, cz) — the AC-0387 carve: the full path's own
+# carved top + post-carve top block — so the stored copy is bit-identical
+# to the recompute and the next _demote_to_far REUSES it instead of paying
+# a synchronous generate_far (~3.4 ms) in the recenter sweep (the AC-0387
+# crossing-burst regression, 34.8 ms p50). The bytes are inert while
+# far == false (every reader — save form, snap rings, sky eff — is
+# flag-gated), and the pooled-node reset still clears them with the column.
+func clear_far_keep_payload() -> void:
+	far = false
+	far_veg = PackedByteArray()
+	far_mat = false
+	far_eff = {}
 
 # AC-0284b: the 1024-byte far payload (H u16 LE + biome + top) as ONE
 # array — the snap_rings far argument (a far neighbor's ring is the

@@ -6,6 +6,7 @@ var _vel := Vector3.ZERO
 var _grounded := false
 var _age := 0.0
 var _mesh: MeshInstance3D = null
+var _pivot: Node3D = null
 
 
 func _ready() -> void:
@@ -20,7 +21,19 @@ func _ready() -> void:
 		_mesh.mesh = HeldMeshes.box_mesh(id)
 		_mesh.material_override = HeldMeshes.box_material()
 	_mesh.scale = Vector3(0.3, 0.3, 0.3)
-	add_child(_mesh)
+	# AC-0093: the box/cross geometry is built in [0,1]^3 (centred at (0.5,0.5,0.5)
+	# in mesh-local space), so a local Y-spin of the MESH orbits the geometry in a
+	# circle of radius 0.3*sqrt(0.5) ~= 0.212 instead of spinning it in place. The
+	# rotation was never the bug - the PIVOT was: the mesh origin is the box's
+	# corner, not its centre. Spin about the box centre: reparent the mesh under a
+	# pivot whose origin is the box centre (the mesh offset (-0.15,-0.15,-0.15)
+	# recentres the [0,1]^3 geometry on it) and rotate the PIVOT, not the mesh. The
+	# drop node position is untouched (fall/settle + the magnet read it) and the box
+	# fills the exact same region as before - only the orbit is gone.
+	_mesh.position = Vector3(-0.15, -0.15, -0.15)
+	_pivot = Node3D.new()
+	_pivot.add_child(_mesh)
+	add_child(_pivot)
 	var area := Area3D.new()
 	var col := CollisionShape3D.new()
 	var sh := SphereShape3D.new()
@@ -125,5 +138,9 @@ func _process(dt: float) -> void:
 				Audio.play("pickup")
 				queue_free()
 				return
-	_mesh.position = Vector3(0.0, 0.16 + sin(_age * 3.0) * 0.06, 0.0)
-	_mesh.rotation.y += dt * 2.0
+	# AC-0093: spin the pivot (the box's centre), not the mesh - the mesh offset
+	# recentres the geometry on the pivot, so this is a true in-place spin. The bob
+	# (0.31 = 0.16 hover + 0.15 half-block centre) and the rate (2.0 rad/s) are
+	# unchanged; the pickup magnet + fall/settle still move the drop node only.
+	_pivot.position = Vector3(0.15, 0.31 + sin(_age * 3.0) * 0.06, 0.15)
+	_pivot.rotation.y += dt * 2.0

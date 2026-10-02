@@ -23740,13 +23740,14 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		else:
 			crx_other += 1
 	var crx_burst_ms: Array = []
-	var crx_census := {"demoted": 0, "gen_far": 0, "promoted": 0, "halo_evicts": 0, "reentry_flips": 0, "scanned": 0}
+	var crx_census := {"demoted": 0, "gen_far": 0, "gen_far_reuse": 0, "promoted": 0, "halo_evicts": 0, "reentry_flips": 0, "scanned": 0}
 	var crx_worst_idx := -1
 	for i2 in range(crx_cross.size()):
 		var e2: Dictionary = crx_cross[i2]
 		crx_burst_ms.append(roundf(float(e2["us"]) / 1000.0 * 10.0) / 10.0)
 		crx_census["demoted"] += int(e2["demoted"])
 		crx_census["gen_far"] += int(e2["gen_far"])
+		crx_census["gen_far_reuse"] += int(e2["gen_far_reuse"])
 		crx_census["promoted"] += int(e2["promoted"])
 		crx_census["halo_evicts"] += int(e2["halo_evicts"])
 		crx_census["reentry_flips"] += int(e2["reentry_flips"])
@@ -23769,6 +23770,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			"scanned": int(ew["scanned"]),
 			"demoted": int(ew["demoted"]),
 			"gen_far": int(ew["gen_far"]),
+			"gen_far_reuse": int(ew["gen_far_reuse"]),
 			"promoted": int(ew["promoted"]),
 			"halo_evicts": int(ew["halo_evicts"]),
 			"reentry_flips": int(ew["reentry_flips"]),

@@ -259,4 +259,133 @@ Native rebuild + re-stage were done by this task (R4, <code>godot/bin/libchunkio
    farab row re-rendered + --check clean. Probe arm removed; G0 re-verified on the pristine tree.
 9. NATIVE rebuild + re-stage DONE (Linux .so staged). The Windows DLL rebuild (build_windows.sh)
    is the coordinator's but MANDATORY before shipping — the fix is in the C++ lanes.</pre>
+
+ <div class="warn"><b>STATUS UPDATE (2026-10-02, follow-up run): the §12 regression is FIXED in this
+ ticket's bounded follow-up.</b> Sections 15–17 record the mitigation, the before/after measurement on
+ the standing instrument, the negative test (the reuse path's proof of life), and the standing gates on
+ the final tree. §1–14 stand as written.</div>
+
+ <h2>15. The mitigation implemented (reuse, not worker)</h2>
+ <p><b>Chosen: REUSE the resident payload (a lookup instead of a recompute).</b> The code allows it, and
+ it is the smaller change that gets the same result the worker alternative would — except it removes the
+ main-thread cost entirely instead of moving it:</p>
+ <ul>
+  <li><b>Why reuse is correct here:</b> the payload is a pure <code>f(seed, cx, cz)</code> — the carve fix
+  (§8) made <code>gen_far</code> run the full path's own per-column sequence, and the project's bit-exact
+  contract (deterministic per seed, <code>-ffp-contract=off</code>) makes a stored copy bit-identical to
+  the recompute. Proven directly, not assumed (§16): a temp probe double-called <code>generate_far</code>
+  on 400 chunks — <b>0/400 byte mismatches</b>. The payload holds no state the recompute would carry
+  differently (player edits are ignored by the far lane in BOTH the old and new code — a recompute
+  ignores them too — so reuse is no staler than the recompute it replaces).</li>
+  <li><b>The catch the code was hiding:</b> every resident node about to be demoted had ALREADY FORGOTTEN
+  its payload — the full landing (<code>threadgen_handoff</code>) ran <code>clear_far()</code>, wiping the
+  bytes under the old "the payload goes with the slabs it replaced" bookkeeping. So the resident copy
+  only exists if we keep it. That is the whole fix — three GDScript sites, no C++:</li>
+  <li><b>(a) <code>chunk.gd</code>: new <code>clear_far_keep_payload()</code></b> — retires the far FLAG +
+  derived caches (<code>far_veg</code>/<code>far_mat</code>/<code>far_eff</code>) but keeps the payload
+  bytes (<code>far_h</code>/<code>far_biome</code>/<code>far_top</code>/<code>far_hmax</code>). The bytes
+  are inert while <code>far == false</code>: every reader (save form, snap rings, sky eff, <code>
+  far_payload()</code>) is flag-gated, and the pooled-node reset still clears them before any
+  re-occupancy, so a node's payload is always for its current <code>(cx, cz)</code>.</li>
+  <li><b>(b) <code>threadgen_handoff</code> (world.gd): the full landing now calls
+  <code>clear_far_keep_payload()</code></b> — the payload bytes survive the promotion.</li>
+  <li><b>(c) <code>_demote_to_far</code> (world.gd): if the node already holds a 512+256+256-byte payload
+  → REUSE it (skip <code>generate_far</code>); otherwise the old synchronous recompute. Census: new
+  <code>crx_gen_far_reuse</code> counter + <code>gen_far_reuse</code> in the crossing ring and the
+  boundary arm's <code>crossing_census</code>/<code>crossing_worst</code> (the reuse path's canary — a 0
+  there means the regression is silently back). The far lane's OUTPUT is untouched — the payload bytes
+  are the lane's own earlier output.</li>
+  <li><b>Why not the worker alternative:</b> moving the edge far regen to the worker needs a new lane
+  (task + poll + handoff + staleness + cap-drop retry) and would still pay 3.35 ms of worker wall per
+  demote (just off the main thread); the reuse path is ~15 lines, bit-identical output, and pays ~0 on
+  the main thread. Per the ticket: the smaller change that gets the same result. The worker alternative
+  is still owed IF the cold first-demote case (13 × 3.32 ms on the worst crossing, §16) ever becomes
+  player-visible — it is a one-time per-column cost, not the steady state.</li>
+ </ul>
+
+ <h2>16. Measurement — before vs after (same instrument: the boundary r4 arm's crossing ring)</h2>
+ <p>One boundary r4 self-check run (the ticket's at-most-one), same arm as the 34.8 ms reading;
+ <code>ulimit -v 8388608</code>, <code>HOME=/tmp/dsh_home</code>, seed 44; log
+ <code>.scratch/AC-0387b-boundary-r4.log</code>. The sweep's per-chunk far cost was re-measured two ways:
+ the lane itself (a temp probe, removed in-task, same 400-chunk instrument as §9) and the sweep-side cost
+ (the crossing ring census).</p>
+ <table>
+  <tr><th></th><th>before (R4, §11/§12)</th><th>after (this run)</th></tr>
+  <tr><td><code>crossing_burst_p50_ms</code> — <b>the gate field (≤ 10 ms)</b></td><td class="bad">34.8</td><td class="ok">6.7</td></tr>
+  <tr><td><code>crossing_burst_max_ms</code></td><td class="bad">52.7 (15 sync calls × 3.35 ms)</td><td>46.1 (13 COLD calls × 3.32 ms + 2 reuses — the spawn region's first demotes; the steady-state walk runs 3.4–10.7 ms)</td></tr>
+  <tr><td><code>crossing_burst_p95_ms</code></td><td>37.2</td><td>29.0 (the early-walk cold storms + one 27.4 ms late crossing)</td></tr>
+  <tr><td>frame p95 (<code>p95_ms</code>)</td><td>31</td><td>31 (unchanged — the fix is not moving cost into the frame)</td></tr>
+  <tr><td>storm p99 (<code>storm_walk_p99_ms</code>)</td><td>116</td><td class="ok">81 (max 172 → 159)</td></tr>
+  <tr><td>far lane, per chunk (direct <code>generate_far</code>, 400 chunks)</td><td>3,353 µs</td><td>3,321 / 3,334 µs — UNCHANGED (the C++ lane is untouched; the probe re-measured it)</td></tr>
+  <tr><td>sweep-side far cost per demote</td><td>3.35 ms every time</td><td class="ok">230/285 demotes paid ≈0 (resident lookup); 55 paid 3.32 ms (cold first demote of a column that never rode the far band)</td></tr>
+  <tr><td>other</td><td>crossings 20/20, walk 21.76 s</td><td>crossings 20/20, walk 26.31 s (slower box minute), mem +113 MB (R4 +140), footprint missing 0</td></tr>
+ </table>
+ <div class="find"><b>The gate question, answered plainly: the standing <code>crossing_burst_p50 ≤ 10 ms</code>
+ gate is MET AGAIN — 6.7 ms, back inside the historical 5.3–7.0 band (pre-regression).</b> No re-basing:
+ the instrument is the same, the gate field's code is untouched (this run's only harness change adds the
+ informational <code>gen_far_reuse</code> census term — the <code>crossing_burst_*</code> computation is
+ byte-identical). The <code>max</code> is still 46.1 ms, and that is honest to attribute: the worst
+ crossing (seq 4, early walk) demotes 15 columns of which 13 have NO resident payload — they are the
+ spawn region's full-band columns, never far, so their FIRST demote must compute the payload once
+ (13 × 3.32 ms = 43.2 ms of the 45.4 ms scan). That is a one-time per-column cost, not the steady state:
+ the steady-state walk's bursts are 3.4–10.7 ms. The max is a single-sample field (documented as NOT the
+ gate); the gate is the p50, and it reads 6.7.</div>
+ <p><b>NEGATIVE TEST — the reuse path is proven taken, not assumed.</b> The boundary RESULT (same run,
+ same instrument): <code>crossing_census: demoted 285 = gen_far 55 + gen_far_reuse 230</code> — 81% of the
+ demotes took the reuse path, and the per-sweep ring term (<code>gen_far_reuse</code>) is now a standing
+ field of the crossing ring + the boundary census (a 0 in a future run means the reuse silently stopped
+ firing and the regression is back). The cold 55 match the expected first-demote population (the 41
+ spawn-region full columns + a few early leading-edge columns). Bit-identity of the reused bytes: the
+ double-call probe (0/400 mismatches, above) + the farab gate (fresh <code>generate_far</code> vs the
+ full path's <code>carved_tops</code>, h_mismatch 0, §17) + the halo arm, which actually promotes/demotes
+ 33+46 columns through the changed path with 0 mismatches / 0 unlit.</p>
+
+ <h2>17. Standing gates on the final tree (2026-10-02, this box) + report</h2>
+ <p>Tree: the AC-0387 fix commit + this run's three GDScript sites (<code>world.gd</code>, <code>
+ chunk.gd</code>, <code>harness.gd</code> census field) + the re-rendered <code>harness_data.yaml</code>
+ row. <b>No C++ change</b> — <code>gdext/</code> is untouched and <code>godot/bin/libchunkio.so</code>
+ (1,671,744 B) is newer than every native source, i.e. it IS the R4 binary; the "native rebuild +
+ re-stage" condition (touching the C++ lane) never arose, so no rebuild is owed — the Windows rebuild
+ remains the coordinator's and remains MANDATORY (the carve fix lives in the C++ lanes). Temp probe arm
+ added and removed in-task (AC-0140); G0 re-verified on the pristine tree after removal. One godot at a
+ time, every run <code>ulimit -v 8388608</code> + <code>HOME=/tmp/dsh_home</code>; no R50, no <code>
+ load</code> arm, no renders, no commits.</p>
+ <table>
+  <tr><th>gate</th><th>result</th><th>note</th></tr>
+  <tr><td>G0 (pristine boot, probe removed)</td><td class="ok">0 SCRIPT ERROR</td><td>zero-SCRIPT-ERROR semantics; also 0 early (before the boundary run)</td></tr>
+  <tr><td><code>genhash</code></td><td class="ok">25/25 byte-identical</td><td>diffed line-for-line against the R4 run's log — unchanged (GDScript-only change)</td></tr>
+  <tr><td><code>farab</code> (repaired, §10)</td><td class="ok">ok:true — h_mismatch 0, slab_mismatch 0/0 (1080/1080), mat_surf_diff 0, mat_pierce 0, mat_uplift 3,359, water 6/7</td><td>the carve fix survives; identical standing values to R4</td></tr>
+  <tr><td><code>ladder</code></td><td class="ok">ok:true — band_a 20/20 (fail []), band_b 144/144, band_c 90/90, tier_mismatch 0</td><td>identical to R4</td></tr>
+  <tr><td><code>meshprobe</code></td><td class="ok">match_rate 1.0, mismatch [], ac0211_ok</td><td>standing 1.0</td></tr>
+  <tr><td><code>halo</code></td><td class="ok">ok:true — a: 0 mismatches (4,030,464 cells), b: 226/226 slabs, payload_bad 0, b1 20/20, unlit 0</td><td>promotes 33 + demotes 79 through the CHANGED path — all clean</td></tr>
+  <tr><td><code>lightstate</code> (R16)</td><td class="ok">leaks 0/0, holes 0, final double-LOD census 0</td><td><code>low_on_high_n</code> (the transient churn canary) read 1, stable across two runs — inside the box's historical 0–7 band for the same 41-demotion churn (ac0312: 7, lightstate_v2: 1, p2: 1); the R4 reading of 0 paired with an anomalous <code>demoted: 1</code> (sparse streaming state at the arm's teleport), not a like-for-like baseline. The GATED fields (leaks/holes/final census) are clean.</td></tr>
+  <tr><td><code>r16</code> (<code>--fixed-fps 600</code>, 356 s wall)</td><td class="ok">ok:true — all sub-flags; far_holes 0/0 BOTH bands; uv_mismatch 0/0; air_ok, uv_repeat_ok, wave_ok, air_chunk_test, tier edit/fall/spin all ok; built_all 41</td><td>standing</td></tr>
+  <tr><td><code>boundary</code> r4 (ONE self-check run)</td><td class="ok">ok:true — crossings 20/20, marker_ok, remesh_ok, footprint missing 0, col_deferred_in_footprint 0</td><td>the §16 measurement; <code>crossing_burst_p50</code> 6.7 ≤ 10 ✓</td></tr>
+ </table>
+ <h2>18. Deliverable report (≤12 lines)</h2>
+ <pre>1. MITIGATION: reuse the resident far payload in the recenter sweep's demote (a lookup, not a
+    recompute) — chosen over the worker move because the code allows it (the payload is a pure
+    f(seed,cx,cz); bit-identity proven 0/400 double-calls) and it is ~15 lines of GDScript that
+    removes the main-thread cost entirely instead of moving 3.35 ms/chunk to the worker. Three
+    sites: chunk.gd clear_far_keep_payload() (full landings keep the payload bytes, inert while
+    far==false), threadgen_handoff uses it, _demote_to_far reuses a 512+256+256-byte resident
+    copy and skips generate_far. No C++ change; the far lane's OUTPUT is untouched.
+2. MEASURED (same instrument — the boundary r4 arm's crossing ring): crossing_burst_p50 34.8 -> 6.7 ms;
+    max 52.7 -> 46.1; p95 37.2 -> 29.0; frame p95 31 -> 31 (unchanged); storm p99 116 -> 81 (max 172 -> 159).
+    Far lane per chunk re-measured: 3,353 -> 3,321/3,334 us (UNCHANGED — C++ untouched); sweep-side
+    demote cost: 230/285 demotes paid ~0, 55 paid 3.32 ms (cold first demotes).
+3. GATE: the standing crossing_burst_p50 <= 10 ms gate is MET AGAIN (6.7, inside the historical
+    5.3-7.0 band) — no re-basing; the gate field's code is untouched. The max stays 46.1 ms, honestly
+    attributed: the worst crossing's 13 cold recomputes (spawn-region columns that never rode the far
+    band) x 3.32 ms; the steady-state walk runs 3.4-10.7 ms. The max is a single-sample field, not the gate.
+4. NEGATIVE TEST: crossing_census demoted 285 = gen_far 55 + gen_far_reuse 230 (81% reuse) in the same
+    run; gen_far_reuse is now a standing crossing-ring + boundary-census field (a 0 = the regression is
+    silently back); bit-identity by the 0/400 double-call probe + farab + halo (33/46-column churn clean).
+5. GATES: G0 0 SCRIPT ERROR (pristine, probe removed); genhash 25/25 byte-identical; farab ok
+    h_mismatch 0 (the carve fix survives); ladder 20/20; meshprobe 1.0; halo ok (0 unlit); lightstate
+    leaks 0/0, holes 0 (low_on_high transient 1, inside the box's historical 0-7); r16 ok, far_holes
+    0/0 both bands; boundary r4 ok (one self-check run).
+6. NATIVE: no C++ change — gdext/ untouched, the staged .so is the R4 binary (newer than every native
+    source), so no rebuild is owed; the Windows DLL rebuild stays the coordinator's and stays
+    MANDATORY before shipping (the carve fix lives in the C++ lanes). Tree left ready, no commits.</pre>
 </body></html>

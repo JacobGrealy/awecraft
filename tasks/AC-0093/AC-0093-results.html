@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC-0093 — drop spins in place, not orbit — results</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--ink:#e7ebf2;--dim:#9aa6b8;--acc:#5cc8ff;--ok:#43d17e;--bad:#ff6b6b;--line:#262c38;}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px 4vw;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:18px 0;}
+  h1{font-size:22px;margin:0 0 4px;} h2{font-size:16px;margin:0 0 10px;color:var(--acc);text-transform:uppercase;letter-spacing:.04em;}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 6px;}
+  code,pre{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:13px;}
+  code{background:#0c0e12;padding:1px 5px;border-radius:4px;color:#cfe6ff;}
+  pre{background:#0c0e12;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto;color:#cfe6ff;}
+  table{border-collapse:collapse;width:100%;font-size:14px;}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top;}
+  th{background:#12151c;color:var(--dim);font-weight:600;}
+  td.num{font-family:ui-monospace,Menlo,monospace;white-space:nowrap;}
+  .ok{color:var(--ok);font-weight:600;} .bad{color:var(--bad);font-weight:600;} .acc{color:var(--acc);}
+  .tag{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:20px;}
+  .tag.ok{background:rgba(67,209,126,.15);color:var(--ok);} .tag.bad{background:rgba(255,107,107,.15);color:var(--bad);}
+  .kv{display:grid;grid-template-columns:190px 1fr;gap:4px 16px;font-size:13.5px;}
+  .kv dt{color:var(--dim);} .kv dd{margin:0;}
+  .small{font-size:12.5px;color:var(--dim);}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>AC-0093 — drop-spin-in-place-not-orbit</h1>
+  <p class="sub">User story: broken-block drops must <strong>spin in place</strong> while they sit on the ground.
+  Bug as filed: they <strong>orbit</strong> (a circle) instead of spinning. Verdict: <span class="tag ok">FIXED — numeric invariant proven</span></p>
+  <dl class="kv">
+    <dt>Ticket</dt><dd>AC-0093 (shared ticket — <code>TASKS.yaml</code> was <em>not</em> edited by this run; its only diff is the pre-existing <code>open → in-progress</code> status flip owned by the coordinator).</dd>
+    <dt>File repaired</dt><dd><code>godot/entities/drop.gd</code> (only code change in the working tree).</dd>
+    <dt>Verification</dt><dd>Headless numeric arm (<code>AWECRAFT_LOGIC</code>), the project's own harness path. No renders (llvmpipe degraded, none allowed). <strong>Temp arm removed in-task</strong> — tree returned to pristine except <code>drop.gd</code>.</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Root cause — it is case (d): the pivot, not the rotation</h2>
+  <p>The spin itself (<code>_mesh.rotation.y += dt * 2.0</code>, original <code>drop.gd:129</code>) is a <em>legitimate local Y-rotation</em>.
+  The bug is where that rotation is anchored. The box/cross geometry is built in <code>[0,1]³</code> with its
+  <strong>center at <code>(0.5,0.5,0.5)</code></strong> in mesh-local space, but the mesh's origin (the pivot the rotation is applied about)
+  sits at the box's <strong>corner</strong>:</p>
+  <ul>
+    <li><code>godot/core/held_mesh.gd:3-4</code> — the cross quads <code>XQ_A/XQ_B</code> are corners in <code>[0,1]³</code>, centered at <code>(0.5,0.5,0.5)</code>.</li>
+    <li><code>godot/core/held_mesh.gd:83-117</code> — <code>_build_box</code> emits <code>VoxelMath.FACES</code> corners (the unit cube <code>[0,1]³</code>, <code>core/math.gd:3</code>), also centered at <code>(0.5,0.5,0.5)</code>.</li>
+    <li>Original <code>drop.gd:23</code> <code>add_child(_mesh)</code> + <code>drop.gd:128</code> <code>_mesh.position = Vector3(0, 0.16+bob, 0)</code> — the mesh origin is the box's <em>corner</em>, and the <code>_mesh.scale = 0.3</code> puts the geometry center <code>0.3·(0.5,0.5,0.5) = (0.15,0.15,0.15)</code> away from it.</li>
+  </ul>
+  <p>Rotating <code>_mesh</code> about its own origin therefore sweeps the box center in a circle of radius
+  <code>0.3·√(0.5²+0.5²) = 0.3·√0.5 ≈ 0.212</code>. That is the orbit. <strong>Per the ticket's own rule, the correct fix is the pivot / mesh offset — not the rotation</strong> (the rotation was already correct).</p>
+</div>
+
+<div class="card">
+  <h2>The fix (drop.gd)</h2>
+  <p>Reparent the mesh under a <code>_pivot</code> node whose origin is the <em>box center</em>, recenter the geometry on it, and spin the pivot:</p>
+  <pre># _ready()  (was: add_child(_mesh))
+_mesh.position = Vector3(-0.15, -0.15, -0.15)   # recenter the [0,1]³ geometry on the pivot
+_pivot = Node3D.new()
+_pivot.add_child(_mesh)
+add_child(_pivot)
+
+# _process()  (was: _mesh.position = (0,0.16+bob,0); _mesh.rotation.y += dt*2.0)
+_pivot.position = Vector3(0.15, 0.31 + sin(_age*3.0)*0.06, 0.15)  # box center in drop space
+_pivot.rotation.y += dt * 2.0                                     # spin about the box center</pre>
+  <p>Consequences, verified by construction + the numeric arm:</p>
+  <ul>
+    <li>The box fills the <strong>exact same region</strong> as before (<code>x:[0,0.3], y:[0.16+bob,0.46+bob], z:[0,0.3]</code> in drop space) — look unchanged.</li>
+    <li>The drop node's <code>position</code> is <strong>untouched</strong> — fall/settle and the pickup magnet read only it, so those move it (legit) and nothing else does.</li>
+    <li><strong>Bob preserved</strong>: same <code>sin(_age·3.0)·0.06</code> term (0.06 amp, 3.0 rad/s), now on the pivot (<code>0.31 = 0.16 hover + 0.15 half-block center</code>).</li>
+    <li><strong>Spin rate preserved</strong>: still <code>dt·2.0</code> (2.0 rad/s).</li>
+    <li>The <code>Area3D</code>/collision sphere stays a direct child of the drop node — physics unchanged.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>Verification — the numeric form of "spins without circling"</h2>
+  <p class="small">Method: a drop at <strong>rest</strong> (pre-grounded; a far-away player stub so the magnet
+  <code>dist &lt; 2.5</code> never fires; <code>Game.world = null</code> so the ground-snap branch is skipped) is driven with a
+  <strong>fixed dt = 1/60</strong> for 200 ticks. Each tick records: (a) the drop <strong>node</strong> position, (b) the rendered
+  <strong>box-center</strong> world XZ (the <code>(0.5,0.5,0.5)</code> mesh point composed through the node chain), (c) the mesh's
+  world Y-rotation (unwrapped). <strong>Invariant of "spins in place":</strong> the box-center XZ <em>and</em> the node position stay
+  fixed while the Y-rotation advances. The orbit (the bug) is the box-center XZ drifting in a circle whose radius is the off-origin offset.</p>
+  <p class="small">Delivery note: a bare <code>SceneTree</code> main-loop script does not spin under <code>--headless</code> on this box, so the probe
+  ran through the project's <code>AWECRAFT_LOGIC</code> harness as a <strong>temporary measurement arm</strong> (added to
+  <code>scenes/harness.gd</code> + a one-line dispatch in <code>scenes/main.gd</code>), exactly the "temporary measurement arm goes in and comes out in the same task"
+  convention. Both files were reverted; <code>git status</code> confirms the tree is pristine except <code>drop.gd</code>.</p>
+</div>
+
+<div class="card">
+  <h2>Before / after — per-tick numbers</h2>
+  <table>
+    <thead>
+      <tr><th>metric (per tick, dt = 1/60, n = 200)</th><th class="num">BEFORE (bug)</th><th class="num">AFTER (fix)</th><th>reading</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>drop node <code>position</code> drift / tick</td><td class="num">0.000000</td><td class="num">0.000000</td><td>fixed at rest both ways — the physics position was never the orbit</td></tr>
+      <tr><td><strong>box-center XZ drift / tick</strong> (mean)</td><td class="num bad">0.007071</td><td class="num ok">0.000000</td><td>the rendered box center stopped moving</td></tr>
+      <tr><td>box-center XZ drift / tick (max)</td><td class="num bad">0.007072</td><td class="num ok">0.000000</td><td>—</td></tr>
+      <tr><td><strong>box-center orbit radius</strong> (max XZ excursion from run mean)</td><td class="num bad">0.22426</td><td class="num ok">0.00002</td><td>the circular excursion = the bug; residual 2e-5 is float noise. Theoretical radius <code>0.3·√0.5 = 0.2121</code> (measured value carries the &gt;1-turn sampling offset)</td></tr>
+      <tr><td>spin advance / tick (mean)</td><td class="num">0.03333</td><td class="num">0.03333</td><td><strong>unchanged</strong> — spin rate <code>dt·2.0</code> preserved</td></tr>
+      <tr><td>spin advance / tick (max)</td><td class="num">0.03333</td><td class="num">0.03333</td><td>uniform</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Raw <code>AC0093RESULT</code> lines —<br>
+  BEFORE: <code>{"ok":true,"n":200,"fixed_dt":0.01667,"node_pos_drift_per_tick":0.000000,"box_center_xz_drift_per_tick_mean":0.007071,"box_center_xz_drift_per_tick_max":0.007072,"box_center_orbit_radius":0.22426,"spin_advance_per_tick_mean":0.03333,"spin_advance_per_tick_max":0.03333,"expected_spin_per_tick":0.03333}</code><br>
+  AFTER:&nbsp; <code>{"ok":true,"n":200,"fixed_dt":0.01667,"node_pos_drift_per_tick":0.000000,"box_center_xz_drift_per_tick_mean":0.000000,"box_center_xz_drift_per_tick_max":0.000000,"box_center_orbit_radius":0.00002,"spin_advance_per_tick_mean":0.03333,"spin_advance_per_tick_max":0.03333,"expected_spin_per_tick":0.03333}</code></p>
+</div>
+
+<div class="card">
+  <h2>Existing behavior preserved</h2>
+  <ul>
+    <li><strong>Pickup attraction (magnet):</strong> the whole magnet path (<code>drop.gd</code> <code>dist &lt; 2.5</code> lerp + <code>dist &lt; 1.1</code> <code>inv_add</code>) reads only the drop node's <code>position</code>, which the fix does not touch. Exercised end-to-end by the <code>interact</code> arm: <code>drop_spawned:true</code>, <code>inv_grew:{id:2,n:1}</code>, <code>place_ok:true</code> — a block was broken, its drop spawned/fell/settled, and was picked up through the fixed code.</li>
+    <li><strong>Hover / bob:</strong> same <code>sin(_age·3.0)·0.06</code> term and phase, relocated to the pivot — identical amplitude and frequency.</li>
+    <li><strong>Spin rate:</strong> <code>0.03333 rad/tick</code> (= <code>dt·2.0</code>) before and after.</li>
+    <li><strong>Look:</strong> the box occupies the identical region; only the orbit is gone.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>Gates</h2>
+  <table>
+    <thead><tr><th>gate</th><th class="num">standing value</th><th class="num">measured (pristine tree)</th><th>status</th></tr></thead>
+    <tbody>
+      <tr><td>G0 — zero <code>SCRIPT ERROR</code> (not <code>rc=0</code>)</td><td class="num">0</td><td class="num">0</td><td class="ok">PASS — via <code>AWECRAFT_LOGIC=interact</code>, which boots the full game and drives a real drop through <code>drop.gd</code> (RC=0)</td></tr>
+      <tr><td>genhash byte-identical</td><td class="num">25/25</td><td class="num">25/25, 2-run identical</td><td class="ok">PASS — a drop animation cannot touch generation; two <code>AWECRAFT_LOGIC=genhash</code> runs are byte-identical (no re-baseline)</td></tr>
+      <tr><td>farab <code>h_mismatch</code></td><td class="num">0</td><td class="num">—</td><td>coordinator's battery — unaffected (no native/emit change)</td></tr>
+      <tr><td>ladder</td><td class="num">20/20</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+      <tr><td>meshprobe</td><td class="num">1.0</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+      <tr><td>halo</td><td class="num">ok</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+      <tr><td>lightstate</td><td class="num">0/0</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+      <tr><td>r16 (far_holes 0/0 both bands)</td><td class="num">all sub-flags</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+      <tr><td>boundary r4 (in band)</td><td class="num">in band</td><td class="num">—</td><td>coordinator's battery — unaffected</td></tr>
+    </tbody>
+  </table>
+  <p class="small">The change is a pure <strong>runtime visual pivot</strong> in <code>drop.gd</strong> — no generation, no mesh-emit, no lighting, no native lane.
+  No C++/gdext change was made, so <strong>no native rebuild / re-stage was required</strong>. The remaining heavy arms (farab/ladder/meshprobe/halo/lightstate/r16/boundary)
+  sit in the coordinator's full battery and are not affected by a node-tree visual change.</p>
+</div>
+
+<div class="card">
+  <h2>Cleanup / provenance</h2>
+  <ul>
+    <li>Temp measurement arm <code>_ac0093_test</code> + helpers and the <code>main.gd</code> <code>ac0093</code> dispatch were <strong>removed in-task</strong>; no probe left behind.</li>
+    <li><code>git status --porcelain</code> on the final tree: <code>M godot/entities/drop.gd</code> (the fix) — the only <code>M</code> in game code. <code>tasks/TASKS.yaml</code> shows a pre-existing <code>open→in-progress</code> status flip (not made by this run).</li>
+    <li>G0 was re-verified <em>after</em> the arm removal, on the pristine tree.</li>
+  </ul>
+</div>
+
+</body>
+</html>

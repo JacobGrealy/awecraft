@@ -3525,6 +3525,7 @@ const CROSSING_RING_CAP := 256
 var crossing_seq := 0
 var crossing_ring: Array = []
 var crx_gen_far_sync := 0  # cumulative synchronous generate_far calls (the per-sweep delta is the census term)
+var crx_gen_far_reuse := 0  # AC-0387b: cumulative resident-payload reuses in _demote_to_far (the per-sweep delta is the census term — the reuse path's proof of life)
 # AC-0350: the band-bounded sweep's state. _stream_outside = the resident
 # home-face columns OUTSIDE the stream set (w.r.t. the current recenter
 # center) — maintained per recenter by the sweep's re-entry/exit branches
@@ -5980,11 +5981,16 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 	c.no_caves = int(e["args"][5]) != 0
 	# AC-0284b: the far (h-only) landing stamps the payload (no slabs at
 	# all — the resl[0] all-null array IS the column); ANY full landing
-	# clears it — the full regen replaces the column whole, the 284a
-	# no-caves-slab merge fix generalized (the payload goes with the
-	# slabs it replaced).
+	# retires the far FLAG + derived caches. AC-0387b: the payload BYTES
+	# are kept (clear_far_keep_payload) — they are a pure f(seed, cx, cz)
+	# (the AC-0387 carve: the full path's own carved top), so the stored
+	# copy stays bit-identical to the recompute and the next
+	# _demote_to_far reuses it instead of paying a synchronous
+	# generate_far in the recenter sweep (the AC-0387 crossing-burst
+	# regression, 34.8 ms p50). The pool reset still clears the bytes
+	# with the column.
 	if not _gen_far_stamp(c, resl):
-		c.clear_far()
+		c.clear_far_keep_payload()
 	# AC-0309 D2: the far (h-only) tier ends at the patch edge too.
 	_patch_far_mask(c)
 	# AC-0346/AC-0350: a FULL landing on a column OUTSIDE the real band (the
@@ -9920,13 +9926,25 @@ func _demote_to_far(c: Node3D, key: String) -> void:
 	var g: Variant = WorldGen.gen_cpp()
 	if g == null:
 		return
-	crx_gen_far_sync += 1  # AC-0348 census: the synchronous generate_far (only caller: the recenter walk's _demote_high_band_exit)
-	var pay: PackedByteArray = g.generate_far(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
-	if pay.size() != 1024:
-		return
-	c.far_h = pay.slice(0, 512)
-	c.far_biome = pay.slice(512, 768)
-	c.far_top = pay.slice(768, 1024)
+	# AC-0387b: the payload is a pure f(seed, cx, cz) (the AC-0387 carve:
+	# the full path's own carved top + post-carve top block) — a RESIDENT
+	# copy (stamped by a prior far phase, kept across the full landing by
+	# clear_far_keep_payload) is bit-identical to the recompute. Reuse it:
+	# the synchronous recenter sweep used to pay one generate_far (~3.4 ms)
+	# per demote — the AC-0348 crossing_burst_p50 regression (34.8 ms).
+	# A node's payload always belongs to its current (cx, cz): every stamp
+	# site validates the column identity (inst + col_gen), and the
+	# pooled-node reset clears the bytes before any re-occupancy.
+	if c.far_h.size() == 512 and c.far_biome.size() == 256 and c.far_top.size() == 256:
+		crx_gen_far_reuse += 1  # AC-0387b census: resident-payload reuse (a 0 here means the regression is silently back)
+	else:
+		crx_gen_far_sync += 1  # AC-0348 census: the synchronous generate_far (only caller: the recenter walk's _demote_high_band_exit)
+		var pay: PackedByteArray = g.generate_far(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA))
+		if pay.size() != 1024:
+			return
+		c.far_h = pay.slice(0, 512)
+		c.far_biome = pay.slice(512, 768)
+		c.far_top = pay.slice(768, 1024)
 	c.far = true
 	var hmax := 0
 	for i in range(256):
@@ -10038,6 +10056,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# Instrumentation only — no behaviour change.
 	var crx_t0 := Time.get_ticks_usec()
 	var crx_genfar_base := int(crx_gen_far_sync)
+	var crx_reuse_base := int(crx_gen_far_reuse)
 	var cx_demoted := 0
 	var cx_promoted := 0
 	var cx_halo_evicts := 0
@@ -10517,6 +10536,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		"scanned": int(cx_scanned),
 		"demoted": int(cx_demoted),
 		"gen_far": int(crx_gen_far_sync) - int(crx_genfar_base),
+		"gen_far_reuse": int(crx_gen_far_reuse) - int(crx_reuse_base),
 		"promoted": int(cx_promoted),
 		"halo_evicts": int(cx_halo_evicts),
 		"reentry_flips": int(cx_reentry_flips),
