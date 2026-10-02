@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T11:34
+  updated_at: 2026-10-02T14:19
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0388
 - AC-0159
 - AC-0112
 - AC-0113
@@ -23183,11 +23182,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-02T11:34
-  updated_at: 2026-10-02T11:34
-  completed_at: null
+  updated_at: 2026-10-02T14:19
+  completed_at: 2026-10-02T14:19
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Walking across the world, the moment the streaming ring recenters should not
@@ -23247,5 +23246,35 @@ intake:
     the census field), tasks/AC-0381/AC-0381-results.html (the DRAIN and engine-gap shares), and grep
     world.gd for the recenter sweep, `_demote_to_far` and `gen_far_reuse`.
 
-    '
+
+
+    CLOSED - the gate is met again, the cold set is gone, and the most valuable part of this ticket is
+    what it REFUSED to claim. THE MEASUREMENT CAME FIRST AND IT NARROWED THE WHOLE PROBLEM: the cold set
+    is entirely the spawn-band ring - 40 spawn columns plus one leading edge, at 3.08-3.70 ms each with
+    a mean of 3.31 that matched the ticket''s own 3.32 estimate - and ZERO freshly-promoted columns, which
+    is the finding that confirmed the earlier keep-payload work was already doing its job. THE FIX IS
+    PROJECTION RATHER THAN RECOMPUTATION, and that is the elegant part: the far payload is a pure function
+    of (seed, cx, cz), so instead of computing it in the sweep it is derived from values the C++ full
+    path has ALREADY produced - heff, bcode and topblk - and rides along with the full landing stamped
+    dormant, with c.far left false so the bytes are inert until a demote makes them live. The first demote
+    is then the resident-payload reuse that already existed. No recompute, no extra worker task, no new
+    architecture. BIT-EXACTNESS IS ARGUED FROM TWO SIDES rather than asserted: H and the top block are
+    proven by the farab gate (negative-tested, h_mismatch 0), and bcode is bit-identical BY CONSTRUCTION
+    because it comes from two direct fbm2 calls that are table-independent. MEASURED ACROSS THREE POST-FIX
+    RUNS because this value has moved 3x across my stages and one reading cannot distinguish a fix from
+    luck: burst p50 4.0-4.4 ms against the 10 ms gate, MET with 57-60% margin; the max fell from 46.9-47.2
+    to 12.5-15.8; p95 from 20.2-20.3 to 8.5-13.7; the crossing frame p95 33-133 against 150; storm p99
+    98-116 against 200; and the census reads gen_far 0/0/0 with 100% reuse where the cold set used to
+    be 41-42. MY OWN STAGE ON 534d8f6 CONFIRMS IT: genhash 25/25 with run 1 equal to run 2, farab ok with
+    h_mismatch 0, r16 no reds with far_holes 0/0 in both bands, boundary r4 ok, the R24 walk inside every
+    gated value with gen_far at zero, and the battery complete. THE HONEST BOUND IS THE PART WORTH KEEPING:
+    the builder reports that the 14.2 ms which OPENED this ticket did not reproduce on this box, whose
+    baseline p50 is already 4.6-4.9, so that figure is box-state and is NOT something this fix can be
+    credited with beating. What the fix eliminates is the cold-set component the ticket owns; the remaining
+    p50 floor belongs to the band-bounded scan and is a separate matter since AC-0350. Separating what
+    was fixed from what cannot be reproduced here is exactly why the number can be believed, and it is
+    the opposite of the failure mode this project keeps finding - an instrument that reports a green without
+    saying what it measured. Note also that three files in the tree (game.gd, drop.gd, main.gd) remain
+    dirty from the OTHER session''s in-flight work and were deliberately left unstaged, which is why this
+    commit contains only gen.cpp, world.gd and the ticket''s own page.'
   comments: []
