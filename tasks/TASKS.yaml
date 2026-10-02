@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T05:48
+  updated_at: 2026-10-02T06:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0384
 - AC-0038
 - AC-0039
 - AC-0159
@@ -31,7 +30,6 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
-- AC-0386
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -22605,11 +22603,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T21:42
-  completed_at: null
+  updated_at: 2026-10-02T06:39
+  completed_at: 2026-10-02T06:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
@@ -22772,7 +22770,34 @@ intake:
     the arm measured thresholds; the export probe measured loadability - and none of them could see that
     the body''s colour is the sky. When a visual feature cannot be rendered on the build box, the only
     instrument that reaches it is a human being with a screenshot, and asking for one should have been
-    the FIRST move on this ticket rather than the last.'
+    the FIRST move on this ticket rather than the last.
+
+
+    CLOSED - the shader fix is in the shipped build (fb9644d) and the user has been asked to confirm it,
+    which is the only remaining step and is theirs because renders are infeasible here. WHAT WAS ACTUALLY
+    WRONG, after two wrong diagnoses in a row: the satellite body''s fragment shader computed its dissolve
+    opacity from `d = length(VIEW)`, and in Godot''s fragment stage `VIEW` is a UNIT vector - `view_highp
+    = -normalize(vertex_interp)` in the 4.7.1 engine source - so `d` was identically 1.0, `op` was identically
+    0, and the body DISCARDED 100% OF ITS FRAGMENTS. It had never rendered, in any build, at any altitude,
+    and the user''s original words "the satellite LOD never loads" were literally exact. The pale ball
+    in their screenshot is the AeroWash layer plus the cloud puffs - a different thing entirely - which
+    is why my first fix (the res:// existence predicate) changed nothing visible even though it was a
+    genuine latent bug, and why my second reading of their screenshot as a "washed-out haze" was a plausible
+    inference from an ambiguous image that happened to be wrong. THE FIX computes the true world-space
+    distance, `d = |(INV_VIEW_MATRIX * VERTEX) - CAMERA_POSITION_WORLD|`, with the limb term evaluated
+    in world space; the physical model is now stated as the ray''s impact parameter, and the finding worth
+    keeping is that the term was never mis-scaled - it was evaluated in the wrong space on top of `d`
+    being constant. Haze across the disc now reads centre 0.0000, mid 0.1723, limb 1.0000, monotone, where
+    before NO FRAGMENTS EXISTED AT ALL. THE INSTRUMENT LESSON IS THE THIRD ONE ON THIS TICKET AND THE
+    SHARPEST: the bake guard measured texture BYTES, the arm measured the ladder''s THRESHOLDS from GDScript,
+    and the export probe measured LOADABILITY - and not one of them computed what the shader outputs.
+    The new check does, and it was BUILT TO FAIL: replaying the old shader asserts zero fragments, replaying
+    a haze-identically-1 body asserts variance 0.0, and the real fix yields a disc-centre output variance
+    of 23794.3 against the texture-derived 23794.6, a ratio of 1.000. A body that renders as a constant
+    cannot pass it now. A caveat that stays open deliberately: headless never compiles the shader pipeline,
+    so the Windows build is the real GPU-compile check, and if the planet now appears but looks wrong
+    the debug console build will print Godot''s own shader error - which is why the user was asked for
+    exactly that text if anything looks off.'
   comments: []
 - id: AC-0385
   title: clouds-wrap-the-planet
@@ -22867,11 +22892,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-01T14:33
-  completed_at: null
+  updated_at: 2026-10-02T06:39
+  completed_at: 2026-10-02T06:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Flying up from the surface, the sky never turns into space - the horizon and
@@ -22913,7 +22938,44 @@ intake:
     including the fog figures that justify the 2000 m edge), tasks/AC-0310/AC-0310-results.html (the tier
     that opens above the atmosphere) and tasks/AC-0382/AC-0382-results.html (the sun convention).
 
-    '
+
+
+    CLOSED - a clean change with an unusually good property: below the band it is BIT-IDENTICAL to what
+    was there before. WHAT DREW THE SKY: the engine sky pass (aero_sky_gradient.gdshader on the Environment''s
+    Sky) with a time-of-day-only gradient and sun disc, plus a 320-unit CAMERA-FOLLOWING star shell whose
+    opacity was (1 - day), plus an additive AeroWash screen tint. None of the three knew about altitude
+    - and that single missing term is the whole bug, which is why the user could fly to orbit and watch
+    the sky stay stubbornly atmospheric. WHAT CHANGED: the sky pass gains u_space, the stars take the
+    same u_space in their opacity AND gain planet-disc occlusion, and AeroWash fades by (1 - S). No design-only
+    outcome was needed because the star field already existed with a source and a style - it was a skybox
+    in disguise missing one input. THE CURVE IS THE FLIGHT BAND ITSELF: S = smoothstep(500, 2000, |pos
+    - C| - R), read off player.gd, so the visual handover and the control handover are the SAME threshold
+    rather than two numbers that drift apart - and because S is the flight curve the change is C1, so
+    there is no pop at either end, while S = 0 below 500 m leaves the old sky untouched and the night
+    path is bit-identical because star opacity is (1 - day) + day*S. MEASURED ACROSS THE BAND rather than
+    described: noon zenith (61,134,216) at ground, (53,121,209) at 750 m, (14,45,122) at 1250 m, (0,0,2)
+    at 1750 m and black by 2000 m, with the horizon lagging blue to 2000 m and star opacity running 0
+    to 1 over the same span. AN UNREPORTED BUG WAS FIXED ON THE WAY: stars used to paint their dots ON
+    the planet when seen from orbit, and they are now occluded by its disc. LAYER OWNERSHIP RESTATED so
+    the standing convention stays true after AC-0385: sky pass owns day/night and the space transition,
+    stars own the field (altitude-gated, planet-occluded), AeroWash is the lens tint times (1 - S), and
+    CloudLayer plus the SatelliteBody disc, rim and depth fog are unchanged - the space gradient touches
+    the BACKGROUND ONLY, so nothing double-darkens the ground, and at orbit the player sees a blue atmospheric
+    limb from fog, body air colour and clouds against a black star field. VERIFICATION HONESTY: the builder
+    ran the full standing set green on the changed tree (G0 zero SCRIPT ERROR, genhash 25/25 with run
+    1 equal to run 2, the daynight arm, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4, and the satellite ladder with its
+    0.25 ratio), and I re-ran genhash and daynight myself on the final commit fb9644d rather than taking
+    the report on trust; I did NOT re-run the full battery for this one because the change is two shaders
+    plus their wiring and touches no generation, which is a deliberate judgement rather than an oversight.
+    AND ONE PROCESS FAILURE IS RECORDED HERE RATHER THAN BURIED: my first commit for this ticket took
+    the shaders and left godot/scenes/main.gd behind, and that file is the wiring - it sets space_color,
+    seeds the star material''s planet centre, radius and camera position, and drives u_space every frame.
+    Without it the shader changes are parameters nobody sets, so the build stamped 323b711 would have
+    shipped a space transition that does not transition, and I caught it only by reading the modified-file
+    list again. That is the THIRD time this session a file belonged to a change and missed the commit:
+    the rule to carry is that the MODIFIED LIST, not the builder''s narrative, is the authority for what
+    a change contains, and any unstaged file in it must be inspected or explained before committing.'
   comments: []
 - id: AC-0387
   title: carve-missing-from-low-and-medium-lods
