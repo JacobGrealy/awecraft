@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T02:27
+  updated_at: 2026-10-03T09:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -8912,10 +8912,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-09-03T08:24
-  updated_at: 2026-09-03T08:24
+  updated_at: 2026-10-03T09:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -8930,7 +8930,41 @@ intake:
     cubes with no ramps. Mesh in godot/world/chunk.gd:_bake_box/build_accs — detect 1-block step between
     ground mats and emit sloped quad (sheared UVs, same atlas), plus matching ConvexPolygonShape3D ramp
     collision in world.gd. Data stays 16³ cubes (buildability unchanged). Verify G0+SMOKE, walk/shoot
-    on hills and player-built dirt mounds shows no stair snag, stone stays blocky.'
+    on hills and player-built dirt mounds shows no stair snag, stone stays blocky.
+
+
+    USER REQUIREMENT ADDED 2026-10-03, BEFORE IMPLEMENTATION: make the smooth-ground-ramps feature TOGGLABLE.
+    This is the user''s second such request in two days - the first was the always-on ambient sound bed
+    from AC-0039, which shipped without a switch and had to be given one (AC-0389). Two instances make
+    a pattern rather than a coincidence, and the pattern is this: A FEATURE THAT CHANGES HOW THE GAME
+    LOOKS OR FEELS MUST SHIP WITH A SWITCH, and the default should be the more conservative behaviour
+    unless the user has asked for the new one. The user is the person who has to live with the result,
+    and they cannot evaluate a change they cannot turn off.
+
+    WHAT THIS MEANS FOR THIS TICKET, concretely: the ramp rule is applied or not applied according to
+    a persisted setting exposed where the project''s other settings live (Options > Settings, the surface
+    AC-0389 and AC-0088 built), not a debug flag and not an env var alone - env vars are for the arms,
+    not for players. BOTH should exist: the setting for the player, and an env override so the arms can
+    test both states without a save file.
+
+    THE TOGGLE MAKES VERIFICATION BETTER RATHER THAN WORSE, which is why it belongs in the design rather
+    than being deferred: with a switch, the arm can assert that the ramp quads EXIST when it is on and
+    that the mesh is BYTE-IDENTICAL TO THE PRE-FEATURE BUILD when it is off. That second assertion is
+    the strongest possible statement that the feature is inert when disabled - the same property that
+    made AC-0159''s smooth lighting safe to land, where fully-lit faces stayed byte-identical to the old
+    flat path. A toggle implemented as a runtime check that still walks the ramp code path does not give
+    that property, so prefer a switch that short-circuits before the geometry is emitted.
+
+    DEFAULT: OFF, unless the user says otherwise, consistent with the ambient-bed decision and because
+    the ramps change the shape of every walkable surface in the game - the conservative default is the
+    world the user already knows, and they can turn the ramps on to evaluate them. If the ramps later
+    become plainly better, the default flips in a one-line change with the same setting and no new plumbing.
+
+    ALSO OWED AND UNCHANGED BY THIS: the colLIDER must follow the toggle too, not just the mesh. A ramp-shaped
+    collider under a cubed mesh, or the reverse, is the exact mismatch this ticket''s survey identified
+    as the thing that would make the feature dishonest - the player would snag on an invisible ledge -
+    so the setting must switch BOTH together, and the arm should assert they never disagree in either
+    state.'
   comments:
   - id: 1
     created_at: '2026-09-03T12:24:21.840375'

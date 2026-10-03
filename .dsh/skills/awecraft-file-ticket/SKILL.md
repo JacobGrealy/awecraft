@@ -63,3 +63,23 @@ git show HEAD:tasks/TASKS.yaml | python3 -c "..."   # extract the committed queu
 
 Also: `--priority` accepts only **1, 2 or 3** (a 4 is rejected, which is a safe failure only if you do
 not also pipe stderr away).
+
+## Player-facing features ship with a switch
+
+Every ticket that changes how the game LOOKS or FEELS gets a setting, decided when the ticket is filed
+rather than after the user complains. Two instances on 2026-10-02/03 established this: the ambient sound
+bed (AC-0039) shipped always-on and had to be given a switch (AC-0389), and the smooth-ground-ramps
+feature (AC-0205) drew the same request before it was even implemented. The user is the person who lives
+with the result and cannot evaluate a change they cannot turn off.
+
+- The setting lives where the other settings live (Options > Settings), persists like them, and is
+  asserted by an arm. An env var may ALSO exist for the arms to test both states without a save file,
+  but an env var alone is not a player-facing switch.
+- Default to the CONSERVATIVE behaviour - the world the user already knows - unless they asked for the
+  new thing. Flipping the default later is then a one-line change with no new plumbing.
+- The switch must short-circuit BEFORE the work is done, not just skip its effect, so the arm can assert
+  that the mesh or output is BYTE-IDENTICAL to the pre-feature build when the switch is off. That
+  assertion is the strongest statement of inertness available and is why AC-0159's fully-lit faces
+  staying byte-identical made the smooth-lighting change safe to land.
+- If the feature has more than one consequence - a mesh AND a collider, a sound AND a caption - the
+  switch drives all of them together, and the arm asserts they never disagree in either state.
