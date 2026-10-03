@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-10-03T14:28
+  updated_at: 2026-10-03T14:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0392
-- AC-0393
 - AC-0391
 - AC-0390
 - AC-0205
@@ -23707,11 +23705,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T14:28
-  updated_at: 2026-10-03T14:28
-  completed_at: null
+  updated_at: 2026-10-03T14:32
+  completed_at: 2026-10-03T14:32
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet should show its terrain. It has in fact NEVER shown anything
@@ -23765,7 +23763,29 @@ intake:
     shader-compile finding, and how to invoke the Forward+ path), tasks/AC-0384/AC-0384-results.html,
     and godot/HARNESS.md section 2.
 
-    '
+
+
+    CLOSED - FIXED AND VERIFIED ON THE SHIPPED RENDERER, which is the only place this defect class is
+    visible at all. THE FIX: `godot/core/satellite_body.gdshader`''s fifty-nine-line header comment used
+    `#` instead of `//`, and a gdshader whose first line begins with a hash is dropped by Godot with NO
+    ERROR while the material silently falls back to a default white Lambert sphere - so the satellite
+    body has drawn a white ball since the day it was built, and white ball plus depth fog is precisely
+    the pale cyan (177,240,255) the user has been reporting as a pale blue planet since 2026-10-01. The
+    header is now `//`, `shader_type spatial;` is at line 64, and the file''s comment block is intact.
+    THE VERIFICATION IS THE POINT OF THE WHOLE SESSION: run through the Forward+ path on this box (xvfb
+    plus the lavapipe ICD plus --rendering-driver vulkan), the boot line reads "Vulkan 1.4.318 - Forward+"
+    and the SHADER ERROR count is ZERO, where the project previously had a standing shader error nobody
+    had explained. Headless could never have shown this - it compiles no shader pipeline - and that is
+    why three diagnoses died here: the resource was present, its 5810 characters of code were present,
+    the arm''s ladder measured GDScript-computed opacity, and Godot 4 exposes no GDScript API to ask whether
+    a shader compiled. A SWEEP CONFIRMS NO OTHER SHADER IN THE PROJECT HAS A HASH FIRST LINE, so this
+    particular one-character landmine is now disarmed everywhere rather than just here. WHAT THIS TICKET
+    COST AND WHAT IT BOUGHT: three wrong diagnoses (a res:// existence predicate, a saturated haze ramp,
+    a distance window), two rounds of reasoning from user screenshots, and one genuinely correct but irrelevant
+    fix (AC-0390''s two-term split, which was good engineering applied to a shader that was never compiling)
+    - against ONE render on the shipped renderer, which found the true cause and a second defect besides.
+    The user asked whether the renderer difference could be the issue and whether it was worth using Forward+
+    in the pipeline; the answer to both is yes, and this ticket is the evidence.'
   comments: []
 - id: AC-0393
   title: cloud-shader-invalid-render-mode-never-rendered
@@ -23774,11 +23794,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T14:28
-  updated_at: 2026-10-03T14:28
-  completed_at: null
+  updated_at: 2026-10-03T14:32
+  completed_at: 2026-10-03T14:32
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The clouds should wrap the planet as a continuous shell. They have never appeared
@@ -23824,5 +23844,24 @@ intake:
     path), tasks/AC-0385/AC-0385-results.html (the coverage work this shader belongs to), and godot/HARNESS.md
     section 2.
 
-    '
+
+
+    CLOSED IN THE SAME PASS - FIXED AND VERIFIED ON THE SHIPPED RENDERER. THE FIX: `godot/core/cloud_layer.gdshader`
+    carried `render_mode unshaded, transparent, cull_back, fog_disabled;` and the `transparent` keyword
+    is INVALID in Godot 4.7.1 on both renderers, so the cloud shell built by AC-0385 has never rendered
+    at all. The token is removed and the line now reads `render_mode unshaded, cull_back, fog_disabled;`
+    with transparency inferred from the shader''s own alpha output as it always should have been; the
+    misleading comment claiming forward_plus compiles it is gone with it. VERIFIED THE SAME WAY AS ITS
+    SIBLING: on the Forward+ path the boot line reads Forward+ and the SHADER ERROR count is ZERO, where
+    this file had been erroring on every single run. THE LESSON THIS ONE CARRIES IS THE UNCOMFORTABLE
+    KIND: this defect was ANNOUNCING ITSELF IN OUR OWN LOGS for days. The error line appears in gate logs
+    from AC-0384 onward, and AC-0039''s builder explicitly wrote that "the pre-existing SHADER ERROR:
+    ''transparent'' is in every AC-0384 log, not a script error" - and I accepted that twice, as did the
+    builder, without anyone asking WHICH shader or WHY a shader error was acceptable. A standing error
+    nobody has explained is not noise; it is an unexplained defect that everybody has silently agreed
+    to ignore, and this session has now found EIGHT stale or wrong-measuring instruments with this being
+    the only one that was screaming in plain text the entire time. The generalized rule is worth more
+    than the fix: every unexplained line in a gate log gets explained or gets a ticket, and "pre-existing"
+    is not an explanation. The sweep for invalid render_mode keywords and hash first lines across every
+    gdshader in the project is complete and clean.'
   comments: []

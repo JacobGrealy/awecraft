@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode unshaded, transparent, cull_back, fog_disabled;
+render_mode unshaded, cull_back, fog_disabled;
 // (the dummy/headless renderer rejects `transparent` and logs a
 // SHADER ERROR - the same accepted condition satellite_body.gdshader
 // has lived with since AC-0310; the shipped forward_plus compiles it.)
