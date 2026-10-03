@@ -4,7 +4,6 @@ meta:
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0391
 - AC-0205
 - AC-0186
 - AC-0130
@@ -23650,11 +23649,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T11:38
-  updated_at: 2026-10-03T11:38
-  completed_at: null
+  updated_at: 2026-10-03T14:45
+  completed_at: 2026-10-03T14:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: When we verify something that is meant to be looked at, we should be verifying
@@ -23719,7 +23718,32 @@ intake:
     section 2 (the standing warning about renders being a proxy, and the wallshot hook), and godot/AGENTS.md''s
     note that renders on this box are software GL and evidence about geometry only.
 
-    '
+
+
+    CLOSED - the user asked whether the renderer difference could be the cause of the pale planet and
+    whether it was worth running the shipped renderer in our testing. The answer to both was yes, and
+    this ticket is the evidence: the FIRST render on the shipped Forward+ path found two product defects
+    that every headless arm, every numeric evaluation and three rounds of reasoning from screenshots had
+    missed. THE PIPELINE: lavapipe (Mesa''s software Vulkan ICD, already installed via mesa-vulkan-drivers)
+    under Xvfb, selected with VK_ICD_FILENAMES and Godot''s --rendering-driver vulkan. No packages were
+    added. The boot line asserts the path: "Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe
+    (LLVM 20.1.8, 256 bits)" - and the ADAPTER-NAME TRAP is documented because the software Vulkan device
+    is ALSO called llvmpipe, so the RENDERER string, not the device name, is the discriminator, and a
+    Compatibility or OpenGL boot line under a Forward+ claim must fail loudly. COST AND POLICY: about
+    5 FPS at 1280x720 R4, roughly 300 s per snapshot and 83 s for the wallshot hook, so renders are possible
+    and marginally practical - the recommendation is ONE RENDER PER VISUAL TICKET rather than per gate
+    run, with the headless arms unchanged as the fast gate. The wallshot hook, which timed out at rc=124
+    under the software OpenGL proxy, now completes at rc=0. WHAT IT FOUND, which is the whole justification:
+    (1) a gdshader whose first line begins with a hash is dropped by Godot with NO ERROR and silently
+    replaced by a default material, so the satellite body has drawn a white sphere since it was built
+    - filed and fixed as AC-0392; (2) the invalid render_mode transparent keyword in the cloud shader,
+    so the cloud shell had never rendered either - filed and fixed as AC-0393, and that one had been printing
+    its error into our gate logs for days while being dismissed as pre-existing noise. Both are now fixed
+    and verified ON THIS PATH with a SHADER ERROR count of zero where the project previously carried a
+    standing unexplained shader error. THE VERDICT ON THE USER''S QUESTION: keep Forward+, do not fall
+    back to the Compatibility renderer everywhere, and verify visual work here - because the gap this
+    closes is precisely the gap that let a one-character mistake hide a whole planet for two days and
+    cost three wrong diagnoses.'
   comments: []
 - id: AC-0392
   title: satellite-shader-never-compiled-hash-first-line
