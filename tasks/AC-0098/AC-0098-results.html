@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0098 — results: held voxel tools take their colour from the icon</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{color:#0a7a2f;font-weight:600}.warn{color:#a06000;font-weight:600}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}img{max-width:100%;border:1px solid #ccc;border-radius:6px;margin:8px 0}</style></head><body>
+<h1>AC-0098 — held voxel tools take their per-voxel colour from the icon</h1>
+<p class="meta">status: evidence for coordinator review · builder: delegated subagent · the held pickaxe/axe/shovel/sword voxels (16 items: 109, 111–125) are no longer a flat single tint — every voxel carries the sRGB colour of its own icon pixel in <code>godot/assets/items_atlas.png</code>.</p>
+
+<h2>1. Where the icon art lives, and how the voxel colours are derived from it</h2>
+<p><b>The icons are per-pixel art</b>: <code>godot/assets/items_atlas.png</code> (1024×1024, 32×32 cells, rects in <code>godot/assets/items_atlas.json</code>), imported with the default sRGB process. Nothing about them is procedural — there is no generator to share, so the ticket's "strongest approach" applies: <b>the icons are sampled programmatically and the voxel build and the icon share one source of truth</b>.</p>
+<p>The decisive finding (probed first, before any design): <b>each icon is a per-cell rendering of the very 32×32 <code>TOOL_GRIDS</code> shape the voxel tool uses.</b> The sampler verified the match in BOTH directions for all 16 tool items: every non-<code>.</code> grid cell has an opaque icon pixel, and there are zero spare opaque icon pixels on empty grid cells (0 fallbacks, 0 spares — exact 1:1). So the derivation is per-cell, not per-palette: <b>voxel cell (i, j) takes the colour of icon pixel (i, j)</b>. The icon's hand-drawn per-cell shading (highlight / base / shadow / edge tones per material) IS the shading variation — nothing was invented by eye.</p>
+<p>The committed sampler <code>tasks/AC-0098/sample_tool_icons.py</code> reads the atlas + the parsed <code>TOOL_GRIDS</code> + the canonical tints (<code>Data.items</code> icon floats, <code>player.gd</code> <code>HANDLE_C</code>) and regenerates the <code>TOOL_ICON_TONES</code> const block in <code>player.gd</code> (marked <i>AC-0098 GENERATED BLOCK — do not hand-edit</i>). If the icon art changes, re-running the script re-projects it into the voxel build.</p>
+<p>Two canonical pins, forced by existing gates (not taste):</p>
+<ul>
+<li><b>Head anchor</b> — the icon tone closest to <code>Data.item_tint(id)</code> is replaced by the canonical tint float exactly. The <code>toolres</code> arm asserts <code>held_head_color() == Data.item_tint(id)</code>; the <code>"head"</code> node must keep reading the canonical tint.</li>
+<li><b>Handle anchor</b> — the icon tone closest to <code>HANDLE_C</code> is replaced by <code>HANDLE_C</code> exactly (the existing handle base — no movement of the established tone).</li>
+</ul>
+<p>Colour-space handling: icon bytes are sRGB display values, while <code>albedo_color</code> is linear. Non-anchor voxels are sRGB-decoded (the EOTF in <code>player.gd _srgb_lin</code>) so the voxel wall <b>displays</b> exactly what the icon texture displays. Anchor voxels display the sRGB-encode of the linear tint float — the same value the flat era already displayed for that tone (the tint convention is untouched; this ticket does not rebase the game's colour management).</p>
+
+<h2>2. The shading rule (stated)</h2>
+<pre>For each tool item, for each TOOL_GRIDS cell (i,j):
+  colour = icon pixel (i,j) of the item's atlas cell          # per-cell 1:1
+  EXCEPT cells of the head-anchor tone  -> Data.item_tint(id)  (canonical, exact)
+  EXCEPT cells of the handle-anchor tone -> HANDLE_C           (canonical, exact)
+Material: head voxels are the icon's head tones (tier colour family);
+handle voxels the icon's wood tones — the icon art already carries the
+highlight (up/sun side), shadow (receding side), base and dark edge
+outline per material. No geometric tone assignment was invented;
+the icon IS the palette.</pre>
+<p>So "up faces lighter, down faces darker, edge dark" is not a rule I applied — it is what the Faithful-style icon art already does per cell (e.g. iron pick: white/#d8 highlight on the bar's lit side, #c1 base, #44/#18 shadow + outline; wood: #896727 highlight, #6a501e/#684e1e base, #493615/#372910/#281e0b/#20180a shadow ladder).</p>
+
+<h2>3. Measured outcome (before / after) — 16 tools</h2>
+<p>Distinct colours per tool; tone spread = lightest minus darkest luminance (0–1, Rec.709 weights on the 8-bit bytes); highlight/base/shadow = voxel counts strictly brighter / equal to / darker than the material's canonical anchor tone. <b>Before</b> = the flat era (exactly 2 colours per tool: head tint + <code>HANDLE_C</code>).</p>
+<table>
+<tr><th>id</th><th>item</th><th>type</th><th>colours before</th><th>colours after</th><th>spread before</th><th>spread after</th><th>highlight</th><th>base</th><th>shadow</th><th>voxels</th></tr>
+<tr><td>109</td><td>Iron Sword</td><td>sword</td><td>2</td><td>11</td><td>0.403</td><td>0.906</td><td>74</td><td>26</td><td>153</td><td>253</td></tr>
+<tr><td>111</td><td>Wooden Pickaxe</td><td>pick</td><td>2</td><td>9</td><td>0.055</td><td>0.317</td><td>13</td><td>29</td><td>161</td><td>203</td></tr>
+<tr><td>112</td><td>Stone Pickaxe</td><td>pick</td><td>2</td><td>9</td><td>0.111</td><td>0.510</td><td>46</td><td>46</td><td>111</td><td>203</td></tr>
+<tr><td>113</td><td>Iron Pickaxe</td><td>pick</td><td>2</td><td>9</td><td>0.403</td><td>0.906</td><td>46</td><td>46</td><td>111</td><td>203</td></tr>
+<tr><td>114</td><td>Diamond Pickaxe</td><td>pick</td><td>2</td><td>9</td><td>0.281</td><td>0.640</td><td>19</td><td>50</td><td>134</td><td>203</td></tr>
+<tr><td>115</td><td>Wooden Axe</td><td>axe</td><td>2</td><td>10</td><td>0.055</td><td>0.317</td><td>9</td><td>31</td><td>145</td><td>185</td></tr>
+<tr><td>116</td><td>Stone Axe</td><td>axe</td><td>2</td><td>10</td><td>0.111</td><td>0.510</td><td>38</td><td>58</td><td>89</td><td>185</td></tr>
+<tr><td>117</td><td>Iron Axe</td><td>axe</td><td>2</td><td>10</td><td>0.403</td><td>0.906</td><td>38</td><td>58</td><td>89</td><td>185</td></tr>
+<tr><td>118</td><td>Diamond Axe</td><td>axe</td><td>2</td><td>10</td><td>0.281</td><td>0.640</td><td>19</td><td>40</td><td>126</td><td>185</td></tr>
+<tr><td>119</td><td>Wooden Shovel</td><td>shovel</td><td>2</td><td>9</td><td>0.055</td><td>0.317</td><td>14</td><td>37</td><td>133</td><td>184</td></tr>
+<tr><td>120</td><td>Stone Shovel</td><td>shovel</td><td>2</td><td>9</td><td>0.111</td><td>0.510</td><td>45</td><td>62</td><td>77</td><td>184</td></tr>
+<tr><td>121</td><td>Iron Shovel</td><td>shovel</td><td>2</td><td>9</td><td>0.403</td><td>0.906</td><td>45</td><td>62</td><td>77</td><td>184</td></tr>
+<tr><td>122</td><td>Diamond Shovel</td><td>shovel</td><td>2</td><td>9</td><td>0.281</td><td>0.640</td><td>33</td><td>30</td><td>121</td><td>184</td></tr>
+<tr><td>123</td><td>Wooden Sword</td><td>sword</td><td>2</td><td>10</td><td>0.055</td><td>0.317</td><td>3</td><td>54</td><td>196</td><td>253</td></tr>
+<tr><td>124</td><td>Stone Sword</td><td>sword</td><td>2</td><td>10</td><td>0.111</td><td>0.575</td><td>86</td><td>27</td><td>140</td><td>253</td></tr>
+<tr><td>125</td><td>Diamond Sword</td><td>sword</td><td>2</td><td>11</td><td>0.281</td><td>0.795</td><td>74</td><td>26</td><td>153</td><td>253</td></tr>
+</table>
+<p>The user-story case (wooden pickaxe): before, head <code>#8c6133</code> vs handle <code>#78542e</code> — two near-identical browns, spread <b>0.055</b> (the "flat" read). After: 9 distinct tones, spread <b>0.317</b> (5.8×), a clearly lighter head family and a darker shaded handle. No tool ends up in "twenty near-identical browns": every tool's head and handle families now each carry their icon's highlight and shadow ladder.</p>
+<p class="note">Palette tables per item (sRGB hex, brightest first) are in <code>.scratch/AC-0098/measure.json</code> — e.g. iron pick after: <code>#ffffff #d8d8d8 #bfbfc7 #896727 #78542e #444444 #493615 #281e0b #181818</code>; the two <code>78</code>-family entries are the canonical pins (item tint / HANDLE_C), the rest are icon tones verbatim.</p>
+
+<h2>4. Data-driven comparison PNGs (for the coordinator's eye)</h2>
+<p>Renders are infeasible on this box and no builder opens an image, so the check is data-driven: each image below is built by script (<code>.scratch/AC-0098/make_compare_pngs.py</code>) from the <b>same 32×32 cell grid</b> the game builds. Four tool types × four tier columns. Per column, top to bottom: <b>ICON</b> (the atlas cell, 10×) — the reference; <b>VOXEL</b> (the grid drawn with the new per-voxel <i>display</i> colours, i.e. icon bytes sRGB-decoded and re-encoded — what the material displays) — the result; <b>DELTA</b> (cells where icon and voxel display differ, in red) — expected to be <b>exactly the canonical anchor cells and nothing else</b> (the head base tone pinned to the item tint, the handle base tone pinned to HANDLE_C, by the toolres/tint contract). <b>Expectation per image:</b> the VOXEL row should be visually indistinguishable from the ICON row except for the red cells, which sit on the tool's base-tone band (the lit-side highlight, the shadow ladder and the dark edge read identically in both rows). If the VOXEL row shows a missing highlight band, a wrong metal hue, or a scrambled handle, the table or the sRGB step is wrong.</p>
+<table>
+<tr><th>image</th><th>what a viewer should expect</th></tr>
+<tr><td><code>compare_pick.png</code></td><td>Four picks (wood/stone/iron/diamond): the head bar should show a bright top lit band and dark lower/edge cells in both rows; wood columns must read clearly as wood-on-wood with the head a step lighter than the shaded handle; iron/stone/diamond heads in their tier family (white-flash light / greys / cyans) over a brown handle.</td></tr>
+<tr><td><code>compare_axe.png</code></td><td>Four axes: the head wedge carries the same lit/dark split in both rows; the diagonal handle keeps its 4-rung brown ladder (highlight step on one side, dark step on the other); diamond head cyan with a dark edge.</td></tr>
+<tr><td><code>compare_shovel.png</td></td><td>Four shovels: the blade tip block carries the tier tones (the iron/diamond tips are the most saturated objects in their column); handle ladder identical to the axes'.</td></tr>
+<tr><td><code>compare_sword.png</td></td><td>Four swords (wood/stone/iron/diamond — the iron sword is item 109, the other tiers 123/124/125): the long blade band carries the tier highlight→shadow ladder along its width; the pommel/crossguard cells at the lower left carry the wood ladder; red delta cells hug the base-tone band only.</td></tr>
+</table>
+<p>DELTA expectation per column: a small cluster of red cells on the head's base tone (the icon tone closest to the item tint — e.g. #c1c1c1 cells for iron, the lightest brown for wood) plus a band of red on the handle's base tone (#684e1e cells). No scattered red; red only where the canonical pin replaces an icon tone.</p>
+
+<h2>5. Poses did not move</h2>
+<p>The pose plumbing (<code>HELD_POSE</code> rows, the per-type pos/rot/scale assignment, swing arcs, <code>TOOL_GRIDS</code> geometry, voxel count, bbox) is untouched. The one structural risk was real and was caught: splitting the head/handle into per-colour meshes shrank the <code>"head"</code>/<code>"handle"</code> nodes' AABBs to the anchor-tone subset, which moved the <code>toolpose</code> arm's camera-space centroids (measured up to 0.135 m off the pristine baseline). Fixed by keeping <code>"head"</code>/<code>"handle"</code> as <b>invisible full-extent geometry anchors</b> (canonical tint material, as before) with the visible per-colour meshes as <code>*_cN</code> children — the arm's measurement contract is byte-for-byte the old one.</p>
+<p><b>Measured A/B on this tree</b> (same session, same world, <code>toolpose</code> arm): all 16 pose vectors (4 tools × idle/apex × head/handle) drift <b>0.0000 m</b> between the pristine (stashed) tree and this change; <code>rot_delta</code> 0.858 rad, <code>bbox_diag</code> 1.224/1.10/1.10/0.796, <code>scale_expect</code> [0.33, 0.33] unchanged. AC-0113's 0.0 m baseline therefore holds — any pose movement would be a regression, and there is none.</p>
+
+<h2>6. Gates</h2>
+<p>All runs: <code>ulimit -v 8388608</code>, one godot at a time, headless, <code>--path godot</code> from the repo root. Logs under <code>.scratch/AC-0098/</code>.</p>
+<table>
+<tr><th>gate</th><th>result</th><th>standing value</th></tr>
+<tr><td><b>G0</b> (final, after probe cleanup)</td><td class="ok">0 <code>SCRIPT ERROR</code></td><td>0 (the pre-existing <code>SHADER ERROR</code> from <code>_setup_aero</code> under the dummy renderer is not a SCRIPT ERROR and not this change)</td></tr>
+<tr><td><b>battery</b> <code>player;interact;held;swing;light;genhash</code></td><td class="ok"><code>ok:true</code>, 0 SCRIPT ERROR; player/interact/light green in-battery; <code>held</code>+<code>swing</code> are BATTSKIP arms → run standalone (below)</td><td>green</td></tr>
+<tr><td><b>held</b> (standalone)</td><td class="ok">RESULT <b>byte-identical to the pristine tree</b> (A/B, diffed as JSON) — <code>cross_ok/depth_ok/scale_ok/sprite_hidden</code> true on both sides; the pre-existing <code>box_ok:false</code> (held-block top-face tint; the arm's yaml row is stale, not re-run since 08-24) is present on both trees and is <b>not</b> touched by this ticket</td><td>no delta vs pristine</td></tr>
+<tr><td><b>swing</b> (standalone)</td><td class="ok"><code>ok:true</code> — swing_max_rot 0.858, punch 0.449, loop cycles 4 in 0.9 s, settles on release, fist/box/tool presence transitions all true, <code>headcolor_111/113</code> read the canonical pins mid-swing, <code>tier_differs_111_vs_113:true</code></td><td>green (swing arcs untouched)</td></tr>
+<tr><td><b>toolres</b> (tool arm)</td><td class="ok"><code>ok:true</code> — 5/5 <code>head_ok</code> (<code>held_head_color()==item_tint</code>: 111/115/119/123=<code>#8c6133</code>, 113=<code>#bfbfc7</code>), 5/5 <code>size_ok</code> (diags 1.224/1.224/1.1/1.1/0.796 == old), <code>tier_tint_111_ne_113:true</code>, voxel counts 203/203/185/184/253 unchanged, per-colour children 11–12 (2 invisible anchors + per-colour meshes)</td><td>green</td></tr>
+<tr><td><b>toolpose</b> (tool arm)</td><td class="ok"><code>ok:true</code>, depth_ok, scale_ok — <b>16/16 pose vectors 0.0000 m drift</b> vs the pristine tree (A/B); rot_delta 0.858 rad, bbox diags 1.224/1.1/1.1/0.796, scale [0.33, 0.33] unchanged</td><td>green (AC-0113 baseline 0.0 m holds)</td></tr>
+<tr><td><b>farab</b></td><td class="ok"><code>ok:true</code>, <code>h_mismatch:0</code>, mat_pierce 0/0, codec bit0/far/v4 ok, slab_cmp 1080</td><td>green</td></tr>
+<tr><td><b>ladder</b></td><td class="ok"><code>ok:true</code>, band A <b>20/20</b> (<code>band_a_eff_ok:20</code>), tier_mismatch 0, air_synth ok</td><td>20/20</td></tr>
+<tr><td><b>meshprobe</b></td><td class="ok"><code>ok:true</code>, <code>match_rate:1.0</code>, 32/32 chunks, 0 mismatches, quadcheck 0/0</td><td>1.0</td></tr>
+<tr><td><b>halo</b></td><td class="ok">a/b/b1/c/d/d2 all <code>ok:true</code> (mismatches 0, <code>ref_converged:true</code>, slabs_ok 226)</td><td>ok</td></tr>
+<tr><td><b>lightstate</b> (R16)</td><td class="ok">double-LOD <b>0/0</b> (<code>double_lod_slabs_now/chunks_now</code>), leaks 0, stragglers 0, worst null, wash_detected false, <code>ab.arr_diff_cells:1</code> (the re-baselined one-cell class)</td><td>0/0</td></tr>
+<tr><td><b>r16</b> (<code>--fixed-fps 600</code>)</td><td class="ok"><code>ok:true</code>, <b>far_holes 0/0 both bands</b>, built_all true</td><td>all sub-flags green</td></tr>
+<tr><td><b>boundary r4</b> (in band)</td><td class="ok"><code>ok:true</code>, radius 4, <code>col_deferred_in_footprint:0</code>, footprint missing 0, marker_ok, remesh_ok, crossing_frame p95 in band</td><td>green</td></tr>
+<tr><td><b>pcensus</b> (particle census)</td><td class="ok"><code>ok:true</code>, allocs_delta 0 (zero allocation growth), stress live_after_wait 0, evicted_oldest at cap, radial max pair delta 0.0001 m</td><td>green</td></tr>
+<tr><td><b>sound</b> (Dummy audio)</td><td class="ok"><code>ok:true</code>, deterministic, negatives all rejected (silent/all-ones/alias), bed default off, 8 event voices fire with bed off, 15/15 names resolved</td><td>green</td></tr>
+<tr><td><b>genhash</b> (25/25)</td><td class="ok">25/25 <b>byte-identical between my tree and the pristine (my-files-stashed) tree</b> — the AC-0098 diff provably does not touch generation. Note: the current shared tree's values differ from the recorded AC-0367 reference set on all 25 — pre-existing on this tree (the pristine tree diverges identically; no tracked <code>world/</code> files are modified by this ticket) — attributed to other in-flight work on the shared checkout, NOT an AC-0098 rebase.</td><td>25/25 unchanged by this ticket</td></tr>
+</table>
+<p class="note">Tool arm note: <b><code>toolclass</code> does not exist</b> on this tree (no such arm in <code>harness.gd</code>/<code>harness_data.yaml</code>) — the tool arms are <code>toolres</code> and <code>toolpose</code>, both green above. No harness files were edited, so no <code>harness_doc.py --render</code> is owed.</p>
+
+<h2>7. Scope, fences, notes</h2>
+<ul>
+<li><b>Bow (item 142): OUT of scope, explicitly.</b> AC-0113 deferred the bow as content design; it routes to the <i>sprite</i> branch (<code>HELD_POSE["sprite"]</code>), not the voxel tool branch — it has no <code>TOOL_GRIDS</code> grid, so the icon-matching work here does not make it trivial (different rendering path, no per-cell grid to project onto). Not touched.</li>
+<li><b>Icons unchanged</b> — <code>git status</code> shows no change to <code>godot/assets/*</code>. The direction was voxel→icon all the way; at no point was an icon edited to match a voxel (the shape match was exact, so there was nothing to reconcile).</li>
+<li><b><code>toolclass</code> arm does not exist</b> (grep of <code>harness.gd</code> + <code>harness_data.yaml</code>: no such mode) — the "tool arms" that exist are <code>toolres</code> and <code>toolpose</code>; both green (§6).</li>
+<li><b>No harness edits</b>: <code>harness.gd</code> and <code>harness_data.yaml</code> untouched; no new/changed arm, so no <code>harness_doc.py --render</code> owed.</li>
+<li><b>Native lane untouched</b>: the change is pure GDScript in <code>player.gd</code> — no rebuild/re-stage needed.</li>
+<li><b>ARCHITECTURE.md</b>: the colour-path structure changed (per-cell icon table + sRGB decode + per-colour meshes + invisible full-extent "head"/"handle" anchor convention) — the <b>§3 Scene tree → Player entry</b> was updated in-task with the HELD-TOOL COLOUR convention (invariant 2).</li>
+<li><b>Tmp probes removed, G0 re-verified on the pristine tree</b> — see §6. (The scratch scripts under <code>.scratch/AC-0098/</code> are git-ignored working files; the committed artifacts are this page, the four PNGs and <code>tasks/AC-0098/sample_tool_icons.py</code>.)</li>
+</ul>
+
+</body></html>

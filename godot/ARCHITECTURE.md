@@ -130,7 +130,21 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         CharacterBody3D + CollisionShape3D + Camera3D
 │                         (CameraAttributesPractical = camera_attributes/main-camera-attributes.tres)
 │                         movement, look, mine/place/bucket/bow, combat, inventory model,
-│                         held-item viewmodel, swing/bob
+│                         held-item viewmodel, swing/bob.
+│                         HELD-TOOL COLOUR (AC-0098): the 32×32 TOOL_GRIDS voxels
+│                         take their per-cell colour from the item's own icon in
+│                         godot/assets/items_atlas.png — the icons are per-cell
+│                         renderings of the same grid (1:1 shape match), so voxel
+│                         (i,j) = icon pixel (i,j), sRGB-decoded to linear (the
+│                         generated TOOL_ICON_TONES table in player.gd, rebuilt by
+│                         tasks/AC-0098/sample_tool_icons.py). Two canonical pins:
+│                         the icon tone nearest Data.item_tint(id) renders as the
+│                         tint EXACTLY (the "head" node, read by toolres'
+│                         held_head_color()), and the tone nearest HANDLE_C renders
+│                         as HANDLE_C ("handle"). "head"/"handle" are INVISIBLE
+│                         full-extent anchor meshes (pose contract — the toolpose
+│                         arm's AABB centroid must not move); the visible meshes are
+│                         one per colour (head_cN/handle_cN).
 ├─ ui/inventory.gd        CanvasLayer — hotbar, backpack + crafting grid, armour,
 │                         hearts/food, crosshair, messages (Game.hotbar)
 ├─ ui/console.gd          CanvasLayer — in-game console (AC-0121)

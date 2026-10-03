@@ -4527,10 +4527,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-08-23T23:51
-  updated_at: 2026-09-01T21:59
+  updated_at: 2026-10-02T19:35
   completed_at: null
   waiting_on: null
   parent_id: null
