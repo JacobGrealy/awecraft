@@ -14,6 +14,12 @@ the machine, the build, the daemons and git. Do not restate one in the other —
   path, always `--path godot`, run from the repo root.**
 - Export templates: `~/.local/share/godot/export_templates/4.7.1.stable`.
 - The product is Windows-only (AC-0124). Linux is development + verification only.
+- **No GPU, no display** (AC-0391, 2026-10-03). Everything that renders is software:
+  `mesa-vulkan-drivers` (lavapipe Vulkan ICD — `/usr/share/vulkan/icd.d/lvp_icd.json`,
+  `libvulkan_lvp.so`), `xvfb` (virtual X — a Vulkan surface needs one), `vulkan-tools`
+  (`vulkaninfo`) — all preinstalled on this box. The software-Vulkan path (Forward+ via
+  lavapipe) is PROVEN working, 2026-10-03: recipe + the mandatory path assertion +
+  measured fps/budgets in `godot/HARNESS.md` §2/§4.
 - Native extension: `python3 -m SCons -C gdext platform=linux|windows target=template_release`
   — `./build_windows.sh` runs both for you (§4).
 
@@ -148,13 +154,25 @@ The user downloads it at `http://192.168.0.224:8080/AweCraft.exe` (or `127.0.0.1
 
 ## 6. Render limits
 
-- Rendering needs a virtual X server: `xvfb-run -a` + `AWECRAFT_SNAPSHOT=<path>`; the exact
-  recipes and every render hook are in `godot/HARNESS.md` §2/§4.
-- It is **software** rendering (llvmpipe/lavapipe): budget up to **300 s** per shot and keep
-  `AWECRAFT_RADIUS` at 1–2. One render at a time (see §2).
-- Renders on this box are a *convenience*: the rendered pipeline may not be the shipped one, so
-  treat a render as evidence about geometry/UI layout, not about final colour or effects. The
-  authoritative look is the user's Windows build of the shipped renderer (AC-0241).
+- Rendering needs a virtual X server: `xvfb-run -a` + `AWECRAFT_SNAPSHOT=<absolute path>`; the
+  exact recipes, every render hook and the memory/timeout budgets are in `godot/HARNESS.md`
+  §2/§4.
+- **Use the SHIPPED Forward+ renderer for all visual verification (AC-0391, 2026-10-03)** —
+  `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json` + `--rendering-driver vulkan`
+  (lavapipe, software Vulkan — the same renderer, a software driver). Every Forward+ run's log
+  must assert the boot line `- Forward+ -` (the adapter is ALSO named "llvmpipe" — the renderer
+  string is the discriminator; the assertion contract is in HARNESS.md §2). The legacy
+  `--rendering-method gl_compatibility` (llvmpipe OpenGL — the Compatibility renderer, a
+  different graphics API) remains only for compat-specific A/B questions.
+- It is **software** rendering (lavapipe): budget up to **300 s** per shot and keep
+  `AWECRAFT_RADIUS` ≤ 4. Measured 2026-10-03 at 1280×720 R4: ~5 FPS (the `AWECRAFT_DSSTATS=1`
+  overlay), `wallshot` hook 83 s (it rc=124'd at the 300 s timeout under the old proxy), a full
+  R4 snapshot run ~290 s. One render at a time (see §2). Practicality verdict: renders are
+  POSSIBLE and marginally PRACTICAL — **one render per visual ticket, not per gate run**.
+- Renders on this box run the shipped renderer with a software driver: they ARE evidence about
+  the Forward+ path (shader compilation, feature availability, layout, colour) but NOT about
+  real-GPU performance or GPU-specific precision edges. The authoritative look and speed are
+  the user's Windows build (AC-0241).
 
 ## 7. Why this file exists (rule harvest)
 

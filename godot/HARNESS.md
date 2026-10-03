@@ -64,6 +64,35 @@ before any mode; without it, harness envs force radius 4.
 | `toolpose` | `_toolpose_test` | tool orientation + scale ×2 + depth-disable (AC-0073/0067/0085) | `ok`, `held_box_scale_x`, `held_sprite_scale_x`, `scale_ok` (AC-0113 re-established: expects the player's `HELD_POSE` block/sprite row scales — 0.33 since AC-0097; the pre-AC-0113 0.70 expectation was AC-0073-era and held the arm red), `scale_expect` (AC-0113: the [block, sprite] expectations read from `HELD_POSE`), `tool_…` {`position_ok`,`arc_ok`,`vertical_ok`,`handle_below_cam`,`bbox_diag`,`diag_2x_ok`,`depth_disabled`,`ok`}, `depth` {tool,box,fist,sprite}, `depth_ok` | — | ~15 s (not re-run 08-24) | handle y < −0.55 |
 | `viewmodel` | `_viewmodel_shot` | AC-0085 render hook: idle/apex head+handle centroids for a held tool | `vmshot`, `frac`, `idle_head`, `idle_handle`, `apex_head`, `apex_handle` | `AWECRAFT_VMITEM`, `AWECRAFT_VMSHOT`, `AWECRAFT_VMFRACTION` | ~10 s headless (render hook; xvfb for the shot) | centroid-only in headless |
 | `wallshot` | `_wallshot_test` | AC-0067 on-top: held box/sprite vs stone wall pixel regions (before/after) | `before`, `shots`, `wall_face_z`, `block` {`block_frame_stone`,`block_vm_nonstone`,`block_box_vis`,`block_depth_on`}, `item` {`item_vm_cyan`,`item_sprite_vis`} | `AWECRAFT_WALL_BEFORE` (1), `AWECRAFT_WALL_SHOTS`, `AWECRAFT_SNAPSHOT` (paths) | render mode (~300 s timeout) | xvfb; writes shots into `tasks/AC-0067/` |
+| `fwdshot` | shell recipe (AC-0391) — not a `main.gd` branch: any render hook
+(`AWECRAFT_SNAPSHOT`, `wallshot`, …) under the SHIPPED Forward+ (Vulkan)
+renderer via lavapipe, instead of the legacy gl_compatibility proxy | AC-0391: proves a render run took the shipped Forward+ (Vulkan) path on
+this GPU-less box and produced a rendered frame; the adapter + renderer
+strings in the engine boot line are the assertion | boot line `Vulkan 1.4.318 - Forward+ - Using Device #0: … - llvmpipe (LLVM 20.1.8, 256 bits)` (the assertion),
+the underlying hook's `RESULT` (snapshot `{"m4":"ok",w,h,cam}`; wallshot's fields),
+`SNAPDRAIN not fully drained after N frames` marker (build budget ran out, not a failure),
+the run's `SHADER ERROR` census | `xvfb-run -a` + `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json` +
+`--rendering-driver vulkan` (the Forward+ selection), then the usual shot envs
+(`AWECRAFT_SNAPSHOT` ABSOLUTE path, `AWECRAFT_SIZE`, `AWECRAFT_RADIUS`, `AWECRAFT_AIM`,
+`AWECRAFT_TIME`, `AWECRAFT_SNAP_DRAIN`, `AWECRAFT_DSSTATS`) | R4 @1280×720 ~290 s (snapshot) / 83 s (wallshot) — AC-0391 measurements | AC-0391 (2026-10-03): the Forward+ path RUNS on this box — lavapipe (the
+mesa-vulkan-drivers lvp_icd, software Vulkan) under Xvfb, forced with
+VK_ICD_FILENAMES + --rendering-driver vulkan. THE VERIFICATION IS THE
+ASSERTION: the boot line must say `- Forward+ -` and the lavapipe device;
+a `Compatibility`/`OpenGL` boot line, or no Forward+ line, FAILS the run
+loudly (the wrong-instrument class). ADAPTER-NAME TRAP: the lavapipe
+Vulkan device is ALSO named "llvmpipe" — the renderer string (Forward+
+vs Compatibility), not the device name, is the discriminator. Measured
+2026-10-03: ~5 FPS at 1280×720 R4 (the `AWECRAFT_DSSTATS=1` overlay),
+wallshot completes in 83 s (it rc=124'd at the 300 s timeout under the
+gl_compatibility proxy) — renders are POSSIBLE and marginally
+PRACTICAL: one render per visual ticket, not per gate run. TWO PRODUCT
+DEFECTS FOUND BY THE FIRST FORWARD+ RUN (probe-verified, details in
+tasks/AC-0391/AC-0391-results.html): `render_mode transparent` is
+invalid in this engine (loud SHADER ERROR — `core/cloud_layer.gdshader`)
+and a .gdshader whose FIRST LINE is a `#` line is SILENTLY DROPPED with
+no error (the only shipped case: `core/satellite_body.gdshader` — it
+draws its default material). Until those are fixed, every Forward+ run
+logs the cloud SHADER ERROR (report it, don't chase it). |
 | `editperf` | `_editperf_test` | single block edit: flush frames, build cost, no hitch | `cell`, `edited_id`, `cell_after`, `flush_done`, `flush_frames`, `max_frame_build_ms`, `single_build_ms`, `total_ms` | — | ~5–10 s (not re-run 08-24) | |
 | `perf` | `_perf_test` | full-radius build/drain/first-draw/frame percentiles + memory | `chunks`, `render_radius`, `fog_near`/`fog_far`/`fog_edge`/`fog_ok`, `total_chunks`, `all_meshed`, `collision_shapes`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `total_ms`, `frames`, `recenter_ms`, `max_frame_ms`, `build_units`, `drain_frames`, `max_drain_ms`, `gen_ms`, `build_ms`, `first_draw_ms`, `p50_ms`, `p95_ms`, `frame_max_ms`, `mem_before_bytes`, `mem_after_bytes`, `drain_s` | `AWECRAFT_RADIUS`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`, `AWECRAFT_DRAIN_MS`, `AWECRAFT_COLLIDE_MS` (AC-0340 staged collision cap, default 8 ms), `AWECRAFT_GEN_BUDGET`, `AWECRAFT_MESH_INFO` | r4 ≈12.3 s total_ms (measured `.scratch/ac0082_g4_perf_r4_t1.log` 2026-08-24); **r50 ≈850 s total_ms (from 2026-08-24 03:25 log `ac0082_g4_perf_r50_t1.log`)** | SLOW at r50 — use 3000 s timeout. **AC-0340: the per-frame collision budget (collide_drain_budget_ms, default 8 ms — the drain_budget_ms model) caps the staged lane; `col_deferred` counts budget-deferred (re-queued) columns, `col_deferred_in_footprint` the FENCE tripwire (must be 0), and `footprint` is the arm-side scan of the immediate footprint (Chebyshev ≤ 1 of the anchor + (0,0)) for meshed slabs missing a body (must be 0 — the "player falls through" class). `collision_n`/`collision_max_ms` now count PARTIAL batches (a column split across frames is 2+ batches, each ≤ budget); `collision_ms_total` and the per-slab census are invariant** |
 | `boundary` | `_boundary_test` (via `_await_boundary_core`) | chunk streaming: walk r chunks, crossings, bursts, forward/trailing wall, mem, marker round-trip | `ok`, `radius`, `walk_chunks`, `walk_speed`, `walk_s`, `crossings`, `p50_ms`, `p95_ms`, `max_ms`, `loads`, `unloads`, `flap`, `burst_ms_per_crossing`, `burst_p50_ms`, `burst_p95_ms`, `burst_max_ms`, `forward_wall_ms_per_crossing`, `forward_p95_ms`, `forward_max_ms`, `trailing_*`, `fluid_tick_ms_p95`, `mem_delta_mb`, `marker`, `marker_ok`, `remesh_ok`, `resident_final`, `built_final`, `in_radius_built_final`/`_max`/`_min`, `in_radius_present_final`, `target_in_radius`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `unbodied_built_final`, **AC-0348 crossing attribution (FRAME-LATENCY fields — never gate frame smoothness on the `burst_*` throughput fields above)**: `crossing_n` (the cross>0 ring entries over the walk), `crossing_other_n` (the cross==0 entries — snap-backs/Y recenters), `crossing_burst_ms` (list) + `crossing_burst_p50_ms`/`crossing_burst_p95_ms`/`crossing_burst_max_ms` (the SYNCHRONOUS recenter() sweep wall, from the world crossing ring `world.crossing_ring`), `crossing_frame_ms` (list) + `crossing_frame_p50_ms`/`crossing_frame_p95_ms`/`crossing_frame_max_ms` (the frame time OF the frame each crossing ran on — the GATE fields), `crossing_census` {`demoted`, `gen_far`, `gen_far_reuse` (AC-0387b — resident-payload reuses in _demote_to_far; the reuse path's proof of life), `promoted`, `halo_evicts`, `reentry_flips`, `scanned`} (per-crossing cause totals), `crossing_worst` {`seq`, `us_ms`, `scan_ms`, `frame_ms`, `cross`, `ahead`, `scanned`, `demoted`, `gen_far`, `gen_far_reuse`, `promoted`, `halo_evicts`, `reentry_flips`} (the max-sweep entry — the tail's named owner), **AC-0352 storm-tail attribution (the worst-frame class — the fields the standing R24 row gates on)**: `storm_walk_n` (walk frames over the 30 ms capture threshold), `storm_walk_p99_ms` (the p99 of the WALK frame list — the GATED worst-frame field; the percentile, stable across runs), `storm_walk_max_ms` (single-sample by nature — documented, NOT the gate), `storm_threshold_ms` (30 — the capture threshold), `wfc_total_n` (all over-threshold frames since boot — the load storm included), `wfc_boot_n` (the pre-walk share of that), `worst_frames` (list, worst 20 captured entries inside the walk window, each {`t_ms`, `ms`, `split` (13-slot stage split in ms: drain/low/handoff/io/recenter/misc + facelight/rescore/meshattach/low_poll/star/collide), `state` (queue/tm/tg/low/star/resident/inr_present/inr_built), `edit` (dispatches/defers/syncs cumulative + dirty_depth + remesh_depth + act_window/dirty_max_window/remesh_max_window — the re-mesh correlation lead)}), `census_walk_start`/`census_walk_end` {`tree_nodes`, `tree_mi`, `collision_bodies`, `resident`} (the blind-spot census — the instance-level ground for the costs outside `World._process`; headless has no rasterizer so draw-call counters are meaningless there) | `AWECRAFT_RADIUS` (r), `AWECRAFT_WALK`, `AWECRAFT_WALK_SPEED`, `AWECRAFT_TICKTIME`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE` | r3 45 s, r4 46 s (measured 2026-08-24); r50 ≈1400 s wall (from 2026-08-24 10:34 log `.scratch/ac0079r3_battery/b_r50.log`); r24 ≈20 min wall (AC-0348, WALK=10 — the initial streaming storm dominates, the walk itself is ~10 s) — **AC-0352 (2026-09-23, post-AC-0356 tree): the stale 20-min estimate does not hold uniformly — AC-0356's post-fix run read ~130 s, this ticket's two WALK=10 runs read ~850 s on the dsh-web cgroup box; the wall is the frame-based settle/retreat loops scaled by the storm's slow frames (timeout 2400 s covers all readings; RSS-sample the run — the storm is flat at ~1.0–1.3 GB)** | **AC-0348: the `burst_*`/`forward_*`/`trailing_*` fields are wall-clock THROUGHPUT (resolved only when the whole forward wall is `mesh_built` — unresolvable at R24, so they read -1/0 there) and must NEVER be gated as frame latency; the AC-0348 `crossing_*` fields are the frame/sweep LATENCY (the synchronous recenter() sweep runs from the physics frame, outside the wprof partition — the world crossing ring is its home).** SLOW at r≥8 — 3000 s timeout; fluid sim enabled. **Off-default walk speeds read RED for a budget reason, not a world bug** — `ok = crossings == walk_lines and marker_ok` and the walk line is a fixed length, so at `AWECRAFT_WALK_SPEED=8` the arm needs ~2× the wall and finishes fewer crossings than `walk_lines` (measured 2026-09-17 at AC-0313: 7 crossings, `ok:false`, while the same run's world values were clean — p50 14, p95 21, `marker_ok`/`remesh_ok` true). Judge off-default runs on the p50/p95/`*_final` fields, not on `ok`. **AC-0340: the walk moves the immediate footprint continuously (and crosses the band edge on every crossing), so the `col_deferred_in_footprint` / `footprint` fence fields are the MOVING-footprint proof — both must read 0; the per-frame staged collision cap must not move walk p50/p95 (standing band 39–42)** AC-0311 PIECE 3 (band removal): RE-VERIFIED UNCHANGED — the C1 blend band removal (and the world.gd evict-margin re-base that dropped the 196 m band term, win+196.3+64 -> win+64 at R=4000) does not move the r4 boundary crossing latency; re-measured band-free at AC-0311 p3: built_final 57 (standing 56-59), crossing_frame p50 27 / p95 38 (drift band 35-55), footprint missing 0, col_deferred_in_footprint 0 — still discriminates (ok = crossings == walk_lines + marker_ok + the fence fields). |
@@ -124,20 +153,57 @@ same `_settings_test` inside the battery (see its table row).
 
 ## 2. Render / shot env hooks
 
-All render hooks need the software-GL recipe (§4); typical timeout **300 000 ms**
-(llvmpipe is slow; keep `AWECRAFT_RADIUS` 1–2). All are in the `HARNESS_ENVS` list
-(main.gd:273) which also forces radius 4 + default settings when set.
+All render hooks run under the software recipe (§4). **The renderer to use is the SHIPPED
+Forward+ path** (AC-0391): typical timeout **300 000 ms** (measured 2026-10-03: R4 snapshot
+run ~290 s total, `wallshot` 83 s, at 1280×720 with ~5 FPS); keep `AWECRAFT_RADIUS` ≤ 4.
+All are in the `HARNESS_ENVS` list (main.gd:273) which also forces radius 4 + default settings
+when set.
 
-**Renders here are a PROXY, not the product renderer (verified 2026-09-16, AC-0298).**
-The recipe forces `--rendering-method gl_compatibility` (software GL through llvmpipe, the
-only path proven on this box) while the game ships `forward_plus` (AC-0241). gl_compatibility
-provably **cannot** show Forward+-only features — the engine logs
-`Depth of field blur is only available when using the Forward+ or Mobile renderer` (DOF is a
-shipped developer setting, AC-0281) — and it differs in tonemap/clustered-lighting behaviour.
-Use a render as evidence about **geometry, layout and UI**, never about final colour, DOF or
-lighting feel; the authoritative look is the user's Windows build of the shipped renderer.
-The `forward_plus` A/B on this box is unproven (a Vulkan device via lavapipe is present but
-untested) — AC-0300.
+**Renders here ARE the shipped Forward+ path (verified 2026-10-03, AC-0391) — via
+LAVAPIPE, Mesa's software Vulkan ICD.** The box has no GPU and no display; the recipe
+`xvfb-run -a` + `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`
++ `--rendering-driver vulkan` runs the **same renderer the product ships** (Forward+,
+Vulkan) on a software driver. Measured on this box 2026-10-03 at 1280×720, R4: **~5 FPS**
+(the `AWECRAFT_DSSTATS=1` overlay), the `wallshot` hook completes in **83 s** (it rc=124'd at
+the 300 s timeout under the old proxy), a full R4 snapshot run ~290 s. Verdict: renders are
+POSSIBLE and **marginally PRACTICAL** — budget ~300 s per shot, keep `AWECRAFT_RADIUS` ≤ 4,
+and run **one render per visual ticket**, not per gate run. The legacy
+`--rendering-method gl_compatibility` recipe (llvmpipe OpenGL — the Compatibility renderer, a
+different graphics API) still works but is a PROXY now: it cannot show Forward+-only features
+(DOF, AC-0281) and cannot be used to judge the shipped look. Use it only for compat-specific
+A/B questions; everything visual ships through the Forward+ recipe. What a Forward+/lavapipe
+render IS evidence of: the shipped renderer's shader compilation, feature availability and the
+Forward+ path end to end (shaders, layout, colour) — NOT real-GPU performance or GPU-specific
+precision edges; the authoritative look and speed remain the user's Windows build (AC-0241).
+
+**The path verification is MANDATORY (the AC-0391 assertion) — a render that didn't take the
+shipped path is a wrong instrument and must FAIL loudly, not pass quietly.** Every Forward+
+render run's log must carry the engine boot line
+`Vulkan … - Forward+ - Using Device #0: … - llvmpipe (LLVM 20.1.8, 256 bits)`. If the boot
+line says `Compatibility` or `OpenGL`, or the Forward+ line is missing, the run measured a
+different renderer — treat it as FAILED. ADAPTER-NAME TRAP: the lavapipe Vulkan device ALSO
+reports as `llvmpipe (LLVM …, 256 bits)` — the **renderer string** (Forward+ vs Compatibility),
+not the device name, is the discriminator (`vulkaninfo` confirms it is `DRIVER_ID_MESA_LLVMPIPE`,
+i.e. lavapipe, the Vulkan ICD).
+
+**Two shader defects ON THE SHIPPED PATH were found by AC-0391's first Forward+ run**
+(probe-verified in a minimal project; pixel evidence + the full matrix in
+`tasks/AC-0391/AC-0391-results.html`):
+1. `render_mode transparent` is **not a valid render mode** in this engine (4.7.1) — a loud
+   `SHADER ERROR: Invalid render mode: 'transparent'` on BOTH Forward+ and Compatibility.
+   `core/cloud_layer.gdshader` (the AC-0385 cloud shell) carries it → **the cloud shell does
+   not render on this box on either renderer** (the same engine parse runs on the Windows
+   build — likely not there either; unverified). Valid modes verified by probe: `unshaded`,
+   `cull_back`, `cull_disabled`, `fog_disabled`, `blend_add`, `depth_draw_always`.
+2. A `.gdshader` whose **first line is a `#` line** is **SILENTLY DROPPED** — no SHADER
+   ERROR, the material draws the engine default (lit grey). A valid `#define` on line 1 is
+   fine; a `#` after any code is a hard tokenizer error. `core/satellite_body.gdshader`
+   (59-line `#` header) is the only shipped shader with a `#` first line → **the satellite
+   body draws its default material, never its shader, with no log line to see it**. Until
+   that is fixed, the satellite's "colour" in any render is the default material, not the
+   baked terrain. (The old comment in cloud_layer.gdshader claiming "the shipped forward_plus
+   compiles it" was FALSE — the proxy never ran the shipped renderer, which is exactly the
+   gap AC-0391 closed.)
 
 **UNDERGROUND RENDERS ARE BLACK — a hard limit, not a camera problem (AC-0292, 2026-09-25).**
 The proxy renderer puts no light underground, so a snapshot taken in an unlit cave or inside solid
@@ -152,7 +218,7 @@ suspiciously small PNG is a black frame.
 
 | env | what it does | required flags / notes |
 |---|---|---|
-| `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | xvfb-run -a + `--rendering-method gl_compatibility` (proxy renderer — see the note above §2); sets `RESULT {"m4":"ok",w,h,cam}` |
+| `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | **path must be ABSOLUTE** (a relative path fails to save); the Forward+ recipe (`xvfb-run -a` + `VK_ICD_FILENAMES=…/lvp_icd.json` + `--rendering-driver vulkan`, AC-0391) — the boot line must assert `- Forward+ -` (§2); sets `RESULT {"m4":"ok",w,h,cam}`; `AWECRAFT_SNAP_DRAIN=frames` stretches the build wait (3000 default; a `SNAPDRAIN not fully drained after N frames` line = the budget ran out, the shot still happens) |
 | `AWECRAFT_SNAPSHOT2=path.png` | second snap in `AWECRAFT_CAM=shaft` (after fluid settle) | only with cam=shaft |
 | `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft\|cave` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; `cave` teleports into the first enclosed cave pocket + 3D torch array + 300-frame settle (AC-0110); default (empty) = first-person player spawn. **AC-0152/0160 finding:** the on-demand player spawn (main.gd:1310, `snapshot_path != "" and player == null`) makes the player camera current AFTER the named-camera block — `cam=top` snapshots silently come out first-person. For a true top-down band/LOD shot use `AWECRAFT_AIM="x,y,z,yaw,pitch"` (e.g. `8,240,8,0,-1.57` = 100 m above spawn, straight down) with the default cam |
 | `AWECRAFT_SIZE=W,H` | force window size (e.g. `1280,720`) before boot | no-size → `Settings.apply_window` |
@@ -282,10 +348,20 @@ timeout 300 env 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' $S --hea
 # full battery (pre-build gate, ~60–90 s):
 timeout 600 env 'AWECRAFT_BATTERY=player;interact;light;fluids;buckets;genhash' $S --headless --path godot
 
-# render (software GL under virtual X; R=1–2; timeout 300000 ms). NOTE: a PROXY
-# renderer — gl_compatibility cannot show Forward+-only features (DOF) and differs
-# in tonemap; the shipped renderer is forward_plus (AC-0241). See §2.
-xvfb-run -a env AWECRAFT_SNAPSHOT=/tmp/shot.png AWECRAFT_CAM=top AWECRAFT_RADIUS=2 $S --path godot --rendering-method gl_compatibility
+# render — THE SHIPPED FORWARD+ PATH (AC-0391; R<=4; timeout 300000 ms; snapshot
+# path ABSOLUTE). Software Vulkan via lavapipe under a virtual display. THE LOG
+# MUST CARRY THE BOOT LINE `Vulkan … - Forward+ - Using Device #0: … -
+# llvmpipe (LLVM 20.1.8, 256 bits)` — a Compatibility/OpenGL line (or none)
+# means the run measured a different renderer and FAILS. Measured ~5 FPS @
+# 1280x720 R4 (AWECRAFT_DSSTATS=1 burns the FPS overlay into the shot). See §2
+# (incl. the two shader defects found by the first run).
+xvfb-run -a env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_SNAPSHOT=/abs/path/shot.png AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=4 \
+  $S --path godot --rendering-driver vulkan
+
+# render, legacy COMPATIBILITY proxy (llvmpipe OpenGL — a different graphics
+# API; only for compat-specific A/B questions; AC-0391 superseded it):
+xvfb-run -a env AWECRAFT_SNAPSHOT=/abs/path/shot.png AWECRAFT_RADIUS=2 $S --path godot --rendering-method gl_compatibility
 
 # env knobs that matter (any mode):
 #   AWECRAFT_SEED=n   world seed (default 44)

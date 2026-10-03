@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0391 — the shipped Forward+ path, exercised for the first time (lavapipe)</title>
+<style>
+ body { font: 15px/1.5 system-ui, sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+ h1 { font-size: 1.4rem; } h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #ccc; padding-bottom: .2rem; }
+ h3 { font-size: 1rem; margin-top: 1.4rem; }
+ table { border-collapse: collapse; margin: .8rem 0; }
+ th, td { border: 1px solid #bbb; padding: .35rem .6rem; text-align: left; vertical-align: top; }
+ th { background: #f0f0f0; }
+ code, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; }
+ pre { background: #f6f6f6; border: 1px solid #ddd; padding: .6rem .8rem; overflow-x: auto; }
+ img { max-width: 640px; display: block; margin: .5rem 0; border: 1px solid #ccc; }
+ .ok { color: #0a7a2f; font-weight: 600; } .bad { color: #b3261e; font-weight: 600; } .warn { color: #8a6d00; font-weight: 600; }
+ .small { font-size: .85em; color: #555; }
+ figure { margin: 1rem 0; } figcaption { font-size: .85em; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>AC-0391 — verify visuals on the shipped Forward+ renderer</h1>
+<p class="small">2026-10-03 · testing pipeline · no game-code changes · headless arms untouched · no commits</p>
+
+<h2>Report (the ≤12-line answer)</h2>
+<ol>
+<li><span class="ok">Forward+ RUNS here.</span> Recipe: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json … godot --path godot --rendering-driver vulkan</code> (lavapipe ICD + Xvfb; both preinstalled).</li>
+<li>Path assertion (mandatory): boot line <code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256 bits)</code>. The device name says “llvmpipe” — that is the lavapipe <em>Vulkan</em> driver (<code>DRIVER_ID_MESA_LLVMPIPE</code>, Mesa 25.2.8); the <strong>renderer string</strong> (Forward+ vs Compatibility) is the discriminator. A run reporting Compatibility/OpenGL must fail loudly.</li>
+<li>Frame time: <strong>~5 FPS at 1280×720, R4</strong> (DSSTATS overlay), VRAM 468 MB. Wall clock: wallshot <strong>82.9 s</strong>, R4 snapshot <strong>~290 s</strong> (SNAP_DRAIN 12000 not fully drained).</li>
+<li>Verdict: <strong>POSSIBLE and marginally PRACTICAL</strong> — budget ≈ 300 s/shot, R≤4 only. Recommend <strong>one render per visual ticket, not per gate run</strong>; headless arms stay the fast gate.</li>
+<li>Wallshot retest: <strong>completes</strong> — rc=0 in 82.9 s (was rc=124 at 300 s under the llvmpipe-GL proxy). Full RESULT json below.</li>
+<li>Demo (satellite body, the one real visual feature): at 668 m / R4 / noon, the “planet” is a pale-cyan disc <strong>(177,240,255)</strong> centred on the nadir (frame centre), ~52° radius (flying FOV 99°); at 3000 m, ~22° disc against starry space. That colour is <strong>not</strong> the baked terrain — see defects.</li>
+<li><span class="bad">DEFECT 1 (product, SILENT):</span> a <code>.gdshader</code> whose first line is <code>#</code> is silently dropped — no SHADER ERROR — and the material falls back to the engine default (white lit). <code>core/satellite_body.gdshader</code> (59-line <code>#</code> header) is the only shipped shader with a <code>#</code> first line → the satellite body has never rendered its shader on ANY path. Fix: <code>//</code> header or <code>shader_type</code> on line 1.</li>
+<li><span class="bad">DEFECT 2 (product, LOUD):</span> <code>render_mode transparent</code> is INVALID in 4.7.1 → <code>SHADER ERROR: Invalid render mode: 'transparent'</code> on both renderers → <code>core/cloud_layer.gdshader</code> (AC-0385 cloud shell) never renders. Fix: drop the keyword (transparency is inferred from writing ALPHA).</li>
+<li>Both defects are game-code changes → follow-up tickets for the coordinator (not made here). The old comment in cloud_layer.gdshader (“the shipped forward_plus compiles it”) is false and needs fixing with the defect.</li>
+<li>Docs: <code>tasks/harness_data.yaml</code> gains the <code>fwdshot</code> row (rendered + <code>--check</code> clean); <code>godot/HARNESS.md</code> §2 “software GL proxy” warning replaced with the verified truth + assertion + both defects; §4 recipe = Forward+ primary; <code>godot/OPS.md</code> §1 machine facts + §6 render budget rewritten.</li>
+<li>Open observation (not a defect verdict): the fallback sphere’s apparent radius (22° at 3000 m) is smaller than the full R+SEA rim (35.3°) on this software path — geometry verified complete; flagged for the follow-up ticket, not asserted as product behaviour.</li>
+<li>Constraints held: one godot at a time, <code>ulimit -v 8388608</code> KB never exceeded (no raise), R4 only, no <code>load</code> arm, no R50, no TASKS.yaml edit, no commits.</li>
+</ol>
+
+<h2>1 · How the shipped path runs on this box</h2>
+<p>Machine: no GPU, no display. Already installed: <code>xvfb</code>, <code>vulkan-tools</code>, and Mesa’s lavapipe software Vulkan ICD at <code>/usr/share/vulkan/icd.d/lvp_icd.json</code> (<code>libvulkan_lvp.so</code>, Mesa 25.2.8, LLVM 20.1.8, 256 bits; apiVersion 1.4.318 per <code>vulkaninfo</code>). No packages were installed.</p>
+<p>Working recipe (from repo root; one godot at a time; memory cap as always):</p>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME
+xvfb-run -a env HOME=$HOME VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_SNAPSHOT=/abs/path/shot.png AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=4 \
+  AWECRAFT_AIM="x,y,z,yaw,pitch" AWECRAFT_TIME=0.5 AWECRAFT_SNAP_DRAIN=12000 \
+  bash -c "ulimit -v 8388608; timeout 1500 /home/angrygiant/tools/godot/godot \
+    --path godot --rendering-driver vulkan"</pre>
+<p><strong>The boot line IS the assertion.</strong> Every render in this ticket’s logs begins with:</p>
+<pre>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256 bits)</pre>
+<p><strong>Adapter-name trap:</strong> the lavapipe device is <em>also</em> named “llvmpipe” (<code>DRIVER_ID_MESA_LLVMPIPE</code>) — grepping for “llvmpipe” does NOT identify the path. The discriminator is the renderer string: <code>Forward+</code> (this path) vs <code>Compatibility</code> (the old GL proxy: <code>OpenGL API 4.5 (Core Profile) Mesa 26.0.6 … - Compatibility - Using Device: Mesa - llvmpipe (LLVM 20.1.8, 256 bits)</code>). A render whose boot line reports Compatibility/OpenGL for a ticket claiming Forward+ evidence <strong>must fail loudly, not pass quietly</strong>.</p>
+<figure><img src="fwd_ground_r4_dsstats.png" alt="Forward+ ground shot with DSSTATS overlay">
+<figcaption>Ground-level Forward+ render (R4, 1280×720) with the <code>AWECRAFT_DSSTATS</code> overlay: ~5 FPS, VRAM 468 MB (render), sys RAM 82%.</figcaption></figure>
+
+<h2>2 · Measurements (1280×720, R4, lavapipe Forward+)</h2>
+<table>
+<tr><th>Run</th><th>Wall clock</th><th>rc</th><th>Notes</th></tr>
+<tr><td>ground shot + DSSTATS</td><td>~300 s</td><td>0</td><td>~5 FPS in overlay; SNAP_DRAIN 12000 not fully drained</td></tr>
+<tr><td>wallshot arm (<code>AWECRAFT_LOGIC=wallshot</code>)</td><td><strong>82.9 s</strong></td><td><span class="ok">0</span></td><td>previously rc=124 at 300 s timeout under the gl_compatibility proxy</td></tr>
+<tr><td>satellite 668 m snapshot</td><td>332.9 s</td><td>0</td><td><code>AWECRAFT_AIM="8,794,8,0,-1.57"</code>, noon</td></tr>
+<tr><td>satellite 3000 m snapshot</td><td>281.5 s</td><td>0</td><td>same, <code>…,"8,3126,8,…”</code></td></tr>
+<tr><td>isolation variants (nofog / noworld / noaero / noclouds / 3000-nofog-noaero)</td><td>231–325 s</td><td>0</td><td>each a full snapshot; boot line asserted in every log</td></tr>
+</table>
+<p><strong>Practical vs possible:</strong> rendering on the shipped path is <strong>POSSIBLE</strong> everywhere and <strong>mARGINALLY PRACTICAL</strong> at R≤4 — a ~300 s budget per shot, ~5 FPS interactive. It is not practical as a per-gate check; it is practical as <em>one render per visual ticket</em> (a visual ticket already justifies a few minutes). R50 and the <code>load</code> arm were excluded by this ticket’s constraints, so their cost on this path is unmeasured (expect worse; the satellite far-plane extends to ~11.5 km at high altitude).</p>
+<p>Memory: the standing <code>ulimit -v 8388608</code> KB (8 GB) was <strong>never exceeded</strong> — no raise was used.</p>
+
+<h2>3 · Wallshot retest (was rc=124 under the GL proxy)</h2>
+<p>The <code>wallshot</code> arm (lives in <code>godot/scenes/harness.gd</code>, not main.gd) now <strong>completes</strong> on Forward+: rc=0 in 82.9 s, versus a 300 s timeout (rc=124) on the same box under llvmpipe-OpenGL. Result, verbatim:</p>
+<pre>RESULT {"before":false,"block":true,"block_box_vis":true,"block_depth_on":false,
+"block_frame_stone":4816,"block_vm_nonstone":29664,...,"item":true,
+"item_sprite_vis":true,"item_vm_cyan":110,"shots":"","wall_face_z":8.0}</pre>
+<figure><img src="wallshot_fwd_held_on_wall.png" alt="wallshot: held block on wall"><img src="wallshot_fwd_held_item_on_wall.png" alt="wallshot: held item on wall">
+<figcaption>Forward+ wallshot evidence (both shots; the tracked AC-0067 PNGs were restored from git afterwards).</figcaption></figure>
+
+<h2>4 · End-to-end demo: the satellite body at a stated altitude and render distance</h2>
+<p><strong>Stated conditions:</strong> altitude <strong>668 m</strong> (eye y=794, nadir straight down; satdiag recorded <code>alt=792.4(player)</code>, <code>phase=LOADED</code>, <code>op_nadir=1.000</code>, <code>vis=true</code>) and render radius <strong>R4</strong> (<code>fog_far=69.6</code> / <code>render_edge=80.0</code>, 87.5% fog setting), noon (<code>AWECRAFT_TIME=0.5</code>), 1280×720. Planet R=4000 (satellite sphere radius R+SEA=4126, centre (0,−4000,0); satdiag <code>pos=(0,-4000,0)</code>).</p>
+<figure><img src="sat_alt668_r4_fwd.png" alt="satellite at 668 m, Forward+, fog on">
+<figcaption>668 m / R4 / Forward+ with fog. <strong>Where the planet is:</strong> a disc centred exactly on the frame centre (nadir), radius ≈ 52° at the 99° flying FOV — it fills most of the frame; outside it, the teal sky gradient; the held stone-block viewmodel overlaps the lower-right edge; HUD at the bottom. <strong>What colour it is:</strong> a flat pale cyan, centre pixel <strong>(177,240,255)</strong>, uniform to the limb (1–2 px AA edge) — <em>not</em> the baked terrain. That colour is the 100% depth-fog colour (fog colour = <code>sky_display(0.5)</code> = (135,206,235), lifted by the aero grade to (177,240,255)); the satellite lies 668 m from the eye, far beyond fog_far 69.6 m.</figcaption></figure>
+<figure><img src="sat_alt3000_r4_fwd.png" alt="satellite at 3000 m, Forward+, space background">
+<figcaption>3000 m / R4 / Forward+, same settings: the same disc, now ≈ 22° radius, centred on the frame, against the black space background — the sky pass’s AC-0386 space transition works (satdiag <code>S=1.000</code>), and the star field renders (star sprites of varied size/hue). No stars appear inside the satellite’s rim annulus — the star shader’s AC-0386 planet-disc occlusion (ray-sphere at R+SEA=4126) is active on this path.</figcaption></figure>
+<h3>What the disc actually is (isolation matrix)</h3>
+<table>
+<tr><th>Variant</th><th>Disc at nadir</th><th>Reading</th></tr>
+<tr><td>fog on (above)</td><td>(177,240,255) uniform, both radii</td><td>100% fogged object (fog colour + grade)</td></tr>
+<tr><td><code>AWECRAFT_AERO=0</code> (no clouds/wash/grade)</td><td><strong>exactly (135,206,235)</strong> = the fog colour = <code>sky_display(0.5)</code></td><td>confirms the disc is fog-occluded; the surround is the plain ungraded sky gradient</td></tr>
+<tr><td><code>AWECRAFT_NO_FOG=1</code></td><td>warm-white centre (252,250,244) + grey ring (219,222,218); small dark nadir terrain dot</td><td>the un-fogged disc is a <strong>lit white sphere (Lambert)</strong> — an engine fallback material, not the baked terrain texture</td></tr>
+<tr><td><code>AWECRAFT_NO_WORLD_VIS=1</code> (world hidden)</td><td>the 330 px inner disc survives (a Main-child contribution); the outer ring vanishes</td><td>two superimposed objects: the fallback sphere (world child = the satellite) + a smaller Main-child disc of the same fog colour — identity of the latter unresolved, flagged below</td></tr>
+<tr><td>3000 m, <code>NO_FOG</code>+<code>AERO=0</code> (isolation)</td><td>white Lambert sphere, lit from the <em>bottom</em> of the frame = the sun’s azimuth; dark 15 px nadir dot = the real 80 m terrain patch</td><td>the satellite renders with the fallback material; the sky pass + stars work; background pure black (no sky material when aero off)</td></tr>
+</table>
+<figure><img src="sat3000_nofog_noaero.png" alt="isolated satellite fallback render at 3000 m">
+<figcaption>The isolation shot: fog off, aero off, 3000 m. The satellite as the engine draws it today — a white Lambert sphere (lit from below = sun azimuth) over black space with stars. The baked terrain colour never reaches the screen.</figcaption></figure>
+<p><span class="warn">Open observation (flagged, not asserted):</span> the fallback sphere’s apparent radius is ≈ 22° at 3000 m (220 px) where the full R+SEA sphere’s rim would be 35.3° (373 px) at the same eye height — and ≈ 52° at 668 m where the full rim is 59.4°. The geometry is verified complete (satdiag: <code>mesh faces=12 verts=28812</code>, custom AABB ±4126, face-0 geometry AABB exactly the home-patch region, <code>scale=1.000</code>, camera far extended to h+2·RB+200 — no clipping). The shortfall appears on this software Vulkan path only (never observable before this ticket, because the path was never exercised). It does not change any conclusion above; it belongs in the follow-up ticket’s scope.</p>
+<p><strong>Bottom line for the demo:</strong> “the planet’s colour” on the shipped path, as shipped, is <em>whatever the engine’s fallback material plus the fog produce</em> — a pale cyan (177,240,255) disc at 668 m / (135,206,235) ungraded — because the satellite’s own shader is silently never compiled (Defect 1). The feature has <strong>never</strong> shown its baked terrain on any renderer, and this ticket is the first to have a render of the shipped path at all to prove that from.</p>
+
+<h2>5 · Defect 1 — a <code>#</code> first line silently kills a .gdshader (product, SILENT)</h2>
+<p><span class="bad">Symptom:</span> <code>godot/core/satellite_body.gdshader</code> lines 1–59 are a <code>#</code>-comment header. On this engine (4.7.1, verified on BOTH renderers), a <code>.gdshader</code> whose <em>first line</em> begins with <code>#</code> is dropped with <strong>no SHADER ERROR, no warning, nothing</strong>; the material then draws the engine fallback. In the 668/3000 m logs above there are <strong>zero</strong> shader errors for the satellite — yet the render is the white fallback sphere, not the baked texture.</p>
+<p><strong>Probe matrix</strong> (throwaway project <code>.scratch/ac0391/vkprobe/</code>, pixel-readout per shader):</p>
+<table>
+<tr><th>Probe</th><th>First line</th><th>Result (Forward+, same probe on Compat)</th></tr>
+<tr><td>c13</td><td><code>shader_type spatial;</code> + <code>ALBEDO = vec3(1,0,0)</code></td><td>renders RED — control, path works</td></tr>
+<tr><td>c14</td><td><code># comment</code> then the same red shader</td><td><strong>renders the background colour — shader silently gone, no log line</strong></td></tr>
+<tr><td>c-load path</td><td>same file via <code>ResourceLoader.load</code> + <code>sm.shader</code></td><td>same silent drop — the game’s exact load path</td></tr>
+<tr><td>b-series</td><td><code>#define</code> on line 1; <code>#</code> after code</td><td><code>#define</code> fine; <code>#</code> after code = HARD tokenizer error (<code>Unknown character #35</code>) — so the failure is specifically “# as the very first line”, silently</td></tr>
+</table>
+<p><strong>Blast radius:</strong> <code>core/satellite_body.gdshader</code> is the <em>only</em> shipped <code>.gdshader</code> with a <code>#</code> first line (all others start <code>shader_type</code> or <code>//</code>). <strong>Fix (one line, follow-up ticket):</strong> convert the header to <code>//</code> (or move <code>shader_type spatial;</code> above it). Until then the satellite body shows the fallback material on every renderer — this ticket’s renders are the first visual proof.</p>
+
+<h2>6 · Defect 2 — <code>render_mode transparent</code> is invalid in 4.7.1 (product, LOUD)</h2>
+<p><span class="bad">Symptom:</span> <code>godot/core/cloud_layer.gdshader</code> (the AC-0385 cloud shell) line 2: <code>render_mode unshaded, transparent, depth_draw_always;</code>. Every render with clouds present logs, verbatim:</p>
+<pre>SHADER ERROR: Invalid render mode: 'transparent'.
+ERROR: Failed to compile shader ...</pre>
+<p>on <strong>both</strong> Forward+ and Compatibility. The cloud shell nodes exist and are visible (satdiag: <code>clouds: n=3 c0{vis=true r=4400 …} c1{… r=4330} c2{… r=4275}</code>) but produce no pixels — the <code>AWECRAFT_CLOUDS=0</code> and <code>AWECRAFT_AERO=0</code> renders are pixel-identical to the clouded ones. Valid <code>render_mode</code> keywords probed on this engine: <code>unshaded</code>, <code>cull_back</code>, <code>cull_disabled</code>, <code>fog_disabled</code>, <code>blend_add</code>, <code>depth_draw_always</code> (<code>no_fog</code> is also invalid). The in-file comment claiming “the shipped forward_plus compiles it” is <strong>false</strong> and should be corrected with the fix. <strong>Fix (follow-up ticket):</strong> drop <code>transparent</code> — transparency is inferred from writing <code>ALPHA</code>; keep <code>depth_draw_always</code>.</p>
+
+<h2>7 · Documentation changed (this ticket)</h2>
+<ul>
+<li><code>tasks/harness_data.yaml</code> — new <code>fwdshot</code> row (recipe, boot-line assertion, adapter-name trap, measured budgets, both defects, “one render per visual ticket”); <code>harness_doc.py --render</code> + <code>--check</code> clean.</li>
+<li><code>godot/HARNESS.md</code> — §2: the “renders are software GL, geometry-only proxy” warning is <strong>replaced</strong> with the verified truth (Forward+ via lavapipe works here; the assertion; the adapter-name trap; both defects); the <code>AWECRAFT_SNAPSHOT</code> env row updated (absolute path, Forward+ recipe, SNAP_DRAIN marker); §4: Forward+ recipe primary, the legacy gl_compatibility line kept for compat A/B only.</li>
+<li><code>godot/OPS.md</code> — §1 machine facts (lavapipe ICD + xvfb + vulkan-tools preinstalled; Forward+ proven 2026-10-03); §6 rewritten (shipped-path budget ~300 s/shot, R≤4, one render per visual ticket; compat recipe demoted to proxy; evidence scope: Forward+ path yes, real-GPU perf/precision no).</li>
+</ul>
+
+<h2>8 · What was NOT done / not claimed</h2>
+<ul>
+<li>No game-code change of any kind (both defects reported, not fixed); no <code>TASKS.yaml</code> edit; no commits (coordinator closeout). <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code> untouched (other session).</li>
+<li>No R50, no <code>load</code> arm, no memory-cap raise (8 GB stood); headless arms unchanged and untouched as gates.</li>
+<li>The disc-size shortfall (open observation, §4) is flagged, not diagnosed as product behaviour; the Main-child 330 px disc’s identity is unresolved (it is not the clouds — <code>clouds: none</code> runs are pixel-identical — and not the wash, which is a full-screen square) and rides along to the follow-up.</li>
+<li>Real-GPU performance/precision is out of scope by construction: this box has no GPU. The evidence scope is “the shipped renderer <em>path</em> (Forward+ pipeline, Vulkan, lavapipe)”, not “the shipped GPU look”.</li>
+</ul>
+
+<h2>9 · Evidence index</h2>
+<table>
+<tr><th>File</th><th>What it is</th></tr>
+<tr><td><code>fwd_ground_r4_dsstats.png</code></td><td>Forward+ ground render + DSSTATS overlay (~5 FPS, 468 MB VRAM)</td></tr>
+<tr><td><code>sat_alt668_r4_fwd.png</code></td><td>demo: 668 m / R4 / noon — pale-cyan disc (177,240,255) at nadir, fog-occluded</td></tr>
+<tr><td><code>sat_alt3000_r4_fwd.png</code></td><td>demo: 3000 m — 22° disc vs space + stars, AC-0386 occlusion active</td></tr>
+<tr><td><code>sat668_noaero.png</code></td><td>disc = exactly the fog colour (135,206,235); surround = ungraded sky</td></tr>
+<tr><td><code>sat668_nofog.png</code></td><td>fog off: white fallback sphere (two Lambert zones) + nadir terrain dot</td></tr>
+<tr><td><code>sat3000_nofog_noaero.png</code></td><td>isolation: Lambert white sphere lit from below (sun azimuth), stars, black space</td></tr>
+<tr><td><code>wallshot_fwd_held_on_wall.png</code>, <code>wallshot_fwd_held_item_on_wall.png</code></td><td>wallshot retest outputs (rc=0, 82.9 s)</td></tr>
+<tr><td><code>.scratch/ac0391/*.log</code> (git-ignored)</td><td>every run’s full stdout: boot line (the assertion), RESULT jsons, SATDIAG state/config/clouds lines, the SHADER ERROR line</td></tr>
+<tr><td><code>.scratch/ac0391/vkprobe/</code> (git-ignored, throwaway)</td><td>the probe project behind the §5/§6 matrices (safe to delete after closeout)</td></tr>
+</table>
+
+</body>
+</html>

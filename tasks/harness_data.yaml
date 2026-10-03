@@ -290,6 +290,46 @@ modes:
       `AWECRAFT_WALL_BEFORE` (1), `AWECRAFT_WALL_SHOTS`, `AWECRAFT_SNAPSHOT` (paths)
     wall: render mode (~300 s timeout)
     notes: xvfb; writes shots into `tasks/AC-0067/`
+  fwdshot:
+    entry: |-
+      shell recipe (AC-0391) — not a `main.gd` branch: any render hook
+      (`AWECRAFT_SNAPSHOT`, `wallshot`, …) under the SHIPPED Forward+ (Vulkan)
+      renderer via lavapipe, instead of the legacy gl_compatibility proxy
+    tests: |-
+      AC-0391: proves a render run took the shipped Forward+ (Vulkan) path on
+      this GPU-less box and produced a rendered frame; the adapter + renderer
+      strings in the engine boot line are the assertion
+    result_fields: |-
+      boot line `Vulkan 1.4.318 - Forward+ - Using Device #0: … - llvmpipe (LLVM 20.1.8, 256 bits)` (the assertion),
+      the underlying hook's `RESULT` (snapshot `{"m4":"ok",w,h,cam}`; wallshot's fields),
+      `SNAPDRAIN not fully drained after N frames` marker (build budget ran out, not a failure),
+      the run's `SHADER ERROR` census
+    envs: |-
+      `xvfb-run -a` + `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json` +
+      `--rendering-driver vulkan` (the Forward+ selection), then the usual shot envs
+      (`AWECRAFT_SNAPSHOT` ABSOLUTE path, `AWECRAFT_SIZE`, `AWECRAFT_RADIUS`, `AWECRAFT_AIM`,
+      `AWECRAFT_TIME`, `AWECRAFT_SNAP_DRAIN`, `AWECRAFT_DSSTATS`)
+    wall: R4 @1280×720 ~290 s (snapshot) / 83 s (wallshot) — AC-0391 measurements
+    notes: |-
+      AC-0391 (2026-10-03): the Forward+ path RUNS on this box — lavapipe (the
+      mesa-vulkan-drivers lvp_icd, software Vulkan) under Xvfb, forced with
+      VK_ICD_FILENAMES + --rendering-driver vulkan. THE VERIFICATION IS THE
+      ASSERTION: the boot line must say `- Forward+ -` and the lavapipe device;
+      a `Compatibility`/`OpenGL` boot line, or no Forward+ line, FAILS the run
+      loudly (the wrong-instrument class). ADAPTER-NAME TRAP: the lavapipe
+      Vulkan device is ALSO named "llvmpipe" — the renderer string (Forward+
+      vs Compatibility), not the device name, is the discriminator. Measured
+      2026-10-03: ~5 FPS at 1280×720 R4 (the `AWECRAFT_DSSTATS=1` overlay),
+      wallshot completes in 83 s (it rc=124'd at the 300 s timeout under the
+      gl_compatibility proxy) — renders are POSSIBLE and marginally
+      PRACTICAL: one render per visual ticket, not per gate run. TWO PRODUCT
+      DEFECTS FOUND BY THE FIRST FORWARD+ RUN (probe-verified, details in
+      tasks/AC-0391/AC-0391-results.html): `render_mode transparent` is
+      invalid in this engine (loud SHADER ERROR — `core/cloud_layer.gdshader`)
+      and a .gdshader whose FIRST LINE is a `#` line is SILENTLY DROPPED with
+      no error (the only shipped case: `core/satellite_body.gdshader` — it
+      draws its default material). Until those are fixed, every Forward+ run
+      logs the cloud SHADER ERROR (report it, don't chase it).
   editperf:
     entry: '`_editperf_test`'
     tests: |-
