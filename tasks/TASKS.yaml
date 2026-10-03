@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-02T19:35
+  updated_at: 2026-10-02T21:19
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0098
 - AC-0088
 - AC-0089
 - AC-0205
@@ -4527,11 +4526,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-08-23T23:51
-  updated_at: 2026-10-02T19:35
-  completed_at: null
+  updated_at: 2026-10-02T21:19
+  completed_at: 2026-10-02T21:19
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player I want held voxel tools to look like their icons with shading variation,
