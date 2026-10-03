@@ -103,6 +103,20 @@ var ctl_status: Label
 var _ctl_rebinds: Dictionary = {}  # action -> {cls -> Button}
 var _ctl_resets: Dictionary = {}   # action -> Button
 var _capturing: Dictionary = {}    # {action, cls} while a capture is open
+# AC-0089: the Controls-tab "Analog tuning" group (code-built like the
+# remap rows above it). The LOGIC + bounds live in core/analog_tune.gd;
+# the settings round-trip in settings.gd (the `analog` + `settings`
+# arms drive the same API/rows). SpinBoxes, not HSliders: the AC-0260
+# fix (the HSlider rows misbehaved in the tabbed options).
+# (each *_spin row holds the _mk_analog_spin_row result: [SpinBox, Label])
+var analog_sens_spin: Array
+var analog_sens_val: Label
+var analog_dz_left_spin: Array
+var analog_dz_left_val: Label
+var analog_dz_right_spin: Array
+var analog_dz_right_val: Label
+var analog_invert_y_check: CheckBox
+var analog_invert_x_check: CheckBox
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -352,6 +366,51 @@ func _ready() -> void:
 		controls_page.add_child(gh)
 		for a in g[1]:
 			controls_page.add_child(_mk_ctl_row(a))
+	# AC-0089: the "Analog tuning" group — stick tuning for the two input
+	# paths (the right-stick look: deadzone + invert X/Y + sensitivity;
+	# the left-stick movement: its own deadzone). Same row pattern as the
+	# remap rows (named rows, value label), same persist path (Settings.
+	# set_value on change — clamp + save in one step; the player applies
+	# the values live at its input paths, no apply step needed).
+	var agh := Label.new()
+	agh.name = "AnalogGroup"
+	agh.text = "Analog tuning (sticks)"
+	agh.add_theme_font_size_override("font_size", 14)
+	agh.modulate = Color(0.88, 0.88, 0.94, 1.0)
+	controls_page.add_child(agh)
+	analog_sens_spin = _mk_analog_spin_row(controls_page, "AnalogSensRow", "Look sensitivity (right stick)", float(AnalogTune.SENS_MIN), float(AnalogTune.SENS_MAX), 0.05)
+	analog_sens_spin[0].value_changed.connect(_on_analog_sens_changed)
+	analog_sens_val = analog_sens_spin[1]
+	analog_dz_left_spin = _mk_analog_spin_row(controls_page, "AnalogDzLeftRow", "Deadzone — left stick (movement)", float(AnalogTune.DZ_MIN), float(AnalogTune.DZ_MAX), 0.01)
+	analog_dz_left_spin[0].value_changed.connect(_on_analog_dz_left_changed)
+	analog_dz_left_val = analog_dz_left_spin[1]
+	analog_dz_right_spin = _mk_analog_spin_row(controls_page, "AnalogDzRightRow", "Deadzone — right stick (look)", float(AnalogTune.DZ_MIN), float(AnalogTune.DZ_MAX), 0.01)
+	analog_dz_right_spin[0].value_changed.connect(_on_analog_dz_right_changed)
+	analog_dz_right_val = analog_dz_right_spin[1]
+	var ainv := HBoxContainer.new()
+	ainv.name = "AnalogInvertRow"
+	ainv.add_theme_constant_override("separation", 10)
+	var ainv_lab := Label.new()
+	ainv_lab.text = "Invert (look)"
+	ainv_lab.add_theme_font_size_override("font_size", 15)
+	ainv_lab.custom_minimum_size = Vector2(250, 0)
+	analog_invert_y_check = CheckBox.new()
+	analog_invert_y_check.name = "AnalogInvertYCheck"
+	analog_invert_y_check.text = "Y (up / down)"
+	analog_invert_y_check.toggled.connect(_on_analog_invert_y_toggled)
+	analog_invert_x_check = CheckBox.new()
+	analog_invert_x_check.name = "AnalogInvertXCheck"
+	analog_invert_x_check.text = "X (left / right)"
+	analog_invert_x_check.toggled.connect(_on_analog_invert_x_toggled)
+	var ainv_reset := Button.new()
+	ainv_reset.name = "AnalogReset"
+	ainv_reset.text = "Reset analog to defaults"
+	ainv_reset.pressed.connect(_on_analog_reset_pressed)
+	ainv.add_child(ainv_lab)
+	ainv.add_child(analog_invert_y_check)
+	ainv.add_child(analog_invert_x_check)
+	ainv.add_child(ainv_reset)
+	controls_page.add_child(ainv)
 	opt_tabs.add_child(controls_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
@@ -601,6 +660,33 @@ func _mk_dev_spin_row(parent: Control, row_name: String, label_text: String, min
 	return [sp, val]
 
 
+# AC-0089: the analog tuning rows (float SpinBoxes with a STEP parameter
+# — _mk_dev_spin_row is the int-step developer pattern and stays as is).
+func _mk_analog_spin_row(parent: Control, row_name: String, label_text: String, minv: float, maxv: float, step: float) -> Array:
+	var row := HBoxContainer.new()
+	row.name = row_name
+	row.add_theme_constant_override("separation", 10)
+	var lab := Label.new()
+	lab.text = label_text
+	lab.add_theme_font_size_override("font_size", 15)
+	lab.custom_minimum_size = Vector2(250, 0)
+	var sp := SpinBox.new()
+	sp.custom_minimum_size = Vector2(90, 0)
+	sp.min_value = minv
+	sp.max_value = maxv
+	sp.step = step
+	sp.value = minv
+	var val := Label.new()
+	val.add_theme_font_size_override("font_size", 15)
+	val.custom_minimum_size = Vector2(44, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(lab)
+	row.add_child(sp)
+	row.add_child(val)
+	parent.add_child(row)
+	return [sp, val]
+
+
 func _sync_controls() -> void:
 	_syncing = true
 	render_slider.value = float(int(Settings.values["render_dist"]))
@@ -677,6 +763,18 @@ func _sync_controls() -> void:
 		for a in _ctl_rebinds:
 			for cls in _ctl_rebinds[a]:
 				_ctl_rebinds[a][cls].text = _ctl_binding_label(a, cls)
+	# AC-0089: the analog tuning rows (the same _sync_controls refresh the
+	# AC-0332/AC-0088 rows get — the state the game guarantees whenever
+	# the panel opens or a value changes elsewhere).
+	if analog_sens_spin != null:
+		analog_sens_spin[0].value = float(Settings.values.get("look_sensitivity", 1.0))
+		analog_sens_val.text = "%.2fx" % float(analog_sens_spin[0].value)
+		analog_dz_left_spin[0].value = float(Settings.values.get("deadzone_left", 0.15))
+		analog_dz_left_val.text = "%.2f" % float(analog_dz_left_spin[0].value)
+		analog_dz_right_spin[0].value = float(Settings.values.get("deadzone_right", 0.15))
+		analog_dz_right_val.text = "%.2f" % float(analog_dz_right_spin[0].value)
+		analog_invert_y_check.button_pressed = bool(Settings.values.get("invert_y", false))
+		analog_invert_x_check.button_pressed = bool(Settings.values.get("invert_x", false))
 	_syncing = false
 
 
@@ -1106,4 +1204,53 @@ func _on_controls_reset_all() -> void:
 	Settings.reset_all_controls()
 	ctl_status.modulate = Color.WHITE
 	ctl_status.text = "All bindings reset to defaults."
+	_sync_controls()
+
+
+# AC-0089: the analog tuning handlers — the AC-0088 persist pattern
+# (Settings.set_value = clamp + save in one step; the player reads the
+# values live at its input paths, so the change applies the next frame —
+# no apply step, no world callback).
+func _on_analog_sens_changed(v: float) -> void:
+	if _syncing:
+		return
+	analog_sens_val.text = "%.2fx" % v
+	Settings.set_value("look_sensitivity", v)
+
+
+func _on_analog_dz_left_changed(v: float) -> void:
+	if _syncing:
+		return
+	analog_dz_left_val.text = "%.2f" % v
+	Settings.set_value("deadzone_left", v)
+
+
+func _on_analog_dz_right_changed(v: float) -> void:
+	if _syncing:
+		return
+	analog_dz_right_val.text = "%.2f" % v
+	Settings.set_value("deadzone_right", v)
+
+
+func _on_analog_invert_y_toggled(v: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("invert_y", v)
+
+
+func _on_analog_invert_x_toggled(v: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("invert_x", v)
+
+
+func _on_analog_reset_pressed() -> void:
+	var d := AnalogTune.defaults()
+	Settings.set_value("look_sensitivity", float(d["look_sensitivity"]))
+	Settings.set_value("deadzone_left", float(d["deadzone_left"]))
+	Settings.set_value("deadzone_right", float(d["deadzone_right"]))
+	Settings.set_value("invert_y", bool(d["invert_y"]))
+	Settings.set_value("invert_x", bool(d["invert_x"]))
+	ctl_status.modulate = Color.WHITE
+	ctl_status.text = "Analog tuning reset to defaults."
 	_sync_controls()

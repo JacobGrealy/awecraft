@@ -115,6 +115,18 @@ const DEFAULTS := {
 	# empty an action: the merge keeps the full default set for any
 	# action with no saved tokens (core/controls_map.gd owns the rule).
 	"controls": [],
+	# AC-0089: the analog tuning layer (Options > Controls "Analog tuning"
+	# group; core/analog_tune.gd owns the bounds and the math). Defaults
+	# from AnalogTune.defaults(): sensitivity 1.0 = the shipped look speed;
+	# 0.15 deadzones keep the shipped arms green (the gamepad arm drives
+	# 0.8 / 1.0 deflections) and reject typical stick drift by default;
+	# invert off = the shipped behaviour. A corrupt stored value clamps
+	# into the legal band (always usable — analog_tune.gd header).
+	"look_sensitivity": 1.0,
+	"deadzone_left": 0.15,
+	"deadzone_right": 0.15,
+	"invert_y": false,
+	"invert_x": false,
 }
 
 # AC-0257 (Developer submenu) slider ranges (AC-0313: the tier-0 radius
@@ -268,6 +280,25 @@ func _clamp(k: String, v) -> void:
 		# never an emptied action (the merge rule, controls_map.gd).
 		"controls":
 			values[k] = controls_map.sanitize_array(v)
+		# AC-0089: the analog tuning layer — plain bounded floats/bools
+		# (AnalogTune owns the band constants; a corrupt stored value
+		# clamps INTO the band, so no stored value is ever out of the
+		# usable range — the bounds keep the game navigable, see
+		# analog_tune.gd). No apply step: the player reads values live at
+		# its two input paths (the look _process + the movement read).
+		"look_sensitivity":
+			values[k] = AnalogTune.clamp_sens(float(v))
+		"deadzone_left":
+			values[k] = AnalogTune.clamp_dz(float(v))
+		"deadzone_right":
+			values[k] = AnalogTune.clamp_dz(float(v))
+		# (AnalogTune.sanitize_bool, not bool(): GDScript's bool() is
+		# numbers only — a hand-edited string in the cfg would raise and
+		# abort the whole load; the sanitizer fails garbage to false.)
+		"invert_y":
+			values[k] = AnalogTune.sanitize_bool(v)
+		"invert_x":
+			values[k] = AnalogTune.sanitize_bool(v)
 		"seed":
 			values[k] = int(v)
 		"resolution":

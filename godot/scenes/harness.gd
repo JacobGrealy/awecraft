@@ -320,6 +320,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _gamepad_test(spawn)
 			return
+		if logic == "analog":
+			# AC-0089: the analog tuning arm — booted like the gamepad
+			# arm (real world + player) so the settings are exercised
+			# through the REAL input paths, not a mock.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_spawn_floor(spawn, 300)
+			player = main._spawn_player()
+			await _analog_test(spawn)
+			return
 		if logic == "craftpad":
 			# AC-0268: the controller-only crafting flow (Y open, D-pad/
 			# stick nav, A pick/place, LB quick-move, B close).
@@ -1794,6 +1803,52 @@ func _settings_test() -> void:
 			if c.name.begins_with("CtlRow_"):
 				n_rows += 1
 	var ctl_rows_count_ok := n_rows == 21
+	# AC-0089: the analog tuning layer — the AC-0088 round-trip pattern
+	# (declared in DEFAULTS, _clamp-validated, set_value persists,
+	# load_settings reads it back), the clamp band (AnalogTune owns the
+	# bounds), and the Controls-tab "Analog tuning" group's presence +
+	# the _sync_controls refresh on the real menu scene (the AC-0332
+	# row pattern). The LOGIC (pure core + the real input path) lives in
+	# the `analog` arm.
+	Settings.load_settings()
+	var an_def_ok := float(Settings.values["look_sensitivity"]) == 1.0 \
+		and float(Settings.values["deadzone_left"]) == 0.15 \
+		and float(Settings.values["deadzone_right"]) == 0.15 \
+		and not bool(Settings.values["invert_y"]) and not bool(Settings.values["invert_x"])
+	Settings.set_value("look_sensitivity", 9.9)
+	var an_clamp_hi_ok := float(Settings.values["look_sensitivity"]) == AnalogTune.SENS_MAX
+	Settings.set_value("deadzone_left", -3.0)
+	var an_clamp_lo_ok := float(Settings.values["deadzone_left"]) == AnalogTune.DZ_MIN
+	Settings.set_value("look_sensitivity", 1.5)
+	Settings.set_value("invert_y", true)
+	Settings.load_settings()
+	var an_reload_ok := float(Settings.values["look_sensitivity"]) == 1.5 and bool(Settings.values["invert_y"])
+	# restore the shipped default before the menu check (the clamp test
+	# left deadzone_left at 0.0 — the AC-0332 pattern).
+	Settings.set_value("deadzone_left", 0.15)
+	var asens_row = cpage.get_node_or_null("AnalogSensRow") if cpage != null else null
+	var asens_sp = asens_row.get_child(1) if asens_row != null and asens_row.get_child_count() == 3 else null
+	var adzl_row = cpage.get_node_or_null("AnalogDzLeftRow") if cpage != null else null
+	var adzr_row = cpage.get_node_or_null("AnalogDzRightRow") if cpage != null else null
+	var ainv_row = cpage.get_node_or_null("AnalogInvertRow") if cpage != null else null
+	var ainv_y = ainv_row.get_node_or_null("AnalogInvertYCheck") if ainv_row != null else null
+	var ainv_x = ainv_row.get_node_or_null("AnalogInvertXCheck") if ainv_row != null else null
+	var an_rows_present := asens_row != null and adzl_row != null and adzr_row != null and ainv_row != null \
+		and asens_sp != null and asens_sp is SpinBox \
+		and float(asens_sp.min_value) == float(AnalogTune.SENS_MIN) and float(asens_sp.max_value) == float(AnalogTune.SENS_MAX) \
+		and adzl_row.get_child(1) is SpinBox and float(adzl_row.get_child(1).max_value) == float(AnalogTune.DZ_MAX) \
+		and ainv_y != null and ainv_y is CheckBox and ainv_x != null and ainv_x is CheckBox
+	ymenu._sync_controls()
+	var asens_sync_v := float(asens_sp.value) if asens_sp != null else -1.0
+	var ainv_y_sync_v := bool(ainv_y.button_pressed) if ainv_y != null else false
+	var adzl_sync_v := float(adzl_row.get_child(1).value) if adzl_row != null else -1.0
+	# (is_equal_approx: the SpinBox snaps to its step grid, and 15*0.01 /
+	# 25*0.05 are not exactly 0.15 / 1.5 in binary — the row still SHOWS
+	# the value, the grid residue is below the step.)
+	var an_rows_sync_ok := an_rows_present and is_equal_approx(asens_sync_v, 1.5) and ainv_y_sync_v == true and is_equal_approx(adzl_sync_v, 0.15)
+	# restore the shipped defaults (the round-trip left sens 1.5 + invert_y on).
+	Settings.set_value("look_sensitivity", 1.0)
+	Settings.set_value("invert_y", false)
 	# restore the shipped default (the sync test left jump=X) + free the
 	# probe menu.
 	Settings.set_value("yfloor_enabled", true)
@@ -1837,7 +1892,13 @@ func _settings_test() -> void:
 		"controls": {"default_empty": ctl_default_empty, "saved": ctl_saved_ok, "reload": ctl_reload_ok,
 			"inputmap_apply": ctl_map_ok, "corrupt_safe": ctl_corrupt_ok,
 			"tab_present": ctl_row_present, "sync": ctl_row_sync_ok, "rows_21": ctl_rows_count_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok,
+		# AC-0089: the analog tuning layer — defaults, the clamp band
+		# (AnalogTune bounds), the save + reload round-trip, and the
+		# Controls-tab "Analog tuning" group's presence + the
+		# _sync_controls refresh (the AC-0332/AC-0088 row pattern).
+		"analog": {"defaults": an_def_ok, "clamp_hi_max": an_clamp_hi_ok, "clamp_lo_min": an_clamp_lo_ok,
+			"roundtrip": an_reload_ok, "rows_present": an_rows_present, "sync": an_rows_sync_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok,
 	})
 
 
@@ -2022,6 +2083,297 @@ func _controls_test() -> void:
 			and corrupt_a_ok and corrupt_b_ok and corrupt_c_ok \
 			and neg_complete and neg_compare and neg_conf_hit and neg_conf_free and clean_ok,
 	})
+
+
+# AC-0089: the analog tuning arm (AWECRAFT_LOGIC=analog). Renders are
+# infeasible on this box and this is a FEEL feature, so the arm drives
+# the LOGIC through the REAL input path (the same synthetic joypad
+# events the gamepad arm uses -> the player's look / movement), plus the
+# pure-function invariants (AnalogTune), the persist round-trip, and the
+# NEGATIVE tests (the instruments must be able to go red).
+#
+# The boundedness claims asserted here: a full stick deflection is
+# EXACTLY full output at every legal deadzone (max 0.9: (1-0.9)/(1-0.9)
+# = 1), so no legal setting makes look or movement unreachable; the
+# keyboard can never be filtered out (strength 1.0 > any legal dz);
+# dz 0 is the identity (a drifting stick reads as input — a reversible
+# player choice, finite math).
+func _analog_test(_spawn: Vector3) -> void:
+	var p := player
+	# a clean start (the controls arm's pattern): the arm's own writes
+	# must not leak into the next run.
+	if FileAccess.file_exists(Settings.PATH):
+		DirAccess.remove_absolute(Settings.PATH)
+	Settings.load_settings()
+	# (1) the defaults exist and are the shipped behaviour.
+	var dflt: Dictionary = AnalogTune.defaults()
+	var defaults_ok := float(Settings.values["look_sensitivity"]) == float(dflt["look_sensitivity"]) \
+		and float(Settings.values["deadzone_left"]) == float(dflt["deadzone_left"]) \
+		and float(Settings.values["deadzone_right"]) == float(dflt["deadzone_right"]) \
+		and not bool(Settings.values["invert_y"]) and not bool(Settings.values["invert_x"]) \
+		and float(dflt["deadzone_left"]) == float(dflt["deadzone_right"]) \
+		and float(dflt["look_sensitivity"]) == 1.0
+	# (2) PURE LOGIC (the core the tab, the player and this arm share):
+	# deadzone filters just below / passes just above; a full deflection
+	# stays full at the MAX legal dz; dz 0 is the identity; invert flips
+	# the sign and keeps the magnitude; sensitivity scales linearly.
+	var p_below := AnalogTune.apply_axis(0.14, 0.15)
+	var p_above := AnalogTune.apply_axis(0.16, 0.15)
+	var p_full_max := AnalogTune.apply_axis(1.0, 0.9)
+	var p_zero_id := AnalogTune.apply_axis(0.03, 0.0)
+	var p_inv := AnalogTune.apply_axis(-0.5, 0.15, true)
+	var p_ninv := AnalogTune.apply_axis(0.5, 0.15)
+	var vals1 := {"look_sensitivity": 1.0, "deadzone_right": 0.15, "invert_x": false, "invert_y": false}
+	var vals2 := vals1.duplicate()
+	vals2["look_sensitivity"] = 2.0
+	var s_lin := AnalogTune.look_stick(Vector2(0.8, 0.0), vals2).x / AnalogTune.look_stick(Vector2(0.8, 0.0), vals1).x
+	var s_zero := AnalogTune.look_stick(Vector2.ZERO, vals2)
+	var pure_ok := p_below == 0.0 and p_above > 0.0 and p_full_max == 1.0 and p_zero_id == 0.03 \
+		and p_inv == p_ninv and absf(p_inv) > 0.0 \
+		and absf(s_lin - 2.0) < 0.001 and s_zero == Vector2.ZERO
+	# wait for footing (the look tests do not move the player; the
+	# movement tests need it).
+	for i in 80:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	var start: Vector3 = p.position
+	# (3) SENSITIVITY through the REAL look path: the same 0.8 deflection
+	# at sens 1.0 vs 2.0 (two settings, two different outputs, ~2x), and
+	# a zeroed stick turns nothing.
+	var yaw_a: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var s1_yaw: float = absf(p.get_yaw() - yaw_a)
+	Settings.set_value("look_sensitivity", 2.0)
+	var yaw_b: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var s2_yaw: float = absf(p.get_yaw() - yaw_b)
+	var yaw_z: float = p.get_yaw()
+	for i in 60:
+		await get_tree().physics_frame
+	var zero_delta: float = absf(p.get_yaw() - yaw_z)
+	var measured_ratio := s2_yaw / maxf(s1_yaw, 0.0001)
+	var sens_ok := s1_yaw > 0.05 and _sens_ratio_ok(measured_ratio)
+	Settings.set_value("look_sensitivity", 1.0)
+	# (4) INVERT through the REAL look path: the same deflection rotates
+	# the OTHER way at the same magnitude (X on yaw, Y on pitch).
+	var yi0: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var invx_pre: float = p.get_yaw() - yi0
+	Settings.set_value("invert_x", true)
+	var yi1: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var invx_post: float = p.get_yaw() - yi1
+	var invx_ok := signf(invx_post) == -signf(invx_pre) \
+		and absf(invx_post) > 0.5 * absf(invx_pre) and absf(invx_post) < 2.0 * absf(invx_pre)
+	Settings.set_value("invert_x", false)
+	# Y on the pitch (30 frames keeps both windows inside PITCH_LIMIT, so
+	# the clamp never masks the sign flip).
+	var py0: float = p._pitch
+	await _drive_stick(JOY_AXIS_RIGHT_Y, 0.8, 30)
+	var invy_pre: float = p._pitch - py0
+	Settings.set_value("invert_y", true)
+	var py1: float = p._pitch
+	await _drive_stick(JOY_AXIS_RIGHT_Y, 0.8, 30)
+	var invy_post: float = p._pitch - py1
+	var invy_ok := signf(invy_post) == -signf(invy_pre) \
+		and absf(invy_post) > 0.5 * absf(invy_pre) and absf(invy_post) < 2.0 * absf(invy_pre)
+	Settings.set_value("invert_y", false)
+	# (5) DEADZONE through the REAL look path: just above the threshold
+	# passes (slower than full); at the MAX legal dz the 0.8 deflection
+	# is filtered to EXACTLY zero while a FULL deflection still drives
+	# look at full speed (no legal setting makes the stick unreachable).
+	Settings.set_value("deadzone_right", 0.7)
+	var yaw_c: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var dz_above: float = absf(p.get_yaw() - yaw_c)
+	var dz_above_ok := dz_above > 0.3 and dz_above < 1.5
+	Settings.set_value("deadzone_right", 0.9)
+	var yaw_d: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.8, 60)
+	var dz_hi_filtered: bool = absf(p.get_yaw() - yaw_d) == 0.0
+	var yaw_e: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 1.0, 60)
+	var dz_hi_full: float = absf(p.get_yaw() - yaw_e)
+	var dz_hi_full_ok := dz_hi_full > 0.5
+	# (6) dz 0 = the identity: a drifting stick (0.03) reads as input —
+	# the player's reversible choice — and the math stays finite.
+	Settings.set_value("deadzone_right", 0.0)
+	var yaw_f: float = p.get_yaw()
+	await _drive_stick(JOY_AXIS_RIGHT_X, 0.03, 60)
+	var drift_delta: float = absf(p.get_yaw() - yaw_f)
+	var drift_sane_ok := drift_delta > 0.0 and drift_delta < 0.1
+	Settings.set_value("deadzone_right", 0.15)
+	# (7) DEADZONE through the REAL MOVEMENT path (the left stick rides
+	# the move_* actions; the engine rescales by the binding deadzone 0.5
+	# first, the user value on top): raw 0.6 (engine 0.2) is FILTERED at
+	# dz 0.5, MOVES (slow) at dz 0.1, a FULL deflection walks at full
+	# speed at the MAX legal dz (the gamepad arm's own threshold), and
+	# the keyboard is never filtered out even at the max dz.
+	Settings.set_value("deadzone_left", 0.5)
+	var m0 := Vector2(p.position.x, p.position.z)
+	await _drive_stick(JOY_AXIS_LEFT_Y, -0.6, 60)
+	var mv_filtered := Vector2(p.position.x, p.position.z).distance_to(m0)
+	Debug.teleport(start.x, start.y, start.z)
+	p.velocity = Vector3.ZERO
+	for i in 80:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	Settings.set_value("deadzone_left", 0.1)
+	var m1 := Vector2(p.position.x, p.position.z)
+	await _drive_stick(JOY_AXIS_LEFT_Y, -0.6, 60)
+	var mv_slow := Vector2(p.position.x, p.position.z).distance_to(m1)
+	Debug.teleport(start.x, start.y, start.z)
+	p.velocity = Vector3.ZERO
+	for i in 80:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	Settings.set_value("deadzone_left", 0.9)
+	var m2 := Vector2(p.position.x, p.position.z)
+	await _drive_stick(JOY_AXIS_LEFT_Y, -1.0, 40)
+	var mv_full := Vector2(p.position.x, p.position.z).distance_to(m2)
+	Debug.teleport(start.x, start.y, start.z)
+	p.velocity = Vector3.ZERO
+	for i in 80:
+		if p.is_on_floor():
+			break
+		await get_tree().physics_frame
+	var m3 := Vector2(p.position.x, p.position.z)
+	Input.action_press("move_forward")
+	for i in 40:
+		await get_tree().physics_frame
+	var mv_kbd := Vector2(p.position.x, p.position.z).distance_to(m3)
+	Input.action_release("move_forward")
+	for i in 8:
+		await get_tree().physics_frame
+	var move_dz_ok := mv_filtered < 0.01 and mv_slow > 0.05 and mv_full > 0.5 and mv_kbd > 0.5
+	Settings.set_value("deadzone_left", 0.15)
+	# (8) PERSIST: every value round-trips through disk (set_value saves,
+	# a wiped in-memory table + load_settings reloads), and a corrupt
+	# stored value lands IN the legal band (float("corrupt") = 0.0 ->
+	# the band edge; the invert string fails safe to false through
+	# AnalogTune.sanitize_bool) — in-band is the guarantee: no stored
+	# value is ever out of the usable range.
+	Settings.set_value("look_sensitivity", 1.75)
+	Settings.set_value("deadzone_left", 0.4)
+	Settings.set_value("deadzone_right", 0.6)
+	Settings.set_value("invert_y", true)
+	Settings.set_value("invert_x", true)
+	var disk_ok := false
+	var cf := ConfigFile.new()
+	if cf.load(Settings.PATH) == OK:
+		disk_ok = float(cf.get_value("settings", "look_sensitivity", -1.0)) == 1.75 \
+			and float(cf.get_value("settings", "deadzone_left", -1.0)) == 0.4 \
+			and float(cf.get_value("settings", "deadzone_right", -1.0)) == 0.6 \
+			and bool(cf.get_value("settings", "invert_y", false)) \
+			and bool(cf.get_value("settings", "invert_x", false))
+	for k in dflt:
+		Settings.values[k] = dflt[k]
+	Settings.load_settings()
+	var reloaded_ok := float(Settings.values["look_sensitivity"]) == 1.75 \
+		and float(Settings.values["deadzone_left"]) == 0.4 \
+		and float(Settings.values["deadzone_right"]) == 0.6 \
+		and bool(Settings.values["invert_y"]) and bool(Settings.values["invert_x"])
+	var cfc := ConfigFile.new()
+	cfc.set_value("settings", "look_sensitivity", "corrupt")
+	cfc.set_value("settings", "deadzone_left", "corrupt")
+	cfc.set_value("settings", "invert_y", "corrupt")
+	cfc.save(Settings.PATH)
+	Settings.load_settings()
+	# float("corrupt") = 0.0 -> clamps to the band edge; the invert string
+	# fails safe to false through AnalogTune.sanitize_bool (GDScript's
+	# bool() is numbers only and would RAISE on a string, aborting the
+	# load — the sanitizer exists for this).
+	var corrupt_ok := float(Settings.values["look_sensitivity"]) == AnalogTune.SENS_MIN \
+		and float(Settings.values["deadzone_left"]) == AnalogTune.DZ_MIN \
+		and float(Settings.values["deadzone_right"]) == float(dflt["deadzone_right"]) \
+		and bool(Settings.values["invert_y"]) == false and bool(Settings.values["invert_x"]) == false
+	# (9) NEGATIVE TESTS — the instruments must be able to go red:
+	# (a) the sensitivity ratio checker goes RED on a bypassed path (the
+	#     setting ignored -> both windows equal -> ratio 1.0) and green on
+	#     the measured ratio;
+	var neg_sens := not _sens_ratio_ok(1.0) and _sens_ratio_ok(measured_ratio)
+	# (b) the deadzone filter checker goes RED when the filter is
+	#     bypassed (the unfiltered 0.05 drift passes) and green on the
+	#     filter's output; the in-world proof that the filter is LIVE in
+	#     the game path is dz_hi_filtered (a 0.8 deflection -> exactly 0
+	#     yaw at dz 0.9 — a bypassed filter would have turned the camera).
+	var filtered_v := AnalogTune.apply_axis(0.05, 0.15)
+	var bypassed_v := 0.05
+	var neg_dz := filtered_v == 0.0 and bypassed_v != 0.0 \
+		and _dz_filtered_ok(filtered_v) and not _dz_filtered_ok(bypassed_v) and dz_hi_filtered
+	# (c) the invert checker goes RED on the identity (un-flipped) output
+	# and green on the inverted one.
+	var neg_inv := _invert_flips(-0.5, p_inv) and not _invert_flips(-0.5, AnalogTune.apply_axis(-0.5, 0.15, false))
+	# (10) CLEANUP: restore the shipped defaults (the standing arms and
+	# the cross-process gate must see the pristine tuning).
+	for k in dflt:
+		Settings.set_value(k, dflt[k])
+	var clean_ok := float(Settings.values["look_sensitivity"]) == float(dflt["look_sensitivity"]) \
+		and float(Settings.values["deadzone_left"]) == float(dflt["deadzone_left"]) \
+		and float(Settings.values["deadzone_right"]) == float(dflt["deadzone_right"]) \
+		and not bool(Settings.values["invert_y"]) and not bool(Settings.values["invert_x"])
+	Debug.result({
+		"mode": "analog",
+		"defaults": defaults_ok,
+		"pure": {"dz_below_zero": p_below == 0.0, "dz_above_pass": p_above, "dz_full_at_max_dz": p_full_max,
+			"dz_zero_identity": p_zero_id, "invert_sign_flip": p_inv, "invert_unflipped": p_ninv,
+			"sens_linear_ratio": s_lin, "zero_input_zero": s_zero == Vector2.ZERO, "ok": pure_ok},
+		"sens": {"low": roundf((s1_yaw) * 10000.0) / 10000.0, "high": roundf((s2_yaw) * 10000.0) / 10000.0, "ratio": roundf((measured_ratio) * 1000.0) / 1000.0,
+			"scaled_ok": sens_ok, "zero_input_delta": zero_delta, "zero_input_ok": zero_delta == 0.0},
+		"invert": {"x_pre": roundf((invx_pre) * 10000.0) / 10000.0, "x_post": roundf((invx_post) * 10000.0) / 10000.0, "y_pre": roundf((invy_pre) * 10000.0) / 10000.0,
+			"y_post": roundf((invy_post) * 10000.0) / 10000.0, "x_ok": invx_ok, "y_ok": invy_ok},
+		"deadzone": {"above_threshold_0.7": roundf((dz_above) * 10000.0) / 10000.0, "hi_dz_0.8_filtered": dz_hi_filtered,
+			"hi_dz_full_deflection": roundf((dz_hi_full) * 10000.0) / 10000.0, "drift_at_dz0": roundf((drift_delta) * 10000.0) / 10000.0,
+			"move_below": roundf((mv_filtered) * 10000.0) / 10000.0, "move_above": roundf((mv_slow) * 10000.0) / 10000.0,
+			"move_full_at_max_dz": roundf((mv_full) * 10000.0) / 10000.0, "move_kbd_at_max_dz": roundf((mv_kbd) * 10000.0) / 10000.0,
+			"move_ok": move_dz_ok, "drift_sane_ok": drift_sane_ok},
+		"persist": {"disk_has_values": disk_ok, "reloaded": reloaded_ok, "corrupt_clamped_in_band": corrupt_ok},
+		"negative": {"sens_checker_red_on_bypass": neg_sens, "dz_checker_red_on_bypass": neg_dz,
+			"invert_checker_red_on_identity": neg_inv},
+		"cleaned": clean_ok,
+		"ok": defaults_ok and pure_ok and sens_ok and zero_delta == 0.0 and invx_ok and invy_ok \
+			and dz_above_ok and dz_hi_filtered and dz_hi_full_ok and drift_sane_ok and move_dz_ok \
+			and disk_ok and reloaded_ok and corrupt_ok \
+			and neg_sens and neg_dz and neg_inv and clean_ok,
+	})
+	get_tree().quit()  # the game-boot arm's exit (the gamepad arm's pattern)
+
+
+# AC-0089 helpers: drive a stick axis to `val` for `frames` physics
+# frames (a FRESH event object, the AC-0243 pattern), then release to
+# 0.0 — the value-event semantics the player's look/movement paths use.
+func _drive_stick(axis: int, val: float, frames: int) -> void:
+	var ev := InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = axis
+	ev.axis_value = val
+	Input.parse_input_event(ev)
+	for i in frames:
+		await get_tree().physics_frame
+	ev.axis_value = 0.0
+	Input.parse_input_event(ev)
+	for i in 6:
+		await get_tree().physics_frame
+
+
+# AC-0089 negative-test checkers (the instruments must be able to fail):
+# the sensitivity ratio (2x expected; a BYPASSED path yields 1.0 and must
+# go red), the deadzone filter (a below-threshold input must be EXACTLY
+# 0; a bypassed filter leaks the raw value and must go red), the invert
+# sign flip (the identity output must go red).
+func _sens_ratio_ok(r: float) -> bool:
+	return r > 1.2
+
+
+func _dz_filtered_ok(v: float) -> bool:
+	return v == 0.0
+
+
+func _invert_flips(orig: float, out: float) -> bool:
+	return signf(out) == -signf(orig)
 
 
 func _build_sand_pad(spawn: Vector3) -> float:

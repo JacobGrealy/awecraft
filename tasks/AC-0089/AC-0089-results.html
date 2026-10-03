@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0089 results — analog tuning controls (look sensitivity, per-stick deadzones, invert X/Y)</title>
+<style>
+body { font-family: Georgia, 'Times New Roman', serif; max-width: 60em; margin: 2em auto; padding: 0 1em; line-height: 1.5; color: #222; }
+h1 { font-size: 1.5em; border-bottom: 2px solid #888; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.8em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+th, td { border: 1px solid #bbb; padding: .35em .7em; text-align: left; vertical-align: top; }
+th { background: #f0ede6; }
+code, pre { font-family: 'Courier New', monospace; font-size: .9em; }
+pre { background: #f6f5f2; border: 1px solid #ddd; padding: .8em; overflow-x: auto; }
+.pass { color: #1a7a1a; font-weight: bold; }
+.fail { color: #b02020; font-weight: bold; }
+.note { background: #fdf6e3; border-left: 4px solid #d4b96a; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0089 — Analog tuning controls: look sensitivity, per-stick deadzones, invert X/Y</h1>
+
+<h2>1. What was built, and where the controls live</h2>
+<p>Options &gt; <b>Controls</b> &gt; <b>"Analog tuning (sticks)"</b> group — the bottom section of the
+AC-0088 Controls tab (<code>ui/menu.gd</code>, code-built like the remap rows): one SpinBox row for
+<b>Look sensitivity (right stick)</b>, one each for <b>Deadzone — left stick (movement)</b> and
+<b>Deadzone — right stick (look)</b>, one row with the two invert <b>CheckBox</b>es (Y, X) and a
+<b>Reset analog to defaults</b> button. SpinBoxes, not HSliders: the AC-0260 fix (the HSlider rows
+misbehaved in the tabbed options) — the ticket's "the project's equivalent control".</p>
+<p><b>Convention copied from AC-0088, exactly:</b> the five keys (<code>look_sensitivity</code>,
+<code>deadzone_left</code>, <code>deadzone_right</code>, <code>invert_y</code>,
+<code>invert_x</code>) are declared in <code>Settings.DEFAULTS</code>, <code>_clamp</code>-validated
+against the bounds, persisted through <code>set_value</code> (clamp + save in one step), read back by
+<code>load_settings</code>, shown on the tab, refreshed by <code>_sync_controls</code>, and asserted
+round-trip + row-present by the arms. No second mechanism. Two new pieces of code carry the logic,
+shared so the UI, the game and the instrument cannot drift (the <code>controls_map.gd</code>
+convention): <code>godot/core/analog_tune.gd</code> (pure-logic core: the math + the bounds) and the
+player's two input paths (below).</p>
+<p><b>The values are APPLIED to the real input path, not merely stored</b> (the failure mode the
+ticket warns about) — the player reads <code>Settings.values</code> live at both paths, so a slider
+change applies the next frame; no apply step exists to skip.</p>
+<ul>
+<li><b>Look (right stick)</b> — <code>player.gd</code> <code>_process</code>: the raw stored stick
+value (<code>_pad_look</code>, the AC-0087 value-event pattern) is tuned through
+<code>AnalogTune.look_stick()</code> (per-axis deadzone + renormalize, invert X/Y, the linear
+sensitivity multiplier) before it scales <code>PAD_LOOK_SPEED</code>.</li>
+<li><b>Movement (left stick — "any analog movement")</b> — <code>player.gd</code>
+<code>_physics_process_impl</code>: the four <code>move_*</code> reads switched from
+<code>Input.is_action_pressed</code> booleans to <code>Input.get_action_strength</code>, and the
+resulting vector goes through <code>AnalogTune.move_stick()</code> (the <code>deadzone_left</code>).
+Keyboard behaviour is unchanged (a held key holds at strength 1.0; the diagonal normalization is
+kept). <b>Stated consequence:</b> the movement model's speed is a constant (WALK/SPRINT/…), the
+input vector is normalized — the stick magnitude only feeds the DEADZONE filter (past the
+threshold = full speed). That is Minecraft parity (the stick is a direction, not a throttle) and
+the ticket's requirement (the deadzone affects analog movement); magnitude→speed scaling would be
+a new movement-feel change outside the ticket.</li>
+</ul>
+
+<h2>2. The decisions: bounds, curve, invert scope — stated and why</h2>
+<table>
+<tr><th>Knob</th><th>Decision</th><th>Why / what it buys</th></tr>
+<tr><td>Sensitivity <code>0.25 … 2.0</code>, default <code>1.0</code></td>
+<td><b>LINEAR</b> multiplier on the look delta (a multiplier, not a curve), look only</td>
+<td>One number the player can calibrate against the base <code>PAD_LOOK_SPEED</code> (2.5 rad/s);
+a curve would change low-deflection response in a way a single value cannot predict. The floor
+0.25 keeps a full deflection at ≥ 0.625 rad/s (90° in ~1.4 s) — no legal value makes look
+unusable; the ceiling is fast-but-controllable. 1.0 = the shipped behaviour.</td></tr>
+<tr><td>Deadzone <code>0 … 0.9</code> per stick, default <code>0.15</code> each</td>
+<td>Per-axis deadzone <b>with renormalize</b>: |v| ≤ dz → 0; above it (|v| − dz) / (1 − dz)</td>
+<td><b>Upper bound 0.9, not 1.0:</b> a full deflection is EXACTLY full output at every legal dz
+((1 − dz)/(1 − dz) = 1), so no legal setting can make look or movement unreachable — a player at
+the extreme still has a working stick, only shallow deflections die. dz = 1 is excluded because
+the renormalize divides by zero AND would filter even a full deflection (the game unnavigable — a
+bug, not a player choice). <b>Lower bound 0.0</b> is legal and is the identity: finite math, no
+division by zero; a drifting stick at dz 0 reads as input — the player's reversible choice,
+visible in the UI. Renormalize keeps a full stick full at high dz (no hidden second effect on
+top speed). Default 0.15 keeps the shipped arms green (the gamepad arm drives 0.8 / 1.0
+deflections — both pass with margin) and rejects typical stick drift by default. Movement: the
+engine's per-action deadzone (0.5, <code>project.godot [input]</code>) rescales the stick FIRST,
+the user value applies on top — so the effective raw threshold is 0.5 + 0.5·dz (dz 0.9 → raw
+&gt; 0.95): the slider has a real, monotone effect, and drift can't reach movement even at
+dz 0.</td></tr>
+<tr><td>Invert Y / X, default off</td>
+<td><b>Look-only</b> (the right stick); flip the sign, keep the magnitude</td>
+<td>The left stick also drives the native GUI focus navigation (engine <code>ui_focus_*</code>
+bindings, untouched by design) and the sprint latch keys off the forward sign — inverting either
+would break both. Mirrors Minecraft's "Invert Y" being a look setting. Sensitivity is likewise
+look-only: movement speed is the game's, not a player knob.</td></tr>
+</table>
+
+<h2>3. The headless arm (<code>AWECRAFT_LOGIC=analog</code>) — the logic, through the REAL input path</h2>
+<p>Renders are infeasible on this box and this is a feel feature, so the arm is booted like the
+gamepad arm (real world + player) and drives the SAME synthetic joypad events the gamepad arm
+uses — <code>Input.parse_input_event</code> → the player's look / movement — never a mock. Final run:
+<b><code>"ok": true</code></b>, zero SCRIPT ERROR.</p>
+<table>
+<tr><th>Block</th><th>What it proves</th></tr>
+<tr><td><code>defaults</code></td><td>the five keys exist with the shipped values (1.0 / 0.15 /
+0.15 / off / off) on a clean cfg</td></tr>
+<tr><td><code>pure</code></td><td>the shared core: deadzone filters 0.14 at dz 0.15 (→ 0) and
+passes 0.16 (→ 0.0118); a full deflection is exactly 1.0 at the MAX legal dz (0.9); dz 0 is the
+identity (0.03 → 0.03); invert flips the sign and keeps the magnitude (−0.5 → +0.4118 = +0.5
+unflipped); sensitivity scales linearly (ratio exactly 2.0); zero input → zero output</td></tr>
+<tr><td><code>sens</code></td><td><b>two settings, two different outputs, in world:</b> the same
+0.8 right-stick deflection gives yaw Δ 1.8969 at sens 1.0 and 3.8134 at sens 2.0 (ratio 2.01);
+a zeroed stick turns nothing (Δ exactly 0.0 over 60 physics frames)</td></tr>
+<tr><td><code>invert</code></td><td>in world: +0.8 gives yaw Δ −1.903 with invert off and
++1.9129 with invert on (sign flipped, same magnitude); Y: pitch Δ −0.95 → +0.9571 (30-frame
+windows keep both inside <code>PITCH_LIMIT</code> so the clamp can't mask the flip)</td></tr>
+<tr><td><code>deadzone</code></td><td>in world, look: at dz 0.7 the 0.8 deflection passes
+(Δ 0.8333 — just above the threshold); at the MAX dz 0.9 the same 0.8 deflection is filtered to
+EXACTLY 0.0 while a FULL deflection (1.0) still drives look at 2.5 rad over the window (full
+speed) —
+<b>no legal setting makes the stick unreachable</b>. In world, movement: raw −0.6 (engine 0.2) is
+filtered to 0.0 m at dz 0.5, moves at dz 0.1, a FULL deflection walks 2.769 m at the max dz
+(the gamepad arm's own &gt; 0.5 m threshold), and the keyboard walks 2.577 m at the max dz —
+<b>the keyboard can never be deadzoned out</b>. Drift: at dz 0 a 0.03 wobble reads as input
+(Δ 0.075 rad — the player's choice, finite, reversible)</td></tr>
+<tr><td><code>persist</code></td><td>all five values on disk after <code>set_value</code>; a wiped
+in-memory table + <code>load_settings</code> brings them back; a hand-written corrupt cfg
+(<code>"corrupt"</code>) lands IN the legal band (float("corrupt") = 0.0 → the band edge; the
+invert string fails safe to <code>false</code> through <code>AnalogTune.sanitize_bool</code> —
+GDScript's <code>bool()</code> is numbers-only and would RAISE on a string and abort the whole
+load; the sanitizer exists for this)</td></tr>
+<tr><td><code>negative</code></td><td><b>the instruments can fail</b>: the sensitivity-ratio
+checker goes RED on a bypassed path (ratio 1.0 — the setting ignored) and green on the measured
+2.01; the deadzone-filter checker goes RED when the filter is bypassed (the unfiltered 0.05
+drift leaks) and green on the filter's 0.0 — with the in-world proof that the filter is LIVE in
+the game path (0.8 deflection → exactly 0.0 yaw at dz 0.9; a bypassed filter would have turned
+the camera); the invert checker goes RED on the identity (un-flipped) output</td></tr>
+<tr><td><code>cleaned</code></td><td>self-cleaning exit: all five keys back at the shipped
+defaults, so the standing arms and the cross-process gate never see a custom tuning</td></tr>
+</table>
+<pre>RESULT {"cleaned":true,"defaults":true,"deadzone":{...},"invert":{...},"mode":"analog","negative":{...},"ok":true,"persist":{...},"pure":{...},"sens":{...}}</pre>
+
+<p>Settings arm, new <code>analog</code> block (round-trip + UI assertions on the real
+<code>menu.tscn</code>, the AC-0332/AC-0088 row pattern):
+<code>{"defaults":true,"clamp_hi_max":true,"clamp_lo_min":true,"roundtrip":true,"rows_present":true,"sync":true}</code>
+— all five rows present on the real menu scene (SpinBox bounds 0.25–2.0 / 0–0.9, the two
+CheckBoxes), and the <code>_sync_controls</code> refresh lands a non-default value (1.5x + invert Y)
+onto the rows. Two instrument notes: row values are compared with <code>is_equal_approx</code>
+(the SpinBox snaps to its step grid — 15×0.01 is not exactly 0.15 in binary), and the arm
+restores <code>deadzone_left</code> to 0.15 before the menu check (its clamp test leaves it at
+0.0 — the AC-0332 pattern).</p>
+
+<h2>4. Gate results</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 (pristine tree — the only temp instrument (the <code>-s</code> deadzone probe) was
+removed in-task)</td><td class="pass">0 <code>SCRIPT ERROR</code> lines (the pre-existing headless
+dummy-driver shader noise only)</td></tr>
+<tr><td>settings arm (<code>AWECRAFT_LOGIC=settings</code>)</td><td class="pass">
+<code>ok:true</code> incl. the new <code>analog</code> block — 0 SCRIPT ERROR</td></tr>
+<tr><td>controls arm (<code>AWECRAFT_LOGIC=controls</code>, AC-0088)</td><td class="pass">
+<code>ok:true</code> — the remap layer untouched by this change</td></tr>
+<tr><td>analog arm (<code>AWECRAFT_LOGIC=analog</code>, new, standalone)</td>
+<td class="pass"><code>ok:true</code> — see §3 (0 SCRIPT ERROR)</td></tr>
+<tr><td>input arms (the refactor's proof — defaults must be behaviourally identical)</td>
+<td class="pass">player, look, interact, swing, guiclick, combat, <b>gamepad</b> (the most
+exposed: stick move, L3 sprint ratio, right-stick look at 0.8, hotbar, fly, menu nav — all
+green with the new defaults: 0.8 → 0.765 after the 0.15 right deadzone, full deflections
+renormalize to 1.0 so every full-speed threshold holds), pcensus, sound — no moved values to
+re-base (see §5)</td></tr>
+<tr><td>input arms, continued: <b>fpv</b> (the run-list's last member — the viewmodel arm)</td>
+<td class="pass">RESULT <b>byte-identical</b> to the pre-diff tree's run
+(<code>.scratch/AC-0388-stage/gate_12_battery_fpv.log</code>, 2026-10-02): all block checks green
+(<code>block_held_ok</code>/<code>block_type_ok</code>/<code>empty_hidden_ok</code>/
+<code>highlight_axis_ok</code>/<code>sprite_hidden_during_block</code> true). The documented
+pre-existing flake reproduces exactly — <code>tool_held_ok:false</code> /
+<code>region_actual [129,1]</code> vs <code>region_want [128,0]</code> — present in every run
+since 2026-10-02 on this tree lineage (last <code>true</code>: 2026-08-20), so it predates
+AC-0089 by ~6 weeks of tickets; 0 SCRIPT ERROR</td></tr>
+<tr><td>battery (one process: player;interact;light;fluids;genhash;settings;controls)</td>
+<td class="pass">all 7 modes green, 0 SCRIPT ERROR — player <code>jump_peak_y</code> 142.42,
+sprint 5.6/4.3, <code>col_deferred</code> 0; interact <code>place_ok</code>/<code>drop_spawned</code>
+true; light <code>torch_level</code> 14 (torch_far 0→9); fluids <code>sea_stable</code> true
+(1719/320 on the resident set); settings incl. the new <code>analog</code> block all true;
+controls <code>ok:true</code> byte-identical to the pre-diff baseline</td></tr>
+<tr><td>genhash</td><td class="pass">25/25 byte-identical vs the current reference set
+(<code>.scratch/AC-0311-gates/p3_genhash_r1.log</code> — the latest rebase) — input tuning
+touches no generation (world/*, data.gd untouched)</td></tr>
+<tr><td>standing set (re-run this task, one godot at a time)</td>
+<td class="pass">farab <code>h_mismatch</code> <b>0</b> (slab_mismatch 0/1080 at BOTH grids,
+<code>ok:true</code>); ladder 20/20 (first run hit the 300 s wall before its RESULT — the
+documented "~2–4 min" is optimistic; the 600 s re-run is green); meshprobe
+<code>match_rate</code> <b>1.0</b> (mismatch empty, <code>ac0211_ok:true</code>); halo
+<code>a/b/b1/c</code> all ok (mismatches 0, b 226/226 slabs); lightstate leaks <b>0/0</b>
+(before/after the arm's edit) + <code>stragglers</code> 0; r16
+(<code>--fixed-fps 600</code>, the documented recipe) all sub-flags green —
+<b>far_holes 0/0 in BOTH bands</b> (far0/far1, far_pending 0 both),
+<code>inr_ok</code>/<code>wave_ok</code>/<code>height_ok</code>/<code>air_ok</code>/
+<code>uv_repeat_ok</code>/<code>no_giant_ok</code>/<code>no_downgrade_ok</code>/
+<code>low_thread_ok</code>/<code>immediate_ok</code>/<code>low_sync_zero_ok</code>/
+<code>catch_up_ok</code> true, <code>built_all</code> true; boundary r4
+<code>ok</code>/<code>remesh_ok</code>/<code>marker_ok</code> true, crossings 20 = walk_lines,
+p50 13 (standing p50 13), p95 34 (standing ≈42) — in band.
+<code>staged_dropped</code> 2793 is a per-run oversubscription census (historical runs span
+0–2850; the standing row's 1667 is one sample, not an invariant) — the arm's own contract is
+green</td></tr>
+</table>
+<div class="note"><b>Standing-row staleness, reported not re-based:</b> the 2026-09-18 standing
+row <code>player start</code> [8.5, 142.0, 8.5] / <code>after_fly_y</code> 143.2 no longer
+matches the arm's output (<code>start</code> [8.78, 140.98, 8.78], <code>after_fly_y</code>
+145.26) — but the <b>pre-my-diff</b> tree already produced the new values: this battery's
+player/interact RESULTS are field-identical (player: every measured field, only the
+non-deterministic <code>time_before/after</code> wall fields differ) to
+<code>.scratch/ac0088-battery.log</code> (AC-0088's battery, same tree, 2026-10-03 00:05 —
+before AC-0089's diff), and identical to the AC-0309-era batteries. The drift predates this
+task (the 2026-09-24/25 AC-0311 genhash rebase changed the terrain the spawn search walks);
+per the task's instruction I report it and leave the re-baseline to the closeout.</div>
+
+
+<h2>5. Did any input arm move? Did I touch main.gd?</h2>
+<p><b>No input arm moved — before/after:</b> the defaults were chosen so the shipped behaviour is
+preserved at every threshold the arms use: look at a 0.8 deflection is 0.765× the raw value after
+the default right deadzone (the gamepad arm only asserts &gt; 0.05 rad — it holds with ~19×
+margin); every full deflection renormalizes to exactly 1.0, so the full-speed movement/look
+thresholds (the gamepad arm's &gt; 0.5 m walk, the L3 ratio band 1.2–1.45 measured at
+strength-1.0 presses) are unchanged; the keyboard reads strength 1.0 → identical. The movement
+path's switch from boolean to strength reads is behaviour-identical for every keyboard input and
+for full-deflection stick input; the only new default behaviour is the drift band below 0.15
+(filtered), which no arm exercises. Direct evidence: this battery's player/interact RESULTs are
+field-identical to the pre-diff tree (<code>.scratch/ac0088-battery.log</code>, AC-0088's battery
+on the same tree 90 minutes before AC-0089's diff — every measured field equal; only the
+non-deterministic wall-clock fields differ), and the settings/controls arms differ from that
+baseline by exactly one thing: the new <code>analog</code> field. Nothing to re-base; nothing
+re-based silently (the one stale standing row is reported in §4, not touched).</p>
+<p><b>main.gd: NOT touched.</b> The <code>analog</code> arm dispatches through the existing
+<code>_run_game</code> path (like <code>gamepad</code>) — no pre-game-node branch needed. The
+worktree also carries another session's in-flight edits (<code>godot/scenes/main.gd</code>
+particle lines, <code>godot/autoload/game.gd</code>, <code>godot/entities/drop.gd</code>,
+<code>tasks/TASKS.yaml</code>) — all gates above ran on the tree as found; AC-0089's diff is
+exactly: <code>godot/core/analog_tune.gd</code> (new), <code>godot/autoload/settings.gd</code>,
+<code>godot/ui/menu.gd</code>, <code>godot/player/player.gd</code>,
+<code>godot/scenes/harness.gd</code> (analog arm + the settings-arm <code>analog</code> block),
+<code>tasks/harness_data.yaml</code> (+ re-rendered <code>godot/HARNESS.md</code>),
+<code>godot/ARCHITECTURE.md</code> (§2 Settings row, the Menu row, the core-helper list, the
+input note), <code>tasks/AC-0089/AC-0089-results.html</code> (this page). No <code>.gd</code>
+outside that list; no TASKS.yaml edit (the spec's FILL sections are the coordinator's); no git;
+the full battery and the Windows rebuild are the coordinator's.</p>
+
+<h2>6. Deviations &amp; notes</h2>
+<ul>
+<li><b>Reset button added, not required:</b> "Reset analog to defaults" (one Button, reuses the
+AC-0088 per-row reset convention; the "Reset ALL bindings" button stays bindings-only). No new
+<code>Settings</code> API — the handler sets the five keys from <code>AnalogTune.defaults()</code>.</li>
+<li><b>No apply step</b> (stated, deliberate): the player reads the values live at its two input
+paths, so <code>set_value</code> (clamp + save) is the whole write path — an apply function to
+skip would be a second mechanism, the thing the ticket warns against.</li>
+<li><b>The corrupt-cfg crash found by the arm's own test</b>: <code>bool("corrupt")</code> raises
+"Nonexistent 'bool' constructor" in GDScript 4 (numbers only) and would abort the entire
+<code>load_settings</code>. The new keys use <code>AnalogTune.sanitize_bool</code> (garbage →
+<code>false</code>); the pre-existing bool settings (<code>fullscreen</code>, …) keep their plain
+<code>bool(v)</code> — a hand-edited string there is a pre-existing weakness outside this
+ticket's fence, noted here for the closeout harvest.</li>
+<li><b>Engine deadzone (measured, not assumed):</b> a temporary <code>-s</code> probe (removed in
+task) confirmed Godot 4.7 rescales the stick by the per-action deadzone (0.5) in
+<code>project.godot [input]</code> — raw 0.55 → strength 0.1, raw 1.0 → 1.0, raw &lt; 0.5 → 0 —
+and that <code>Input.get_action_strength</code> exposes exactly that (keyboard holds at 1.0).
+The user deadzone composes on top; the arm's movement numbers are the proof.</li>
+<li><b>Native lane untouched</b> — no rebuild/re-stage needed (no C++ or <code>data.gd</code>
+change).</li>
+</ul>
+
+</body>
+</html>

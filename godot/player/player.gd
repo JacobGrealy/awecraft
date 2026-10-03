@@ -231,9 +231,14 @@ func _ready() -> void:
 func _process(dt: float) -> void:
 	# AC-0087: right-stick look - the stick sends VALUE events (not deltas),
 	# so the stored value is applied once per frame.
+	# AC-0089: the RAW stick value is tuned here (per-axis deadzone,
+	# invert X/Y, the linear look sensitivity) through the same pure core
+	# the Options > Controls tab and the `analog` arm use (AnalogTune —
+	# the values are read live, so a slider change applies the next frame).
 	if Game.mode == "play" and ui_mode == "" and not Game.console_open and _pad_look != Vector2.ZERO:
-		_yaw -= _pad_look.x * PAD_LOOK_SPEED * dt
-		_pitch = clampf(_pitch - _pad_look.y * PAD_LOOK_SPEED * dt, -PITCH_LIMIT, PITCH_LIMIT)
+		var lt := AnalogTune.look_stick(_pad_look, Settings.values)
+		_yaw -= lt.x * PAD_LOOK_SPEED * dt
+		_pitch = clampf(_pitch - lt.y * PAD_LOOK_SPEED * dt, -PITCH_LIMIT, PITCH_LIMIT)
 		_apply_rotation()
 	if camera == null or hand_root == null or held_box == null or held_sprite == null:
 		return
@@ -531,14 +536,24 @@ func _physics_process_impl(dt: float) -> void:
 	var swim_up := in_water or _block_at(position.x, position.y, position.z) == 5
 	var ix := 0.0
 	var iz := 0.0
-	if not cg and Input.is_action_pressed("move_forward"):
-		iz += 1.0
-	if not cg and Input.is_action_pressed("move_back"):
-		iz -= 1.0
-	if not cg and Input.is_action_pressed("move_left"):
-		ix -= 1.0
-	if not cg and Input.is_action_pressed("move_right"):
-		ix += 1.0
+	if not cg:
+		# AC-0089: ANALOG movement — get_action_strength (the old
+		# is_action_pressed booleans made the stick digital: any deflection
+		# past the binding deadzone ran at full speed). A keyboard key
+		# holds at 1.0 (unchanged behaviour); the left stick arrives
+		# already rescaled by the binding deadzone (0.5, project.godot),
+		# and the user's deadzone_left applies on top (AnalogTune — the
+		# same core the tab and the `analog` arm use; read live). A full
+		# deflection stays full speed at every legal deadzone, and the
+		# keyboard can never be filtered out (strength 1.0 > any legal
+		# dz).
+		iz += Input.get_action_strength("move_forward")
+		iz -= Input.get_action_strength("move_back")
+		ix -= Input.get_action_strength("move_left")
+		ix += Input.get_action_strength("move_right")
+		var mv := AnalogTune.move_stick(Vector2(ix, iz), float(Settings.values["deadzone_left"]))
+		ix = mv.x
+		iz = mv.y
 	var ln := Vector2(ix, iz).length()
 	if ln > 0.0:
 		ix /= ln

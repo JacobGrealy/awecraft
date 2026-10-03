@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -171,7 +171,12 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         Controls — AC-0088; the Controls tab is
 │                         code-built rows over the remap actions,
 │                         press-to-capture rebind + conflict report +
-│                         reset, persisted via Settings "controls")
+│                         reset, persisted via Settings "controls";
+│                         AC-0089 adds its "Analog tuning" group —
+│                         look sensitivity, per-stick deadzones,
+│                         invert X/Y rows, persisted via the Settings
+│                         analog keys, applied live by the player's
+│                         look / movement input paths)
 ```
 
 There is **no** `hud.gd`/`hud.tscn`, `player/interaction.gd`, `player/combat.gd`,
@@ -181,7 +186,10 @@ per-column/slab object; `core/*.gd` are pure-logic helpers with no node dependen
 (`math.gd` DDA, `noise.gd`, `atlas.gd`, `chunk_io.gd`, `sphere_math.gd`, `held_mesh.gd`,
 `aero.gd`, `daynight.gd`, `build_id.gd`, `controls_map.gd` — AC-0088 remap layer:
 token grammar, the captured `project.godot` defaults, the safe-fallback merge,
-apply + conflict detection, shared by the Controls tab and the `controls` arm),
+apply + conflict detection, shared by the Controls tab and the `controls` arm,
+`analog_tune.gd` — AC-0089 analog tuning: the deadzone/invert/sensitivity math +
+the bounded ranges, shared by the Controls-tab "Analog tuning" group, the player's
+look / movement paths and the `analog` arm),
 plus the `.gdshader` files under `world/` and `core/`.
 
 **Input (AC-0087 + AC-0088)**: the `[input]` section of `project.godot` is the
@@ -195,6 +203,19 @@ raw keys/buttons, so a remap reaches every use site. Custom bindings are the
 `Settings` `controls` layer (applied over the defaults at boot, §2 row 5);
 the built-in `ui_*` actions stay on their engine defaults (native GUI focus
 navigation) and are not remappable from the Controls tab.
+
+**Analog tuning (AC-0089)**: the Options > Controls "Analog tuning" group tunes
+the two stick input paths (the Settings analog keys, `core/analog_tune.gd`): the
+right-stick LOOK path stores the raw stick value and applies per-axis deadzone +
+invert X/Y + the LINEAR look sensitivity at its `_process` application; the
+left-stick MOVEMENT path reads the `move_*` action STRENGTH (`Input.
+get_action_strength` — the old `is_action_pressed` booleans made the stick digital)
+and applies the `deadzone_left` on top of the engine's per-action deadzone rescale
+(0.5, `project.godot`). Invert and sensitivity are look-only (the left stick also
+drives the native focus nav and the sprint-latch forward sign). Bounds keep the
+game navigable at every legal setting: a full deflection is exactly full output at
+any deadzone ≤ 0.9, and the keyboard (strength 1.0) can never be filtered out.
+Values are read live — a slider change applies the next frame, no apply step.
 
 ## 4. Native extension (`gdext/`)
 
