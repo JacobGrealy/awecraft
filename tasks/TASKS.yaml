@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-03T09:57
+  updated_at: 2026-10-03T11:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0391
 - AC-0390
 - AC-0205
 - AC-0186
@@ -23616,6 +23617,84 @@ intake:
 
     CONTEXT: read tasks/AC-0384/AC-0384-results.html (the shader''s design, the haze measurements and
     the fail-able texture-dominance check), the user''s diagnostic in the ticket folder, and godot/core/satellite_body.gdshader.
+
+    '
+  comments: []
+- id: AC-0391
+  title: verify-visuals-on-the-shipped-forward-plus-renderer
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-03T11:38
+  updated_at: 2026-10-03T11:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: When we verify something that is meant to be looked at, we should be verifying
+    it on the renderer the game actually ships with - not on a software renderer that is a different graphics
+    API - so that a visual feature cannot pass every test and still look wrong on the player''s machine.
+
+
+    2) Technical Details:
+
+    REQUESTED BY THE USER 2026-10-03, in their words: "the windows build uses a different renderer right?
+    ... actually I do want to use the forward+ renderer, I think the thing we should fix is that your
+    server should be able to run the game with forward+ and we need to start doing that when testing visual
+    elements. So we should create a task for figuring out how we can enable that in our testing pipeline."
+    The user is right and the gap is real and total.
+
+    THE GAP, stated precisely: the product ships the FORWARD+ (Vulkan) renderer, while every verification
+    this project runs is headless - which uses NO renderer at all - and the only local rendering available
+    has been llvmpipe, which is software OPENGL, i.e. the COMPATIBILITY path, a different graphics API
+    from the one shipping. So not one visual feature on this project has ever executed on the shipped
+    GPU path during testing. Every shader defect found so far happened to be catchable on the CPU side
+    (a fragment VIEW that is a unit vector, a dissolve that discarded every fragment, a distance-driven
+    haze ramp that saturated at short render distances), and a defect specific to Forward+ - a precision
+    difference, a feature unavailable in one API, a compile-time branch - would have been invisible to
+    all of it. The satellite shader is the concrete example: three diagnoses were wrong on it, and its
+    correctness is still inferred from numeric per-fragment evaluation rather than observed.
+
+    THE LIKELY ANSWER, to be proven rather than assumed: run Godot''s VULKAN path on a machine with no
+    GPU using LAVAPIPE, Mesa''s software Vulkan implementation - the Vulkan counterpart of llvmpipe -
+    which is an installable ICD. The shape of the work: install the lavapipe ICD (mesa-vulkan-drivers
+    provides lvp_icd.x86_64.json on Debian-family systems), run under a virtual display (Xvfb) since a
+    Vulkan surface needs one, and force the selection with VK_ICD_FILENAMES pointing at the lavapipe JSON
+    plus Godot''s `--rendering-driver vulkan`. The verification that it actually took the intended path
+    is not optional: the project already displays and logs the renderer and adapter, so assert the ADAPTER
+    NAME and the renderer string in the run''s output - if it still says llvmpipe or falls back to OpenGL,
+    the test is worthless and must fail loudly rather than passing quietly, which is this project''s most
+    repeated lesson (seven stale or wrong-measuring instruments found so far, two of them red on the main
+    tree).
+
+    THEN WIRE IT INTO THE PIPELINE, which is the actual deliverable: a visual-verification mode that renders
+    on the shipped renderer, reusing the wallshot hook the project already has - note that hook currently
+    times out (rc=124) because llvmpipe is too slow, and a lavapipe Forward+ run may or may not be fast
+    enough, so MEASURE the time per frame and say whether renders are now practical or merely possible.
+    If they are practical, the arms that today can only assert numbers should gain an OPTIONAL pixel check
+    for the features whose whole point is how they look: the satellite body''s colour at a stated render
+    distance, the cloud shell''s coverage, the sky''s transition with altitude, smooth lighting''s corner
+    gradient. If renders remain too slow for regular use, say so with the measurement and propose the
+    cheapest useful frequency - for example a single render per visual ticket rather than per gate run.
+
+    CONSTRAINTS AND CONTEXT: this is a TESTING-PIPELINE task, so it must not change the shipped renderer
+    setting or any game behaviour; the game''s own renderer stays Forward+ and nothing here should make
+    the product depend on a software path. Keep the existing headless arms exactly as they are - they
+    are fast and they catch logic defects - and add the renderer-based verification ALONGSIDE them rather
+    than replacing them. The sandbox has no GPU and the CI box is this Linux server, so whatever is proposed
+    must work with no display and no hardware acceleration. Renders are currently believed infeasible
+    on this box and that belief is what this ticket exists to test rather than repeat.
+
+    EVIDENCE: report the adapter and renderer strings actually obtained, the measured time per rendered
+    frame at a stated resolution, whether the wallshot hook completes, and one real visual feature captured
+    through the new path so the pipeline is demonstrated end to end rather than merely installed.
+
+    CONTEXT TO READ: godot/OPS.md (the machine, the daemons and the build/serve notes), godot/HARNESS.md
+    section 2 (the standing warning about renders being a proxy, and the wallshot hook), and godot/AGENTS.md''s
+    note that renders on this box are software GL and evidence about geometry only.
 
     '
   comments: []
