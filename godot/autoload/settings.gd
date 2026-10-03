@@ -107,6 +107,14 @@ const DEFAULTS := {
 	# explicit cap for that lane.
 	"worker_gen_threads": 0,
 	"worker_mesh_threads": 0,
+	# AC-0088: the controls remap layer — a flat list of
+	# "action:cls:idx" tokens (ControlsMap owns the grammar). EMPTY by
+	# default = no customisations = the project.godot [input] map as
+	# shipped. A corrupt or partial value can only LOSE customisations
+	# (sanitize_array drops every unvalidated entry) - it can never
+	# empty an action: the merge keeps the full default set for any
+	# action with no saved tokens (core/controls_map.gd owns the rule).
+	"controls": [],
 }
 
 # AC-0257 (Developer submenu) slider ranges (AC-0313: the tier-0 radius
@@ -114,16 +122,30 @@ const DEFAULTS := {
 const WORKER_THREADS_MAX := 16
 
 var values: Dictionary = {}
+# AC-0088: the remap core (core/controls_map.gd) - the captured
+# project.godot defaults + the merge / apply / conflict API shared by
+# the Controls tab (ui/menu.gd) and the `controls` arm (harness.gd).
+var controls_map: ControlsMap
 
 
 func _ready() -> void:
+	# AC-0088: the remap core must exist before load_settings (the
+	# "controls" clamp sanitizes against the captured defaults), and
+	# the capture must precede the apply - it snapshots the
+	# project.godot [input] map BEFORE the custom layer touches it. A
+	# pristine tree (no cfg) stores [] and the apply is a no-op, so
+	# every arm sees the shipped defaults.
+	controls_map = ControlsMap.new()
+	controls_map.capture_defaults()
 	load_settings()
+	apply_controls()
 
 
 func load_settings() -> Dictionary:
 	values = {}
 	for k in DEFAULTS:
 		values[k] = DEFAULTS[k]
+	values["controls"] = []  # AC-0088: copy, never share the const array
 	if OS.get_environment("AWECRAFT_IGNORE_SETTINGS") == "1":
 		return values
 	if not FileAccess.file_exists(PATH):
@@ -238,6 +260,14 @@ func _clamp(k: String, v) -> void:
 			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
 		"worker_mesh_threads":
 			values[k] = clampi(int(v), 0, WORKER_THREADS_MAX)
+		# AC-0088: the controls remap layer. sanitize_array is the whole
+		# clamp: it drops every entry that fails validation (grammar,
+		# unknown action, a class the action does not use) and resolves
+		# duplicates deterministically (last per (action, class) wins).
+		# A corrupt stored value lands here as [] or a reduced list -
+		# never an emptied action (the merge rule, controls_map.gd).
+		"controls":
+			values[k] = controls_map.sanitize_array(v)
 		"seed":
 			values[k] = int(v)
 		"resolution":
@@ -258,6 +288,10 @@ func set_value(k: String, v) -> void:
 	# Game.world is absent (menu / the settings arm's standalone context).
 	if k == "yfloor_enabled" or k == "yfloor_chunks_below_sea":
 		apply_yfloor()
+	# AC-0088: the remap layer applies to the live InputMap in the same
+	# apply step (the clamp chain above already sanitized the value).
+	if k == "controls":
+		apply_controls()
 	save()
 
 
@@ -271,6 +305,7 @@ func save() -> void:
 func reset_defaults() -> void:
 	for k in DEFAULTS:
 		values[k] = DEFAULTS[k]
+	values["controls"] = []  # AC-0088: copy, never share the const array
 	save()
 
 
@@ -279,6 +314,70 @@ func apply_audio() -> void:
 	# AC-0389: the ambient bed toggle rides the same apply step (main
 	# _ready at startup + every Options audio change).
 	Audio.set_ambient(bool(values["ambient_enabled"]))
+
+
+# AC-0088: push the sanitized "controls" layer onto the live InputMap
+# (merge over the captured project.godot defaults). Guarded on the
+# capture: before it there is no default set to merge over, and
+# applying an empty merge would ERASE the actions it cannot see.
+func apply_controls() -> void:
+	if controls_map != null and controls_map.captured:
+		controls_map.apply_map(controls_map.merge(values["controls"]))
+
+
+# AC-0088: the rebind operation - the ONE code path the Controls tab
+# and the `controls` arm share. {ok, conflicts, unchanged?, msg}:
+# a conflict with ANOTHER MANAGED action blocks (both fire in the
+# game's unhandled/poll stages - the real shadowing the ticket exists
+# to prevent); a conflict with a built-in ui_* action is reported but
+# allowed (built-ins fire in the GUI stage only - the default map
+# already co-mingles Space on jump and on ui_accept). Replace-within-
+# class semantics: the captured input replaces the action's current
+# binding of its class (or adds the class when the action has none).
+func rebind_action(action: String, tok: String) -> Dictionary:
+	var map := controls_map
+	if not ControlsMap.is_managed(action):
+		return {"ok": false, "conflicts": [], "msg": "unknown action: %s" % action}
+	var cls := ControlsMap.token_class(tok)
+	if cls == "" or not ControlsMap.valid_token(tok):
+		return {"ok": false, "conflicts": [], "msg": "invalid binding: %s" % tok}
+	if not map.default_classes(action).has(cls):
+		return {"ok": false, "conflicts": [], "msg": "%s does not use %s inputs" % [action, cls]}
+	if map.current_binding(action, cls) == tok:
+		return {"ok": true, "conflicts": [], "unchanged": true}
+	var confs := map.conflicts_for(tok, action)
+	var managed_conf := confs.filter(func(c): return not bool(c.get("builtin", false)))
+	if not managed_conf.is_empty():
+		var names := ""
+		for c in managed_conf:
+			names += str(c["action"]) + " "
+		return {"ok": false, "conflicts": confs, "msg": "conflict: already used by %s" % names.strip_edges()}
+	var list: Array = []
+	for s in values["controls"]:
+		var a := ControlsMap.entry_action(s)
+		var t := ControlsMap.entry_token(s)
+		if a == action and ControlsMap.token_class(t) == cls:
+			continue  # the old binding of this class is replaced
+		list.append(s)
+	list.append("%s:%s" % [action, tok])
+	set_value("controls", list)  # clamp chain + save + apply in one step
+	return {"ok": true, "conflicts": confs}
+
+
+# AC-0088: reset ONE action to its project.godot defaults (its tokens
+# leave the custom layer; every other action's customisations stand).
+func reset_action(action: String) -> void:
+	var list: Array = []
+	for s in values["controls"]:
+		if ControlsMap.entry_action(s) != action:
+			list.append(s)
+	set_value("controls", list)
+
+
+# AC-0088: reset EVERYTHING to the shipped defaults ([] = no
+# customisations - the full default map comes back, byte-identical).
+func reset_all_controls() -> void:
+	set_value("controls", [])
 
 
 func apply_window(win: Window) -> void:

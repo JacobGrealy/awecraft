@@ -93,6 +93,16 @@ var dof_amount_val: Label
 var yfloor_enabled_check: CheckBox
 var yfloor_spin: SpinBox
 var yfloor_val: Label
+# AC-0088: the Controls tab (the third OptTabs page, code-built like
+# the Developer page) - per-action press-to-capture rebind rows, the
+# conflict status line, the per-action and global resets. The remap
+# LOGIC lives in core/controls_map.gd + settings.gd (the `controls`
+# arm drives the same API).
+var controls_page: VBoxContainer
+var ctl_status: Label
+var _ctl_rebinds: Dictionary = {}  # action -> {cls -> Button}
+var _ctl_resets: Dictionary = {}   # action -> Button
+var _capturing: Dictionary = {}    # {action, cls} while a capture is open
 var file_dialog: FileDialog
 var _options_from := "main"
 var _focus_last: Control = null  # AC-0087: gamepad focus highlight
@@ -313,6 +323,36 @@ func _ready() -> void:
 	dof_far_spin.value_changed.connect(_on_dof_far_changed)
 	dof_amount_spin.value_changed.connect(_on_dof_amount_changed)
 	opt_tabs.add_child(dev_page)
+	# AC-0088: the "Controls" page - the AC-0260 tabbed-options
+	# precedent (code-built, like the Developer page). Every managed
+	# action gets a row: one rebind Button per input CLASS the action
+	# actually uses (key / mouse / pad - the stick motions are
+	# protected and never offered), plus a per-action Reset.
+	controls_page = VBoxContainer.new()
+	controls_page.name = "Controls"
+	controls_page.add_theme_constant_override("separation", 5)
+	var ctl_all_reset := Button.new()
+	ctl_all_reset.name = "ControlsResetAll"
+	ctl_all_reset.text = "Reset ALL bindings to defaults"
+	ctl_all_reset.add_theme_font_size_override("font_size", 15)
+	ctl_all_reset.pressed.connect(_on_controls_reset_all)
+	controls_page.add_child(ctl_all_reset)
+	ctl_status = Label.new()
+	ctl_status.name = "ControlsStatus"
+	ctl_status.add_theme_font_size_override("font_size", 14)
+	ctl_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ctl_status.text = "Click a binding to rebind it - press the key, mouse button, or pad button you want. Conflicts are reported, never silently shadowed."
+	controls_page.add_child(ctl_status)
+	for g in ControlsMap.MANAGED_GROUPS:
+		var gh := Label.new()
+		gh.name = "CtrlGroup_" + str(g[0]).replace(" ", "_").replace("&", "")
+		gh.text = g[0]
+		gh.add_theme_font_size_override("font_size", 14)
+		gh.modulate = Color(0.88, 0.88, 0.94, 1.0)
+		controls_page.add_child(gh)
+		for a in g[1]:
+			controls_page.add_child(_mk_ctl_row(a))
+	opt_tabs.add_child(controls_page)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -630,6 +670,13 @@ func _sync_controls() -> void:
 	yfloor_val.text = str(int(yfloor_spin.value))
 	yfloor_spin.editable = bool(Settings.values.get("yfloor_enabled", true))
 	yfloor_spin.modulate.a = 1.0 if bool(Settings.values.get("yfloor_enabled", true)) else 0.45
+	# AC-0088: the Controls tab rows (the current binding per class,
+	# the same _sync_controls refresh the AC-0332 rows get). Skipped
+	# mid-capture - the open capture owns its button's text.
+	if controls_page != null and _capturing.is_empty():
+		for a in _ctl_rebinds:
+			for cls in _ctl_rebinds[a]:
+				_ctl_rebinds[a][cls].text = _ctl_binding_label(a, cls)
 	_syncing = false
 
 
@@ -909,3 +956,154 @@ func _on_ambient_toggled(on: bool) -> void:
 		return
 	Settings.set_value("ambient_enabled", on)
 	Settings.apply_audio()
+
+
+# ------------------------------------------------- AC-0088 Controls tab
+
+func _mk_ctl_row(a: String) -> Control:
+	var row := HBoxContainer.new()
+	row.name = "CtlRow_" + a
+	row.add_theme_constant_override("separation", 8)
+	var lab := Label.new()
+	lab.text = ControlsMap.action_label(a)
+	lab.add_theme_font_size_override("font_size", 15)
+	lab.custom_minimum_size = Vector2(200, 0)
+	row.add_child(lab)
+	for cls in Settings.controls_map.default_classes(a):
+		# "motion" is protected (the analog sticks) - never offered.
+		if cls == "motion":
+			continue
+		var b := Button.new()
+		b.name = "Rebind_" + cls
+		b.add_theme_font_size_override("font_size", 14)
+		b.custom_minimum_size = Vector2(150, 0)
+		b.pressed.connect(_on_rebind_pressed.bind(a, cls))
+		row.add_child(b)
+		if not _ctl_rebinds.has(a):
+			_ctl_rebinds[a] = {}
+		_ctl_rebinds[a][cls] = b
+	var rs := Button.new()
+	rs.name = "Reset"
+	rs.text = "Reset"
+	rs.add_theme_font_size_override("font_size", 14)
+	rs.custom_minimum_size = Vector2(64, 0)
+	rs.pressed.connect(_on_ctl_reset_pressed.bind(a))
+	row.add_child(rs)
+	_ctl_resets[a] = rs
+	return row
+
+
+func _ctl_binding_label(a: String, cls: String) -> String:
+	var t := Settings.controls_map.current_binding(a, cls)
+	if t == "":
+		return "(none)"
+	return ControlsMap.label_for_token(t)
+
+
+func _capture_prompt(cls: String) -> String:
+	match cls:
+		"key": return "Press a key..."
+		"mouse": return "Click a mouse button..."
+		"pad": return "Press a pad button..."
+	return "..."
+
+
+func _class_words(a: String) -> String:
+	var cs: Array = []
+	for c in Settings.controls_map.default_classes(a):
+		if c == "motion":
+			continue
+		match c:
+			"key": cs.append("keys")
+			"mouse": cs.append("mouse buttons")
+			"pad": cs.append("pad buttons")
+	return " / ".join(cs)
+
+
+func _on_rebind_pressed(a: String, cls: String) -> void:
+	_capturing = {"action": a, "cls": cls}
+	_ctl_rebinds[a][cls].text = _capture_prompt(cls)
+	ctl_status.modulate = Color.WHITE
+	ctl_status.text = "Capture for %s - %s (Esc cancels)." % [ControlsMap.action_label(a), _capture_prompt(cls).to_lower().strip_edges()]
+
+
+func _cancel_capture(msg: String) -> void:
+	_capturing = {}
+	ctl_status.modulate = Color.WHITE if msg.begins_with("Set ") else Color(1.0, 0.55, 0.45)
+	ctl_status.text = msg
+	_sync_controls()
+
+
+# AC-0088: the capture intercept. Runs in the _input stage - BEFORE the
+# GUI would hand the event to the focused rebind Button (Space/Enter/A
+# would otherwise re-fire it) and before the menu's own pad_accept
+# branch. While a capture is open, every candidate press is consumed
+# here: accepted (class allowed + no managed conflict) or reported.
+func _input(event: InputEvent) -> void:
+	if _capturing.is_empty():
+		return
+	var act: String = _capturing["action"]
+	var cls: String = _capturing["cls"]
+	if event is InputEventKey:
+		var k: InputEventKey = event
+		if k.pressed and not k.echo and k.is_action_pressed("ui_cancel"):
+			get_viewport().set_input_as_handled()
+			_cancel_capture("Capture cancelled.")
+			return
+		if not k.pressed or k.echo:
+			return
+		var kc := int(k.physical_keycode)
+		if kc == 0:
+			kc = int(k.keycode)
+		if kc == 0:
+			return
+		if ControlsMap.MODIFIER_KEYS.has(kc):
+			get_viewport().set_input_as_handled()
+			_cancel_capture("Modifier keys (Shift/Ctrl/Alt/Meta) cannot be a binding - press a plain key.")
+			return
+		_finish_capture(act, cls, "key:%d" % kc, k)
+	elif event is InputEventMouseButton:
+		var mb: InputEventMouseButton = event
+		if not mb.pressed:
+			return
+		_finish_capture(act, cls, "mouse:%d" % int(mb.button_index), mb)
+	elif event is InputEventJoypadButton:
+		var jb: InputEventJoypadButton = event
+		if not jb.pressed:
+			return
+		_finish_capture(act, cls, "pad:%d" % int(jb.button_index), jb)
+	# anything else (motion, releases, text input) passes through
+
+
+func _finish_capture(act: String, cls: String, tok: String, ev) -> void:
+	get_viewport().set_input_as_handled()
+	if ControlsMap.event_class(ev) != cls:
+		_cancel_capture("%s takes %s only - that was a %s input. Click the row again to try another." % [
+			ControlsMap.action_label(act), _class_words(act), ControlsMap.label_for_token(tok)])
+		return
+	var r: Dictionary = Settings.rebind_action(act, tok)
+	if bool(r.get("ok", false)):
+		var note := ""
+		for c in r.get("conflicts", []):
+			if bool(c.get("builtin", false)):
+				note += " (note: %s also uses it - menus only)" % str(c["action"])
+		_cancel_capture("Set %s = %s.%s" % [ControlsMap.action_label(act), ControlsMap.label_for_token(tok), note])
+	else:
+		var names := ""
+		for c in r.get("conflicts", []):
+			names += str(c["action"]) + " "
+		_cancel_capture("%s %s" % [str(r.get("msg", "conflict")), names.strip_edges()])
+
+
+func _on_ctl_reset_pressed(a: String) -> void:
+	Settings.reset_action(a)
+	ctl_status.modulate = Color.WHITE
+	ctl_status.text = "%s reset to defaults." % ControlsMap.action_label(a)
+	_sync_controls()
+
+
+func _on_controls_reset_all() -> void:
+	Settings.reset_all_controls()
+	ctl_status.modulate = Color.WHITE
+	ctl_status.text = "All bindings reset to defaults."
+	_sync_controls()

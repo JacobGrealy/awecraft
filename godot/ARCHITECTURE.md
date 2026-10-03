@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -167,6 +167,11 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         Game.particles; kill switch AWECRAFT_PARTICLES=0; census
 │                         arm AWECRAFT_LOGIC=pcensus (harness_data.yaml)
 └─ Menu                   scenes/menu.tscn  →  ui/menu.gd — main menu + options
+│                         (three options tabs: Settings / Developer /
+│                         Controls — AC-0088; the Controls tab is
+│                         code-built rows over the remap actions,
+│                         press-to-capture rebind + conflict report +
+│                         reset, persisted via Settings "controls")
 ```
 
 There is **no** `hud.gd`/`hud.tscn`, `player/interaction.gd`, `player/combat.gd`,
@@ -174,8 +179,22 @@ There is **no** `hud.gd`/`hud.tscn`, `player/interaction.gd`, `player/combat.gd`
 `main.gd`, `player.gd`, `world.gd` and `ui/inventory.gd`. `world/chunk.gd` is the
 per-column/slab object; `core/*.gd` are pure-logic helpers with no node dependencies
 (`math.gd` DDA, `noise.gd`, `atlas.gd`, `chunk_io.gd`, `sphere_math.gd`, `held_mesh.gd`,
-`aero.gd`, `daynight.gd`, `build_id.gd`), plus the `.gdshader` files under `world/` and
-`core/`.
+`aero.gd`, `daynight.gd`, `build_id.gd`, `controls_map.gd` — AC-0088 remap layer:
+token grammar, the captured `project.godot` defaults, the safe-fallback merge,
+apply + conflict detection, shared by the Controls tab and the `controls` arm),
+plus the `.gdshader` files under `world/` and `core/`.
+
+**Input (AC-0087 + AC-0088)**: the `[input]` section of `project.godot` is the
+single home of the DEFAULT action map (movement, jump, the pad_* Bedrock
+buttons, and the mouse/keyboard game actions — `attack` LMB, `use` RMB,
+`inventory` E, `sprint` Shift — which AC-0088 promoted from raw
+`button_index`/`physical_keycode` checks in `player.gd` so they are
+remappable; defaults are byte-identical to the old raw checks). Game code
+checks ACTIONS (`Input.is_action_pressed` / `event.is_action_pressed`), never
+raw keys/buttons, so a remap reaches every use site. Custom bindings are the
+`Settings` `controls` layer (applied over the defaults at boot, §2 row 5);
+the built-in `ui_*` actions stay on their engine defaults (native GUI focus
+navigation) and are not remappable from the Controls tab.
 
 ## 4. Native extension (`gdext/`)
 

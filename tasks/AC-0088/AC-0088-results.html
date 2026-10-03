@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0088 results — the Controls menu: remap every keyboard/mouse/controller binding</title>
+<style>
+body { font-family: Georgia, 'Times New Roman', serif; max-width: 60em; margin: 2em auto; padding: 0 1em; line-height: 1.5; color: #222; }
+h1 { font-size: 1.5em; border-bottom: 2px solid #888; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.8em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+th, td { border: 1px solid #bbb; padding: .35em .7em; text-align: left; vertical-align: top; }
+th { background: #f0ede6; }
+code, pre { font-family: 'Courier New', monospace; font-size: .9em; }
+pre { background: #f6f5f2; border: 1px solid #ddd; padding: .8em; overflow-x: auto; }
+.pass { color: #1a7a1a; font-weight: bold; }
+.fail { color: #b02020; font-weight: bold; }
+.note { background: #fdf6e3; border-left: 4px solid #d4b96a; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0088 — Controls menu: remap keyboard / mouse / controller from Options &gt; Controls</h1>
+
+<p><b>Depends on AC-0087 — confirmed in:</b> <code>tasks/TASKS.yaml</code> line 4111, <code>AC-0087</code>
+status <code>done</code> (completed 2026-09-07, full DONE+VERIFIED comment: Bedrock controller defaults in
+<code>project.godot [input]</code>, the gamepad arm green, raw checks gone). The AC-0087 map is the base this
+task remaps.</p>
+
+<h2>1. What was built, and where the page lives</h2>
+<p>Options &gt; <b>Controls</b> — the third tab in the options panel, code-built in <code>ui/menu.gd</code>
+(after the existing Settings and Developer tabs): one row per managed action (21 rows, grouped under
+Movement / Combat &amp; Items / Menu &amp; UI / Developer), a <b>Rebind</b> button per input class the action
+uses (press-to-capture), a per-row <b>Reset</b>, a <b>Reset all</b>, and a status line. The row presence is
+asserted against the <em>real</em> <code>scenes/menu.tscn</code> by the settings arm (<code>controls</code>
+RESULT field).</p>
+<p><b>Convention copied from AC-0389</b> (declare → show → persist → assert): the <code>controls</code> key is
+declared in <code>Settings.DEFAULTS</code> (default <code>[]</code> = no customisations = the shipped
+<code>project.godot [input]</code> map), <code>_clamp</code>-validated (entry-wise sanitise), persisted through
+<code>set_value</code> (clamp + save + apply in one step), read back by <code>load_settings</code>, shown on the
+tab, and asserted round-trip + corrupt-safe + row-present by the arms. The row-presence pattern is the
+AC-0332 <code>yrow</code> one (instantiate <code>menu.tscn</code>, check the named row, check the
+<code>_sync_controls</code> refresh).</p>
+<p>Two new pieces of code carry the logic, shared by the UI and the arm so they cannot drift:
+<code>godot/core/controls_map.gd</code> (pure-logic RefCounted: the 21-action managed set, the
+<code>action:cls:idx</code> token grammar, the captured defaults, the merge/apply/conflict/serialize rules) and
+the <code>Settings</code> remap API (<code>rebind_action</code> / <code>reset_action</code> /
+<code>reset_all_controls</code> / <code>apply_controls</code>).</p>
+
+<h2>2. Rebind decision: replace-within-class (stated, and consistent UI + arm)</h2>
+<div class="note"><b>Binding is a list; the decision:</b> a captured input <b>replaces the action's current
+binding of the captured class</b> (the first one when the action has several of that class) and <b>adds the
+class</b> when the action has none. Other classes of the action and the protected stick motions are untouched.
+The merge rule generalises it: a saved token of class C for action A suppresses <em>all</em> of A's default C
+bindings; classes without saved tokens keep their full defaults; no tokens at all → the full default map.</div>
+<table>
+<tr><th>Case</th><th>Result</th><th>Asserted in</th></tr>
+<tr><td>rebind jump key Space→X</td><td>X present, Space gone, pad-A kept</td><td>
+<code>rebind_replace {jump_x, space_gone, pad_a_kept}</code> all true</td></tr>
+<tr><td>re-capture the same binding</td><td>clean no-op (<code>unchanged: true</code>)</td><td>
+<code>same_noop</code> true</td></tr>
+<tr><td>class the action does not use (attack ← key Z)</td><td>refused, LMB intact</td><td>
+<code>wrong_class_refused</code> true</td></tr>
+</table>
+<p>Why replace and not add: with add, the UI has no way to remove a binding, so a mistaken capture is
+permanently sticky; replace gives the press-to-capture flow one obvious effect per press, and the pad
+co-bindings (e.g. jump = Space + A) survive because only the captured class moves.</p>
+
+<h2>3. Conflict detection</h2>
+<p>The detector compares <em>identity</em> (physical keycode / mouse button / pad button) against every other
+action in the live InputMap:</p>
+<table>
+<tr><th>Conflict kind</th><th>Rule</th><th>Why</th></tr>
+<tr><td>managed action</td><td><b>blocks</b> the rebind, names the colliding action</td><td>both fire in the
+game's unhandled/poll stages — a real shadowing</td></tr>
+<tr><td>built-in <code>ui_*</code></td><td>reported (<em>"note: ui_x also uses it — menus only"</em>) but
+<b>allowed</b></td><td>GUI-stage only; the shipped map already co-mingles Space on <code>jump</code> and on
+<code>ui_accept</code></td></tr>
+</table>
+<p>Armed and verified: a deliberate collision (time→X after jump already owns X) is blocked and names
+<code>jump</code>; a free binding (time→H) passes with zero managed conflicts. The H case is a live demo of the
+builtin co-existence: plain H also matches the <code>ui_filedialog_show_hidden</code> builtin (the engine stores
+it <em>without</em> modifier flags, so it is identity-identical to plain H) — the arm records it in
+<code>free_builtin</code> and the UI would show the "menus only" note. Modifier-qualified stored events are
+otherwise excluded from conflicts (a plain-key binding can never fire a Ctrl+X).</p>
+
+<h2>4. The invariant: every action the game uses stays bound (safe-fallback rule)</h2>
+<div class="note"><b>Stated rule — corrupt/partial stored maps fail safe toward the defaults and can never
+empty an action:</b> the stored format is a flat per-entry token list in which <b>absence = default</b> — an
+action cannot be represented as empty at all. Per-entry validation drops corrupt entries <em>only</em>; an
+action with no surviving tokens keeps its <b>full</b> default set; a belt-and-braces net restores the defaults
+if a merged list ever comes out empty; <code>apply_controls()</code> refuses to run before the defaults are
+captured (pre-capture apply would erase actions). Decision basis: the UI only ever replaces, never clears, so
+emptiness is unreachable by design; hostile hand-edited cfg is filtered entry-wise. The arm asserts the rule
+rather than assuming it — including the net itself.</div>
+<table>
+<tr><th>Stored map</th><th>Asserted outcome</th></tr>
+<tr><td>non-array value (<code>"not-an-array"</code>)</td><td>whole layer dropped; map complete and
+byte-identical to defaults — <code>corrupt_map.non_array</code> true</td></tr>
+<tr><td>partial: <code>["garbage", "jump:key:999999", "nosuchaction:key:65", "attack:pad:0", 12345,
+"fly:key:K"]</code></td><td>the one valid token lands (fly F→K); the ghost keycode 999999 is rejected as corrupt
+(out-of-range = a DEAD binding that could never match a real press); jump keeps Space+pad-A, attack keeps LMB;
+map complete — <code>corrupt_map.partial</code> true</td></tr>
+<tr><td>hostile value through the real load path (cfg written with
+<code>set_value("settings","controls","corrupt")</code>)</td><td><code>_clamp</code> sanitises to <code>[]</code>;
+map byte-identical to defaults — <code>corrupt_map.cfg_load_path</code> true (also in the settings arm:
+<code>controls.corrupt_safe</code> true)</td></tr>
+</table>
+
+<h2>5. The headless arm (<code>AWECRAFT_LOGIC=controls</code>, also a battery mode) — logic, not pixels</h2>
+<p>Renders are infeasible on this box, so the arm drives the <b>same Settings/ControlsMap API the tab uses</b>
+and asserts the invariants; the UI side (tab presence, 21 rows, the <code>_sync_controls</code> refresh,
+round-trip, corrupt-safe) rides in the settings arm on the real menu scene. Final run:
+<b><code>"ok": true</code></b>, zero SCRIPT ERROR.</p>
+<pre>RESULT {"all_bound":true,"cleaned":true,"conflict":{"deliberate_blocked":true,"free_builtin":["ui_filedialog_show_hidden"],"free_managed":[],"free_passes":true,"named":["jump"],"same_noop":true,"time_g_kept":true,"wrong_class_refused":true},"corrupt_map":{"cfg_load_path":true,"non_array":true,"partial":true},"empty_actions":[],"event_match":{"cleared":true,"lmb_attack":true,"shift_sprint":true},"managed_21":true,"mode":"controls","negative":{"compare_fails_on_mutation":true,"complete_fails_on_emptied":true,"conflict_clean_on_free":true,"conflict_hits_space":true},"new_defaults":{"attack_lmb":true,"inv_e":true,"sprint_shift":true,"use_rmb":true,"wheel_prev_next":true},"ok":true,"persist":{"disk_has_token":true,"reloaded":true,"wiped_to_default":true},"rebind_replace":{"jump_x":true,"pad_a_kept":true,"space_gone":true},"reset":{"all_byte_identical":true,"one_action_only":true}}</pre>
+<table>
+<tr><th>Block</th><th>What it proves</th></tr>
+<tr><td><code>all_bound</code> + <code>managed_21</code> + <code>empty_actions:[]</code></td><td><b>the
+invariant</b>: all 21 managed actions carry ≥1 binding</td></tr>
+<tr><td><code>new_defaults</code> + <code>event_match</code></td><td>the new <code>[input]</code> actions
+(attack=LMB, use=RMB, inventory=E, sprint=Shift, wheel on the hotbar actions) parse <em>and</em> match through
+the InputMap via the exact production call (<code>&lt;event&gt;.is_action_pressed("attack")</code>) — a
+serialization typo would leave mining dead with no arm to say why</td></tr>
+<tr><td><code>rebind_replace</code></td><td>replace-within-class (§2)</td></tr>
+<tr><td><code>conflict</code></td><td>deliberate collision blocked + named; free binding passes; re-capture
+no-op; wrong class refused (§3)</td></tr>
+<tr><td><code>reset</code></td><td>reset-one moves only that action (jump's X still stands); reset-all is
+<b>byte-identical</b> to the default serialization</td></tr>
+<tr><td><code>persist</code></td><td>save → the token is on disk; wipe (fresh process with empty layer) →
+defaults; reload → the custom is back</td></tr>
+<tr><td><code>corrupt_map</code></td><td>the safe-fallback rule (§4), three hostile inputs, through the real
+load path</td></tr>
+<tr><td><code>negative</code></td><td><b>the instruments can fail</b>: the completeness checker goes red on a
+deliberately emptied map; the byte-identity comparator goes red on a mutated map; the conflict detector hits on
+Space (ui_accept) and is clean on a genuinely free key</td></tr>
+<tr><td><code>cleaned</code></td><td>self-cleaning exit: cfg + InputMap back at the shipped defaults, so the
+standing arms and the cross-process gate never see a custom map</td></tr>
+</table>
+<p>Settings arm, new <code>controls</code> block (round-trip + UI assertions):
+<code>{"corrupt_safe":true,"default_empty":true,"inputmap_apply":true,"reload":true,"rows_21":true,"saved":true,"sync":true,"tab_present":true}</code>
+— tab present on the real <code>menu.tscn</code>, 21 rows, the jump row's Rebind button reads "Space" by
+default and "X" after a custom set (the AC-0389/AC-0332 pattern).</p>
+
+<h2>6. Gate results</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 (pristine tree, no temp probes — the ConfigFile probe and both debug prints were removed in-task)</td>
+<td class="pass">0 <code>SCRIPT ERROR</code> lines (only the pre-existing headless dummy-driver shader noise;
+the game reaches the menu and stays up)</td></tr>
+<tr><td>SMOKE battery + settings + controls
+(<code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash;settings;controls</code>)</td>
+<td class="pass">all green — battery summary <code>ok:true</code>, 0 SCRIPT ERROR</td></tr>
+<tr><td>genhash</td><td class="pass">25 GENHASH lines, 25/25 byte-identical across two independent runs;
+<code>GENHASH 0 0 46c20b07…</code> matches the last documented reference in
+<code>harness_data.yaml</code> — the tree's generation is unchanged</td></tr>
+<tr><td>input arms (the refactor's proof — defaults must be behaviourally identical)</td>
+<td class="pass">player (sprint FOV fields + jump 142.42 + <code>col_deferred_in_footprint:0</code>),
+interact (mine/place/drop/highlight), look, swing (LMB loop), guiclick, combat, <b>gamepad</b> (AC-0087 arm —
+pad nav, L3 latch 5.6, hotbar sel_trace [0,1,0], RT swing, fly — all true with the wheel riding the hotbar
+actions), pcensus, sound — <b>none moved</b></td></tr>
+</table>
+<div class="note"><b>Two known pre-existing flakes, not regressions:</b> (1) <code>fpv tool_held_ok:false</code>
+— documented "KNOWN PRE-EXISTING" in numerous prior gate pages; the fpv arm's block checks
+(<code>block_held_ok</code>, highlight axis, empty-hidden) are green. (2) <code>held box_ok:false</code> via
+<code>tint_top_ok</code> — a vertex-colour precision flake at the 0.002 tolerance (prior trees show both
+outcomes; the 70-run cluster in the gate logs is the false side); depth/cross/scale/atlas are green. Neither
+touches input; AC-0088's diff contains no colour/viewmodel/world code.</div>
+
+<h2>7. Deviations &amp; notes</h2>
+<p><b>Out of remap scope (documented, deliberate):</b> the built-in <code>ui_*</code> actions stay on their
+engine defaults (native GUI focus navigation — the Controls tab lists them as conflicts but does not remap
+them); the inventory GUI's internal slot wheel/shoulder (ClickCtl), the cursor-capture physical-button block in
+<code>player.gd</code> (window-level, not a game binding), the F8 bug report, and the backtick/F3 console
+checks were left raw on purpose. The 1-9 hotbar digits, the right-stick look and the RT/LT analog triggers
+remain raw analog/one-shot checks as before AC-0087.</p>
+<p><b>Worktree note:</b> the working tree also carries another session's uncommitted work (AC-0038 particle
+pickup puff in <code>game.gd</code>/<code>drop.gd</code> — pcensus is green on it — and a TASKS.yaml status
+claim via the tooling). AC-0088 did not touch those files or <code>TASKS.yaml</code>; the gates above ran on
+the tree as found, with AC-0088's own temp instruments removed (pristine = no temp arms left behind).</p>
+<p><b>Standing battery:</b> <code>controls</code> is now a standing battery mode (fast, worldless,
+self-cleaning — a permanent guard on the remap logic); <code>tasks/harness_data.yaml</code> row added and
+<code>HARNESS.md</code> re-rendered (<code>--check</code> in sync). <code>ARCHITECTURE.md</code> synced: §2
+Settings row (the remap layer), §3 Menu row (the Controls tab), the core-helper list
+(<code>controls_map.gd</code>) and a short input-convention note (actions, never raw keys; defaults live in
+<code>project.godot [input]</code>; the <code>controls</code> key is the custom layer).</p>
+</body>
+</html>

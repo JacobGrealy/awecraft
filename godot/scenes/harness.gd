@@ -1378,6 +1378,12 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 	if mode == "settings":
 		_settings_test()
 		return
+	if mode == "controls":
+		# AC-0088: the controls remap arm (no game nodes needed - the
+		# InputMap + the Settings layer are the whole test surface).
+		# Awaiting: the arm flushes two parsed probe events.
+		await _controls_test()
+		return
 	main._create_game_nodes()
 	var sp: Vector3 = world.spawn_point()
 	world.fluid_sim_enabled = false
@@ -1483,6 +1489,11 @@ func _run_battery(seed_env: String, battery_env: String) -> void:
 	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "1")
 	Settings.load_settings()
 	OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
+	# AC-0088: the InputMap follows the (default) settings - the
+	# autoload may have applied a custom cfg layer at boot; every battery
+	# mode must see the shipped defaults, whatever a previous run left
+	# on disk.
+	Settings.apply_controls()
 	var modes: Array = []
 	for m in battery_env.split(";"):
 		if m != "":
@@ -1718,6 +1729,29 @@ func _settings_test() -> void:
 	# left (false, 7)).
 	Settings.set_value("yfloor_enabled", true)
 	Settings.set_value("yfloor_chunks_below_sea", 0)
+	# AC-0088: the controls remap layer — the AC-0389 round-trip pattern
+	# (declared in DEFAULTS, _clamp-validated, set_value persists,
+	# load_settings reads it back), the apply step onto the InputMap,
+	# and the safe-fallback guarantee: a corrupt stored value sanitizes
+	# to [] and the InputMap stays whole.
+	Settings.load_settings()
+	var ctl_default_empty := (Settings.values["controls"] as Array).is_empty()
+	Settings.set_value("controls", ["jump:key:%d" % int(KEY_X)])
+	var ctl_saved_ok := (Settings.values["controls"] as Array).has("jump:key:%d" % int(KEY_X))
+	Settings.load_settings()
+	Settings.apply_controls()  # the boot sequence is load -> apply
+	var ctl_reload_ok := (Settings.values["controls"] as Array).has("jump:key:%d" % int(KEY_X))
+	var ctl_map_ok := Settings.controls_map.class_has("jump", "key", int(KEY_X)) \
+		and not Settings.controls_map.class_has("jump", "key", int(KEY_SPACE))
+	var cfc := ConfigFile.new()
+	cfc.set_value("settings", "controls", "corrupt")
+	cfc.save(Settings.PATH)
+	Settings.load_settings()
+	Settings.apply_controls()
+	var ctl_corrupt_ok := (Settings.values["controls"] as Array).is_empty() \
+		and Settings.controls_map.class_has("jump", "key", int(KEY_SPACE))
+	# back to the shipped default ([] on disk = no customisations).
+	Settings.reset_all_controls()
 	# the dev-tab row's presence — the real menu scene (scenes/menu.tscn);
 	# add_child flushes _ready synchronously, so the rows exist by the
 	# time this line runs (no await — this arm must stay synchronous: it
@@ -1741,9 +1775,30 @@ func _settings_test() -> void:
 	Settings.set_value("yfloor_enabled", false)
 	ymenu._sync_controls()
 	var yrow_dim_ok := yrow_present and bool(ycheck.button_pressed) == false and bool(ysp.editable) == false
-	# restore the shipped default + free the probe menu.
+	# AC-0088: the Controls tab's presence on the real menu scene (the
+	# AC-0332 row pattern) - the jump row's key rebind button, its
+	# default label, the _sync_controls refresh onto a custom binding,
+	# and the full row count (every managed action gets a row).
+	var ctabs = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs")
+	var cpage = ctabs.get_node_or_null("Controls") if ctabs != null else null
+	var crow = cpage.get_node_or_null("CtlRow_jump") if cpage != null else null
+	var cbtn = crow.get_node_or_null("Rebind_key") if crow != null else null
+	var ctl_row_present := cpage != null and crow != null and cbtn != null and cbtn is Button \
+		and String(cbtn.text) == "Space"
+	Settings.set_value("controls", ["jump:key:%d" % int(KEY_X)])
+	ymenu._sync_controls()
+	var ctl_row_sync_ok := ctl_row_present and String(cbtn.text) == "X"
+	var n_rows := 0
+	if cpage != null:
+		for c in cpage.get_children():
+			if c.name.begins_with("CtlRow_"):
+				n_rows += 1
+	var ctl_rows_count_ok := n_rows == 21
+	# restore the shipped default (the sync test left jump=X) + free the
+	# probe menu.
 	Settings.set_value("yfloor_enabled", true)
 	Settings.set_value("yfloor_chunks_below_sea", 0)
+	Settings.reset_all_controls()
 	ymenu.queue_free()
 	Debug.result({
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
@@ -1774,7 +1829,198 @@ func _settings_test() -> void:
 			"toggle_off_on": yf_toggle_off_ok and yf_toggle_on_ok, "apply_step": yf_apply_ok,
 			"apply_calls": [yf_apply_1, yf_apply_2], "dev_row_present": yrow_present,
 			"sync_set5": yrow_sync_ok, "toggle_dim": yrow_dim_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok,
+		# AC-0088: the controls remap layer — the AC-0389 round-trip
+		# pattern (default empty, set + reload, the apply step on the
+		# InputMap), the corrupt-value safe fallback (sanitizes to [],
+		# the map stays whole), and the Controls-tab row's presence +
+		# refresh (the AC-0332 row pattern).
+		"controls": {"default_empty": ctl_default_empty, "saved": ctl_saved_ok, "reload": ctl_reload_ok,
+			"inputmap_apply": ctl_map_ok, "corrupt_safe": ctl_corrupt_ok,
+			"tab_present": ctl_row_present, "sync": ctl_row_sync_ok, "rows_21": ctl_rows_count_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok,
+	})
+
+
+# AC-0088: the controls remap arm (AWECRAFT_LOGIC=controls). Renders
+# are infeasible on this box, so this drives the LOGIC the Controls
+# tab is built on - the same Settings/ControlsMap API the UI uses -
+# and asserts the invariants that matter: every action stays bound; a
+# rebind replaces its class and the old binding is gone; conflicts are
+# reported (and blocking) rather than shadowed; a free binding passes
+# clean; reset-one moves only that action; reset-all is byte-identical
+# to the defaults; a saved map survives a reload; a corrupt or partial
+# stored map fails safe toward the defaults and can never empty an
+# action. The negative block proves the instruments can fail.
+func _controls_test() -> void:
+	# a clean start (the settings arm's pattern): the arm's own writes
+	# must not leak into the next run.
+	if FileAccess.file_exists(Settings.PATH):
+		DirAccess.remove_absolute(Settings.PATH)
+	Settings.load_settings()
+	Settings.apply_controls()
+	var map: ControlsMap = Settings.controls_map
+	var managed: Array = ControlsMap.action_list()
+	var n_ok := map.captured and managed.size() == 21
+	# (1) EVERY managed action has at least one binding (the invariant).
+	var empty: Array = []
+	for a in managed:
+		if not InputMap.has_action(a) or InputMap.action_get_events(a).is_empty():
+			empty.append(a)
+	var all_bound_ok := empty.is_empty()
+	# (2) the project.godot wiring this task adds (a serialization typo
+	# here would leave attack/use unwired - the player's mining would
+	# die with no arm to say why).
+	var attack_def_ok := map.class_has("attack", "mouse", 1)
+	var use_def_ok := map.class_has("use", "mouse", 2)
+	var inv_def_ok := map.class_has("inventory", "key", int(KEY_E))
+	var sprint_def_ok := map.class_has("sprint", "key", int(KEY_SHIFT))
+	var wheel_ok := map.class_has("pad_hotbar_prev", "mouse", 4) and map.class_has("pad_hotbar_next", "mouse", 5)
+	# (2b) the events must actually MATCH through the InputMap (a saved
+	# default that parses but never matches would be a silent no-op).
+	# The check IS the production code path: player.gd calls
+	# <event>.is_action_pressed("attack"), so probe a fresh event the
+	# same way (no frames, no global state to clean up).
+	var probe_lmb := InputEventMouseButton.new()
+	probe_lmb.button_index = 1
+	probe_lmb.pressed = true
+	var probe_shift := InputEventKey.new()
+	probe_shift.physical_keycode = int(KEY_SHIFT)
+	probe_shift.pressed = true
+	var match_attack := probe_lmb.is_action_pressed("attack")
+	var match_sprint := probe_shift.is_action_pressed("sprint")
+	var match_cleared := not probe_lmb.is_action_pressed("sprint") \
+		and not probe_shift.is_action_pressed("attack")  # no cross-talk
+	# (3) the DEFAULT map serializes - the byte-identity anchor.
+	var snap := map.serialize()
+	# (4) rebind jump's key Space -> X: the map changes, the OLD binding
+	# is gone, the pad-A binding survives (replace-within-class).
+	var r := Settings.rebind_action("jump", "key:%d" % int(KEY_X))
+	var jump_x_ok := bool(r.get("ok", false)) and map.class_has("jump", "key", int(KEY_X))
+	var jump_space_gone := not map.class_has("jump", "key", int(KEY_SPACE))
+	var jump_pad_kept := map.class_has("jump", "pad", 0)
+	# (5) conflict detector: a deliberate collision (X is now on jump)
+	# must be REPORTED and BLOCKED; a free binding (H) must pass clean.
+	var c_conf := Settings.rebind_action("time", "key:%d" % int(KEY_X))
+	var conflict_names: Array = []
+	for c in c_conf.get("conflicts", []):
+		conflict_names.append(str(c["action"]))
+	var conflict_ok := not bool(c_conf.get("ok", false)) and "jump" in conflict_names
+	var time_g_kept := map.class_has("time", "key", int(KEY_G))
+	# A FREE binding passes clean: ok, and NO MANAGED conflicts. A
+	# built-in co-existence (plain H also matches the ui_filedialog_
+	# show_hidden builtin, which the engine stores WITHOUT modifier
+	# flags) is the documented "reported but allowed" case - the same
+	# co-existence the shipped map already carries (Space on jump AND
+	# on ui_accept).
+	var c_free := Settings.rebind_action("time", "key:%d" % int(KEY_H))
+	var free_managed: Array = []
+	var free_builtin: Array = []
+	for c in c_free.get("conflicts", []):
+		if bool(c.get("builtin", false)):
+			free_builtin.append(str(c["action"]))
+		else:
+			free_managed.append(str(c["action"]))
+	var free_ok := bool(c_free.get("ok", false)) and free_managed.is_empty() \
+		and map.class_has("time", "key", int(KEY_H)) and not map.class_has("time", "key", int(KEY_G))
+	# (5b) a re-capture of the SAME binding is a clean no-op, and a
+	# class the action does not use is refused.
+	var same := Settings.rebind_action("time", "key:%d" % int(KEY_H))
+	var same_ok := bool(same.get("ok", false)) and bool(same.get("unchanged", false))
+	var wrongclass := Settings.rebind_action("attack", "key:%d" % int(KEY_Z))
+	var wrongclass_ok := not bool(wrongclass.get("ok", false)) and map.class_has("attack", "mouse", 1)
+	# (6) reset ONE action: only that action moves, the other custom
+	# (jump X) stands.
+	Settings.reset_action("time")
+	var reset_one_ok := map.class_has("time", "key", int(KEY_G)) and not map.class_has("time", "key", int(KEY_H)) \
+		and map.class_has("jump", "key", int(KEY_X))
+	# (7) reset ALL: the whole map is byte-identical to the defaults.
+	Settings.reset_all_controls()
+	var reset_all_ok := map.serialize() == snap
+	# (8) save, wipe, reload: the custom binding survives a restart.
+	Settings.rebind_action("fly", "key:%d" % int(KEY_K))
+	Settings.save()
+	var saved_disk_ok := false
+	var cf := ConfigFile.new()
+	if cf.load(Settings.PATH) == OK:
+		saved_disk_ok = (cf.get_value("settings", "controls", []) as Array).has("fly:key:%d" % int(KEY_K))
+	# the "restart": wipe the in-memory + InputMap state, then reload
+	# from disk.
+	Settings.values["controls"] = []
+	map.apply_map(map.merge([]))
+	var wiped := not map.class_has("fly", "key", int(KEY_K)) and map.class_has("fly", "key", int(KEY_F))
+	Settings.load_settings()
+	Settings.apply_controls()  # the boot sequence is load -> apply
+	var reloaded_ok := map.class_has("fly", "key", int(KEY_K)) and not map.class_has("fly", "key", int(KEY_F))
+	# (9) CORRUPT / PARTIAL stored maps fail safe toward the defaults.
+	#   (a) a non-array value: the whole layer is dropped, the map is
+	#   still complete (nothing emptied).
+	var m_a := map.merge("not-an-array")
+	var corrupt_a_ok := map.map_complete(m_a) and map.serialize_map(m_a) == snap
+	#   (b) garbage tokens + unknown action + a class the action does
+	#   not use, mixed with ONE valid token (fly F -> K): the valid one
+	#   lands, every corrupt entry is dropped, and the actions they
+	#   named keep their full defaults.
+	var partial := [
+		"garbage",
+		"jump:key:999999",
+		"nosuchaction:key:65",
+		"attack:pad:0",
+		12345,
+		"fly:key:%d" % int(KEY_K),
+	]
+	var m_b := map.merge(partial)
+	var corrupt_b_ok := map.map_complete(m_b) \
+		and map.list_has(m_b["fly"], "key", int(KEY_K)) and not map.list_has(m_b["fly"], "key", int(KEY_F)) \
+		and map.list_has(m_b["jump"], "key", int(KEY_SPACE)) and map.list_has(m_b["jump"], "pad", 0) \
+		and map.list_has(m_b["attack"], "mouse", 1)
+	#   (c) a hand-edited cfg with a corrupt value lands through the
+	#   REAL load path (_clamp -> sanitize) and leaves the map whole.
+	var cfc := ConfigFile.new()
+	cfc.set_value("settings", "controls", "corrupt")
+	cfc.save(Settings.PATH)
+	Settings.load_settings()
+	Settings.apply_controls()
+	var corrupt_c_ok := (Settings.values["controls"] as Array).is_empty() and map.serialize() == snap
+	# (10) NEGATIVE TESTS - the instruments must be able to go red:
+	#   (a) the completeness checker flags a deliberately emptied map;
+	var broken := map.serialize_map(map.merge([]))
+	broken["jump"] = []
+	var neg_complete := not map.map_complete(broken)
+	#   (b) the byte-identity comparator goes red on a mutated map;
+	var mut := map.serialize_map(map.merge([]))
+	mut["jump"] = ["key:%d" % int(KEY_Q)]
+	var neg_compare := map.serialize_map(map.merge([])) != mut
+	#   (c) the conflict detector reports the collision the positive
+	#   path blocked, and calls a genuinely free binding clean.
+	var neg_conf_hit := map.conflicts_for("key:%d" % int(KEY_SPACE), "jump").size() >= 1
+	var neg_conf_free := map.conflicts_for("key:%d" % int(KEY_M), "jump").is_empty()
+	# (11) CLEANUP: leave the cfg + the InputMap at the shipped
+	# defaults (the standing arms and the cross-process gate must see
+	# a pristine map).
+	Settings.reset_all_controls()
+	Settings.load_settings()
+	var clean_ok := (Settings.values["controls"] as Array).is_empty() and map.serialize() == snap
+	Debug.result({
+		"mode": "controls",
+		"managed_21": n_ok,
+		"all_bound": all_bound_ok,
+		"empty_actions": empty,
+		"new_defaults": {"attack_lmb": attack_def_ok, "use_rmb": use_def_ok, "inv_e": inv_def_ok, "sprint_shift": sprint_def_ok, "wheel_prev_next": wheel_ok},
+		"event_match": {"lmb_attack": match_attack, "shift_sprint": match_sprint, "cleared": match_cleared},
+		"rebind_replace": {"jump_x": jump_x_ok, "space_gone": jump_space_gone, "pad_a_kept": jump_pad_kept},
+		"conflict": {"deliberate_blocked": conflict_ok, "named": conflict_names, "time_g_kept": time_g_kept, "free_passes": free_ok,
+			"free_managed": free_managed, "free_builtin": free_builtin, "same_noop": same_ok, "wrong_class_refused": wrongclass_ok},
+		"reset": {"one_action_only": reset_one_ok, "all_byte_identical": reset_all_ok},
+		"persist": {"disk_has_token": saved_disk_ok, "wiped_to_default": wiped, "reloaded": reloaded_ok},
+		"corrupt_map": {"non_array": corrupt_a_ok, "partial": corrupt_b_ok, "cfg_load_path": corrupt_c_ok},
+		"negative": {"complete_fails_on_emptied": neg_complete, "compare_fails_on_mutation": neg_compare, "conflict_hits_space": neg_conf_hit, "conflict_clean_on_free": neg_conf_free},
+		"cleaned": clean_ok,
+		"ok": n_ok and all_bound_ok and attack_def_ok and use_def_ok and inv_def_ok and sprint_def_ok and wheel_ok \
+			and match_attack and match_sprint and match_cleared and jump_x_ok and jump_space_gone and jump_pad_kept \
+			and conflict_ok and time_g_kept and free_ok and same_ok and wrongclass_ok \
+			and reset_one_ok and reset_all_ok and saved_disk_ok and wiped and reloaded_ok \
+			and corrupt_a_ok and corrupt_b_ok and corrupt_c_ok \
+			and neg_complete and neg_compare and neg_conf_hit and neg_conf_free and clean_ok,
 	})
 
 

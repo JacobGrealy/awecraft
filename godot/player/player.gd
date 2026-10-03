@@ -268,8 +268,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		apply_look(mm)
 	if event is InputEventMouseButton:
 		var lmb: InputEventMouseButton = event
-		if lmb.button_index == MOUSE_BUTTON_LEFT and not Game.console_open:
-			_lmb_down = lmb.pressed
+		# AC-0088: the swing-loop latch follows the REMAPPABLE attack
+		# action (default LMB - the old raw button check, unchanged).
+		if (lmb.is_action_pressed("attack") or lmb.is_action_released("attack")) and not Game.console_open:
+			_lmb_down = lmb.is_action_pressed("attack")
 	# AC-0272: any controller input hides a visible cursor — a pad button
 	# press or a stick/trigger deflection (above the noise floor, so idle
 	# stick wobble can't flap it). The mouse brings it back: motion while
@@ -319,26 +321,32 @@ func _unhandled_input(event: InputEvent) -> void:
 				Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
 				return
 			Game.set_cursor(Input.MOUSE_MODE_CAPTURED)
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				if was_captured:
-					start_mine()
-				else:
-					_dragging = true
+		# AC-0088: the game mouse actions ride the REMAPPABLE actions
+		# (default LMB attack / RMB use / wheel hotbar - the old raw
+		# button checks, unchanged defaults). The cursor-capture block
+		# above stays on the physical buttons deliberately: capturing
+		# the mouse is a window-level behaviour, not a game binding.
+		if mb.is_action_pressed("attack"):
+			if was_captured:
+				start_mine()
 			else:
-				_dragging = false
-				if _mining:
-					release_mine()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+				_dragging = true
+		elif mb.is_action_released("attack"):
+			_dragging = false
+			if _mining:
+				release_mine()
+		elif mb.is_action_pressed("use"):
 			if was_captured:
 				use_selected()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+		elif mb.is_action_pressed("pad_hotbar_prev"):
 			sel = clampi(sel - 1, 0, 8)
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		elif mb.is_action_pressed("pad_hotbar_next"):
 			sel = clampi(sel + 1, 0, 8)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var kc: int = int(event.physical_keycode)
-		if kc == int(KEY_E):
+		# AC-0088: the keyboard inventory key rides the REMAPPABLE
+		# inventory action (default E - the old raw check, unchanged).
+		if event.is_action_pressed("inventory"):
 			if ui_mode == "":
 				open_inventory("inv")
 				Game.set_cursor(Input.MOUSE_MODE_VISIBLE)
@@ -539,7 +547,12 @@ func _physics_process_impl(dt: float) -> void:
 	# In flight, L3 scales the flight speed by the ground ratio
 	# (SPRINT/WALK ~1.30) and does NOT also act as the down key (that
 	# stays Shift / B-pad_cancel — a double trigger the task forbids).
-	var sprint_kbd := not cg and Input.is_key_pressed(KEY_SHIFT)
+	# AC-0088: the keyboard sprint/sneak key rides the REMAPPABLE
+	# sprint action (default Shift - the old raw is_key_pressed check,
+	# unchanged). The flight-down key (line ~628) and the sneak-hunger
+	# drain (line ~812) follow the same action, so a remap frees the
+	# physical key everywhere at once.
+	var sprint_kbd := not cg and Input.is_action_pressed("sprint")
 	var sprint_pad := not cg and Input.is_action_pressed("pad_sprint")
 	var sprint := sprint_kbd or sprint_pad
 	var fly_sprint := sprint_pad
@@ -801,7 +814,9 @@ func _physics_process_impl(dt: float) -> void:
 		drown_t = 0.0
 	var hungry := bool(Settings.values["hunger_enabled"])
 	if hungry:
-		if not flying and is_on_floor() and not cg and Input.is_key_pressed(KEY_SHIFT):
+		# AC-0088: follows the sprint action (default Shift - the old
+		# raw check, unchanged): a remap frees the physical key here too.
+		if not flying and is_on_floor() and not cg and Input.is_action_pressed("sprint"):
 			hunger = maxf(0.0, hunger - dt * 0.06)
 	else:
 		hunger = 20.0
