@@ -186,6 +186,23 @@ var _satdiag_band_lo := 500.0
 var _satdiag_band_hi := 2000.0
 var _satdiag_in_band := false
 var _satdiag_band_init := false
+# AC-0384 (the file the USER can actually find): on top of the stdout +
+# user://satdiag.txt copies above, the same report is REWRITTEN (never
+# appended, so it stays small enough to email) into two obvious places -
+# the user's Desktop and the folder the game runs from (where they
+# unzipped it: next to the .pck and the dlls) - named
+# AweCraft-satdiag.txt, with a plain-words summary at the top. A missing
+# or read-only location is noted once and skipped; it must never crash
+# or spam. With AWECRAFT_SATDIAG=0 none of this runs at all.
+const _SATDIAG_REPORT_NAME := "AweCraft-satdiag.txt"
+const _SATDIAG_HISTORY_CAP := 80
+var _satdiag_report_paths: Array = []
+var _satdiag_target_state: Dictionary = {}  # path -> "ok" | "failed" (last write)
+var _satdiag_warned: Dictionary = {}  # path -> true (the failure was noted once)
+var _satdiag_history: Array[String] = []  # recent SATDIAG lines (the report's detail tail)
+var _satdiag_last_alt := 0.0
+var _satdiag_last_alt_src := "none"
+var _satdiag_last_op := -1.0
 
 
 func _ready() -> void:
@@ -213,7 +230,8 @@ func _ready() -> void:
 		_satdiag_file = FileAccess.open("user://satdiag.txt", FileAccess.READ_WRITE)
 		if _satdiag_file != null:
 			_satdiag_file.seek_end(0)
-		_satline("diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=%s period=%.1fs band=[%.0f,%.0f]" % [str(_body_off), _satdiag_period, _satdiag_band_lo, _satdiag_band_hi])
+		_satdiag_report_paths = _satdiag_report_paths_build()
+		_satline("diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=%s period=%.1fs band=[%.0f,%.0f] | send back the file: %s" % [str(_body_off), _satdiag_period, _satdiag_band_lo, _satdiag_band_hi, _satdiag_report_summary()])
 
 
 func _reset_counters() -> void:
@@ -990,6 +1008,7 @@ func _finish_bake() -> void:
 	}
 	print("SATELLITE bake done: %s" % str(bake_stats))
 	_satline_config()  # AC-0384 diagnostic: the configured-state burst
+	_satdiag_write_report()  # AC-0384: the findable file, at configure time
 
 
 func _fail(why: String) -> void:
@@ -1007,6 +1026,7 @@ func _fail(why: String) -> void:
 	print("SATELLITE bake FAILED (predicate=%s via=%s): %s" % [_src_predicate, _res_load_via, why])
 	_satline("config: phase=FAILED reason=%s predicate=%s via=%s" % [why, _src_predicate, _res_load_via])
 	_satline_config()  # AC-0384 diagnostic: the partial state, still useful
+	_satdiag_write_report()  # AC-0384: the findable file, at configure time
 
 
 func force_rebake() -> void:
@@ -1057,6 +1077,11 @@ func _satline(line: String) -> void:
 		return
 	var full := "SATDIAG " + line
 	print(full)
+	# The report's detail tail (a bounded ring - the file is REWRITTEN,
+	# so this, not append growth, is what caps the file's size).
+	_satdiag_history.append(full)
+	if _satdiag_history.size() > _SATDIAG_HISTORY_CAP:
+		_satdiag_history.remove_at(0)
 	# Fallback (the windowed build may not keep a console): the same
 	# line appended to a file, opened once in _ready (no truncate).
 	if _satdiag_file != null and _satdiag_file.is_open():
@@ -1072,6 +1097,9 @@ func _satdiag_tick() -> void:
 	elif configured:
 		alt = (_last_ppos + Vector3(0.0, R, 0.0)).length() - R
 		alt_src = "player"
+	# Stashed for the plain-words summary (the report rewritten each tick).
+	_satdiag_last_alt = alt
+	_satdiag_last_alt_src = alt_src
 	var s := smoothstep(_satdiag_band_lo, _satdiag_band_hi, alt)
 	var in_band := configured and alt >= _satdiag_band_lo and alt <= _satdiag_band_hi
 	# Band crossings - the transitions the user is looking at.
@@ -1086,11 +1114,17 @@ func _satdiag_tick() -> void:
 	if configured and phase == Phase.LOADED and last_fog_far > 0.0:
 		var dc := (_last_ppos - Vector3(0.0, -R, 0.0)).length()
 		op = opacity_at(maxf(dc - (R + float(SEA)), 0.0))
+	_satdiag_last_op = op
 	_satline("state: t=%.1f configured=%d phase=%s alt=%.1f(%s) S=%.3f h_first=%.1f h_full=%.1f op_nadir=%.3f fog_far=%.1f render_edge=%.1f body_off=%s vis=%s in_tree=%s pos=(%.0f,%.0f,%.0f) scale=%.3f" % [
 		float(Time.get_ticks_msec()) / 1000.0, int(configured), Phase.keys()[phase], alt, alt_src, s,
 		last_h_first, last_h_full, op, last_fog_far, last_render_edge,
 		str(_body_off), str(visible), str(is_inside_tree()), position.x, position.y, position.z, scale.x])
 	_satline(_satdiag_clouds())
+	# AC-0384: the findable file refreshes on every tick (the slow timer)
+	# and thus on every band crossing (detected above) - the user can fly
+	# up, look at the planet, and then email a file describing exactly
+	# what they were just looking at.
+	_satdiag_write_report()
 
 
 func _satdiag_clouds() -> String:
@@ -1131,6 +1165,199 @@ func _satdiag_clouds() -> String:
 			tint = str(m.get_shader_parameter("u_cloud_tint"))
 		parts.append("c%d{vis=%s r=%.0f h=%.0f cov=%.3f shader=true tint=%s}" % [n, str(mi.visible), rsh, rsh - float(R), cov, tint])
 	return "clouds: n=%d %s" % [found.size(), " ".join(parts)]
+
+
+# ---- AC-0384: the findable file (Desktop + game folder, rewritten) ----
+
+func _satdiag_report_paths_build() -> Array:
+	# The two places a NON-DEVELOPER can actually find a file: the
+	# Desktop, and the folder the game runs from (where they unzipped
+	# it - next to the .pck and the dlls). An empty base dir is dropped
+	# (never a broken path); an unwritable target is caught per-write
+	# and noted ONCE.
+	var out: Array = []
+	var dsk := OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP)
+	if dsk != "":
+		out.append(dsk.path_join(_SATDIAG_REPORT_NAME))
+	var exedir := OS.get_executable_path().get_base_dir()
+	if exedir != "":
+		var p := exedir.path_join(_SATDIAG_REPORT_NAME)
+		if not out.has(p):
+			out.append(p)
+	return out
+
+
+func _satdiag_report_summary() -> String:
+	if _satdiag_report_paths.is_empty():
+		return "NONE AVAILABLE (the user://satdiag.txt copy is kept)"
+	var parts: Array = []
+	for p in _satdiag_report_paths:
+		parts.append(p)
+	return " | ".join(parts)
+
+
+func _satdiag_write_report() -> void:
+	if not _satdiag:
+		return
+	var text := _satdiag_report_text()
+	for p in _satdiag_report_paths:
+		_satdiag_target_write(p, text)
+
+
+func _satdiag_target_write(path: String, text: String) -> void:
+	# A full REWRITE, never an append: the file stays small enough to
+	# email no matter how long the game runs. A failure (read-only
+	# folder, missing directory) is noted ONCE and carried on - it must
+	# never crash or spam.
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		_satdiag_target_note(path)
+		return
+	f.store_string(text)
+	var err := f.get_error()
+	f.close()
+	if err != OK:
+		_satdiag_target_note(path)
+	else:
+		_satdiag_target_state[path] = "ok"
+
+
+func _satdiag_target_note(path: String) -> void:
+	_satdiag_target_state[path] = "failed"
+	if not _satdiag_warned.has(path):
+		_satdiag_warned[path] = true
+		print("SATDIAG file: could not write %s - skipped, the report goes to the other locations (noted once)" % path)
+
+
+func _satdiag_report_text() -> String:
+	var out: Array = []
+	out.append("AweCraft satellite diagnostic report")
+	out.append("Generated: " + Time.get_datetime_string_from_system())
+	out.append("This file is rewritten automatically while the game runs. Please send this whole file back.")
+	out.append("")
+	out.append("WHAT THE GAME SEES RIGHT NOW (plain words - the technical lines are below)")
+	out.append("--------------------------------------------------------------------------------")
+	for l in _satdiag_summary_lines():
+		out.append(l)
+	out.append("")
+	out.append("This report is saved at:")
+	if _satdiag_report_paths.is_empty():
+		out.append("  (no Desktop or game-folder location available on this computer)")
+	for p in _satdiag_report_paths:
+		var st: String = str(_satdiag_target_state.get(p, ""))
+		var note := ""
+		if st == "ok":
+			note = "  [written]"
+		elif st == "failed":
+			note = "  [NOT WRITABLE - skipped]"
+		out.append("  - " + p + note)
+	out.append("  - the game's private folder: %ssatdiag.txt (an append-only log, kept if it already exists)" % ProjectSettings.globalize_path("user://"))
+	out.append("")
+	out.append("RECENT EVENTS (newest last; refreshed on load, on each band crossing, and every couple of seconds)")
+	out.append("--------------------------------------------------------------------------------")
+	for l in _satdiag_history:
+		out.append(l)
+	return "\n".join(out) + "\n"
+
+
+func _satdiag_summary_lines() -> Array:
+	var lines: Array = []
+	# 1. The body: visible? at what altitude?
+	var state := ""
+	if not configured:
+		state = "NOT SET UP YET (the game is still starting)"
+	elif phase == Phase.FAILED:
+		state = "FAILED TO LOAD - nothing can be drawn"
+	elif visible:
+		state = "VISIBLE"
+	elif _body_off:
+		state = "HIDDEN BY THE F7 TOGGLE (press F7 to show it again)"
+	elif phase != Phase.LOADED:
+		state = "NOT FINISHED LOADING (phase: %s)" % Phase.keys()[phase]
+	else:
+		state = "HIDDEN BECAUSE YOU ARE BELOW ITS ALTITUDE BAND (it only appears high up)"
+	lines.append("The big planet ball (\"the body\") is currently: %s - your altitude is %.1f metres above sea level (source: %s)" % [state, _satdiag_last_alt, _satdiag_last_alt_src])
+	# 2. The 12 surface pictures.
+	var tn := 0
+	var tnull := 0
+	for t in textures:
+		if t != null and t is Texture2D:
+			tn += 1
+		else:
+			tnull += 1
+	var src := _load_src if _load_src != "" else "baked"
+	var src_word: String = {
+		"res": "the game's own files (shipped with the game)",
+		"cache": "a saved copy on this computer",
+	}.get(src, "generated by the game at startup")
+	if tn == 12:
+		lines.append("The 12 surface pictures: ALL 12 loaded, from %s" % src_word)
+	else:
+		lines.append("The 12 surface pictures: only %d of 12 loaded (from %s), %d MISSING" % [tn, src_word, tnull])
+	# 3. The shader.
+	if _shader == null:
+		lines.append("The colour shader: MISSING")
+	elif _shader.code.is_empty():
+		lines.append("The colour shader: PRESENT BUT EMPTY (no code inside)")
+	else:
+		lines.append("The colour shader: present with its full code (%d characters)" % _shader.code.length())
+	# 4. The mesh.
+	var verts := 0
+	for mi in face_nodes:
+		if mi == null or not is_instance_valid(mi):
+			continue
+		var mesh: ArrayMesh = mi.mesh
+		if mesh != null and mesh.get_surface_count() > 0:
+			var arrs: Array = mesh.surface_get_arrays(0)
+			if arrs.size() > 0:
+				verts += int(arrs[Mesh.ARRAY_VERTEX].size())
+	if verts > 0:
+		lines.append("The surface mesh: %d vertices (healthy)" % verts)
+	else:
+		lines.append("The surface mesh: EMPTY (0 vertices - there is nothing to draw)")
+	# 5. Opacity + the distance settings.
+	if _satdiag_last_op >= 0.0:
+		lines.append("How solid the ball looks right now (0 = invisible, 1 = fully solid): %.3f" % _satdiag_last_op)
+		lines.append("The two distance settings in use: the fog reaches to %.0f metres; the fade edge is at %.0f metres" % [last_fog_far, last_render_edge])
+	else:
+		lines.append("How solid the ball looks right now: not measured yet (it appears within a couple of seconds of starting)")
+	# 6. The cloud shells.
+	lines.append(_satdiag_cloud_summary())
+	# Problems - in plain words. Only asserted when a verdict is honest
+	# (a mid-bake partial state is not a problem yet).
+	if _shader == null or _shader.code.is_empty():
+		lines.append("PROBLEM: the body's shader is missing or empty - without it the ball renders pure WHITE")
+	if (phase == Phase.LOADED or phase == Phase.FAILED) and tn < 12:
+		lines.append("PROBLEM: %d of the 12 surface pictures did not load - the ball will look wrong or white" % tnull)
+	if phase == Phase.LOADED and verts == 0:
+		lines.append("PROBLEM: the mesh has no vertices, so the body cannot be drawn")
+	if phase == Phase.FAILED:
+		lines.append("PROBLEM: the body failed to load - see the events below for the reason")
+	return lines
+
+
+func _satdiag_cloud_summary() -> String:
+	# Plain-words twin of _satdiag_clouds(): counted the same way (by
+	# shader path, not node name), reduced to "how many, how many visible".
+	var rt := get_tree()
+	if rt == null or rt.root == null:
+		return "The cloud shells: not in the scene yet"
+	var n := 0
+	var vis := 0
+	var q: Array = [rt.root]
+	while q.size() > 0:
+		var nd: Node = q.pop_back()
+		for ch in nd.get_children():
+			if ch is MeshInstance3D:
+				var m := ch.material_override as ShaderMaterial
+				if m != null and m.shader != null and m.shader.resource_path.ends_with("cloud_layer.gdshader"):
+					n += 1
+					if ch.visible:
+						vis += 1
+			q.append(ch)
+	if n == 0:
+		return "The cloud shells: none in the scene"
+	return "The cloud shells: %d in the scene, of which %d visible" % [n, vis]
 
 
 func _satline_config() -> void:

@@ -474,5 +474,116 @@ pale surface disappeared."</em></li>
 recovered from the character-joined tail and matches this ticket's brief. Not repaired here (shared ticket;
 TASKS.yaml is mutated only through <code>tasks.py</code>).</li>
 </ul>
+
+<h2>14. The findable diagnostic file (user request, 2026-10-02: "I don't know how to get you the logs you want on my windows pc")</h2>
+<p>The user is a player, not a developer: the existing diagnostic wrote to <strong>stdout</strong> (needs a console
+build) and to <code>user://satdiag.txt</code> (buried in an AppData path nobody can find). Round 14 makes the
+diagnostic <strong>trivially findable</strong>: the same report is now also <strong>rewritten</strong> (never appended,
+so it stays small enough to email) to <code>AweCraft-satdiag.txt</strong> in two obvious places — the user's
+<strong>Desktop</strong> (<code>OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP)</code>) and <strong>next to the game
+executable</strong> (<code>OS.get_executable_path().get_base_dir()</code>, the folder they unzipped, where the
+.pck and the dlls live) — with a <strong>plain-words summary at the top</strong> that answers the question by
+itself. The existing stdout printing and the <code>user://</code> line are untouched (additive). Pure
+observation: no render state is written, the visual output is identical, and <code>AWECRAFT_SATDIAG=0</code>
+still silences everything completely.</p>
+
+<h3>14.1 What changed (all in <code>godot/world/satellite_body.gd</code>, the diagnostic region only)</h3>
+<table>
+<tr><th>#</th><th>Change</th><th>Where</th></tr>
+<tr><td>1</td><td>The report file <code>AweCraft-satdiag.txt</code> is written to the Desktop and next to the executable, <strong>in addition to</strong> the existing stdout + <code>user://satdiag.txt</code> copies. Each target write is a full <strong>rewrite</strong> (<code>FileAccess.WRITE</code>, truncating): the file never grows past one report + a bounded 80-line event ring, so it stays small enough to email no matter how long the game runs.</td><td><code>_satdiag_report_paths_build()</code>, <code>_satdiag_write_report()</code>, <code>_satdiag_target_write()</code></td></tr>
+<tr><td>2</td><td>A failure to write (read-only folder, missing Desktop) is <strong>noted once per path</strong> to stdout and marked <code>[NOT WRITABLE - skipped]</code> inside the report's own "saved at" list — it never crashes, never spams, and the other targets still get the file.</td><td><code>_satdiag_target_note()</code> (the <code>_satdiag_warned</code> once-map)</td></tr>
+<tr><td>3</td><td>The top of the file is a <strong>plain-words summary</strong> (about ten lines, labelled in words, not field names): body visible + altitude; 12 textures loaded and from where; shader present with non-empty code; mesh vertex count; computed opacity + fog-far + render-edge; cloud shells visible. Anything obviously wrong gets a plain-words <code>PROBLEM:</code> line (e.g. "the body's shader is missing or empty — without it the ball renders pure WHITE"). Problem lines are asserted only when a verdict is honest (phase LOADED/FAILED, not mid-bake).</td><td><code>_satdiag_summary_lines()</code>, <code>_satdiag_cloud_summary()</code></td></tr>
+<tr><td>4</td><td>The file refreshes on the states that matter: <strong>when the body is configured</strong> (<code>_finish_bake</code>/<code>_fail</code>), and <strong>on every 2 s tick</strong> (which is also where band crossings are detected — so every crossing refreshes it too). The user can fly up, look at the planet, and then email a file describing what they were just looking at.</td><td><code>_satdiag_tick()</code> (end), <code>_finish_bake()</code>, <code>_fail()</code></td></tr>
+<tr><td>5</td><td>The startup banner now tells the user which file to send back (the resolved paths).</td><td><code>_ready()</code></td></tr>
+</table>
+
+<h3>14.2 Actual file contents (headless satellite arm, body at 306 m altitude, LOADED, res:// import path)</h3>
+<pre>AweCraft satellite diagnostic report
+Generated: 2026-10-02T21:37:13
+This file is rewritten automatically while the game runs. Please send this whole file back.
+
+WHAT THE GAME SEES RIGHT NOW (plain words - the technical lines are below)
+--------------------------------------------------------------------------------
+The big planet ball (&quot;the body&quot;) is currently: VISIBLE - your altitude is 306.0 metres above sea level (source: player)
+The 12 surface pictures: ALL 12 loaded, from the game&#x27;s own files (shipped with the game)
+The colour shader: present with its full code (5810 characters)
+The surface mesh: 28812 vertices (healthy)
+How solid the ball looks right now (0 = invisible, 1 = fully solid): 1.000
+The two distance settings in use: the fog reaches to 70 metres; the fade edge is at 80 metres
+The cloud shells: 3 in the scene, of which 3 visible
+
+This report is saved at:
+  - /tmp/dsh_home/Desktop/AweCraft-satdiag.txt  [written]
+  - /home/angrygiant/tools/godot/AweCraft-satdiag.txt  [NOT WRITABLE - skipped]
+  - the game&#x27;s private folder: /tmp/dsh_home/.local/share/godot/app_userdata/AweCraft/satdiag.txt (an append-only log, kept if it already exists)
+
+RECENT EVENTS (newest last; refreshed on load, on each band crossing, and every couple of seconds)
+--------------------------------------------------------------------------------
+SATDIAG diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=false period=2.0s band=[500,2000] | send back the file: /tmp/dsh_home/Desktop/AweCraft-satdiag.txt | /home/angrygiant/tools/godot/AweCraft-satdiag.txt
+SATDIAG configure: planet_id=0 seed=44 R=4000 SEA=126 hmax=384 src=res predicate=ResourceLoader.res reason=-
+SATDIAG config: phase=LOADED src=res via=import reason=- textures=12/12 [1024x1024 x12]
+SATDIAG config: shader=path=res://core/satellite_body.gdshader code_nonempty=true code_bytes=5810 mats_with_shader=12/12
+SATDIAG config: mesh faces=12 verts=28812 aabb_custom=min=(-4126,-4126,-4126) size=(8252,8252,8252) aabb_geom=min=(0,2382,-2918) size=(2918,1744,5835) node_vis=false pos=(0,-4000,0) scale=(1.00,1.00,1.00) body_off=false
+SATDIAG state: t=5.5 configured=1 phase=LOADED alt=306.0(player) S=0.000 h_first=126.6 h_full=206.0 op_nadir=1.000 fog_far=69.6 render_edge=80.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.562 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}</pre>
+<p class="ok">The summary block is real, not a stub: every line above was computed from live state — 12/12
+textures with sizes, shader path + 5810 code bytes, 28812 mesh vertices, op_nadir 1.000 at the full band,
+fog-far 69.6 / render-edge 80.0 (the arm's live r4 thresholds), 3 cloud shells all visible. The
+<code>[NOT WRITABLE - skipped]</code> marker in the same file is the live fallback: on this Linux box the
+game-folder target is outside the writable sandbox, so the report says so for the user to read.</p>
+
+<h3>14.3 Fallback behaviour, verified on this box (each case observed in the run logs)</h3>
+<table>
+<tr><th>Case</th><th>What happened</th><th>Result</th></tr>
+<tr><td>Desktop dir missing (<code>OS.get_system_dir</code> returned a path, the dir did not exist)</td><td><code>FileAccess.open(WRITE)</code> returns null → one line <code>SATDIAG file: could not write /tmp/dsh_home/Desktop/AweCraft-satdiag.txt - skipped, the report goes to the other locations (noted once)</code> → carried on; the exe-folder target was still attempted</td><td class="ok">no crash, no spam, exactly one note</td></tr>
+<tr><td>Game-folder target unwritable (sandbox: outside the writable tree — same class as a read-only install folder on Windows)</td><td>same once-note, and the report's "saved at" list marks it <code>[NOT WRITABLE - skipped]</code> while the Desktop target reads <code>[written]</code></td><td class="ok">one note per path; the other target unaffected</td></tr>
+<tr><td>Desktop dir created</td><td>write succeeds: 2709-byte report on disk after the run (multiple rewrites during the run, size stable — rewrite, not append)</td><td class="ok">file findable, small</td></tr>
+<tr><td><code>AWECRAFT_SATDIAG=0</code></td><td>0 <code>SATDIAG</code> lines in the arm's stdout, no report file created (the Desktop stayed empty), and the arm's RESULT is identical to the diag-on run (same ladder hidden/rim/dissolve/full, ratio 0.25, same bake stats)</td><td class="ok">ok</td></tr>
+</table>
+
+<h3>14.4 Finding (pre-existing, not changed): the <code>user://</code> copy was never created</h3>
+<div class="box red">
+<p>The existing fallback opens <code>user://satdiag.txt</code> with <code>FileAccess.READ_WRITE</code> — a mode
+that <strong>does not create a missing file</strong>. On a fresh machine (the user's) <code>_satdiag_file</code>
+is therefore null and <strong>the user://satdiag.txt the user was told to send never existed</strong>. That is
+almost certainly the "I don't know how to get you the logs" report: the only place the output went was stdout,
+which the windowed build has no console for. This round leaves that line untouched (the brief says the existing
+copies stay as they are) — the new targets open with <code>FileAccess.WRITE</code>, which creates the file — and
+the report's "saved at" list now labels the user:// entry honestly ("an append-only log, kept if it already
+exists"). A follow-up one-liner (add <code>FileAccess.CREATE</code>) is the remaining debt on that old copy.</p>
+</div>
+
+<h3>14.5 Gates (final tree; one godot at a time, <code>ulimit -v 8388608</code> wrappers, logs
+<code>.scratch/AC-0384-gates/</code>)</h3>
+<table>
+<tr><th>Gate</th><th>Run</th><th>Result (final tree)</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code></td><td class="ok">0 <code>SCRIPT ERROR</code> (counted, not rc) — re-verified on the exact final tree after the last edit</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td class="ok">25/25 hashes byte-identical to the pre-change set (sorted-set md5 <code>6ad26994c283fe1d801d0eefe3ffe9d6</code> == pristine md5)</td></tr>
+<tr><td>satellite</td><td><code>AWECRAFT_LOGIC=satellite</code></td><td class="ok"><code>ok:true</code>, phase LOADED, meshes 12, textures 12, guard_ok, tex_shape_ok, res_export_ok (<code>ResourceLoader.res</code> / import), ladder hidden/rim/dissolve/full, angular ratio <strong>0.25</strong>, live r4 thresholds h_first 126.6 / h_full 206.0</td></tr>
+<tr><td>satellite (silence)</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_SATDIAG=0</code></td><td class="ok">0 SATDIAG lines, no report file created, RESULT identical to the diag-on run — completely silent, no behaviour change</td></tr>
+<tr><td>farab</td><td><code>AWECRAFT_LOGIC=farab</code></td><td class="ok"><code>ok:true</code>, cols 45, <strong>h_mismatch 0</strong> (h_bad_h 0, h_bad_top 0), slab_cmp 1080 + slab_cmp8 1080 (0 mismatch), mat_surf_diff 0, mat_pierce_cells 0</td></tr>
+<tr><td>ladder</td><td><code>AWECRAFT_LOGIC=ladder</code></td><td class="ok"><code>ok:true</code>, <strong>band_a_ok 20/20</strong> (fail []), boundary_flip_n 90 &gt; 0, tier_mismatch 0, sky_bad_alpha 0 (band B/C censuses 144/90, self-consistent mesh_ok == slabs — machine-timing class, the byte/identity gates hold)</td></tr>
+<tr><td>meshprobe</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td class="ok"><code>ok:true</code>, <strong>match_rate 1.0</strong>, verts_gd == verts_cpp == 177932, quadcheck mismatch 0</td></tr>
+<tr><td>halo</td><td><code>AWECRAFT_LOGIC=halo</code></td><td class="ok"><code>ok:true</code> — (a) mismatches 0 (inner 0, settled 41), (b) slabs_ok 226/226, (c) mismatches 0, (d)/(d2) ok</td></tr>
+<tr><td>lightstate</td><td><code>AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16</code></td><td class="ok"><strong>double-LOD census 0/0</strong>, wash_detected false, leaks 0 on all 20 grid chunks, stragglers 0, ab arr_diff_cells 1 (the re-baselined standing value), vc_diff 2 (the documented 1–2 class)</td></tr>
+<tr><td>r16</td><td><code>AWECRAFT_LOGIC=r16 --fixed-fps 600</code></td><td class="ok"><code>ok:true</code>, built_all true, section_first_ok true, <strong>far_holes 0 + far_pending 0 in BOTH bands</strong> (far0: holes 0 / pending 0; far1: holes 0 / pending 0; far_capsule_n 0/3 report-only)</td></tr>
+<tr><td>boundary r4</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</code></td><td class="ok"><code>ok:true</code>, marker/remesh ok, crossings 20 (other_n 0), crossing_frame_p95 <strong>34 ms (in the 35–42 band)</strong>, burst p95 13.3 ms, resident_final 114, staged_dropped 2417 ≤ 2500, reband_entry 203</td></tr>
+</table>
+<p class="ok">All gates green: G0 zero SCRIPT ERROR (not rc=0 — counted), genhash 25/25 byte-identical
+(md5 6ad26994c283fe1d801d0eefe3ffe9d6 == pristine), the satellite arm green with its ladder (hidden/rim/dissolve/full) and the
+0.25 texel-to-chunk ratio, and the standing set green (farab h_mismatch 0; ladder 20/20; meshprobe 1.0; halo ok;
+lightstate 0/0; r16 far_holes 0/0; boundary r4 in band). No native lane touched, no renders, no commits.
+No temporary probes left; the only file touched is <code>godot/world/satellite_body.gd</code>.</p>
+
+<h3>14.6 Coordinator's next step</h3>
+<ul>
+<li>Rebuild the Windows export from this tree. No instructions about consoles or AppData are needed anymore:
+tell the user one thing — <em>"If the planet still looks wrong, email me
+<strong>AweCraft-satdiag.txt</strong> from your Desktop (or from the folder where the game is unzipped, next
+to the .exe)."</em> The file rewrites itself every couple of seconds and at load / band crossings, so it
+describes what the user was just looking at; its top block answers in plain words whether the body is visible,
+whether its 12 pictures and its shader loaded, and says "PROBLEM: …" in plain words when anything is missing.</li>
+</ul>
+
 </body>
 </html>
