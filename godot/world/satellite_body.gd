@@ -502,7 +502,10 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 		for m in shader_mats:
 			m.set_shader_parameter("u_fog_far", ff)
 			m.set_shader_parameter("u_render_edge", edge)
-			m.set_shader_parameter("u_clear_dist", 4.0 * edge)
+			# AC-0390: the old u_clear_dist (4*edge) uniform is gone -
+			# the shader's edge-continuity term is now the complement of
+			# the existence ramp, windowed by (u_fog_far, u_render_edge)
+			# exactly like the world's own fog.
 			m.set_shader_parameter("u_air", DayNight.sky_display(day_t))
 			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
 			m.set_shader_parameter("u_day_gain", 0.82 * day)

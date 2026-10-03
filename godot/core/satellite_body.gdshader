@@ -9,10 +9,19 @@
 #      fully established by the render edge (d >= u_render_edge). The
 #      rim therefore emerges exactly as it passes the fog wall, and the
 #      body's near region dissolves under the drawn disc on descent.
-#  (2) HAZE: a slant path through the air shell - the limb is always
-#      hazy, and the distance term hugs the render edge so that just
-#      outside the disc's edge (whose fragments are 100% fogged) the
-#      body reads as the fog colour itself: continuous across the edge.
+#  (2) HAZE: two terms, each doing ONE job with its own driver
+#      (AC-0390 separated them - see the fragment-stage note):
+#      (a) haz_a - the LIMB haze, driven by the ray's path length
+#          through the air shell (the impact parameter): the limb is
+#          always hazy at EVERY render distance, and because the limb
+#          is where the disc meets the 100% fogged world, this term is
+#          also what keeps the edge continuous.
+#      (b) haz_d - the EDGE-CONTINUITY term, the only distance term:
+#          the complement of the existence ramp, 1 while the fragment
+#          still sits at/inside the world's fog window [u_fog_far,
+#          u_render_edge] (where the world renders as the fog colour)
+#          and 0 once it is fully established (d >= u_render_edge) -
+#          at every render distance by construction.
 #      AC-0384: both haze inputs and the distance were being evaluated
 #      with the wrong BUILTIN SPACES (Godot 4.7.1, verified in the
 #      engine source, forward_plus scene_forward_clustered.glsl):
@@ -58,7 +67,6 @@ render_mode cull_back, transparent, depth_draw_always;
 uniform sampler2D tex : filter_linear;
 uniform float u_fog_far : hint_range(0.0, 20000.0);
 uniform float u_render_edge : hint_range(0.0, 20000.0);
-uniform float u_clear_dist : hint_range(0.0, 40000.0);
 uniform vec4 u_air : hint_color;
 uniform float u_day : hint_range(0.0, 2.0);
 uniform float u_day_gain : hint_range(0.0, 2.0);
@@ -84,18 +92,36 @@ void fragment() {
 	if (op <= 0.001) {
 		discard;
 	}
-	// The limb term, in world space: (1 - cosv) is a monotone function
-	// of the ray's impact parameter (perpendicular distance from the
-	// planet centre to the view ray) - 0 at the disc centre (b = 0, the
-	// ray's shortest path through the air shell) and 1 at the limb
-	// (b = the body radius, the grazing ray's longest path).
+	// TERM 1 - haz_a: the LIMB haze (the disc's edge is always hazy).
+	// In world space: (1 - cosv) is a monotone function of the ray's
+	// IMPACT PARAMETER (perpendicular distance from the planet centre
+	// to the view ray - the path length through the air shell): 0 at
+	// the disc centre (b = 0, the shortest path) and 1 at the limb
+	// (b = the body radius, the grazing ray's longest path). This is
+	// the physically right driver for the limb, and it is INDEPENDENT
+	// of the render distance: no matter how short the fog is set, the
+	// limb is fully hazy, which is what keeps the disc's edge
+	// continuous with the 100% fogged world just outside it.
 	float cosv = clamp(dot(normalize(cam_w - p_w), NORMAL), 0.0, 1.0);
 	float haz_a = pow(1.0 - cosv, 2.0);
-	// The proximity term hugs the render edge: just outside the disc's
-	// edge the fragments are 100% fogged, so the body must read as the
-	// fog colour there (continuous across the edge), and on descent the
-	// near region dissolves to the air colour under the drawn disc.
-	float haz_d = 1.0 - smoothstep(u_render_edge, u_clear_dist, d);
+	// TERM 2 - haz_d: the EDGE-CONTINUITY term - the only distance
+	// term. It is the complement of the existence ramp (op above): 1
+	// while the fragment still sits at/inside the world's own fog
+	// window [u_fog_far, u_render_edge] (there the world renders as
+	// the fog colour, so the body must too - no pop at the fog wall or
+	// the disc's emerging edge) and 0 once it is fully established
+	// (d >= u_render_edge). Its window IS the world's fog window, so
+	// the continuity holds at EVERY render distance by construction.
+	// AC-0390: the old window was [u_render_edge, 4*u_render_edge] -
+	// it lingered the haze up to 4x the render edge, so at short
+	// render distances a fully-established orbital altitude (d > edge)
+	// still sat inside it and the WHOLE disc washed to the air colour
+	// (the user's "smooth pale ball"; disc-centre haze measured
+	// 0.0000 only at the arm's long settings, which is why that fix
+	// was declared good). One term was doing two jobs (limb haze AND
+	// edge continuity) that pull in opposite directions as the render
+	// distance shrinks; now each has its own driver.
+	float haz_d = 1.0 - op;
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
 	float sun_l = clamp(dot(u_sun, NORMAL) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
 	vec3 base = texture(tex, UV).rgb * (u_day - u_day_gain * (1.0 - sun_l));

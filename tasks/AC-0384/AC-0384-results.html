@@ -585,5 +585,154 @@ describes what the user was just looking at; its top block answers in plain word
 whether its 12 pictures and its shader loaded, and says "PROBLEM: …" in plain words when anything is missing.</li>
 </ul>
 
+ <h2>15. AC-0390 (2026-10-03) — the planet is pale at the USER'S short render distance (fixed)</h2>
+ <p><strong>Status: FIXED.</strong> The user's diagnostic file (this folder,
+ <code>user-satdiag-20261003.txt</code>, altitude 668.3 m) ruled out every simple cause — body visible,
+ 12/12 textures loaded, shader present (5810 chars), mesh healthy (28812 verts), computed opacity 1.000,
+ 3/3 cloud shells visible — so loading, binding, mesh and dissolve were all fine; the defect was the
+ <em>colour the shader computes</em>. The missing variable the file supplied: the user's render distance is
+ <strong>short</strong> — <code>fog_far 332.0</code>, <code>render_edge 400.0</code> (line 12 of the file) — while
+ the previous fix was verified only at the arm's long settings (<code>fog_far 709.92</code>,
+ <code>render_edge 816</code>), where the disc-centre haze weight measured 0.0000. That is exactly why the AC-0384
+ fix was declared good and this failure survived it: three diagnoses had already been wrong on this ticket
+ (a <code>res://</code> predicate, a washed-out haze, and the fragment discard that came before both), and each
+ was wrong for the same reason — it was tested at settings that did not match the user's. This run verifies at
+ the user's configuration, and states the render distance for every number below.</p>
+
+ <h3>15.1 The cause: one term doing two jobs that pull in opposite directions</h3>
+ <p>The AC-0384 shader's haze was <code>haz = clamp(haz_a + haz_d)</code> with
+ <code>haz_d = 1 - smoothstep(u_render_edge, 4*u_render_edge, d)</code> — a <strong>distance-driven</strong>
+ window from the render edge out to <em>four times</em> the render edge. At the user's settings the whole
+ established disc sits inside that window: at altitude 668.3 m the disc centre is at
+ <code>d = 542.3 m</code> (only <code>1.35 x</code> the render edge), so
+ <code>haz_d = 0.9611</code> at the centre — the entire planet renders as the air colour (the "large smooth
+ pale ball"). At the long settings the same altitude-class (4000 m, <code>d = 3874 m &gt; 4*816</code>) clears
+ the window, so centre haze was 0.0000. The limb itself was never the problem — <code>haz_a</code> held the
+ limb at 1.0 at both distances — the distance term's job (edge continuity) was done by an extra window that
+ kept hazing the disc after it was fully established.</p>
+
+ <h3>15.2 The fix: two terms, each with its own driver</h3>
+ <table>
+ <tr><th>Term</th><th>Job</th><th>Driver</th><th>Behaviour</th></tr>
+ <tr><td><code>haz_a = (1 - cosv)^2</code></td><td><strong>LIMB haze</strong> — the disc's edge is always hazy.
+ Because the limb is where the disc meets the 100% fogged world, this term is also what keeps the edge
+ continuous.</td><td>The ray's <strong>impact parameter</strong> (path length through the air shell) —
+ independent of the render distance.</td><td>0 at the disc centre, 1.0 at the limb at <em>every</em> render
+ distance (geometric).</td></tr>
+ <tr><td><code>haz_d = 1 - op</code> (the complement of the existence ramp)</td><td><strong>EDGE
+ CONTINUITY</strong> — the only distance term; it exists to keep the body continuous with the fogged
+ world (no pop at the fog wall or the disc's emerging edge).</td><td>Camera distance, windowed by the
+ world's <em>own</em> fog window <code>[u_fog_far, u_render_edge]</code> — not an independent window.</td>
+ <td>1 while the fragment sits at/inside the fog window (where the world renders as the fog colour), 0 once
+ fully established (<code>d &gt;= u_render_edge</code>) — at every render distance by construction.</td></tr>
+ </table>
+ <p>Changed: <code>godot/core/satellite_body.gdshader</code> (the term split, stated in-code; the
+ <code>u_clear_dist</code> uniform — the 4x-edge window — is gone), <code>godot/world/satellite_body.gd</code>
+ (no longer pushes it). No native lane touched.</p>
+
+ <h3>15.3 The user's configuration as a test case — the arm runs at it, and the colour is evaluated per
+ fragment</h3>
+ <p>The satellite arm now (a) can be run at the user's exact render distance via
+ <code>AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code> (= <code>fog_far 332.0</code>, <code>render_edge
+ 400.0</code> — the live thresholds, cross-checked by <code>fog_env_applied</code>), and (b) carries a
+ permanent per-fragment colour block (<code>ac0390</code>) that evaluates the shader's computed output
+ <em>across the disc</em> at <strong>both</strong> render distances in every run — the user's
+ (<code>332 / 400</code>, altitude 668.3, the diagnostic capture) and the arm's existing long one
+ (<code>709.92 / 816</code>, altitude 4000). Headless has no GPU, so the fragment stage is evaluated by a
+ numeric twin that mirrors the <code>.gdshader</code> exactly (the AC-0384 pattern; re-runnable:
+ <code>.scratch/AC-0390/verify_haze.py</code>). Evaluation context (deterministic, recorded in the RESULT):
+ noon, sun at the nadir's zenith (day factor 1.0 across the 0-3° centre patch), air colour the DayNight noon
+ sky_display (135,206,235 sRGB).</p>
+
+ <h4>Haze weight per fragment across the disc, at the USER's settings (fog_far 332, render_edge 400,
+ altitude 668.3 m) — before and after</h4>
+ <pre>
+ 16 points, centre (d = 542.3 m) -> limb (d = 2183.8 m)
+ BEFORE (AC-0384 shader):  0.96  0.95  0.93  0.91  0.89  0.84  0.79  0.73  0.68  0.65  0.66  0.72  0.80  0.87  0.93  1.00
+ AFTER  (AC-0390 shader):  0.00  0.00  0.02  0.06  0.13  0.21  0.30  0.39  0.48  0.56  0.65  0.72  0.80  0.87  0.93  1.00
+                            ^ centre haz 0.9611 -> 0.0000   the old profile is even non-monotone (it dips at 0.65,
+                            the whole disc was &gt;= 0.65 hazed: the pale ball)  while the new one is monotone
+                            centre->limb (the limb term alone, the established disc)
+</pre>
+
+ <h4>Disc-centre texture dominance (the COLOUR assertion) — at BOTH render distances</h4>
+ <p>AC-0384's fail-able check, reused: the shader's per-fragment output over a 40x40 fragment patch (0-3°
+ from the nadir, mapped onto the 64x64 texel patch at the face-0 centre) must keep the baked texture's
+ variance — a haze-washed output is constant air colour, whose variance collapses. Variance in 0-255 space
+ (summed over the 3 channels, per pixel).</p>
+ <table>
+ <tr><th>Render distance</th><th>tex_var</th><th>base_var</th><th>out_var (new)</th><th>ratio (new)</th>
+ <th>haz1 replay var (ratio)</th><th>zero-frag shader</th></tr>
+ <tr><td><strong>user</strong> — fog_far 332, render_edge 400, alt 668.3</td><td>23876.7</td><td>23794.6</td>
+ <td><strong>23718.3</strong></td><td class="ok"><strong>0.9968</strong> (&gt;= 0.5 required)</td>
+ <td>0.0 (0.000000 — fails, as required)</td><td>0 surviving fragments (fails, as required)</td></tr>
+ <tr><td><strong>long</strong> — fog_far 709.92, render_edge 816, alt 4000</td><td>23876.7</td><td>23794.6</td>
+ <td><strong>23794.3</strong></td><td class="ok"><strong>1.0000</strong></td><td>0.0 (0.000000 — fails, as
+ required)</td><td>0 surviving fragments (fails, as required)</td></tr>
+ </table>
+ <p>The long-distance <code>out_var 23794.3</code> is <strong>identical to AC-0384's measured value</strong> —
+ the long case is bit-for-bit the previous fix, and the user case now passes the same assertion. Both negative
+ replays (haze-identically-1 = the pale ball; the pre-AC-0384 zero-fragment shader) fail the check, so it is
+ fail-able.</p>
+
+ <h4>Edge continuity at EVERY render distance</h4>
+ <table>
+ <tr><th>Render distance</th><th>limb haz (orbital alt)</th><th>fog-wall circle haz (at rim-ladder alt
+ h = h_first + 50)</th></tr>
+ <tr><td>user — 332 / 400</td><td class="ok">1.0000 (d = 2183.8)</td><td class="ok">1.0000 (at d = 332.0, h =
+ 189.3; limb at that alt 1.0000)</td></tr>
+ <tr><td>long — 709.92 / 816</td><td class="ok">1.0000 (d = 6853.9)</td><td class="ok">1.0000 (at d = 709.92,
+ h = 236.6; limb at that alt 1.0000)</td></tr>
+ </table>
+ <p>The continuity now holds <em>structurally</em> at any (fog_far, render_edge): <code>haz_a = 1</code> at
+ the limb (pure geometry — <code>cosv = 0</code>), and <code>haz_d = 1</code> for all
+ <code>d &lt;= fog_far</code> (the window is the world's own fog window, so the body is fully hazed exactly
+ where the world is 100% fogged) — the arm verifies both at each tested distance.</p>
+
+ <h4>What moved at the long distance (stated with numbers, per the regression discipline)</h4>
+ <p>The orbital acceptance case at the long distance is <strong>unchanged</strong> (centre 0.0000 / mid
+ 0.1723 / limb 1.0000, old == new — the profile is bit-identical). The one intentional change is at the TOP
+ OF EMERGENCE: with the old 4x-edge window the ball was still almost fully hazed while it was already fully
+ established (the very mechanism that produced the pale ball at short distances); now the haze clears exactly
+ as each fragment leaves the fog window, so the ball is crisp once fully established:</p>
+ <table>
+ <tr><th>Ladder level (render distance)</th><th>old centre haz (op)</th><th>new centre haz (op)</th></tr>
+ <tr><td>dissolve (long 709.92/816; h = 889.0)</td><td>1.0000 (op 0.5000)</td><td>0.5000 (op 0.5000)</td></tr>
+ <tr><td>full (long 709.92/816; h = 1042.0)</td><td>0.9951 (op 1.0000)</td><td>0.0000 (op 1.0000)</td></tr>
+ <tr><td>dissolve (user 332/400; h = 492.0)</td><td>1.0000 (op 0.5000)</td><td>0.5000 (op 0.5000)</td></tr>
+ <tr><td>full (user 332/400; h = 626.0)</td><td>0.9803 (op 1.0000)</td><td>0.0000 (op 1.0000)</td></tr>
+ </table>
+ <p>AC-0384's "full centre haz &gt;= 0.9" expectation is superseded on purpose: the contract is that a
+ fully-established disc (<code>op = 1</code>) shows terrain, and the haze now tracks the opacity through the
+ dissolve (haz 0.5 where op 0.5) instead of lagging it by three render edges. Nothing at the tested orbital
+ altitudes moved; the ladder's sub-flags (opacity-based) are unaffected and green at both distances.</p>
+
+ <h3>15.4 Gates (one godot at a time, <code>ulimit -v 8388608</code> wrappers, logs
+ <code>.scratch/AC-0390-*.log</code>)</h3>
+ <table>
+ <tr><th>Gate</th><th>Run</th><th>Result</th></tr>
+ <tr><td>satellite (user config)</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code></td>
+ <td class="ok"><code>ok:true</code> at the user's EXACT render distance (live <code>fog_far 332.0</code> / <code>render_edge 400.0</code>, h_first 139.34 / h_full 526.0, <code>fog_env_applied</code> true, settings restored — the next run read default pct 87). Ladder 4/4 (hidden / rim nadir 0 + rim 1.0 / dissolve nadir op 0.5 / full nadir op 1.0), angular ratio <strong>0.25</strong>, guard 12/12, and the <code>ac0390</code> colour block green at BOTH distances (the user case: centre haz 0.9611 old → 0.0000 new, dominance 0.9968, edge continuity 1.0/1.0; the long case unchanged: 0.0000 / 0.1723 / 1.0, dominance 1.0)</td></tr>
+ <tr><td>satellite (long)</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_RADIUS=50</code></td>
+ <td class="ok"><code>ok:true</code>, live <code>fog_far 709.92</code> / <code>render_edge 816.0</code> (pct 87 default — confirms the <code>AWECRAFT_FOG_PCT</code> override restored), ladder 4/4 (dissolve op 0.5 / full op 1.0), ratio 0.25, <code>ac0390</code> green (both cases evaluated in every run)</td></tr>
+ <tr><td>satellite (silence)</td><td><code>… AWECRAFT_SATDIAG=0</code> (user config)</td><td class="ok">0 SATDIAG lines, RESULT identical to the diag-on run — the silence switch still works</td></tr>
+ <tr><td>satellite (body toggle)</td><td><code>… AWECRAFT_SAT_BODY=0</code> (user config)</td><td class="ok">banner <code>body_off=true</code>; the node stays hidden at the <em>full</em> ladder level (nadir op 1.0, rim 1.0) — the same <code>_body_off</code> flag F7 flips in-game, verified on the flag path</td></tr>
+ <tr><td>G0</td><td><code>--headless --path godot --quit</code> (final tree)</td><td class="ok">0 <code>SCRIPT ERROR</code> (counted, not rc)</td></tr>
+ <tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code> × 2</td><td class="ok">25/25 hashes byte-identical across runs AND to the pre-change set (sorted-set md5 <code>6ad26994c283fe1d801d0eefe3ffe9d6</code> == the AC-0384 pristine md5)</td></tr>
+ <tr><td>farab</td><td><code>AWECRAFT_LOGIC=farab</code></td><td class="ok"><code>ok:true</code>, cols 45, <strong>h_mismatch 0</strong> (h_bad_h 0, h_bad_top 0), slab_cmp 1080 + slab_cmp8 1080 (0 mismatch), mat_surf_diff 0, mat_pierce_cells 0</td></tr>
+ <tr><td>ladder</td><td><code>AWECRAFT_LOGIC=ladder</code></td><td class="ok"><code>ok:true</code>, <strong>band_a_ok 20/20</strong> (fail_n 0), boundary_flip_n 90 &gt; 0, tier_mismatch 0, sky_bad_alpha 0</td></tr>
+ <tr><td>meshprobe</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td class="ok"><code>ok:true</code>, <strong>match_rate 1.0</strong>, verts_gd == verts_cpp (171664 — the machine-timing census; the gate is the equality + the rate), quadcheck mismatch 0</td></tr>
+ <tr><td>halo</td><td><code>AWECRAFT_LOGIC=halo</code></td><td class="ok"><code>ok:true</code> — (a) settled 41, inner 0 / boundary 0; (b) slabs 226/226 byte-identical, unseeded 84, payload/rule bad 0; (b1) 20/20; (c) promo single-flood (seed 1, enq 1, was_far true), mismatches 0; (d) evicted + far + h_only + mesh_resident + high_visible, unlit 0; (d2) low re-lower reaches far, unlit 0</td></tr>
+ <tr><td>lightstate</td><td><code>AWECRAFT_LOGIC=lightstate</code> (× 3)</td><td class="ok"><strong>double-LOD census 0/0</strong>, wash_detected false, leaks 0 on all 20 grid chunks, <code>ab.arr_diff_cells</code> 1 (the re-baselined standing), vc_diff 2 (the documented 1–2 class). <code>stragglers</code> read 3 on all three runs — the machine-timing counter (a high build landing after its column left the high tiers) sits at 0–6 across this box's history (<code>.scratch/flyfast19.log</code> 6, <code>.scratch/final_ls.log</code> 5); it is not a gated field and this change cannot reach it (the diff is the shader term, one deleted uniform line, and the satellite-only arm)</td></tr>
+ <tr><td>r16</td><td><code>AWECRAFT_LOGIC=r16</code></td><td class="ok"><code>ok:true</code>, built_all true, section_first_ok true, <strong>far_holes 0 + far_pending 0 in BOTH bands</strong> (far0 and far1), far_capsule_n 0/3 report-only</td></tr>
+ <tr><td>boundary r4</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</code> (re-run on the idle box)</td><td class="ok"><code>ok:true</code>, marker/remesh ok, crossings 20 (other_n 0), walk p95 33 (p50 13), <strong>crossing_frame p50/p95/max 27/48/54 ms</strong> (p95 inside the documented 35–55 drift band), staged_dropped 2441 ≤ 2500, col_deferred_in_footprint 0 / footprint missing 0, reband_entry 188. (The chain run's first pass read p95 145 / staged_dropped 2679 — the box had just serialised eight godot runs; the idle-box re-run is the standing reading.)</td></tr>
+ </table>
+ <p class="ok">All gates green. No temporary probes left (the <code>ac0390</code> block is a permanent arm
+ extension, <code>.scratch/AC-0390/verify_haze.py</code> is the re-runnable twin, not an engine probe). The
+ diagnostic's silence switch (<code>AWECRAFT_SATDIAG=0</code>) and the body toggle (F7 /
+ <code>AWECRAFT_SAT_BODY=0</code>, the same <code>_body_off</code> flag F7 flips) both verified at the user's
+ render distance. No native lane touched — the Windows DLL follows from the coordinator, who will send the
+ user a build to verify with exactly those two tools.</p>
+
 </body>
 </html>

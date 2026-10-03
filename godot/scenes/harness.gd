@@ -11832,15 +11832,29 @@ func _satellite_test(spawn: Vector3) -> void:
 	if sb == null:
 		Debug.result({"ok": false, "why": "no satellite node"})
 		return
+	# AC-0390: the user's configuration as a LIVE test case. The
+	# satellite driver re-derives fog_far from the live settings every
+	# frame (DayNight.fog_far(render_radius, fog_start_pct)), so
+	# AWECRAFT_FOG_PCT pins fog_start_pct for this run (restored before
+	# every exit - the arm never leaves the settings changed):
+	# AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83 runs the arm at the user's
+	# EXACT render distance (fog_far 332.0, render_edge 400.0 - the
+	# tasks/AC-0384/user-satdiag-20261003.txt settings).
+	var fog_pct_env := OS.get_environment("AWECRAFT_FOG_PCT")
+	var fog_pct_orig: int = int(Settings.values.get("fog_start_pct", 87))
+	if fog_pct_env != "":
+		Settings.set_value("fog_start_pct", int(fog_pct_env))
 	# (0) wait for the textures (the startup bake may still be slicing)
 	var t_wait := 0
 	while sb.phase != SatelliteBody.Phase.LOADED and sb.phase != SatelliteBody.Phase.FAILED:
 		await get_tree().physics_frame
 		t_wait += 1
 		if t_wait > 30000:
+			_sat_restore_fog_pct(fog_pct_env, fog_pct_orig)
 			Debug.result({"ok": false, "why": "texture wait timeout", "phase": sb.phase, "stats": sb.bake_stats})
 			return
 	if sb.phase == SatelliteBody.Phase.FAILED:
+		_sat_restore_fog_pct(fog_pct_env, fog_pct_orig)
 		Debug.result({"ok": false, "why": "bake failed", "stats": sb.bake_stats})
 		return
 	for i in 10:
@@ -11876,7 +11890,19 @@ func _satellite_test(spawn: Vector3) -> void:
 		"R": R, "SEA": SEA, "render_radius": rr, "fog_far": ff, "render_edge": edge,
 		"body_radius": R + float(SEA), "h_first": roundf(h_first * 100.0) / 100.0,
 		"h_full": roundf(h_full * 100.0) / 100.0,
+		"fog_start_pct": int(Settings.values.get("fog_start_pct", 87)),
 	}
+	# AC-0390: when the env pins fog_start_pct, the live thresholds must
+	# actually have moved (the override took effect - otherwise the run
+	# is silently at the wrong render distance and the ladder is
+	# meaningless for the user's config).
+	if fog_pct_env != "":
+		var want_ff: float = DayNight.fog_far(rr, float(Settings.values.get("fog_start_pct", 87)))
+		var applied := absf(ff - want_ff) < 0.01 and absf(edge - (float(rr) + 1.0) * 16.0) < 0.01
+		out["fog_env_applied"] = applied
+		if not applied:
+			ok = false
+			out["fog_env_fail"] = "live thresholds (ff %.2f, edge %.2f) do not match the fog_start_pct override (want ff %.2f)" % [ff, edge, want_ff]
 	out["angular"] = {
 		"texel_m": texel_m, "chunk_m": chunk_m, "ratio": texel_m / chunk_m,
 		"texel_rad_at_fog_far": roundf(texel_m / ff * 1e6) / 1e6,
@@ -12036,8 +12062,267 @@ func _satellite_test(spawn: Vector3) -> void:
 			out["rebuild_vs_shipped"] = cmp
 			if max_diff > 1 or (float(diff_px) / float(maxi(samples, 1)) > 0.01):
 				ok = false
+	# (4) AC-0390: the per-fragment COLOUR evaluation of the shader's
+	# computed output across the disc, at BOTH render distances - the
+	# user's configuration (fog_far 332, render_edge 400 - the
+	# diagnostic file's settings, the altitude of its capture) and the
+	# arm's existing long one (fog_far 709.92, render_edge 816). The
+	# acceptance is a COLOUR assertion, not a geometry one: at the
+	# disc's centre the output is dominated by the baked terrain
+	# texture (AC-0384's variance check, negative-tested against the
+	# haze-identically-1 replay and the old zero-fragment shader), at
+	# BOTH distances. The haze weight across the disc is reported old
+	# vs new (the pale-ball diagnosis, re-proved on this tree).
+	var ac: Dictionary = _sat_color_block(sb)
+	out["ac0390"] = ac
+	if not bool(ac["ok"]):
+		ok = false
+		if ac.has("why"):
+			out["ac0390_fail"] = ac["why"]
+	_sat_restore_fog_pct(fog_pct_env, fog_pct_orig)
 	out["ok"] = ok
 	Debug.result(out)
+
+
+# AC-0390: restore the fog_start_pct setting the AWECRAFT_FOG_PCT
+# override changed (the arm never leaves the settings modified).
+func _sat_restore_fog_pct(fog_pct_env: String, fog_pct_orig: int) -> void:
+	if fog_pct_env != "":
+		Settings.set_value("fog_start_pct", fog_pct_orig)
+
+
+# AC-0390: round to `dec` decimals (this engine's roundf takes one arg).
+func _sat_rnd(x: float, dec: int) -> float:
+	var m: float = pow(10.0, float(dec))
+	return roundf(x * m) / m
+
+
+# AC-0390: a Color's sRGB channels as a Vector3 (Godot's Color has no
+# .rgb member; the shader works in sRGB bytes throughout).
+func _sat_rgb(c: Color) -> Vector3:
+	return Vector3(c.r, c.g, c.b)
+
+
+# AC-0390: the numeric twin of the satellite_body.gdshader fragment
+# stage (headless has no GPU, so the shader's per-fragment output is
+# evaluated EXACTLY as Godot 4.7.1 compiles it: the same
+# smoothstep/pow/clamp/mix, the same world-space construction - the
+# .gdshader is the source, this block is the instrument). kind
+# "new" = the AC-0390 shader (haz_d = 1 - op, the fog window);
+# kind "old" = the AC-0384 shader (haz_d = 1 - smoothstep(edge,
+# 4*edge, d)) - replayed for the before/after and the bug
+# reproduction.
+func _sat_ss(e0: float, e1: float, x: float) -> float:
+	var t := clampf((x - e0) / (e1 - e0), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
+func _sat_frag_eval(th: float, H: float, ff: float, edge: float, kind: String) -> Dictionary:
+	var RB: float = float(Game.planet_R) + float(Data.SEA)
+	# camera at (0,0,H) looking straight down at the nadir (0,0,RB);
+	# the fragment at polar angle th from the nadir (azimuth 0),
+	# normal radial (exact at the face centre - the chart's local
+	# radial axis).
+	var p := Vector3(RB * sin(th), 0.0, RB * cos(th))
+	var n := p.normalized()
+	var cam := Vector3(0.0, 0.0, H)
+	var d: float = (p - cam).length()
+	var op := _sat_ss(ff, edge, d)
+	var cosv := clampf((cam - p).normalized().dot(n), 0.0, 1.0)
+	var haz_a: float = (1.0 - cosv) * (1.0 - cosv)
+	var haz_d: float
+	if kind == "old":
+		haz_d = 1.0 - _sat_ss(edge, 4.0 * edge, d)
+	else:
+		haz_d = 1.0 - op
+	var haz: float = clampf(haz_a + haz_d, 0.0, 1.0)
+	return {"d": d, "op": op, "cosv": cosv, "haz_a": haz_a, "haz_d": haz_d, "haz": haz}
+
+
+func _sat_var3(xs: Array) -> float:
+	var m := Vector3.ZERO
+	for c in xs:
+		m += c
+	m /= float(xs.size())
+	var s := 0.0
+	for c in xs:
+		var dev: Vector3 = c - m
+		s += dev.x * dev.x + dev.y * dev.y + dev.z * dev.z
+	return s / float(xs.size())
+
+
+func _sat_color_block(sb: SatelliteBody) -> Dictionary:
+	var ac := {"ok": true}
+	var R := float(Game.planet_R)
+	var SEA := float(Data.SEA)
+	var RB := R + SEA
+	var INV_BAKE_SUN_RADIAL := 1.09544512  # the shader's const (sqrt(1.2))
+	# Deterministic noon context (recorded in the RESULT): sun at the
+	# nadir's zenith -> sun_l = 1 across the 0-3 deg centre patch ->
+	# day factor 1.0 there (the brightest case: if the centre is
+	# texture-dominated here, it is everywhere); air colour = the
+	# DayNight noon sky_display (135,206,235 sRGB).
+	var u_day := 1.0
+	var u_day_gain := 0.82
+	var u_sun := Vector3(0.0, 0.0, 1.0)
+	var u_air := Color8(135, 206, 235)
+	var u_air_v := _sat_rgb(u_air) * 255.0
+	ac["context"] = {"u_day": u_day, "u_day_gain": u_day_gain,
+		"u_sun": [u_sun.x, u_sun.y, u_sun.z], "u_air": [u_air.r, u_air.g, u_air.b]}
+	# the real baked face texture (the disc-centre patch of face 0,
+	# whose chart centre is the nadir)
+	var img: Image = (sb.textures[0] as ImageTexture).get_image()
+	var W := img.get_width()
+	var Hh := img.get_height()
+	var cases: Array = [
+		{"name": "user", "fog_far": 332.0, "render_edge": 400.0, "altitude": 668.3},
+		{"name": "long", "fog_far": 709.92, "render_edge": 816.0, "altitude": 4000.0},
+	]
+	var res := {}
+	for c in cases:
+		var cname: String = c["name"]
+		var ff: float = float(c["fog_far"])
+		var edge: float = float(c["render_edge"])
+		var H: float = R + float(c["altitude"])
+		var th_max: float = acos(RB / H)
+		var h_first: float = sqrt(RB * RB + ff * ff) - R
+		var co := {
+			"fog_far": ff, "render_edge": edge, "altitude": float(c["altitude"]),
+			"h_first": roundf(h_first * 100.0) / 100.0,
+			"h_full": roundf((SEA + edge) * 100.0) / 100.0,
+			"nadir_d": roundf((H - RB) * 100.0) / 100.0,
+			"rim_d": roundf(sqrt(H * H - RB * RB) * 100.0) / 100.0,
+		}
+		# --- the haze weight per fragment across the disc, old vs new
+		var prof_old: Array = []
+		var prof_new: Array = []
+		for k in 16:
+			var th: float = th_max * float(k) / 15.0
+			prof_old.append(roundf(_sat_frag_eval(th, H, ff, edge, "old")["haz"] * 10000.0) / 10000.0)
+			prof_new.append(roundf(_sat_frag_eval(th, H, ff, edge, "new")["haz"] * 10000.0) / 10000.0)
+		co["profile_old"] = prof_old
+		co["profile_new"] = prof_new
+		var mono := true
+		for k in range(1, 16):
+			if float(prof_new[k]) + 1e-12 < float(prof_new[k - 1]):
+				mono = false
+		co["monotone_new"] = mono
+		var rows := {}
+		for kind in ["old", "new"]:
+			rows[kind] = {}
+			for lab in ["centre", "mid", "limb"]:
+				var fth: float = th_max * (0.0 if lab == "centre" else (0.5 if lab == "mid" else 1.0))
+				var f: Dictionary = _sat_frag_eval(fth, H, ff, edge, kind)
+				rows[kind][lab] = {"d": roundf(float(f["d"]) * 100.0) / 100.0,
+					"op": roundf(float(f["op"]) * 10000.0) / 10000.0,
+					"haz_a": roundf(float(f["haz_a"]) * 10000.0) / 10000.0,
+					"haz_d": roundf(float(f["haz_d"]) * 10000.0) / 10000.0,
+					"haz": roundf(float(f["haz"]) * 10000.0) / 10000.0}
+		co["disc"] = rows
+		# --- edge continuity at this render distance
+		# (a) the limb at the orbital altitude: haz_a = 1 (cosv = 0) -
+		#     geometric, independent of the render distance;
+		# (b) the fog wall: at the rim ladder altitude (h = h_first +
+		#     50) the visible sliver starts on the d = fog_far circle,
+		#     where the world is 100% fogged - haz must be 1 there (and
+		#     at the limb).
+		var ec := {"limb_haz": float(rows["new"]["limb"]["haz"])}
+		var h_rim: float = h_first + 50.0
+		var Hr: float = R + h_rim
+		var cosw: float = (Hr * Hr + RB * RB - ff * ff) / (2.0 * Hr * RB)
+		var th_w: float = acos(clampf(cosw, -1.0, 1.0))
+		var fw: Dictionary = _sat_frag_eval(th_w, Hr, ff, edge, "new")
+		var lm: Dictionary = _sat_frag_eval(acos(RB / Hr), Hr, ff, edge, "new")
+		ec["fogwall"] = {"h": roundf(h_rim * 100.0) / 100.0,
+			"d": roundf(float(fw["d"]) * 100.0) / 100.0,
+			"haz": roundf(float(fw["haz"]) * 10000.0) / 10000.0,
+			"limb_haz_at_rim_alt": roundf(float(lm["haz"]) * 10000.0) / 10000.0}
+		co["edge_continuity"] = ec
+		# --- texture dominance at the disc centre (AC-0384's check):
+		# a 40x40 fragment patch 0-3 deg from the nadir, mapped onto
+		# the 64x64 texel patch at the face centre (the chart is ~linear
+		# there). Output variance must match the baked texture's
+		# variance (a haze-washed output is constant air colour -> the
+		# variance collapses).
+		var n := 40
+		var half := 32
+		var cx := int(W / 2.0)
+		var cy := int(Hh / 2.0)
+		var patch: Array = []
+		for i in 64:
+			for j in 64:
+				patch.append(_sat_rgb(img.get_pixel(cx - half + j, cy - half + i)) * 255.0)
+		var vtex := _sat_var3(patch)
+		var bases: Array = []
+		var outs: Array = []
+		var outsh: Array = []
+		for i in n:
+			for j in n:
+				var th: float = (3.0 * PI / 180.0) * (float(i) + 0.5) / float(n)
+				var az: float = TAU * (float(j) + 0.5) / float(n)
+				var p := Vector3(RB * sin(th) * cos(az), RB * sin(th) * sin(az), RB * cos(th))
+				var nn := p.normalized()
+				var cam := Vector3(0.0, 0.0, H)
+				var d: float = (p - cam).length()
+				var op: float = _sat_ss(ff, edge, d)
+				var cosv := clampf((cam - p).normalized().dot(nn), 0.0, 1.0)
+				var haz_a: float = (1.0 - cosv) * (1.0 - cosv)
+				var haz: float = clampf(haz_a + (1.0 - op), 0.0, 1.0)
+				var sun_l: float = clampf(u_sun.dot(nn) * INV_BAKE_SUN_RADIAL, 0.0, 1.0)
+				var f: float = u_day - u_day_gain * (1.0 - sun_l)
+				var tp := img.get_pixel(int((float(j) + 0.5) / float(n) * 64.0 + float(cx - half)),
+					int((float(i) + 0.5) / float(n) * 64.0 + float(cy - half)))
+				var base: Vector3 = _sat_rgb(tp) * f * 255.0
+				bases.append(base)
+				outs.append(base.lerp(u_air_v, haz))
+				outsh.append(base.lerp(u_air_v, 1.0))  # the haze-1 replay
+		var vbase := _sat_var3(bases)
+		var vnew := _sat_var3(outs)
+		var vhaz1 := _sat_var3(outsh)
+		# the old zero-fragment shader (pre-AC-0384): d = length(VIEW)
+		# is identically 1.0 (VIEW is the unit fragment->camera
+		# direction) -> op = smoothstep(ff, edge, 1.0) -> every
+		# fragment discarded, at any render distance.
+		var op_zf: float = _sat_ss(ff, edge, 1.0)
+		var zf_surviving: int = 0 if op_zf <= 0.001 else n * n
+		co["dominance"] = {
+			"patch": "40x40 fragments @ 0-3deg from the nadir vs 64x64 texels of face 0",
+			"tex_var": _sat_rnd(vtex, 1), "base_var": _sat_rnd(vbase, 1),
+			"out_var": _sat_rnd(vnew, 1), "ratio": _sat_rnd(vnew / vbase, 4),
+			"haz1_var": _sat_rnd(vhaz1, 4), "haz1_ratio": _sat_rnd(vhaz1 / vbase, 6),
+			"zero_fragment_shader_surviving": zf_surviving,
+		}
+		# --- assertions: the new shader must PASS at this distance,
+		# the negative replays must FAIL the dominance check
+		var why := ""
+		if float(rows["new"]["centre"]["haz"]) > 0.05:
+			why = "%s: new centre haze %.4f > 0.05" % [cname, float(rows["new"]["centre"]["haz"])]
+		elif float(rows["new"]["limb"]["haz"]) < 0.99:
+			why = "%s: new limb haze %.4f < 0.99" % [cname, float(rows["new"]["limb"]["haz"])]
+		elif not mono:
+			why = "%s: new haze profile not monotone centre->limb" % cname
+		elif float(co["dominance"]["ratio"]) < 0.5:
+			why = "%s: centre output only %.4f of the texture variance" % [cname, float(co["dominance"]["ratio"])]
+		elif float(ec["limb_haz"]) < 0.99:
+			why = "%s: limb haze %.4f < 0.99 - edge continuity broken" % [cname, float(ec["limb_haz"])]
+		elif float(ec["fogwall"]["haz"]) < 0.99:
+			why = "%s: fog-wall haze %.4f < 0.99 - fog-wall continuity broken" % [cname, float(ec["fogwall"]["haz"])]
+		elif float(ec["fogwall"]["limb_haz_at_rim_alt"]) < 0.99:
+			why = "%s: limb haze at rim altitude %.4f < 0.99" % [cname, float(ec["fogwall"]["limb_haz_at_rim_alt"])]
+		elif float(co["dominance"]["haz1_ratio"]) >= 0.5:
+			why = "%s: haze-1 replay did not fail (ratio %.6f)" % [cname, float(co["dominance"]["haz1_ratio"])]
+		elif int(co["dominance"]["zero_fragment_shader_surviving"]) != 0:
+			why = "%s: zero-fragment replay unexpectedly survived" % cname
+		elif cname == "user" and float(rows["old"]["centre"]["haz"]) < 0.5:
+			why = "user: old-shader centre haze %.4f - the pale ball is not reproduced pre-fix" % float(rows["old"]["centre"]["haz"])
+		if why != "":
+			co["fail"] = why
+			ac["ok"] = false
+			if not ac.has("why"):
+				ac["why"] = why
+		res[cname] = co
+	ac["cases"] = res
+	return ac
 
 
 func _sat_img(pth: String) -> Image:
