@@ -1,11 +1,10 @@
 meta:
-  updated_at: 2026-10-03T14:32
+  updated_at: 2026-10-03T14:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0391
-- AC-0390
 - AC-0205
 - AC-0186
 - AC-0130
@@ -23554,11 +23553,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T09:57
-  updated_at: 2026-10-03T09:57
-  completed_at: null
+  updated_at: 2026-10-03T14:45
+  completed_at: 2026-10-03T14:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet should show its terrain. Right now it draws as a large
@@ -23618,7 +23617,31 @@ intake:
     CONTEXT: read tasks/AC-0384/AC-0384-results.html (the shader''s design, the haze measurements and
     the fail-able texture-dominance check), the user''s diagnostic in the ticket folder, and godot/core/satellite_body.gdshader.
 
-    '
+
+
+    CLOSED - the fix is correct and was, until a few hours ago, INVISIBLE. WHAT IT DOES: it separated
+    the two jobs one haze term was doing, giving the limb haze a driver that is independent of the render
+    distance (the ray''s impact parameter through the air shell) and leaving the edge-continuity term
+    as the only distance term, windowed by the world''s own fog window; the old multiplier-of-the-edge
+    window that saturated across the whole disc at short render distances is deleted. Verified numerically
+    at the user''s own configuration (fog 332, edge 400, altitude 668.3): the disc-centre haze read 0.9611
+    BEFORE with the whole disc at or above 0.65 and non-monotone, and reads 0.0000 after with a monotone
+    0.00 to 0.56 to 1.00 profile, with the texture-dominance ratio at 0.9968 there and 1.0000 at the long
+    setting, and the negative tests still failing as required. THE CONTEXT THAT MAKES THIS TICKET WORTH
+    READING: while it was being fixed, the shader it applies to WAS NOT COMPILING AT ALL. AC-0392 later
+    found that satellite_body.gdshader''s first line began with a hash, which Godot drops silently and
+    replaces with a default white material - so this ticket''s careful per-fragment engineering was applied
+    to a shader that had never run, and it could not possibly have changed what the user saw. Both facts
+    are true and both mattered: the haze bug was real and would have produced a pale disc the moment the
+    shader compiled, which is exactly what the Forward+ render in AC-0391 showed before AC-0392''s fix
+    landed - a white Lambert sphere with fog on it, at the user''s settings. THE LESSON, which this ticket
+    shares with the three diagnoses that preceded it: a numeric evaluation of a shader''s terms is not
+    evidence about what the shader draws, because it assumes the thing compiles and runs. Three wrong
+    diagnoses on the satellite all had that assumption buried in them. THE RENDER CONFIRMATION IS NOW
+    POSSIBLE AND IS HANDED FORWARD: this box can run the shipped Forward+ path (AC-0391, about 5 FPS at
+    1280x720 R4), and the acceptance the ticket asked for - a picture of the planet at a stated altitude
+    and render distance, looked at by the coordinator - is the one thing still owed. It is no longer a
+    substitute for the user''s own retest but a confirmation of it, and the recipe is in AC-0391''s page.'
   comments: []
 - id: AC-0391
   title: verify-visuals-on-the-shipped-forward-plus-renderer
