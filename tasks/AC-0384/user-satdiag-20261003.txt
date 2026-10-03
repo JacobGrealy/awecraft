@@ -1,0 +1,89 @@
+AweCraft satellite diagnostic report
+Generated: 2026-10-03T09:54:59
+This file is rewritten automatically while the game runs. Please send this whole file back.
+
+WHAT THE GAME SEES RIGHT NOW (plain words - the technical lines are below)
+--------------------------------------------------------------------------------
+The big planet ball ("the body") is currently: VISIBLE - your altitude is 668.3 metres above sea level (source: player)
+The 12 surface pictures: ALL 12 loaded, from a saved copy on this computer
+The colour shader: present with its full code (5810 characters)
+The surface mesh: 28812 vertices (healthy)
+How solid the ball looks right now (0 = invisible, 1 = fully solid): 1.000
+The two distance settings in use: the fog reaches to 332 metres; the fade edge is at 400 metres
+The cloud shells: 3 in the scene, of which 3 visible
+
+This report is saved at:
+  - C:/Users/greal/OneDrive/Desktop/AweCraft-satdiag.txt  [written]
+  - C:/Users/greal/Downloads/AweCraft/AweCraft-satdiag.txt  [written]
+  - the game's private folder: C:/Users/greal/AppData/Roaming/Godot/app_userdata/AweCraft/satdiag.txt (an append-only log, kept if it already exists)
+
+RECENT EVENTS (newest last; refreshed on load, on each band crossing, and every couple of seconds)
+--------------------------------------------------------------------------------
+SATDIAG diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=false period=2.0s band=[500,2000] | send back the file: C:/Users/greal/OneDrive/Desktop/AweCraft-satdiag.txt | C:/Users/greal/Downloads/AweCraft/AweCraft-satdiag.txt
+SATDIAG configure: planet_id=0 seed=5432 R=4000 SEA=126 hmax=384 src=cache predicate=FileAccess.user reason=-
+SATDIAG config: phase=LOADED src=cache via=- reason=- textures=12/12 [1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024]
+SATDIAG config: shader=path=res://core/satellite_body.gdshader code_nonempty=true code_bytes=5810 mats_with_shader=12/12
+SATDIAG config: mesh faces=12 verts=28812 aabb_custom=min=(-4126,-4126,-4126) size=(8252,8252,8252) aabb_geom=min=(0,2382,-2918) size=(2918,1744,5835) node_vis=false pos=(0,-4000,0) scale=(1.00,1.00,1.00) body_off=false
+SATDIAG state: t=77.6 configured=1 phase=LOADED alt=196.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=79.6 configured=1 phase=LOADED alt=196.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=81.6 configured=1 phase=LOADED alt=196.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=83.6 configured=1 phase=LOADED alt=196.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=85.6 configured=1 phase=LOADED alt=196.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=87.6 configured=1 phase=LOADED alt=203.2(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=89.6 configured=1 phase=LOADED alt=217.8(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=91.6 configured=1 phase=LOADED alt=232.5(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=93.6 configured=1 phase=LOADED alt=235.6(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=95.6 configured=1 phase=LOADED alt=237.8(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=97.7 configured=1 phase=LOADED alt=252.5(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=99.7 configured=1 phase=LOADED alt=267.3(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=101.7 configured=1 phase=LOADED alt=339.0(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=103.7 configured=1 phase=LOADED alt=485.2(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.353 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=105.7 configured=1 phase=LOADED alt=497.4(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.618 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=107.7 configured=1 phase=LOADED alt=497.4(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.618 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=109.8 configured=1 phase=LOADED alt=497.6(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.623 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=111.8 configured=1 phase=LOADED alt=497.9(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.630 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=113.8 configured=1 phase=LOADED alt=497.9(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.630 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=115.8 configured=1 phase=LOADED alt=497.9(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.630 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=117.8 configured=1 phase=LOADED alt=497.9(player) S=0.000 h_first=139.3 h_full=526.0 op_nadir=0.630 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG band: ENTERED alt=567.4 S=0.006 band=[500,2000]
+SATDIAG state: t=119.9 configured=1 phase=LOADED alt=567.4(player) S=0.006 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=121.9 configured=1 phase=LOADED alt=667.4(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=124.1 configured=1 phase=LOADED alt=667.7(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=126.1 configured=1 phase=LOADED alt=668.1(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=128.1 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=130.1 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=132.2 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=134.2 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=136.3 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=138.3 configured=1 phase=LOADED alt=668.3(player) S=0.035 h_first=139.3 h_full=526.0 op_nadir=1.000 fog_far=332.0 render_edge=400.0 body_off=false vis=true in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=true r=4330 h=330 cov=0.563 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=true r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}

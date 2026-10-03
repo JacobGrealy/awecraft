@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-03T09:49
+  updated_at: 2026-10-03T09:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0390
 - AC-0205
 - AC-0186
 - AC-0130
@@ -23544,4 +23545,77 @@ intake:
     rather than a loss. This task touches no streaming code and genhash proves the data lane is unchanged,
     so the threshold is re-based WITH ATTRIBUTION as a documented consequence of the carve price rather
     than quietly raised.'
+  comments: []
+- id: AC-0390
+  title: satellite-body-pale-at-short-render-distance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-03T09:57
+  updated_at: 2026-10-03T09:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From orbit the planet should show its terrain. Right now it draws as a large
+    smooth pale ball, and the diagnostic the user ran proves the body IS drawing correctly - so the only
+    thing wrong is the colour the shader produces.
+
+
+    2) Technical Details:
+
+    THE USER''S DIAGNOSTIC FILE SETTLES IT AND RULES OUT EVERY SIMPLE CAUSE (tasks/AC-0384/user-satdiag-20261003.txt,
+    generated 2026-10-03T09:54:59 on the user''s Windows PC, altitude 668.3 m): the body is VISIBLE; ALL
+    12 textures are loaded (from a saved copy on their computer, so the cache path won this run and the
+    res:// predicate fix is doing its job); the colour shader is PRESENT with its full 5810 characters
+    of code; the surface mesh has 28812 vertices and is described as healthy; the computed opacity is
+    1.000, which is correct at that altitude; and all 3 cloud shells are visible. So there is nothing
+    to fix in loading, binding, mesh construction or the dissolve - the defect is in the COLOUR the shader
+    computes, and the previous two diagnoses on this ticket (a res:// predicate issue, then a washed-out
+    haze) were both wrong for the same reason: they were tested at settings that did not match the user''s.
+
+    THE MISSING VARIABLE THE FILE SUPPLIED: the user''s render distance is SHORT - "the fog reaches to
+    332 metres; the fade edge is at 400 metres" - and the player is at 668 m, so the body''s fragments
+    are thousands of metres away, MANY TIMES beyond the fade edge. The shader''s haze is a DISTANCE-driven
+    term (AC-0310''s design: a slant path through the air shell whose distance component "hugs the render
+    edge" so that just outside the disc the body reads as the fog colour itself, giving continuity). At
+    the arm''s settings (fog_far 709.92, edge 816) the disc centre''s haze weight measured 0.0000, which
+    is why the previous fix was declared good; at the user''s settings the same ramp saturates across
+    the WHOLE disc, so the entire planet renders as the air colour - a smooth pale ball with no terrain
+    in it. The term is being asked to do two jobs at once: guarantee continuity at the disc''s EDGE, and
+    describe a limb effect across the DISC, and those two jobs pull in opposite directions as the render
+    distance shrinks.
+
+    WHAT TO DO: make the user''s exact configuration a TEST CASE in the arm - the arm must be able to
+    run at a short render distance (fog_far 332, edge 400) as well as the existing long one, and the shader''s
+    computed output colour must be evaluated PER FRAGMENT ACROSS THE DISC at both. The acceptance is a
+    colour assertion, not a geometry one: at the disc''s CENTRE the output must be dominated by the baked
+    terrain texture (for example the output''s variance across a patch of disc centre matches the texture''s
+    variance there, the check AC-0384 already built and negative-tested), and that must hold at BOTH render
+    distances. Then find the formulation of the haze that keeps the edge continuity at every render distance
+    without saturating the disc - the physically right driver is the ray''s path length through the air
+    shell (the impact parameter), which is independent of how far the render distance is set, and the
+    previous run already identified that quantity but kept the distance ramp for the edge. Separate the
+    two jobs explicitly: one term for edge continuity, one for limb haze, each with its own driver, and
+    say which is which.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (a shader touches no generation); the satellite arm''s ladder
+    (hidden / rim / dissolve at nadir_op 0.5 / full) and the 0.25 texel-to-chunk ratio intact at BOTH
+    render distances; the piece-1 texture guard still passing; the standing set green (G0 zero SCRIPT
+    ERROR, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags
+    with far_holes 0/0 both bands, boundary r4 in band); the diagnostic''s own silence switch (AWECRAFT_SATDIAG=0)
+    must keep working and the F7 body toggle must keep working, since the user will be asked to verify
+    with exactly those two tools.
+
+    VERIFICATION NOTE: this must be checked at the USER''S settings as well as the arm''s, because the
+    failure is a function of render distance - a fix verified only at the long distance is the same mistake
+    twice.
+
+    CONTEXT: read tasks/AC-0384/AC-0384-results.html (the shader''s design, the haze measurements and
+    the fail-able texture-dominance check), the user''s diagnostic in the ticket folder, and godot/core/satellite_body.gdshader.
+
+    '
   comments: []
