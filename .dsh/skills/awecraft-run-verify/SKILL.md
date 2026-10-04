@@ -51,3 +51,22 @@ file.
 Log to `.scratch/AC-NNNN-gates/` at the **repo root**, and write the self-contained
 `tasks/AC-NNNN/AC-NNNN-results.html` (G0 output, RESULT JSON, deviations, PNG only when visual).
 Report **values**, not prose.
+
+## A shot that writes no file is not evidence of anything
+
+Four failed snapshot attempts on 2026-10-04 produced no picture and no error message. Three traps, all
+silent, all now known:
+
+- **`AWECRAFT_SIZE` takes a COMMA** — `1280,720`. The parser splits on `,` (main.gd:115), so `1280x720`
+  becomes `parts[1] = ""` → `to_int()` 0 → a **1280-by-zero window** and no snapshot at all.
+- **`AWECRAFT_SNAP_DRAIN` must be large** (AC-0391's recipe uses 12000, not 1) — a small value captures
+  an unbuilt world. Note the drain is in FRAMES: at the Forward+ path's ~5 FPS a 12000-frame drain is
+  ~40 minutes, so a short `timeout` kills the run before the shot is taken.
+- **The snapshot hook belongs to specific modes.** `AWECRAFT_LOGIC=satellite` with `AWECRAFT_SNAPSHOT`
+  set runs cleanly and writes nothing. AC-0391's satellite evidence came from `LOGIC=wallshot` with
+  `NO_WORLD_VIS=1`, `AERO=0`, `CLOUDS=0`, `TIME=0.5`, `RADIUS=4`.
+
+**Before trusting any shot, check that the file exists and is newer than the run started.** And note the
+related trap that cost a day: a shader compiles LAZILY, when a material is first built, so a run that
+never builds the material reports **zero shader errors** while the shader is broken. A green check on a
+code path the run never reached is a false pass, not a pass.

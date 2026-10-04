@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T21:02
+  updated_at: 2026-10-03T21:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24147,7 +24147,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T21:00
-  updated_at: 2026-10-03T21:00
+  updated_at: 2026-10-03T21:04
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24191,5 +24191,29 @@ intake:
     chain and the two confirmations of the "unexplained log line" rule), and godot/scenes/AGENTS.md for
     the harness conventions and why G0 is defined as it is.
 
-    '
+
+
+    ADD TO THIS TICKET''S SCOPE, from the coordinator''s four failed attempts to take a satellite picture
+    on 2026-10-04: THE SNAPSHOT HOOK IS ITSELF POORLY INSTRUMENTED, and that is the same class of problem
+    this ticket exists to fix. Attempts: (1) the satellite arm with AWECRAFT_SIZE=1280x720 and SNAP_DRAIN=1
+    - no PNG; (2) the same with the corrected comma size and drain 12000 - still no PNG, because the satellite
+    arm does not drive the snapshot path at all; (3) AC-0391''s own wallshot recipe (LOGIC=wallshot, NO_WORLD_VIS=1,
+    AERO=0, CLOUDS=0, TIME=0.5, RADIUS=4, SIZE=1280,720, SNAP_DRAIN=12000, an absolute .png path) - rc=0,
+    ZERO shader errors, ZERO script errors, and STILL no file written, with no message saying why. Four
+    attempts, no picture, no diagnostic: a hook that silently produces nothing is exactly the shape of
+    failure this project has spent a week eliminating, and the fact that it blocks visual verification
+    of the very features this ticket is about makes it worth fixing here rather than later.
+
+    WHAT IT SHOULD DO: print a line stating whether the snapshot hook was armed, which mode drove it,
+    how many drain frames it ran, and where it wrote (or why it did not) - so that a failed shot is a
+    message rather than an absence. And the size parser should REJECT a malformed value loudly: `AWECRAFT_SIZE=1280x720`
+    currently parses as a 1280-by-zero window with no complaint, which cost two of the four attempts before
+    the comma form was found by reading the parser. A silently-zero dimension is the same family as a
+    shader dropped for a hash first line.
+
+    ALSO, because this ticket is about not trusting a clean-looking result: the coordinator''s Forward+
+    shader check on 2026-10-03 reported zero SHADER ERROR and was a FALSE PASS, because shaders compile
+    lazily and that run never reached the code that builds the satellite face. Any check this ticket adds
+    must FORCE the compile rather than hope a code path reaches it - the arm that actually builds the
+    mesh (meshprobe) is the one that caught all four defects, and that is the model to follow.'
   comments: []
