@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T23:15
+  updated_at: 2026-10-04T03:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -23952,7 +23952,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T20:45
-  updated_at: 2026-10-03T21:09
+  updated_at: 2026-10-04T03:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24127,7 +24127,34 @@ intake:
     a mechanism existed - either a temporary preset it removed, or a hook not in the preset list (top,
     iso, iso2, lodring, sky, eyeup, sandpad, shaft). Adding one permanently is a small, high-value harness
     change: it turns "photograph the planet" from a hunt into one command, and this class of shot is now
-    routine.'
+    routine.
+
+
+    BANDING NARROWED BY THE COORDINATOR 2026-10-04, using a 10-second source check after a 700 s render
+    timed out before capturing - which is the right order to try things in. HYPOTHESIS ELIMINATED: CLOUD
+    SHADOWS cannot be the cause, because NO cloud-shadow code exists anywhere in the project (a case-insensitive
+    grep for cloud/shadow pairings across godot/core and godot/world returns nothing). That hypothesis
+    was formed by looking at tasks/AC-0394/fwd_ground_first_look.png, where the bands sweep diagonally
+    like shadows, and it is recorded here as eliminated so nobody re-tries it. WHAT THE EVIDENCE POINTS
+    AT INSTEAD, from `gdext/src/mesh.cpp` - the code that emits every face: `FSH[6] = {0.8f, 0.8f, 1.0f,
+    0.5f, 0.8f, 0.8f}` is a PER-FACE shade (top 1.0, the four sides 0.8, bottom 0.5), and `AO_MULT[4]
+    = {1.0f, 0.8f, 0.6f, 0.4f}` is PER-CORNER ambient occlusion with only FOUR DISCRETE LEVELS. Together
+    those two produce hard boundaries that run along terrain contour and step edges and, on the stepped
+    surfaces a voxel world is made of, read as diagonal bands. That matches what the user described as
+    distorted, stair-stepped ground and what is visible in the coordinator''s own capture. IT IS ALSO
+    POSSIBLY NOT A DEFECT AT ALL, which is why this is written as a narrowing rather than a diagnosis:
+    per-face shading plus four-level corner AO is a deliberate, conventional voxel look, and it was introduced
+    on purpose by AC-0159. The question for the ticket is therefore not "what is broken" but "is this
+    the intended look", and if the answer is that the four AO levels quantise too coarsely - `AO_MULT`
+    at 0.25 steps - then the fix is to interpolate or to add levels rather than to remove the feature,
+    and PER THE PROJECT''S STANDING RULE A CHANGE TO HOW THE GAME LOOKS SHIPS WITH A SETTING defaulting
+    to the conservative behaviour. THE SEPARATE CYAN LINES are still unexplained and should not be folded
+    into this: they are thin, bright, straight and lie ON the surface at angles, which is not what any
+    of the shading constants above would produce. STILL TO DO: reproduce with the user''s own short render
+    distance (fog 332, fade edge 400) before changing anything, confirm whether the user is describing
+    this same banding or the floating slabs from their screenshot (which remain unconfirmed and may be
+    a different cause entirely), and note that the 700 s capture timeout was not enough on this occasion
+    where an earlier identical run succeeded - budget 1200 s or check for the file rather than assuming.'
   comments: []
 - id: AC-0395
   title: noclip-toggle-for-inspecting-geometry
