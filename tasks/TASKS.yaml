@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-10-03T14:45
+  updated_at: 2026-10-03T20:46
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0205
+- AC-0394
+- AC-0395
 - AC-0186
 - AC-0130
 - AC-0294
@@ -8912,11 +8913,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-03T08:24
-  updated_at: 2026-10-03T09:49
-  completed_at: null
+  updated_at: 2026-10-03T20:46
+  completed_at: 2026-10-03T20:46
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player running and shooting on planets, I want hills and ground to be smooth
@@ -23911,4 +23912,135 @@ intake:
     than the fix: every unexplained line in a gate log gets explained or gets a ticket, and "pre-existing"
     is not an explanation. The sweep for invalid render_mode keywords and hash first lines across every
     gdshader in the project is complete and clean.'
+  comments: []
+- id: AC-0394
+  title: terrain-distorted-and-floating-in-the-air
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-03T20:45
+  updated_at: 2026-10-03T20:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From the air the world looks broken - the ground surface is distorted into ripples,
+    whole slabs of terrain hang in the sky with gaps between them, and part of the view is filled by a
+    huge flat tan shape. The user''s own words: "I think there is a sizing issue or something".
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER 2026-10-03 from the Windows build (the screenshot is in the conversation; it
+    was pasted rather than saved, so it is NOT in the repo - ask for a copy if the reproduction is not
+    obvious). FOUR DISTINCT SYMPTOMS ARE VISIBLE IN ONE FRAME, read by the coordinator with vision:
+
+    (a) THE TERRAIN SURFACE IS RIPPLEd OR STEPPED - a large grey/white area carries a regular wavy banding
+    that looks like a staircase seen edge-on, which is not how any of our surfaces should read. Prime
+    suspects in order: AC-0159''s per-vertex smooth lighting and AO (a wrong corner interpolation produces
+    exactly this kind of rippling, and it is the newest change to the surface shading); the AC-0387 carve
+    changing H beneath a mesh built from a different H; or a far/near tier mismatch where one tier ramps
+    or shades differently from the other.
+
+    (b) SLABS OF TERRAIN HANG IN THE SKY WITH SKY VISIBLE BETWEEN THEM - dark green and brown chunk-shaped
+    pieces sit detached with gaps, which is the shape of missing or misplaced geometry rather than a shading
+    error: candidates are a chunk mesh whose AABB or transform is wrong, the far-to-full promotion boundary,
+    or the boundary/straddler work (AC-0379) reading live terrain in one band and not the other.
+
+    (c) A LARGE PALE-BLUE TRANSLUCENT SPHERE fills the background behind the terrain. This is almost certainly
+    the satellite body or the cloud shell, both of which STARTED RENDERING for the first time only hours
+    before this report because their shaders had never compiled (AC-0392, AC-0393 - a gdshader whose first
+    line began with a hash is dropped silently, and an invalid render_mode keyword). So this may be a
+    NEWLY VISIBLE feature behaving as designed, or the body being drawn at an altitude where the dissolve
+    should hide it. Worth separating from (a) and (b) for that reason.
+
+    (d) A LARGE FLAT TAN POLYGON occupies the lower right, which the user reads as a sizing problem and
+    which looks like a single quad far too large for its context - a held-item or viewmodel mesh at the
+    wrong scale is the obvious candidate, and AC-0113 has just moved every held pose into a per-type table
+    (with 0.0 m drift measured, so a scale is a likelier suspect than a position).
+
+    WHAT MAKES THIS FIXABLE NOW, which is the point of filing it: as of AC-0391 this box can run the SHIPPED
+    Forward+ renderer through lavapipe and Xvfb at about 5 FPS, so these can be REPRODUCED AND LOOKED
+    AT here rather than diagnosed from a description - `godot/HARNESS.md` section 2 and the `fwdshot`
+    row in `tasks/harness_data.yaml` own the recipe, and the camera presets available to a shot are in
+    `harness.gd` ("top", "iso", "iso2", "lodring", "sky", "eyeup", "sandpad", "shaft") - note the coordinator
+    looked for a satellite/altitude preset and found none, so a shot from altitude may need one of those
+    or a small purpose-built preset.
+
+    METHOD WARNING FROM THIS PROJECT''S OWN HISTORY: eight instruments have been found stale or wrong-measuring
+    this session and three diagnoses on the satellite were wrong because they were tested at settings
+    that did not match the user''s. So: reproduce at the USER''S settings first (their render distance
+    is short - fog 332, fade edge 400 - which is what made a haze bug invisible to every arm), state the
+    render distance and altitude for every finding, and separate the four symptoms above rather than treating
+    them as one bug, because they may well have four causes and two of them may not be bugs at all.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR; the standing set green; if the cause
+    turns out to be the ramps from AC-0205 - which default OFF, so they are NOT in the build the user
+    tested - say so explicitly rather than assuming.
+
+    '
+  comments: []
+- id: AC-0395
+  title: noclip-toggle-for-inspecting-geometry
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-03T20:46
+  updated_at: 2026-10-03T20:46
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player or tester I want a way to turn off my own collision so I can fly
+    through the world freely - to get somewhere quickly, to see a build from inside, and above all to
+    inspect geometry that is misbehaving without walls in the way.
+
+
+    2) Technical Details:
+
+    REQUESTED BY THE USER 2026-10-03, in their words: "a useful debugging tool would be an option for
+    disabling my characters collision box so I can [fly] through blocks". This is a good request and worth
+    taking seriously rather than treating as a cheat: the user has been reporting visual defects from
+    screenshots, and being able to move freely through the world is exactly the tool that turns "here
+    is a picture of something odd" into "here is the chunk that is wrong", which is the difference between
+    the last three days of guessing and an afternoon of looking.
+
+    WHAT TO BUILD: a NOCLIP toggle that disables the player''s collision with the world - the character
+    body stops colliding while movement stays under the player''s control, so they can pass through terrain.
+    It should be reachable two ways: an env var for scripted and arm use (consistent with how this project
+    drives everything else), and an in-game key or a settings checkbox for the user (the project''s standing
+    convention now says a player-facing switch lives on the Options surface and persists; a debug tool
+    may reasonably live on a key, but say which you chose and why). Show the state somewhere visible when
+    it is on, so nobody is confused about why they are falling through the world - a one-line indicator
+    is enough and this project already draws debug overlays.
+
+    WHAT IT MUST NOT DO, since it touches the player''s movement path: it must not change movement FEEL
+    when it is off (byte-identical behaviour, and the arms that drive movement - player, look, interact,
+    swing, boundary - must stay green); it must not disable collision for anything except the player (mobs,
+    drops, arrows and the block placement raycast should behave as they do, because a noclip that also
+    breaks interaction is useless for inspecting a build); it must not fight the sphere world''s radial
+    gravity (up is normalize(pos - C), and the 6-DOF flight band above the atmosphere already exists from
+    AC-0145, so decide whether noclip is simply "collision off" or whether it should also imply free flight,
+    and say which); and it must not silently persist a state that leaves a player stuck inside rock on
+    the next load - if it persists, default OFF and make the toggle obvious.
+
+    TESTS THAT WOULD PROVE IT: with noclip on, drive the player into solid terrain and assert it passes
+    through; with it off, drive the same path and assert it stops; assert mobs and drops still collide
+    in both states; assert the block-break raycast still hits in both states; and assert the movement
+    arms are byte-identical with noclip off. NEGATIVE-TEST the pass-through assertion, because "the player
+    moved" is exactly the kind of check that passes for the wrong reason.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (this is a player toggle, not generation); G0 zero SCRIPT
+    ERROR; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band); if it adds a setting,
+    the settings arm covers it and any moved standing value is re-established with attribution; ARCHITECTURE.md
+    synced if the player or settings surface changes.
+
+    '
   comments: []
