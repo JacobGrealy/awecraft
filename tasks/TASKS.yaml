@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-03T20:57
+  updated_at: 2026-10-03T21:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0396
 - AC-0394
 - AC-0395
 - AC-0186
@@ -23756,7 +23757,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-10-03T14:28
-  updated_at: 2026-10-03T14:32
+  updated_at: 2026-10-03T21:00
   completed_at: 2026-10-03T14:32
   waiting_on: null
   parent_id: null
@@ -23833,7 +23834,36 @@ intake:
     fix (AC-0390''s two-term split, which was good engineering applied to a shader that was never compiling)
     - against ONE render on the shipped renderer, which found the true cause and a second defect besides.
     The user asked whether the renderer difference could be the issue and whether it was worth using Forward+
-    in the pipeline; the answer to both is yes, and this ticket is the evidence.'
+    in the pipeline; the answer to both is yes, and this ticket is the evidence.
+
+
+    RESOLVED 2026-10-04 by the coordinator, and it is a FOUR-DEFECT CHAIN rather than the one defect previously
+    believed. The satellite shader had NEVER BEEN PARSED AT ALL, because its first line began with a hash
+    and Godot drops such a file silently - so every error inside it was a first-time discovery, and because
+    Godot stops at the first parse error, fixing one simply revealed the next. THE FOUR, in the order
+    they surfaced: (1) the hash first line, which dropped the entire file (fixed as AC-0392); (2) `render_mode
+    ... transparent`, invalid on both renderers (fixed as AC-0393); (3) `hint_color`, which is Godot 3
+    syntax - Godot 4 renamed it `source_color` - and it was the only occurrence in the project; (4) `COLOR
+    = vec4(...)`, which is the CANVAS_ITEM (2D) output, not a spatial one, so in a spatial shader `COLOR`
+    resolves to a read-only vertex input and the parser reports "Constants cannot be modified" - this
+    was 2D-style shader code living in a 3D shader, and it is now `ALBEDO = ...` plus `ALPHA = op`. With
+    all four fixed the arm reports zero shader errors and zero script errors for the first time since
+    the body was built. THE CORRECTION I OWE ON MY OWN WORK: I claimed this fixed last round on the strength
+    of a "zero SHADER ERROR on the Forward+ path" check, and THAT CHECK WAS A FALSE PASS - shaders compile
+    LAZILY when a material is first built, and my run never reached the point where the satellite face
+    is constructed, so it reported success on a shader it had never compiled. A verification that cannot
+    reach the defect is worse than no verification, because it converts an open question into a false
+    conclusion, and I stated it to the user as fixed. THE WAY THIS WAS ACTUALLY FOUND, which is the durable
+    lesson and the second confirmation of a rule harvested one day earlier: THE ARMS HAD BEEN PRINTING
+    THE DEFECT ALL ALONG. `meshprobe` reports `SHADER ERROR` on every run because it builds meshes and
+    therefore compiles this shader, and its gate only checks its own mismatch count - so the error line
+    rode along unread, exactly as the cloud shader''s error rode along in the gate logs for days until
+    AC-0393. The rule "an unexplained line in a gate log is not noise" was harvested on 2026-10-03 and
+    paid for itself within a day, in the same file family. THE STRUCTURAL FIX WORTH DOING, filed separately:
+    a standing check that every arm''s log carries zero SHADER ERROR lines, in the same spirit as G0''s
+    zero SCRIPT ERROR rule - because the engine''s own exit code is 0 either way and the gate JSON does
+    not mention it. Until that exists, reading the shader-error count by hand is the only thing standing
+    between us and a fifth silent shader.'
   comments: []
 - id: AC-0393
   title: cloud-shader-invalid-render-mode-never-rendered
@@ -24075,6 +24105,62 @@ intake:
     0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band); if it adds a setting,
     the settings arm covers it and any moved standing value is re-established with attribution; ARCHITECTURE.md
     synced if the player or settings surface changes.
+
+    '
+  comments: []
+- id: AC-0396
+  title: gate-on-shader-errors-like-script-errors
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-03T21:00
+  updated_at: 2026-10-03T21:00
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: When a shader in the game fails to compile, the game quietly draws something
+    else - a white placeholder - and nothing tells us. That has now hidden the planet twice and the clouds
+    once, so the checks should say so out loud.
+
+
+    2) Technical Details:
+
+    FILED AFTER AC-0392/AC-0393/AC-0394, where the SAME failure shape produced three separate user-visible
+    defects and survived for days: a shader that does not compile is replaced by Godot with a fallback
+    material, the engine still exits 0, the arm''s RESULT JSON says nothing about it, and the only trace
+    is a `SHADER ERROR` line on stdout that nobody reads. The satellite shader had FOUR stacked defects
+    (a hash first line that dropped the file silently, an invalid render_mode keyword, a Godot-3 `hint_color`
+    type hint, and a canvas_item `COLOR` output in a spatial shader) and the cloud shader a fifth - and
+    in both cases THE ARMS WERE PRINTING THE ERROR ON EVERY RUN while their gates checked only their own
+    fields.
+
+    THE JOB, in the same spirit as G0''s rule that the gate is zero SCRIPT ERROR lines rather than the
+    process exit code: (1) give the harness a SHADER ERROR census, so every arm''s output carries a count
+    and the heavy-gate job can fail on it the way it fails on script errors; (2) add a standing check
+    that compiles every shader the game uses and reports any that do not - a lazily-compiled shader is
+    only compiled when a material using it is built, which is exactly how a run can pass while the shader
+    is broken, so the check must FORCE the compile rather than hope a code path reaches it; (3) negative-test
+    it, per this project''s standard, by breaking a shader deliberately and showing the check go red.
+
+    ALSO WORTH SWEEPING WHILE HERE, since two of the four defects were Godot-3 leftovers and one was a
+    2D idiom in 3D code: grep every gdshader for `hint_color`, `hint_albedo`, `hint_white`, `hint_black`,
+    `hint_aniso`, for `render_mode` keywords invalid in 4.7.1, for a first line beginning with `#`, and
+    for assignments to anything that is a read-only input in that shader_type (`COLOR`, `VERTEX`, `NORMAL`,
+    `UV` where the stage does not allow writes). The project-wide sweep for the first two classes is already
+    clean; the last class is not covered by any check and is exactly what defect four was.
+
+    CONSTRAINTS: instrumentation only - no behaviour change; genhash 25/25 byte-identical; G0 zero SCRIPT
+    ERROR and now also zero SHADER ERROR on the standing set; the arms'' existing RESULT fields unchanged
+    so no standing value moves; if a new field is added, it goes in tasks/harness_data.yaml with the doc
+    re-rendered and --check clean.
+
+    CONTEXT: read tasks/AC-0392/AC-0392-results.html and tasks/AC-0393/AC-0393-results.html (the defect
+    chain and the two confirmations of the "unexplained log line" rule), and godot/scenes/AGENTS.md for
+    the harness conventions and why G0 is defined as it is.
 
     '
   comments: []

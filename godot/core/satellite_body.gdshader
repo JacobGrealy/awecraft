@@ -67,7 +67,7 @@ render_mode cull_back, depth_draw_always;
 uniform sampler2D tex : filter_linear;
 uniform float u_fog_far : hint_range(0.0, 20000.0);
 uniform float u_render_edge : hint_range(0.0, 20000.0);
-uniform vec4 u_air : hint_color;
+uniform vec4 u_air : source_color;
 uniform float u_day : hint_range(0.0, 2.0);
 uniform float u_day_gain : hint_range(0.0, 2.0);
 // direction FROM the surface TO the sun. World frame == body-local
@@ -125,5 +125,9 @@ void fragment() {
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
 	float sun_l = clamp(dot(u_sun, NORMAL) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
 	vec3 base = texture(tex, UV).rgb * (u_day - u_day_gain * (1.0 - sun_l));
-	COLOR = vec4(mix(base, u_air.rgb, haz), op);
+	// AC-0394: spatial outputs are ALBEDO and ALPHA - COLOR is the canvas_item
+	// (2D) output and is a read-only vertex input here, which is why the parser
+	// reported "Constants cannot be modified" at this line.
+	ALBEDO = mix(base, u_air.rgb, haz);
+	ALPHA = op;
 }
