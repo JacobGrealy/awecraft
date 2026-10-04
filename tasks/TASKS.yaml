@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T21:00
+  updated_at: 2026-10-03T21:02
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -23953,7 +23953,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T20:45
-  updated_at: 2026-10-03T20:57
+  updated_at: 2026-10-03T21:02
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24045,7 +24045,36 @@ intake:
     ALSO WORTH KNOWING FOR THE NEXT ATTEMPT: the snapshot envs used were AWECRAFT_CAM, AWECRAFT_SNAPSHOT,
     AWECRAFT_SIZE=1280x720, AWECRAFT_RADIUS=4, AWECRAFT_SNAP_DRAIN=1, AWECRAFT_TIME=0.35 - the wall was
     about 300 s per snapshot per AC-0391, so a 620 s timeout should have been enough for one, which suggests
-    the snapshot hook did not engage rather than that it was too slow.'
+    the snapshot hook did not engage rather than that it was too slow.
+
+
+    SNAPSHOT RECIPE, established the hard way 2026-10-04, so the next session does not repeat three failed
+    attempts. A satellite render needs THREE things right and the coordinator got two of them wrong twice:
+
+    1. `AWECRAFT_SIZE` TAKES A COMMA, not an x: `AWECRAFT_SIZE=1280,720`. The parser splits on "," (main.gd:115),
+    so `1280x720` yields parts[1] = "" and a to_int() of 0 - a 1280-BY-ZERO window, which silently produces
+    no snapshot at all. This was the cause of the first failed attempt and it fails without any error
+    message.
+
+    2. `AWECRAFT_SNAP_DRAIN` MUST BE LARGE: 12000 in AC-0391''s own recipe, not 1. The drain is the number
+    of frames to run before capturing, so a small value captures an unbuilt world.
+
+    3. THE SNAPSHOT HOOK BELONGS TO SPECIFIC MODES. `AWECRAFT_LOGIC=satellite` with `AWECRAFT_SNAPSHOT`
+    set runs cleanly - verified this round: the shipped Forward+ path, ZERO shader errors, ZERO script
+    errors, the first clean run since the body was built - but it writes NO PNG, because that arm does
+    not drive the snapshot path. AC-0391''s own satellite evidence used `AWECRAFT_LOGIC=wallshot` with
+    `AWECRAFT_NO_WORLD_VIS=1` (hide the terrain), `AWECRAFT_AERO=0`, `AWECRAFT_CLOUDS=0`, `AWECRAFT_TIME=0.5`,
+    `AWECRAFT_RADIUS=4` and `AWECRAFT_AIM=` - that combination is the one that produced sat_alt668_r4_fwd.png
+    and sat_alt3000_r4_fwd.png, and it is the recipe to use until a purpose-built satellite/altitude camera
+    preset exists (which it should, because this class of shot is now routine and hunting for a hook every
+    time is waste).
+
+    WHAT WAS ACTUALLY PROVED THIS ROUND, which is worth separating from the snapshot failure: with all
+    four shader defects fixed (the hash first line, the invalid render_mode, the Godot-3 hint_color, and
+    the canvas_item COLOR output in a spatial shader), the satellite arm now reports zero shader errors
+    AND zero script errors on the shipped Forward+ path. That is a real state change - before today every
+    run of that arm carried a shader error line that its gate did not read - and it is the first evidence
+    that the body can draw anything but the white fallback.'
   comments: []
 - id: AC-0395
   title: noclip-toggle-for-inspecting-geometry
