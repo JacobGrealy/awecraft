@@ -48,6 +48,8 @@ var fog_enabled_check: CheckBox
 # AC-0389: the ambient sound bed toggle (default OFF) — Settings-page
 # row, the code-created checkbox pattern (fog_enabled above).
 var ambient_check: CheckBox
+# AC-0205: the smooth-ground-ramps toggle (Settings page).
+var ramp_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -253,6 +255,19 @@ func _ready() -> void:
 	opt_vbox.add_child(ambient_check)
 	if hi + 6 < opt_vbox.get_child_count():
 		opt_vbox.move_child(ambient_check, hi + 7)
+	# AC-0205: the smooth-ground-ramps toggle — user-facing visual setting
+	# on the Settings page (next to the ambient bed), persisted like every
+	# other setting (Settings "smooth_ramps", default OFF). The apply step
+	# rides Settings.set_value -> world.note_ramps (the ctx flag + the
+	# full re-mesh through the tex-refresh drain).
+	ramp_check = CheckBox.new()
+	ramp_check.name = "RampCheck"
+	ramp_check.text = "Smooth ground ramps (dirt / grass / sand steps)"
+	ramp_check.add_theme_font_size_override("font_size", 15)
+	ramp_check.toggled.connect(_on_ramp_toggled)
+	opt_vbox.add_child(ramp_check)
+	if hi + 7 < opt_vbox.get_child_count():
+		opt_vbox.move_child(ramp_check, hi + 8)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -722,6 +737,8 @@ func _sync_controls() -> void:
 	fog_enabled_check.button_pressed = bool(Settings.values.get("fog_enabled", true))
 	# AC-0389: the ambient bed toggle (default OFF).
 	ambient_check.button_pressed = bool(Settings.values.get("ambient_enabled", false))
+	# AC-0205: the smooth-ground-ramps toggle (default OFF).
+	ramp_check.button_pressed = bool(Settings.values.get("smooth_ramps", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1054,6 +1071,16 @@ func _on_ambient_toggled(on: bool) -> void:
 		return
 	Settings.set_value("ambient_enabled", on)
 	Settings.apply_audio()
+
+
+# AC-0205: the smooth-ground-ramps toggle — set_value does the clamp
+# chain + the save + the apply step (world.note_ramps re-derives the
+# worker ctx flag and re-meshes every resident column through the
+# tex-refresh drain; the collider follows by construction).
+func _on_ramp_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("smooth_ramps", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

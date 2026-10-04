@@ -639,6 +639,25 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _texrefresh_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "ramp":
+			# AC-0205: the smooth-ground-ramps arm (the permanent gate for
+			# the one-block-step ramp feature + its toggle). Synthetic
+			# per-column patterns through the direct C++ build_accs (flat /
+			# one-step / two-step / ramp corner / in-scope-beside-out-of-
+			# scope / buried / player-placed / a gradient column): the
+			# sloped quads appear EXACTLY where the rule says (an
+			# independent GDScript re-derivation of the expected set), the
+			# byte-identity-OFF against the captured pre-feature REF hash,
+			# the collider-vs-mesh agreement on a real slab (and the
+			# negative proof that the comparator goes red on a mismatched
+			# pair), the runtime toggle re-mesh + collider follow, and the
+			# quad-count / build-cost before-and-after on the gradient.
+			# Collision stays ON (the collider is the point). Run with
+			# AWECRAFT_RAMPS=1 for the full on-state; without it the world
+			# part asserts the off-state (zero ramps, byte-exact colliders).
+			await _ramp_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "banana":
 			# AC-0040: the banana-tree generation probe — the shore dirt
 			# edge rule (independent re-derivation from the data), the
@@ -1580,6 +1599,1073 @@ class _StubWorld:
 		yfloor_calls += 1
 
 
+# ---------------------------------------------------------------------------
+# AC-0205: the smooth-ground-ramps arm.
+#
+# The rule under test (C++ ro scan, gdext/src/mesh.cpp): for a surface
+# block P (the cell above is air) whose id is rampable (the "ramp" block
+# flag — dirt/grass/sand + snowy grass), each of the four horizontal
+# directions d with a non-solid cell at P+d and a RAMPABLE solid cell at
+# P+d-up (the neighbour column's top exactly ONE lower) replaces P's d
+# side face with one sloped quad (low edge on the lower column's top
+# edge, high edge on P's far-top edge). Δ2+ never ramps; buried ground
+# never ramps; every non-ground id stays a full cube. The toggle
+# (Settings "smooth_ramps", default OFF; the AWECRAFT_RAMPS env overrides
+# it at boot) rides the worker ctx ("ramps") and short-circuits BEFORE
+# the geometry is emitted — OFF is byte-identical to the pre-feature
+# build (the REF hash below, captured on the pre-feature .so). The
+# collider follows the same flag BY CONSTRUCTION (chunk.gd
+# _build_slab_collision derives the ConcavePolygonShape3D from the slab's
+# opaque surface; the world's geom_epoch re-dirties the body on a flag
+# flip so the staged drain re-derives it from the re-meshed surface).
+# ---------------------------------------------------------------------------
+
+# The byte-identity reference: the fingerprint of the OFF-state
+# "one_step" synthetic build captured on the PRE-FEATURE build (mesh.cpp
+# without the ramp code, engine 4.7.1, 2026-10-03). Format:
+# "length/h1/h2" (h2 = hash of the reversed fingerprint string). Empty =
+# capture mode (report the value, do not assert).
+const _RAMP_REF := "331446/3237708432/767103344"
+
+# The RAMP_COR table of mesh.cpp, mirrored here INDEPENDENTLY (the
+# expected-ramp corners for the collider-triangle check): dir 0=-x 1=+x
+# 2=-z 3=+z, corner offsets relative to (lx, y, lz).
+const _RAMP_COR_ARM := {
+	"0": [[0, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 0]],
+	"1": [[1, 0, 0], [1, 0, 1], [0, 1, 1], [0, 1, 0]],
+	"2": [[0, 0, 0], [1, 0, 0], [0, 1, 1], [1, 1, 1]],
+	"3": [[0, 0, 1], [0, 1, 0], [1, 0, 1], [1, 1, 0]],
+}
+
+
+func _ramp_pattern_data(pname: String) -> Array:
+	# The 24-slab synthetic column for pattern pname (raw n==0 slabs — the
+	# codec's accepted in-memory form). B = 100 base height; ids: 1 grass,
+	# 2 dirt, 3 stone, 4 sand. Column layout (x east, z north), every
+	# column solid from y=0:
+	#  flat:     every column dirt top 100.
+	#  one_step: z<=8 grass top 101, z>8 dirt top 100 (the 16-ramp wall).
+	#  two_step: z<=8 grass top 102 (dirt at 101), z>8 dirt top 100 (Δ2).
+	#  corner:   one_step + column (8,8) dirt top 102 — its top block ramps
+	#            -x/+x/-z (the 3-ramp corner; +z is Δ2); the buried rows
+	#            100/101 below it must stay ramp-free.
+	#  oos:      z<=8 grass top 101, z>8 STONE top 100 (out-of-scope
+	#            neighbour — the 16 faces stay vertical).
+	#  placed:   all-dirt; column (8,8) dirt top 101 — player-placed dirt
+	#            on a dirt slope (the 4-ramp pyramid, all ids 2).
+	#  gradient: H(x,z) = 96 + (x+z)/2, all dirt (the cost column — many
+	#            Δ1 adjacencies; the before/after measurement).
+	var B := 100
+	var top := {}
+	for x in 16:
+		for z in 16:
+			top["%d,%d" % [x, z]] = B
+	match pname:
+		"one_step":
+			for x in 16:
+				for z in range(0, 9):
+					top["%d,%d" % [x, z]] = B + 1
+		"two_step":
+			for x in 16:
+				for z in range(0, 9):
+					top["%d,%d" % [x, z]] = B + 2
+		"corner":
+			for x in 16:
+				for z in range(0, 9):
+					top["%d,%d" % [x, z]] = B + 1
+			top["8,8"] = B + 2
+		"oos":
+			for x in 16:
+				for z in range(0, 9):
+					top["%d,%d" % [x, z]] = B + 1
+		"placed":
+			top["8,8"] = B + 1
+		"gradient":
+			for x in 16:
+				for z in 16:
+					top["%d,%d" % [x, z]] = 96 + (x + z) / 2
+	var topid := {}
+	for x in 16:
+		for z in 16:
+			topid["%d,%d" % [x, z]] = 2  # dirt below the top everywhere
+	match pname:
+		"one_step":
+			for x in 16:
+				for z in range(0, 9):
+					topid["%d,%d" % [x, z]] = 1
+		"two_step":
+			for x in 16:
+				for z in range(0, 9):
+					topid["%d,%d" % [x, z]] = 1
+		"oos":
+			for x in 16:
+				for z in range(0, 9):
+					topid["%d,%d" % [x, z]] = 1
+			for x in 16:
+				for z in range(9, 16):
+					topid["%d,%d" % [x, z]] = 3  # stone (out of scope)
+		"corner":
+			for x in 16:
+				for z in range(0, 9):
+					topid["%d,%d" % [x, z]] = 1
+			topid["8,8"] = 2  # placed dirt on top of the grass wall
+	var data := []
+	for si in 24:
+		var flat := PackedByteArray()
+		flat.resize(4096)
+		var nz := 0
+		var base := si * 16
+		for z in 16:
+			for x in 16:
+				var H: int = top["%d,%d" % [x, z]]
+				for y in range(base, base + 16):
+					var idv := 0
+					if y <= H:
+						idv = topid["%d,%d" % [x, z]] if y == H else 2
+					if idv != 0:
+						flat[(y - base) * 256 + z * 16 + x] = idv
+						nz += 1
+		if nz == 0:
+			data.append(null)
+		else:
+			data.append({"n": 0, "b": 8, "i": flat, "nz": nz})
+	return data
+
+
+# The INDEPENDENT expected-ramp re-derivation (GDScript, reading the
+# pattern's own data slabs — a different code path than the C++ emitter):
+# for every rampable surface top, each direction with a non-solid cell at
+# the top level and a rampable solid below it.
+func _ramp_expected(pname: String) -> Dictionary:
+	var data := _ramp_pattern_data(pname)
+	var ctx := _ChunkScriptM.make_ctx()
+	var stab: PackedByteArray = ctx["stab"]
+	var rtab: PackedByteArray = ctx["rtab"]
+	var flats: Array = []
+	for si in 24:
+		var s = data[si]
+		if s == null:
+			flats.append(PackedByteArray())
+		else:
+			flats.append((s["i"] as PackedByteArray))
+	var exp := {}
+	var list := []
+	for x in 16:
+		for z in 16:
+			var ty := -1
+			var tid := 0
+			for si in range(23, -1, -1):
+				var f: PackedByteArray = flats[si]
+				if f.size() != 4096:
+					continue
+				var found := false
+				for y in range(15, -1, -1):
+					var idv: int = f[y * 256 + z * 16 + x]
+					if idv != 0:
+						ty = si * 16 + y
+						tid = idv
+						found = true
+						break
+				if found:
+					break
+			if ty < 0 or rtab[tid] == 0:
+				continue
+			for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var nx: int = x + int(d[0])
+				var nz: int = z + int(d[1])
+				# The synthetic build feeds SELF-RINGS as neighbours
+				# (snap_rings on the same data: the z=-1 ring IS the
+				# z=15 slice) — the expectation wraps EXACTLY that way
+				# (no boundary skip).
+				var wx: int = (x + int(d[0])) % 16
+				wx = wx if wx >= 0 else wx + 16
+				var wz: int = (z + int(d[1])) % 16
+				wz = wz if wz >= 0 else wz + 16
+				var qid := 0
+				if ty < 384:
+					qid = int(flats[ty / 16][(ty % 16) * 256 + wz * 16 + wx])
+				if qid != 0 and stab[qid] > 0:
+					continue  # a solid neighbour — the face is not emitted
+				if ty == 0:
+					continue
+				var qid2: int = flats[(ty - 1) / 16][((ty - 1) % 16) * 256 + wz * 16 + wx]
+				if stab[qid2] == 0 or rtab[qid2] == 0:
+					continue
+				list.append([x, ty, z, d[0], d[1]])
+	return {"list": list}
+
+
+# The ramp-class quads of an opaque acc: exactly the quads whose four
+# corners span one unit in x AND z AND y (every flat face spans zero in
+# one axis; the merged path is absent — the arm feeds empty rects).
+func _ramp_class_quads(ao: Dictionary) -> Array:
+	var out := []
+	var v: PackedVector3Array = ao["v"]
+	var q := int(ao["q"])
+	for i in q:
+		var b := i * 4
+		var vs := [v[b], v[b + 1], v[b + 2], v[b + 3]]
+		var xmin := INF
+		var xmax := -INF
+		var ymin := INF
+		var ymax := -INF
+		var zmin := INF
+		var zmax := -INF
+		for p in vs:
+			xmin = minf(xmin, float(p.x))
+			xmax = maxf(xmax, float(p.x))
+			ymin = minf(ymin, float(p.y))
+			ymax = maxf(ymax, float(p.y))
+			zmin = minf(zmin, float(p.z))
+			zmax = maxf(zmax, float(p.z))
+		if absf(xmax - xmin - 1.0) < 1e-6 and absf(zmax - zmin - 1.0) < 1e-6 and absf(ymax - ymin - 1.0) < 1e-6:
+			vs.sort_custom(func(a, b2):
+				if a.y != b2.y:
+					return a.y < b2.y
+				if a.x != b2.x:
+					return a.x < b2.x
+				return a.z < b2.z)
+			var key := ""
+			for p in vs:
+				key += "%d/%d/%d;" % [int(round(p.x)), int(round(p.y)), int(round(p.z))]
+			# The ramp's P (the upper block) + dir, from the quad
+			# geometry: P = (xmin, ymin, zmin); the LOW edge is the
+			# constant-axis edge at ymin — constant x at xmin = -x, at
+			# xmax = +x; constant z at zmin = -z, at zmax = +z.
+			var lo := []
+			for p in vs:
+				if absf(float(p.y) - ymin) < 1e-6:
+					lo.append(p)
+			var d := ""
+			if absf(float(lo[0].z) - float(lo[1].z)) < 1e-6:  # x-dir ramp
+				d = "nx" if absf(float(lo[0].x) - xmin) < 1e-6 else "px"
+			else:  # z-dir ramp
+				d = "nz" if absf(float(lo[0].z) - zmin) < 1e-6 else "pz"
+			out.append({"key": key, "verts": vs, "p": Vector3(xmin, ymin, zmin), "dir": d})
+	return out
+
+
+func _ramp_exp_corners(x: int, y: int, z: int, dx: int, dz: int) -> Array:
+	var dir := "0" if dx == -1 else ("1" if dx == 1 else ("2" if dz == -1 else "3"))
+	var out := []
+	for o in _RAMP_COR_ARM[dir]:
+		out.append(Vector3(float(x + o[0]), float(y + o[1]), float(z + o[2])))
+	return out
+
+
+func _ramp_exp_key(x: int, y: int, z: int, dx: int, dz: int) -> String:
+	var vs := _ramp_exp_corners(x, y, z, dx, dz)
+	vs.sort_custom(func(a, b2):
+		if a.y != b2.y:
+			return a.y < b2.y
+		if a.x != b2.x:
+			return a.x < b2.x
+		return a.z < b2.z)
+	var key := ""
+	for p in vs:
+		key += "%d/%d/%d;" % [int(round(p.x)), int(round(p.y)), int(round(p.z))]
+	return key
+
+
+# The canonical fingerprint of a build: every slab's six accs (vertex,
+# normal, color, uv, index) as one deterministic string (9-decimal
+# float formatting — exact for the float32 values in range; the indices
+# as ints). The REF constant is the OFF build's fingerprint (length +
+# the string hash + the reversed-string hash) captured on the PRE-
+# FEATURE .so.
+func _ramp_fingerprint(res: Dictionary) -> String:
+	var s := ""
+	for row in res["slabs"]:
+		for si in 6:
+			var a: Dictionary = row[si]
+			var q := int(a["q"])
+			if q == 0:
+				continue
+			s += "["
+			var v: PackedVector3Array = a["v"]
+			for k in q * 4:
+				s += "%.9f/%.9f/%.9f " % [v[k].x, v[k].y, v[k].z]
+			var n: PackedVector3Array = a["n"]
+			for k in q * 4:
+				s += "%.9f/%.9f/%.9f " % [n[k].x, n[k].y, n[k].z]
+			var c: PackedColorArray = a["c"]
+			for k in q * 4:
+				s += "%.9f/%.9f/%.9f/%.9f " % [c[k].r, c[k].g, c[k].b, c[k].a]
+			var u: PackedVector2Array = a["u"]
+			for k in q * 4:
+				s += "%.9f/%.9f " % [u[k].x, u[k].y]
+			var i: PackedInt32Array = a["i"]
+			for k in q * 6:
+				s += "%d " % i[k]
+			s += "]"
+	return s
+
+
+func _ramp_build(pname: String, on: bool) -> Dictionary:
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var data := _ramp_pattern_data(pname)
+	var fl := ChunkIO.empty_slabs(24)
+	var nbs := {}
+	for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+		nbs["%d,%d" % [d[0], d[1]]] = mc.snap_rings(data, fl, d[0], d[1], PackedByteArray(), PackedByteArray(), 126)
+	var ctx := _ChunkScriptM.make_ctx().duplicate()
+	ctx["ramps"] = on
+	var ms := {"rects": {}, "h": 0.0}
+	return mc.build_accs(data, fl, 0, 0, nbs, ctx, ms, {}, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray(), -1)
+
+
+# A FRESH build_accs of a real chunk from its CURRENT slab dicts + the
+# neighbours' current rings (mirroring the game dispatch exactly) — the
+# oracle the mesh is compared against when the scan sees a mismatch.
+# merged = true feeds the world's merge table (_tm_ms_full) — the game's
+# full dispatch takes the merged emitter, the scoped lanes the per-face.
+func _ramp_skipfill_id(fp: PackedByteArray, idx: int, y: int) -> int:
+	var H: int = int(fp[2 * idx]) | (int(fp[2 * idx + 1]) << 8)
+	if y < 5:
+		return 11  # B_BEDROCK
+	if H < 126 and y >= H + 1 and y <= 126:
+		return 5  # B_WATER
+	if y == H:
+		return int(fp[768 + idx])
+	if y >= H - 3:
+		return 4 if int(fp[512 + idx]) == 1 else 2  # B_SAND / B_DIRT
+	return 3  # B_STONE
+
+func _ramp_cell_at(flats: Dictionary, i: int, j: int, y: int) -> int:
+	var oi := 0
+	var oz := 0
+	var li := i
+	var lj := j
+	if li < 0:
+		oi = -1
+		li += 16
+	elif li > 15:
+		oi = 1
+		li -= 16
+	if lj < 0:
+		oz = -1
+		lj += 16
+	elif lj > 15:
+		oz = 1
+		lj -= 16
+	var key := "%d,%d" % [oi, oz]
+	if not flats.has(key):
+		return 0
+	var fls: Array = flats[key]
+	var si := y / 16
+	if si < 0 or si > 23:
+		return 0
+	var f: PackedByteArray = fls[si]
+	if f.size() != 4096:
+		return 0
+	return int(f[(y - si * 16) * 256 + lj * 16 + li])
+
+
+# The data top of a world column (the highest non-air y), or -1.
+func _ramp_tri_key(a: Vector3, b: Vector3, c: Vector3) -> String:
+	return "%d/%d/%d|%d/%d/%d|%d/%d/%d" % [
+		int(round(a.x * 1000.0)), int(round(a.y * 1000.0)), int(round(a.z * 1000.0)),
+		int(round(b.x * 1000.0)), int(round(b.y * 1000.0)), int(round(b.z * 1000.0)),
+		int(round(c.x * 1000.0)), int(round(c.y * 1000.0)), int(round(c.z * 1000.0))]
+
+
+# The real-world scan (the r4 band): the INDEPENDENT expected ramp set
+# (from the data + the 4-neighbor data, the cell rule) vs the ramp-class
+# quads actually in the opaque meshes (exact-set equality), plus the
+# collider agreement on every slab that carries a ramp (the ramp's two
+# triangles present in the ConcavePolygonShape3D, and the whole mesh
+# surface-0 triangle set a subset of the collider's faces — the collider
+# may only ADD the flora-cutout triangles).
+func _ramp_world_scan(on: bool) -> Dictionary:
+	var ctx := _ChunkScriptM.make_ctx()
+	var stab: PackedByteArray = ctx["stab"]
+	var rtab: PackedByteArray = ctx["rtab"]
+	var io: Variant = ChunkIO.io_cpp()
+	var wres := {"chunks": 0, "ramps_expected": 0, "ramps_found": 0, "missing": 0, "extra": 0, "exact": false, "skipped": 0}
+	var col := {"slabs_checked": 0, "ramp_tris": 0, "ramp_tris_total": 0, "missing_tris": 0, "mesh_not_in_col": 0, "bodies_missing": 0, "ok": true}
+	var rep := {}  # one representative ramp for the flip test
+	for key in world.chunks.keys():
+		var c: Node3D = world.chunks[key]
+		if c == null or c.far or c.data.size() == 0:
+			continue
+		if not bool(c.mesh_built):
+			wres["skipped"] += 1
+			continue
+		var cx := int(c.cx)
+		var cz := int(c.cz)
+		var flats := {}
+		# full_neighbors: which neighbour offsets carry a FULL (non-far)
+		# chunk's data. A far/h-only neighbour (or an absent one) feeds
+		# the C++ builder its ring from the FAR PAYLOAD (the skip-fill
+		# edge row — solid to the far H), not from slab data, so ramps
+		# across that boundary are correct-but-unpredictable here; they
+		# are excluded from the exactness axis (counted separately).
+		var full_neighbors := {}
+		var skipfill_rings := {}
+		for d in [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]]:
+			var nc = world.chunks.get(world._key(cx + d[0], cz + d[1]))
+			var fls: Array = []
+			if nc != null and nc.data.size() > 0:
+				for si in 24:
+					var s = nc.data[si]
+					if s == null:
+						fls.append(PackedByteArray())
+					else:
+						fls.append(io.slab_flat(s))
+			else:
+				for si in 24:
+					fls.append(PackedByteArray())
+			flats["%d,%d" % [d[0], d[1]]] = fls
+			# Verifiable = the neighbour's ring is readable from here. Two
+			# readable cases: (a) SLAB ring — the neighbour holds slab data
+			# AND no 1024-byte far payload (the circle-ring chunks are
+			# far-flagged but carry real slab data the game rings from);
+			# (b) SKIP-FILL ring — a 1024-byte far payload: snap_rings
+			# synthesizes the exact skip-fill edge row (bedrock/water/top
+			# id/dirt-sand/stone from the far H) — modeled below, so it is
+			# exact too. Only a fully absent neighbour (air ring) is off
+			# the exactness axis.
+			var fp3: PackedByteArray = nc.far_payload() if nc != null else PackedByteArray()
+			full_neighbors["%d,%d" % [d[0], d[1]]] = nc != null and nc.data.size() > 0 and fp3.size() != 1024
+			skipfill_rings["%d,%d" % [d[0], d[1]]] = fp3 if fp3.size() == 1024 else null
+		# The expected set (the cell rule, from the data) — mirroring
+		# the C++ ro scan EXACTLY: visit every solid cell whose cell
+		# above is non-solid (a surface block — including ones under a
+		# floating canopy or inside a cave; the builder visits them too),
+		# and apply the ramp rule at each. (The topmost-non-zero scan
+		# is wrong: a canopy of non-solid leaves above the surface — or
+		# a cave layer — makes the "top" a non-surface row.)
+		var exp := {}
+		var nexp := 0
+		var selffl: Array = flats["0,0"]
+		for i in 16:
+			for j in 16:
+				var solid_above := false
+				for y in range(383, -1, -1):
+					var f2: PackedByteArray = selffl[y / 16]
+					var idv := 0
+					if f2.size() == 4096:
+						idv = int(f2[(y - (y / 16) * 16) * 256 + j * 16 + i])
+					var solid := idv != 0 and stab[idv] > 0
+					if solid and not solid_above:
+						if rtab[idv] > 0:
+							for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+								# Only a ramp whose LOWER column crosses
+								# the chunk edge touches a neighbour's
+								# ring. The ring is one of: slab data
+								# (read from the neighbour's flats), the
+								# SYNTHESIZED SKIP FILL (a 1024-byte far
+								# payload — modeled exactly below), or AIR
+								# (absent neighbour — the builder never
+								# ramps into all air, so it can be dropped).
+								var crosses := (int(d[0]) == 1 and i == 15) or (int(d[0]) == -1 and i == 0) or (int(d[1]) == 1 and j == 15) or (int(d[1]) == -1 and j == 0)
+								var fpd: Variant = skipfill_rings["%d,%d" % [int(d[0]), int(d[1])]]
+								var qa := 0
+								var qb := 0
+								if crosses and fpd != null:
+									# snap_rings edge-column index: the
+									# neighbour's edge row (lx/lz fixed by
+									# the direction, t along the edge).
+									var tt: int = j if int(d[0]) != 0 else i
+									var idxs: int = 16 * tt + 15 if int(d[0]) == -1 else (16 * tt if int(d[0]) == 1 else (240 + tt if int(d[1]) == -1 else tt))
+									qa = _ramp_skipfill_id(fpd, idxs, y)
+									qb = _ramp_skipfill_id(fpd, idxs, y - 1)
+								elif crosses and not bool(full_neighbors["%d,%d" % [int(d[0]), int(d[1])]]):
+									continue  # air ring — no ramp possible
+								else:
+									qa = _ramp_cell_at(flats, i + int(d[0]), j + int(d[1]), y)
+									if y == 0:
+										continue
+									qb = _ramp_cell_at(flats, i + int(d[0]), j + int(d[1]), y - 1)
+								if qa != 0 and stab[qa] > 0:
+									continue
+								if stab[qb] == 0 or rtab[qb] == 0:
+									continue
+								var k := _ramp_exp_key(i, y, j, int(d[0]), int(d[1]))
+								exp[k] = _ramp_exp_corners(i, y, j, int(d[0]), int(d[1]))
+								nexp += 1
+					solid_above = solid
+		# The actual set (the ramp-class quads of the opaque meshes) —
+		# boundary ramps across a far/absent neighbour are excluded
+		# (their ring is the far payload, not slab data).
+		var act := {}
+		var nact := 0
+		var nbound := 0
+		for s in c.slabs:
+			if s.mesh_instance == null or s.mesh_instance.mesh == null:
+				continue
+			var arrs = s.mesh_instance.mesh.surface_get_arrays(0)
+			if arrs.is_empty():
+				continue
+			var ao := {"v": arrs[Mesh.ARRAY_VERTEX], "q": int(arrs[Mesh.ARRAY_INDEX].size()) / 6}
+			for r in _ramp_class_quads(ao):
+				var doff: Array = ({"nx": [-1, 0], "px": [1, 0], "nz": [0, -1], "pz": [0, 1]})[r["dir"]]
+				# Mirror of the exp-side boundary rule: only a ramp whose
+				# LOWER column crosses the edge (px @ x==15, nx @ x==0,
+				# pz @ z==15, nz @ z==0) touches a neighbour's ring.
+				var rd: String = r["dir"]
+				var crosses2: bool = (rd == "px" and int(r["p"].x) == 15) or (rd == "nx" and int(r["p"].x) == 0) or (rd == "pz" and int(r["p"].z) == 15) or (rd == "nz" and int(r["p"].z) == 0)
+				# Mirror of the exp-side rule: a crossing ramp is on the
+				# exactness axis when the neighbour's ring is readable —
+				# slab data OR the synthesized skip fill (both modeled in
+				# the expectation). Only an air ring (absent neighbour)
+				# is excluded; the builder never ramps into all air.
+				if crosses2 and skipfill_rings["%d,%d" % [int(doff[0]), int(doff[1])]] == null and not bool(full_neighbors["%d,%d" % [int(doff[0]), int(doff[1])]]):
+					nbound += 1
+					continue
+				act[r["key"]] = true
+				nact += 1
+		wres["boundary_ramps"] = int(wres.get("boundary_ramps", 0)) + nbound
+		wres["chunks"] += 1
+		wres["ramps_expected"] += nexp
+		wres["ramps_found"] += nact
+		var missing := 0
+		var extra := 0
+		var mmiss := []
+		var mextra := []
+		for k in exp:
+			if not act.has(k):
+				missing += 1
+				if mmiss.size() < 4:
+					mmiss.append(k)
+		for k in act:
+			if not exp.has(k):
+				extra += 1
+				if mextra.size() < 4:
+					mextra.append(k)
+		if mmiss.size() > 0 and not wres.has("sample_miss"):
+			wres["sample_miss"] = mmiss
+			wres["sample_chunk"] = "%d,%d" % [cx, cz]
+		if mextra.size() > 0 and not wres.has("sample_extra"):
+			wres["sample_extra"] = mextra
+			wres["sample_extra_chunk"] = "%d,%d" % [cx, cz]
+		wres["missing"] += missing
+		wres["extra"] += extra
+		# The collider agreement on every ramped slab.
+		var by_slab := {}
+		for k in exp:
+			var parts := String(k).split("/")
+			var ry := int(parts[1])
+			by_slab[ry / 16] = by_slab.get(ry / 16, 0) + 1
+		for si in by_slab:
+			var s = c.slabs[si]
+			if s.collision_body == null or not is_instance_valid(s.collision_body) \
+					or s.collision_body.get_child_count() == 0:
+				col["bodies_missing"] += 1
+				continue
+			var cs: Node = s.collision_body.get_child(0)
+			var shape = cs.shape if cs is CollisionShape3D else null
+			if shape == null or s.mesh_instance == null or s.mesh_instance.mesh == null:
+				col["bodies_missing"] += 1
+				continue
+			col["slabs_checked"] += 1
+			var faces: PackedVector3Array = shape.get_faces()
+			var fset := {}
+			for i2 in range(0, faces.size(), 3):
+				fset[_ramp_tri_key(faces[i2], faces[i2 + 1], faces[i2 + 2])] = true
+			# The ramp's two triangles (the shared index pattern
+			# (b, b+2, b+1, b, b+3, b+2)): present in the collider when
+			# the flag is ON, ABSENT when OFF (the mesh⊆collider subset
+			# check below covers the cubed faces either way).
+			for k in exp:
+				var corners: Array = exp[k]
+				var ymin := INF
+				for p in corners:
+					ymin = minf(ymin, float(p.y))
+				if int(ymin) / 16 != si:
+					continue
+				col["ramp_tris_total"] += 2
+				var t1 := _ramp_tri_key(corners[0], corners[2], corners[1])
+				var t2 := _ramp_tri_key(corners[0], corners[3], corners[2])
+				var p1 := fset.has(t1)
+				var p2 := fset.has(t2)
+				if on == (p1 and p2):
+					col["ramp_tris"] += 2
+				else:
+					col["missing_tris"] += 2
+			# The whole mesh surface-0 must be a subset of the collider.
+			var arrs2 = s.mesh_instance.mesh.surface_get_arrays(0)
+			if not arrs2.is_empty():
+				var mv: PackedVector3Array = arrs2[Mesh.ARRAY_VERTEX]
+				var mi: PackedInt32Array = arrs2[Mesh.ARRAY_INDEX]
+				for i3 in range(0, mi.size(), 3):
+					if not (fset.has(_ramp_tri_key(mv[mi[i3]], mv[mi[i3 + 1]], mv[mi[i3 + 2]]))):
+						col["mesh_not_in_col"] += 1
+		# Remember the first ramp as the flip test's representative.
+		if rep.is_empty() and nexp > 0:
+			for k in exp:
+				var corners: Array = exp[k]
+				var ym := 0.0
+				for p in corners:
+					ym = maxf(ym, float(p.y))
+				var x0 := 0
+				var z0 := 0
+				for p in corners:
+					x0 = int(round(float(p.x)))
+					z0 = int(round(float(p.z)))
+					break
+				rep = {
+					"key": key, "si": int(ym - 1.0) / 16,
+					"tri1": _ramp_tri_key(corners[0], corners[2], corners[1]),
+					"tri2": _ramp_tri_key(corners[0], corners[3], corners[2]),
+				}
+				break
+	col["ok"] = col["missing_tris"] == 0 and col["mesh_not_in_col"] == 0 \
+			and col["bodies_missing"] == 0 and (col["slabs_checked"] > 0 or wres["ramps_expected"] == 0)
+	wres["exact"] = wres["missing"] == 0 and wres["extra"] == 0
+	return {"scan": wres, "collider": col, "rep": rep}
+
+
+# Bring the real band to a VERIFIED steady state before the scan:
+# (1) wait until the star box is settled for every real chunk (the
+# tex-refresh dispatch gate — an unsettled box defers the re-dispatch),
+# (2) bump the world's geom epoch + force a re-dispatch of the real
+# band ONLY (the ~5000 far/halo keys never settle and would churn the
+# drain queue forever — and the epoch bump makes the collider re-derive
+# track the re-landed mesh, exactly the ramp-flip semantics),
+# (3) wait for ramp-count stability (every ramp-bearing slab re-landed).
+func _ramp_wait_steady(frames_max: int) -> bool:
+	var forced := false
+	var last := -1
+	var stable := 0
+	for f in frames_max:
+		await get_tree().process_frame
+		if world.star != null:
+			var settled := true
+			for key in world.chunks:
+				var c = world.chunks[key]
+				if c == null or c.far or c.data.size() == 0:
+					continue
+				if not world.star.box_settled(int(c.cx), int(c.cz), -1, 24):
+					settled = false
+					break
+			if not settled:
+				forced = false
+				stable = 0
+				last = -1
+				continue
+			if not forced:
+				var keys: Array = []
+				for key2 in world.chunks:
+					var c2 = world.chunks[key2]
+					if c2 != null and not c2.far and c2.data.size() > 0:
+						keys.append(key2)
+				world.geom_epoch += 1
+				world.tex_refresh = keys
+				forced = true
+		# The forced wave is LANDED when every real slab's collider stamp
+		# carries the current geom epoch: the stamp is re-recorded only
+		# when the re-derived collider lands, and the re-derive happens
+		# only after the re-landed mesh (the epoch bump breaks the
+		# stamp match). Light re-bakes churn the edge chunks forever
+		# (identical geometry, same epoch — the stamp stays matched),
+		# so a world-wide ramp-count stability test can never settle;
+		# the stamp test is the structural wave-landed signal.
+		var wave := true
+		for key in world.chunks:
+			var c = world.chunks[key]
+			if c == null or c.far or c.data.size() == 0:
+				continue
+			for s in c.slabs:
+				if s == null or s.collision_body == null or not is_instance_valid(s.collision_body):
+					continue
+				if int(s.col_dirty):
+					wave = false
+					break
+				if s.col_geom_stamp.is_empty() or int(s.col_geom_stamp[s.col_geom_stamp.size() - 1]) != int(world.geom_epoch):
+					wave = false
+					break
+			if not wave:
+				break
+		if not wave:
+			stable = 0
+			last = -1
+			continue
+		var n := _ramp_world_ramp_count()
+		if n == last:
+			stable += 1
+		else:
+			stable = 0
+			last = n
+		if stable >= 20:
+			for g in 30:  # let the queue_free'd bodies free + the handoffs land
+				await get_tree().process_frame
+			return true
+	return false
+
+
+# Wait for the toggle flip to settle: the per-slab
+# high-lane landings + the tex_refresh drain (3/frame) form a long wave
+# after the ramps flip. "Queue/inflight empty" is NOT
+# a steady-state signal here — the 5051-column halo keeps the far lane
+# working forever, so the mesh build inflight never empties. Stability
+# is: no slab collider dirty + the real-band ramp count unchanged for 40
+# consecutive frames (every ramp-bearing real-band slab has re-landed).
+func _ramp_wait_remesh(frames_max: int) -> bool:
+	# The flip bumped the geom epoch (note_ramps), so the stamp test
+	# below is exactly "the flip's re-mesh wave (mesh + collider
+	# re-derive) has landed on every real slab" — immune to the light
+	# re-bake churn that makes a world-wide count test never settle.
+	var last := -1
+	var stable := 0
+	for f in frames_max:
+		await get_tree().process_frame
+		var wave := true
+		for key in world.chunks:
+			var c = world.chunks[key]
+			if c == null or c.far or c.data.size() == 0:
+				continue
+			for s in c.slabs:
+				if s == null or s.collision_body == null or not is_instance_valid(s.collision_body):
+					continue
+				if int(s.col_dirty):
+					wave = false
+					break
+				if s.col_geom_stamp.is_empty() or int(s.col_geom_stamp[s.col_geom_stamp.size() - 1]) != int(world.geom_epoch):
+					wave = false
+					break
+			if not wave:
+				break
+		if not wave:
+			stable = 0
+			last = -1
+			continue
+		var n := _ramp_world_ramp_count()
+		if n == last:
+			stable += 1
+		else:
+			stable = 0
+			last = n
+		if stable >= 20:
+			for g in 30:  # let the queue_free'd bodies free + the handoffs land
+				await get_tree().process_frame
+			return true
+	return false
+
+
+# The ramp-class quad count over the whole real band (the flip check).
+func _ramp_world_ramp_count() -> int:
+	var n := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c == null or c.far:
+			continue
+		for s in c.slabs:
+			if s.mesh_instance == null or s.mesh_instance.mesh == null:
+				continue
+			var arrs = s.mesh_instance.mesh.surface_get_arrays(0)
+			if arrs.is_empty():
+				continue
+			var ao := {"v": arrs[Mesh.ARRAY_VERTEX], "q": int(arrs[Mesh.ARRAY_INDEX].size()) / 6}
+			n += _ramp_class_quads(ao).size()
+	return n
+
+
+func _ramp_col_fset(c: Node3D, si: int) -> Dictionary:
+	var out := {}
+	if si < 0 or si >= c.slabs.size():
+		return out
+	var s = c.slabs[si]
+	if s.collision_body == null or not is_instance_valid(s.collision_body) \
+			or s.collision_body.get_child_count() == 0:
+		return out
+	var cs = s.collision_body.get_child(0)
+	if not (cs is CollisionShape3D) or cs.shape == null:
+		return out
+	var faces: PackedVector3Array = cs.shape.get_faces()
+	for i in range(0, faces.size(), 3):
+		out[_ramp_tri_key(faces[i], faces[i + 1], faces[i + 2])] = true
+	return out
+
+
+func _ramp_test(spawn: Vector3) -> void:
+	var res := {"ok": false, "feature": "AC-0205 smooth ground ramps"}
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	if mc == null:
+		res["why"] = "no C++ mesh lane"
+		Debug.result(res)
+		return
+	# The scan compares the mesh (built at dispatch time) against the
+	# CURRENT slab data — flowing water would keep rewriting that data
+	# and never let the remesh waits settle. Stop fluids at the moment
+	# of the wait, before any scan.
+	world.fluid_sim_enabled = false
+
+	# --- A: the synthetic per-pattern assertions (both toggle states) ---
+	var syn := {}
+	var pat_names := ["flat", "one_step", "two_step", "corner", "oos", "placed"]
+	for pname in pat_names:
+		var bo := _ramp_build(pname, true)
+		var bq := 0
+		var ramps := []
+		for row in bo["slabs"]:
+			var ao: Dictionary = row[0]
+			if int(ao["q"]) > 0:
+				bq += int(ao["q"])
+				ramps.append_array(_ramp_class_quads(ao))
+		var ex := _ramp_expected(pname)
+		var exp_keys := {}
+		for e in ex["list"]:
+			exp_keys[_ramp_exp_key(e[0], e[1], e[2], e[3], e[4])] = true
+		var act_keys := {}
+		for r in ramps:
+			act_keys[r["key"]] = true
+		var missing := int(exp_keys.size()) - int(act_keys.keys().filter(func(k): return exp_keys.has(k)).size())
+		var extra := int(act_keys.size()) - int(act_keys.keys().filter(func(k): return exp_keys.has(k)).size())
+		var entry := {
+			"nq": bq, "ramps_found": ramps.size(), "ramps_expected": ex["list"].size(),
+			"exact": missing == 0 and extra == 0, "missing": missing, "extra": extra,
+		}
+		if extra > 0:  # TEMP DEBUG (AC-0205): where do the extras come from
+			var ek := []
+			for k in act_keys:
+				if not exp_keys.has(k):
+					ek.append(k)
+			ek.sort()
+			entry["extra_keys"] = ek.slice(0, 6)
+		match pname:
+			"flat":
+				entry["ramps_zero"] = ramps.size() == 0
+			"two_step":
+				# Δ2 keeps BOTH vertical +z faces per column (rows 101 and
+				# 102, the z=9 plane): 16 columns x 2 = 32.
+				var vfaces := 0
+				for row in bo["slabs"]:
+					var ao: Dictionary = row[0]
+					if int(ao["q"]) == 0:
+						continue
+					var vv: PackedVector3Array = ao["v"]
+					for i in int(ao["q"]):
+						var b0 := i * 4
+						var xs := [float(vv[b0].x), float(vv[b0 + 1].x), float(vv[b0 + 2].x), float(vv[b0 + 3].x)]
+						var ys := [float(vv[b0].y), float(vv[b0 + 1].y), float(vv[b0 + 2].y), float(vv[b0 + 3].y)]
+						var zs := [float(vv[b0].z), float(vv[b0 + 1].z), float(vv[b0 + 2].z), float(vv[b0 + 3].z)]
+						var x0 := minf(minf(xs[0], xs[1]), minf(xs[2], xs[3]))
+						var x1 := maxf(maxf(xs[0], xs[1]), maxf(xs[2], xs[3]))
+						var z0 := minf(zs[0], zs[1])
+						var z1 := maxf(zs[0], zs[1])
+						var y0 := minf(minf(ys[0], ys[1]), minf(ys[2], ys[3]))
+						var y1 := maxf(maxf(ys[0], ys[1]), maxf(ys[2], ys[3]))
+						# The +z faces of the upper wall sit on the z=9
+						# plane (constant z, span 1 in x, height 1).
+						if z1 - z0 < 1e-6 and absf(z0 - 9.0) < 1e-6 and absf(y1 - y0 - 1.0) < 1e-6:
+							vfaces += 1
+				entry["vfaces"] = vfaces
+				entry["vfaces_ok"] = vfaces == 32
+			"corner":
+				# Buried rows: no ramp quad may reach below the wall's
+				# lower row (y 101) — the 100/101 rows under the raised
+				# column stay full cubes.
+				var buried := 0
+				for r in ramps:
+					var low := INF
+					for p in r["verts"]:
+						low = minf(low, float(p.y))
+					if low < 100.5:
+						buried += 1
+				entry["buried_ramps"] = buried
+				entry["buried_ok"] = buried == 0
+			"oos":
+				entry["ramps_zero"] = ramps.size() == 0
+		# The OFF build of the same pattern: the short-circuit leaves zero
+		# ramp-class quads (and the un-ramped face count comes back).
+		var bf := _ramp_build(pname, false)
+		var fq := 0
+		var framps := 0
+		for row in bf["slabs"]:
+			var ao: Dictionary = row[0]
+			if int(ao["q"]) > 0:
+				fq += int(ao["q"])
+				framps += _ramp_class_quads(ao).size()
+		entry["off_nq"] = fq
+		entry["off_ramps"] = framps
+		entry["off_zero"] = framps == 0
+		syn[pname] = entry
+
+	# --- A2: NEGATIVE — the presence check must go RED when disabled ---
+	# (the wall's 16 expected ramps exist by the rule; the off build has
+	# none — an instrument that cannot fail is the expensive failure mode.)
+	var presence_red_off := false
+	if syn.has("one_step"):
+		presence_red_off = int(syn["one_step"]["ramps_expected"]) > 0 \
+				and int(syn["one_step"]["off_ramps"]) == 0 \
+				and bool(syn["one_step"]["off_zero"])
+
+	# --- A3: byte-identity REF (off build vs the captured pre-feature) ---
+	var ref_res := {"mode": "checked", "ok": false, "on_differs": false}
+	if _RAMP_REF == "":
+		var fs := _ramp_fingerprint(_ramp_build("one_step", false))
+		var fr := ""
+		for k in range(fs.length() - 1, -1, -1):
+			fr += fs[k]
+		ref_res["mode"] = "captured"
+		ref_res["ref"] = "%d/%d/%d" % [fs.length(), fs.hash(), fr.hash()]
+		ref_res["ok"] = true
+	else:
+		var fs2 := _ramp_fingerprint(_ramp_build("one_step", false))
+		var fr2 := ""
+		for k in range(fs2.length() - 1, -1, -1):
+			fr2 += fs2[k]
+		var parts := _RAMP_REF.split("/")
+		ref_res["ref"] = "%d/%d/%d" % [fs2.length(), fs2.hash(), fr2.hash()]
+		ref_res["ok"] = fs2.length() == int(parts[0]) and fs2.hash() == int(parts[1]) \
+				and fr2.hash() == int(parts[2])
+		var fs3 := _ramp_fingerprint(_ramp_build("one_step", true))
+		ref_res["on_differs"] = fs3.length() != fs2.length() or fs3.hash() != fs2.hash()
+
+	# --- A4: the gradient cost measurement (on vs off) ---
+	var g_on := _ramp_build("gradient", true)
+	var g_off := _ramp_build("gradient", false)
+	var gq_on := 0
+	var gq_off := 0
+	var gramps := 0
+	for row in g_on["slabs"]:
+		var ao: Dictionary = row[0]
+		if int(ao["q"]) > 0:
+			gq_on += int(ao["q"])
+			gramps += _ramp_class_quads(ao).size()
+	for row in g_off["slabs"]:
+		var ao: Dictionary = row[0]
+		if int(ao["q"]) > 0:
+			gq_off += int(ao["q"])
+	var gex := _ramp_expected("gradient")
+	var grad := {
+		"ramps_expected": gex["list"].size(), "ramps_found": gramps,
+		"ramps_exact": gramps == gex["list"].size(),
+		"nq_off": gq_off, "nq_on": gq_on,
+		"wms_off": int(g_off["wms"]), "wms_on": int(g_on["wms"]),
+	}
+
+	# --- B: the real world (the r4 band) — expected vs actual + collider ---
+	world.recenter(spawn.x, spawn.z, true)
+	await main._await_sim_band(spawn, 3000)
+	var on := bool(Settings.values.get("smooth_ramps", false))
+	# The real band must be at a VERIFIED steady state before the scan
+	# (a stale slab mid-rebuild is not a feature mismatch; the boot
+	# wave remeshes edge chunks against rings that later regenerate).
+	var scan_ok := await _ramp_wait_steady(4000)
+	var scan := _ramp_world_scan(on)
+	if scan != null:
+		scan["scan"]["settle_ok"] = scan_ok
+	# Residual staleness retry: a re-dispatch wave can outlast the first
+	# stability window (the worker queue + per-slab handoffs). If the
+	# scan still shows a mismatch, force another re-dispatch + re-wait —
+	# up to two more passes. (A mismatch that SURVIVES the retries is a
+	# real finding, not a timing artifact.)
+	for rp in 2:
+		var wtmp: Dictionary = scan["scan"]
+		if int(wtmp["missing"]) == 0 and int(wtmp["extra"]) == 0:
+			break
+		var rkeys: Array = []
+		for key in world.chunks:
+			var c = world.chunks[key]
+			if c != null and not c.far and c.data.size() > 0:
+				rkeys.append(key)
+		world.geom_epoch += 1
+		world.tex_refresh = rkeys
+		scan_ok = await _ramp_wait_steady(6000)
+		scan = _ramp_world_scan(on)
+		scan["scan"]["settle_ok"] = scan_ok
+		scan["scan"]["retry_pass"] = rp + 1
+	if scan == null:
+		scan = {"scan": {"chunks": 0, "exact": false, "why": "scan failed",
+			"ramps_expected": 0, "ramps_found": 0, "missing": 0, "extra": 0},
+			"collider": {"ok": false, "bodies_missing": 0, "mesh_not_in_col": 0,
+			"missing_tris": 0, "ramp_tris": 0, "ramp_tris_total": 0, "slabs_checked": 0},
+			"rep": {}}
+	var wres: Dictionary = scan["scan"]
+	var col: Dictionary = scan["collider"]
+	var rep: Dictionary = scan["rep"]
+	wres["on"] = on
+	# The exactness axis follows the flag: ON = the mesh carries exactly
+	# the rule's set; OFF = the mesh carries none of it (the short-
+	# circuit) — the data's Δ1 steps are still there (the expected set
+	# is the DATA's, flag-independent), so the off-state "exact" is
+	# "every expected ramp is missing from the mesh and nothing ramp-
+	# class exists at all".
+	if not on:
+		wres["off_world_ramps_zero"] = wres["ramps_found"] == 0
+		wres["exact"] = wres["ramps_found"] == 0
+
+	# --- C: the runtime toggle flip (re-mesh + the collider follows) ----
+	var tog := {"ok": false, "ran": false}
+	if on and not rep.is_empty():
+		tog["ran"] = true
+		var fset_on := _ramp_col_fset(world.chunks[rep["key"]], int(rep["si"]))
+		var on_tri_present := fset_on.has(rep["tri1"]) and fset_on.has(rep["tri2"])
+		Settings.set_value("smooth_ramps", false)
+		var off_ok := await _ramp_wait_remesh(1200)
+		var off_count := _ramp_world_ramp_count()
+		var fset_off := _ramp_col_fset(world.chunks[rep["key"]], int(rep["si"]))
+		# NEGATIVE (the mismatch proof): the ramp's triangles are present
+		# in the ON collider and ABSENT from the re-derived OFF collider —
+		# the comparator distinguishes a mismatched pair.
+		var neg_mismatch := on_tri_present and not fset_off.has(rep["tri1"]) and not fset_off.has(rep["tri2"])
+		# The OFF-state agreement: the new (cubed) mesh's triangles are
+		# all inside the re-derived collider.
+		var c2: Node3D = world.chunks[rep["key"]]
+		var off_agree := true
+		if off_ok and c2 != null and int(rep["si"]) < c2.slabs.size():
+			var s2 = c2.slabs[int(rep["si"])]
+			if s2.mesh_instance != null and s2.mesh_instance.mesh != null:
+				var arrs3 = s2.mesh_instance.mesh.surface_get_arrays(0)
+				if not arrs3.is_empty() and fset_off.size() > 0:
+					var mv: PackedVector3Array = arrs3[Mesh.ARRAY_VERTEX]
+					var mi: PackedInt32Array = arrs3[Mesh.ARRAY_INDEX]
+					for i in range(0, mi.size(), 3):
+						if not fset_off.has(_ramp_tri_key(mv[mi[i]], mv[mi[i + 1]], mv[mi[i + 2]])):
+							off_agree = false
+							break
+				elif arrs3.is_empty() and fset_off.size() == 0:
+					off_agree = true
+				else:
+					off_agree = false
+		Settings.set_value("smooth_ramps", true)
+		var on_ok := await _ramp_wait_remesh(1200)
+		var on_count := _ramp_world_ramp_count()
+		Settings.load_settings()  # back to the env-derived state (the cfg
+		# the flip saved is removed at the arm's end anyway)
+		tog["ok"] = off_ok and on_ok and off_count == 0 and on_count > 0 \
+				and bool(on_tri_present) and bool(neg_mismatch) and bool(off_agree)
+		tog["remesh_off_ok"] = off_ok
+		tog["remesh_on_ok"] = on_ok
+		tog["off_count"] = off_count
+		tog["on_count"] = on_count
+		tog["on_tri_present"] = on_tri_present
+		tog["neg_mismatch"] = neg_mismatch
+		tog["off_agree"] = off_agree
+		# The cfg the flip test saved would outlive the arm (the env
+		# override writes WITHOUT save — the flip's set_value does).
+		# Remove it so the next boot sees no stored value at all.
+		if FileAccess.file_exists(Settings.PATH):
+			DirAccess.remove_absolute(Settings.PATH)
+
+	# --- The verdict ---
+	var ok := true
+	for pname in pat_names:
+		ok = ok and bool(syn[pname].get("exact", false))
+	ok = ok and bool(syn["flat"].get("ramps_zero", false)) \
+			and bool(syn["two_step"].get("vfaces_ok", false)) \
+			and bool(syn["corner"].get("buried_ok", false)) \
+			and bool(syn["oos"].get("ramps_zero", false)) \
+			and presence_red_off \
+			and bool(ref_res["ok"]) \
+			and (ref_res["mode"] == "captured" or bool(ref_res["on_differs"])) \
+			and bool(grad["ramps_exact"]) \
+			and bool(wres.get("exact", false)) \
+			and bool(col["ok"]) \
+			and (bool(tog["ok"]) if bool(tog["ran"]) else true)
+	res["ok"] = ok
+	res["syn"] = syn
+	res["neg_presence_red_off"] = presence_red_off
+	res["ref"] = ref_res
+	res["gradient"] = grad
+	res["world"] = wres
+	res["collider"] = col
+	res["toggle"] = tog
+	Debug.result(res)
+
+
 func _settings_test() -> void:
 	if FileAccess.file_exists(Settings.PATH):
 		DirAccess.remove_absolute(Settings.PATH)
@@ -1854,6 +2940,32 @@ func _settings_test() -> void:
 	Settings.set_value("yfloor_enabled", true)
 	Settings.set_value("yfloor_chunks_below_sea", 0)
 	Settings.reset_all_controls()
+	# AC-0205: the smooth-ground-ramps toggle — the AC-0389/AC-0332
+	# mechanism (declare in DEFAULTS, _clamp-validated, set_value
+	# persists, load_settings reads it back, the apply step reaches
+	# world.note_ramps — a no-op in this standalone context). Default
+	# OFF; a corrupt stored value fails to false (sanitize_bool, the
+	# invert_y precedent — never a raise that aborts the load); the
+	# Settings-page row exists and re-syncs.
+	var rp_default_off := bool(Settings.values["smooth_ramps"]) == false
+	Settings.set_value("smooth_ramps", true)
+	var rp_saved_ok := bool(Settings.values["smooth_ramps"]) == true
+	Settings.load_settings()
+	var rp_reload_ok := bool(Settings.values["smooth_ramps"]) == true
+	var cfr := ConfigFile.new()
+	cfr.set_value("settings", "smooth_ramps", "corrupt")
+	cfr.save(Settings.PATH)
+	Settings.load_settings()
+	var rp_corrupt_ok := bool(Settings.values["smooth_ramps"]) == false
+	var yset2 = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Settings")
+	var rchk = yset2.get_node_or_null("RampCheck") if yset2 != null else null
+	ymenu._sync_controls()
+	var rp_row_present := rchk != null and rchk is CheckBox and bool(rchk.button_pressed) == false
+	Settings.set_value("smooth_ramps", true)
+	ymenu._sync_controls()
+	var rp_row_sync_ok := rp_row_present and bool(rchk.button_pressed) == true
+	# back to the shipped default (OFF).
+	Settings.set_value("smooth_ramps", false)
 	ymenu.queue_free()
 	Debug.result({
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
@@ -1898,7 +3010,10 @@ func _settings_test() -> void:
 		# _sync_controls refresh (the AC-0332/AC-0088 row pattern).
 		"analog": {"defaults": an_def_ok, "clamp_hi_max": an_clamp_hi_ok, "clamp_lo_min": an_clamp_lo_ok,
 			"roundtrip": an_reload_ok, "rows_present": an_rows_present, "sync": an_rows_sync_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok,
+		# AC-0205: the smooth-ground-ramps toggle (default OFF, clamp,
+		# round-trip, corrupt-fails-false, the Settings-page row syncs).
+		"ramps": {"default_off": rp_default_off, "saved": rp_saved_ok, "reload": rp_reload_ok, "corrupt_false": rp_corrupt_ok, "row_present": rp_row_present, "row_sync": rp_row_sync_ok, "ok": rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok and rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok,
 	})
 
 

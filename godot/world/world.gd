@@ -908,6 +908,45 @@ func note_yfloor() -> void:
 			_hslab_probe_invalidate(c)
 			_low_probe_invalidate(c)
 
+
+# AC-0205: the smooth-ground-ramps toggle (Settings "smooth_ramps",
+# default OFF; the AWECRAFT_RAMPS harness env preloads Settings.values at
+# boot so the arms test both states without a save file). The flag rides
+# the worker ctx ("ramps") — the C++ ro scan's ramp branch is gated on it
+# and short-circuits BEFORE any geometry is emitted, so OFF rebuilds are
+# byte-identical to the pre-feature mesh. The COLLIDER follows the same
+# flag by construction: each slab's ConcavePolygonShape3D is derived from
+# the slab's opaque surface (chunk.gd _build_slab_collision reads the
+# re-meshed mesh), so a ramped mesh carries the sloped triangles and a
+# cubed mesh the vertical ones — the two can never disagree.
+#
+# A change re-derives the ctx and re-dispatches EVERY resident column
+# through the tex_refresh drain (the refresh_textures shape, minus the
+# table rebuild — the tables did not move; the settled star payload is
+# reused, the light did not move). The far/coarse tiers are untouched:
+# they never ramp (their silhouette is cell-quantized LOD; the H field
+# stays bit-exact — the farab byte gates are the standing proof).
+var ramps_on := false
+# AC-0205: the GEOMETRY EPOCH — bumped on every change of a mesh-geometry
+# input (today: the ramps flag). It rides the per-slab collider stamp
+# (chunk.gd _slab_geom_stamp), so when the re-mesh lands after a toggle
+# the stored body stamp (old epoch) mismatches the current one and the
+# slab re-dirties its collider — the body is freed and re-derived from
+# the NEW mesh by the existing staged drain. Without it the toggle would
+# remesh the visuals and leave the OLD collider in place (the ramp-
+# collider-under-cubed-mesh mismatch the AC-0205 survey flagged).
+var geom_epoch := 0
+
+func note_ramps() -> void:
+	var en := bool(Settings.values.get("smooth_ramps", false))
+	if en == ramps_on:
+		return
+	ramps_on = en
+	geom_epoch += 1
+	if threadmesh:
+		_tm_ctx["ramps"] = en
+		tex_refresh = chunks.keys().duplicate()
+
 func _rescore_kick() -> void:
 	_rescore_ver += 1
 	_rescore_due = true
@@ -3654,6 +3693,14 @@ func _ready() -> void:
 	if yfn != "":
 		Settings.values["yfloor_chunks_below_sea"] = clampi(yfn.to_int(), 0, Settings.YFLOOR_MAX)
 	note_yfloor()  # AC-0332: the boot derive (the live Settings after the preloads)
+	# AC-0205: harness env preload (the AWECRAFT_YFLOOR pattern) —
+	# AWECRAFT_RAMPS=<0|1> overrides the STORED setting for this process
+	# (written to Settings.values WITHOUT save, so the arms never clobber
+	# the user's cfg) and lets them test both states without a save file.
+	var rpe := OS.get_environment("AWECRAFT_RAMPS")
+	if rpe != "":
+		Settings.values["smooth_ramps"] = rpe == "1"
+	note_ramps()  # AC-0205: the boot derive (after the env preload)
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":

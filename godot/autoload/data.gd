@@ -173,11 +173,18 @@ var tiles := {}
 
 
 func _init() -> void:
+	# AC-0205: "ramp" marks the GROUND materials that smooth into sloped
+	# quads across a one-block step (the smooth-ground-ramps toggle —
+	# default OFF; see world.gd note_ramps / the C++ ro-scan ramp branch in
+	# gdext/src/mesh.cpp). ONLY dirt/grass/sand + the snowy-grass variant:
+	# every other block stays a full cube (a ramp needs BOTH column tops
+	# in this set). Generated terrain AND player-placed blocks of these
+	# types ramp (the rule is id-based, not source-based).
 	blocks = {
-		1: {"name": "Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "color": {"top": C_GRASS_TOP, "side": C_GRASS_SIDE, "bottom": C_DIRT}},
-		2: {"name": "Dirt", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "color": {"top": C_DIRT, "side": C_DIRT, "bottom": C_DIRT}},
+		1: {"name": "Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_GRASS_TOP, "side": C_GRASS_SIDE, "bottom": C_DIRT}},
+		2: {"name": "Dirt", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_DIRT, "side": C_DIRT, "bottom": C_DIRT}},
 		3: {"name": "Stone", "solid": true, "cross": false, "hard": 1.5, "light": 0, "drop": 9, "color": {"top": C_STONE, "side": C_STONE, "bottom": C_STONE}},
-		4: {"name": "Sand", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 4, "color": {"top": C_SAND, "side": C_SAND, "bottom": C_SAND}},
+		4: {"name": "Sand", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 4, "ramp": true, "color": {"top": C_SAND, "side": C_SAND, "bottom": C_SAND}},
 		5: {"name": "Water", "solid": false, "cross": true, "hard": 1e9, "light": 0, "color": {"top": C_WATER, "side": C_WATER, "bottom": C_WATER}},
 		6: {"name": "Oak Log", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 6, "color": {"top": Color(0.55, 0.42, 0.24), "side": Color(0.42, 0.3, 0.18), "bottom": Color(0.55, 0.42, 0.24)}},
 		7: {"name": "Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
@@ -208,7 +215,7 @@ func _init() -> void:
 		20: {"name": "Crafting Table", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 20, "color": {"top": Color(0.62, 0.47, 0.26), "side": Color(0.55, 0.4, 0.22), "bottom": Color(0.72, 0.56, 0.34)}},
 		21: {"name": "Furnace", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 21, "color": {"top": Color(0.5, 0.46, 0.46), "side": Color(0.45, 0.4, 0.4), "bottom": Color(0.5, 0.46, 0.46)}},
 		11: {"name": "Bedrock", "solid": true, "cross": false, "hard": 1e9, "light": 0, "color": {"top": C_BEDROCK, "side": C_BEDROCK, "bottom": C_BEDROCK}},
-		12: {"name": "Snowy Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "color": {"top": C_SNOW, "side": C_SNOW_SIDE, "bottom": C_DIRT}},
+		12: {"name": "Snowy Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_SNOW, "side": C_SNOW_SIDE, "bottom": C_DIRT}},
 		14: {"name": "Coal Ore", "solid": true, "cross": false, "hard": 2.0, "light": 0, "color": {"top": C_COAL_ORE, "side": C_COAL_ORE, "bottom": C_COAL_ORE}},
 		15: {"name": "Iron Ore", "solid": true, "cross": false, "hard": 2.5, "light": 0, "color": {"top": C_IRON_ORE, "side": C_IRON_ORE, "bottom": C_IRON_ORE}},
 		16: {"name": "Diamond Ore", "solid": true, "cross": false, "hard": 3.0, "light": 0, "color": {"top": C_DIAMOND_ORE, "side": C_DIAMOND_ORE, "bottom": C_DIAMOND_ORE}},

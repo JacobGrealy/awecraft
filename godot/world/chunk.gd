@@ -741,6 +741,13 @@ func _slab_geom_stamp(si: int) -> Array:
 		else:
 			t.append(-1)
 			t.append(-1)
+	# AC-0205: the world's geometry epoch (bumped by note_ramps when the
+	# ramps flag flips — a mesh-geometry input the dgen/fgen stamps do
+	# not see). A mismatch re-dirties the slab's collider so the staged
+	# drain re-derives the body from the re-meshed surface. (Direct
+	# member access — Game.world is the real World here: the null case
+	# returned above; the test stubs never drive chunk slabs.)
+	t.append(int(Game.world.geom_epoch))
 	return t
 
 
@@ -1180,6 +1187,11 @@ static func make_ctx() -> Dictionary:
 	var stab := PackedByteArray(); stab.resize(256)
 	var ktab := PackedByteArray(); ktab.resize(256)
 	var ttab := PackedByteArray(); ttab.resize(256)
+	# AC-0205: the rampable ground ids (the "ramp" block flag —
+	# dirt/grass/sand + snowy grass). Consumed by the C++ ro scan's ramp
+	# branch ONLY (the toggle "ramps" key is added to this ctx by the
+	# world's note_ramps — the table itself is static per atlas).
+	var rtab := PackedByteArray(); rtab.resize(256)
 	var ct := PackedColorArray(); ct.resize(256)
 	var cs := PackedColorArray(); cs.resize(256)
 	var cb := PackedColorArray(); cb.resize(256)
@@ -1196,6 +1208,8 @@ static func make_ctx() -> Dictionary:
 			ktab[bi] = 1
 		if bool(binf.get("thin", false)):
 			ttab[bi] = 1
+		if bool(binf.get("ramp", false)):  # AC-0205
+			rtab[bi] = 1
 		var bcol: Dictionary = binf.color
 		ct[bi] = bcol.top
 		cs[bi] = bcol.side
@@ -1236,7 +1250,7 @@ static func make_ctx() -> Dictionary:
 		"h": h,
 		"atlas_px": Data.ATLAS_PX,
 		"has_tex": Data.atlas_tex != null,
-		"oktab": oktab, "xtab": xtab, "stab": stab, "ktab": ktab, "ttab": ttab,
+		"oktab": oktab, "xtab": xtab, "stab": stab, "ktab": ktab, "ttab": ttab, "rtab": rtab,
 		"ct": ct, "cs": cs, "cb": cb,
 		"tint_top": tint_top, "tint_side": tint_side, "tint_bottom": tint_bottom,
 		"brect": brect,

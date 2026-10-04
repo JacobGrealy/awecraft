@@ -219,6 +219,12 @@ struct Ctx {
 	float atlas_px = 1024.0f;
 	bool has_tex = false;
 	bool coarse = false;
+	// AC-0205: the smooth-ground-ramps toggle (Settings "smooth_ramps",
+	// default OFF; the world re-derives it on change and rides it in the
+	// value-copy ctx). FALSE = the pre-feature path exactly: the ro scan
+	// never enters the ramp branch (no rmask, no ramp records), so the
+	// emitted mesh is byte-identical to the pre-AC-0205 build.
+	bool ramps = false;
 	int uv_scale = 1;
 	float ppb = 31.0f;
 	uint8_t oktab[256];
@@ -226,6 +232,10 @@ struct Ctx {
 	uint8_t stab[256];
 	uint8_t ktab[256];
 	uint8_t ttab[256];
+	// AC-0205: the rampable ground ids (the "ramp": true block flag —
+	// dirt/grass/sand + the snowy-grass variant; every other block stays
+	// a full cube). make_ctx builds it; absent key = all zeros = off.
+	uint8_t rtab[256];
 	Color ct[256];
 	Color cs[256];
 	Color cb[256];
@@ -265,9 +275,11 @@ static void parse_ctx(const Dictionary &ctx, Ctx &out) {
 	out.atlas_px = (float)ctx.get("atlas_px", 1024.0);
 	out.has_tex = (bool)ctx.get("has_tex", false);
 	out.coarse = (bool)ctx.get("coarse", false);
+	out.ramps = (bool)ctx.get("ramps", false); // AC-0205 (default = off = pre-feature)
 	out.uv_scale = (int)ctx.get("uv_scale", 1);
 	out.ppb = 31.0f / (float)out.uv_scale;
 	copy_table(ctx.get("oktab", PackedByteArray()), out.oktab, 256);
+	copy_table(ctx.get("rtab", PackedByteArray()), out.rtab, 256); // AC-0205
 	copy_table(ctx.get("xtab", PackedByteArray()), out.xtab, 256);
 	copy_table(ctx.get("stab", PackedByteArray()), out.stab, 256);
 	copy_table(ctx.get("ktab", PackedByteArray()), out.ktab, 256);
@@ -1115,9 +1127,23 @@ static void bake_box(const Dictionary &light, const StripSet &eff_strips, int h,
 // culled for OPAQUE blocks only - AC-0111: cutout/cross blocks stay
 // see-through, so a leaf's faces toward its leaf neighbors are emitted
 // and a cluster interior is visible through the cutout holes).
-static void s_faces(std::vector<FRec> &recs, const uint8_t *stab, int lx, int y, int lz, int id, const std::vector<uint8_t> &snap, int h, const uint8_t *ktab, const uint8_t *xtab) {
+// AC-0205: rmask suppresses the side faces a ramp replaces (bit 0 = -x,
+// bit 1 = +x, bit 2 = -z, bit 3 = +z; the ramp quad is emitted from the
+// ro scan's ramp records instead). 0 (the default, every pre-AC-0205
+// call site) = the exact pre-feature behavior.
+static void s_faces(std::vector<FRec> &recs, const uint8_t *stab, int lx, int y, int lz, int id, const std::vector<uint8_t> &snap, int h, const uint8_t *ktab, const uint8_t *xtab, int rmask = 0) {
 	int sxi = (lz + 1) * SNAP_W + (lx + 1);
 	for (int fi = 0; fi < 6; fi++) {
+		if (rmask != 0) {
+			if (fi == 0 && (rmask & 1))
+				continue;
+			if (fi == 1 && (rmask & 2))
+				continue;
+			if (fi == 4 && (rmask & 4))
+				continue;
+			if (fi == 5 && (rmask & 8))
+				continue;
+		}
 		int ny = y + FN[fi][1];
 		int nb;
 		if (ny < 0 || ny >= h) {
@@ -1159,6 +1185,134 @@ static inline bool s_is_interior(int lx, int y, int lz, const std::vector<uint8_
 	int rowd = (y - 1) * SNAP_ROW + mid;
 	int rowu = (y + 1) * SNAP_ROW + mid;
 	return stab[snap[(size_t)row - 1]] > 0 && stab[snap[(size_t)row + 1]] > 0 && stab[snap[(size_t)row - SNAP_W]] > 0 && stab[snap[(size_t)row + SNAP_W]] > 0 && stab[snap[(size_t)rowu]] > 0 && stab[snap[(size_t)rowd]] > 0;
+}
+
+// ---------------------------------------------------------------------------
+// AC-0205: one-block-step ramps (smooth ground). A rampable ground column
+// (rtab — dirt/grass/sand + the snowy-grass variant) whose top is exactly
+// ONE higher than the neighbour column's top, with both tops surface (the
+// cell above the upper block is air), replaces the side face toward the
+// lower column with a sloped quad: the low edge rides the lower column's
+// top-face edge (== the upper block's near-bottom edge), the high edge the
+// upper block's far-top edge. The quad lands in the same opaque acc (s_ao)
+// the slab's ConcavePolygonShape3D collider is derived from (chunk.gd
+// _build_slab_collision reads surface 0), so the collider carries the slope
+// BY CONSTRUCTION — there is no second, parallel collision rule.
+//
+// Lighting (AC-0159): each corner inherits the Java-Fancy light + AO of the
+// TOP-FACE corner of the column top it rides on (low corner = the lower
+// column's top block, high corner = the upper block). The shared edges then
+// carry identical corner values on both faces — the light/AO gradient is
+// seamless across the ramp (sampling the quad as two flat faces, which is
+// what this avoids, would double the occlusion at the shared edge).
+// Shade 0.9 = the 45-degree surface's midpoint of side (0.8) and top (1.0).
+// UVs = the upper block's side tile (the replaced face), sheared: u along
+// the edge, v from the low edge to the high edge.
+//
+// RAMP-OFF IS THE PRE-FEATURE PATH EXACTLY: the ro scan's ramp branch is
+// gated on C.ramps (the ctx flag, default false), so with it off there is
+// no rmask, no ramp record and no other code change — the emitted mesh is
+// byte-identical to the pre-AC-0205 build (the `ramp` arm's REF hash is
+// the captured pre-feature proof).
+// ---------------------------------------------------------------------------
+
+struct RampRec {
+	int lx;
+	int y;
+	int lz;
+	int dir; // 0=-x 1=+x 2=-z 3=+z (toward the lower column)
+	int id;  // the upper (this) block's id — the ramp's material
+};
+
+// Winding-verified corner offsets (relative to (lx, y, lz)): with the
+// shared index pattern (b, b+2, b+1, b, b+3, b+2),
+// cross(c2-c0, c1-c0) = the outward ramp normal (per direction).
+static const int RAMP_COR[4][4][3] = {
+	{ {0, 0, 0}, {1, 1, 1}, {0, 0, 1}, {1, 1, 0} }, // -x: n=(-1,1,0)
+	{ {1, 0, 0}, {1, 0, 1}, {0, 1, 1}, {0, 1, 0} }, // +x: n=(+1,1,0)
+	{ {0, 0, 0}, {1, 0, 0}, {0, 1, 1}, {1, 1, 1} }, // -z: n=(0,1,-1)
+	{ {0, 0, 1}, {0, 1, 0}, {1, 0, 1}, {1, 1, 0} }, // +z: n=(0,1,+1)
+};
+static const int RAMP_N[4][3] = {
+	{-1, 1, 0}, {1, 1, 0}, {0, 1, -1}, {0, 1, 1}
+};
+// The lower neighbour column's (dx, dz) per dir (0=-x 1=+x 2=-z 3=+z).
+static const int RAMP_NXZ[4][2] = {
+	{-1, 0}, {1, 0}, {0, -1}, {0, 1}
+};
+// Per-corner light source: (block dx, block dz, top-face corner j). The
+// source block is (lx+dx, r.y-1, lz+dz) when (dx,dz) != (0,0) — the lower
+// column's top — else (lx, r.y, lz) (the upper block); corner j of its +Y
+// face sits exactly at the ramp corner.
+static const int RAMP_LC[4][4][3] = {
+	{ {-1, 0, 2}, {0, 0, 1}, {-1, 0, 1}, {0, 0, 2} }, // -x
+	{ {1, 0, 3}, {1, 0, 0}, {0, 0, 0}, {0, 0, 3} }, // +x
+	{ {0, -1, 0}, {0, -1, 1}, {0, 0, 1}, {0, 0, 0} }, // -z
+	{ {0, 1, 3}, {0, 0, 3}, {0, 1, 2}, {0, 0, 2} }, // +z
+};
+
+static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap) {
+	const int dir = r.dir;
+	const int n[3] = {RAMP_N[dir][0], RAMP_N[dir][1], RAMP_N[dir][2]};
+	const int (*cor)[3] = RAMP_COR[dir];
+	const int (*lc)[3] = RAMP_LC[dir];
+	const Vector2i &tl = ctx.brect[r.id][0]; // the side tile (the replaced face)
+	const float inv2 = 1.0f / 1.4142135f; // float(1/sqrt(2))
+	const int wx0 = cx * SIZE;
+	const int wz0 = cz * SIZE;
+	int lsum[4];
+	int ao[4];
+	int chan[4];
+	float uv[8];
+	Color col[4];
+	bool uni = true;
+	for (int j = 0; j < 4; j++) {
+		int bx = lc[j][0];
+		int bz = lc[j][2];
+		int bwy = (bx == 0 && bz == 0) ? r.y : r.y - 1;
+		s_corner_tag(2, lc[j][2], wx0 + r.lx + bx, bwy, wz0 + r.lz + bz, lmn, larr, lw, ld, ctx.h, wx0, wz0, snap, ctx.stab, bmask, bmask_sz, lsum[j], ao[j], chan[j]);
+		// Sheared side UV (the s_corner_uv math for a side face: u the
+		// in-edge offset, v from the low edge (v=1) to the high edge
+		// (v=0)); the tl < 0 guard matches s_corner_uv exactly.
+		float uo = (dir < 2) ? (float)cor[j][2] : (float)cor[j][0];
+		float vo = 1.0f - (float)cor[j][1];
+		if (tl.x < 0) {
+			uv[j * 2] = 0.0f;
+			uv[j * 2 + 1] = 0.0f;
+		} else {
+			uv[j * 2] = ((float)tl.x + (0.5f + uo * ctx.ppb)) / ctx.atlas_px;
+			uv[j * 2 + 1] = ((float)tl.y + (0.5f + vo * ctx.ppb)) / ctx.atlas_px;
+		}
+		col[j] = light_color(s_corner_sl(lsum[j], ao[j]), 0.9f, chan[j], ctx.cs[r.id], has_tex);
+		if (j > 0 && (lsum[j] != lsum[0] || ao[j] != ao[0] || chan[j] != chan[0]))
+			uni = false;
+	}
+	int k = acc.q;
+	acc.ensure(k + 1);
+	int b = k * 4;
+	for (int j = 0; j < 4; j++) {
+		acc.v[(b + j) * 3 + 0] = (float)r.lx + (float)cor[j][0];
+		acc.v[(b + j) * 3 + 1] = (float)r.y + (float)cor[j][1];
+		acc.v[(b + j) * 3 + 2] = (float)r.lz + (float)cor[j][2];
+		acc.n[(b + j) * 3 + 0] = (float)n[0] * inv2;
+		acc.n[(b + j) * 3 + 1] = (float)n[1] * inv2;
+		acc.n[(b + j) * 3 + 2] = (float)n[2] * inv2;
+		acc.u[(b + j) * 2 + 0] = uv[j * 2];
+		acc.u[(b + j) * 2 + 1] = uv[j * 2 + 1];
+		const Color &c = uni ? col[0] : col[j];
+		acc.c[(b + j) * 4 + 0] = c.r;
+		acc.c[(b + j) * 4 + 1] = c.g;
+		acc.c[(b + j) * 4 + 2] = c.b;
+		acc.c[(b + j) * 4 + 3] = c.a;
+	}
+	int ib = k * 6;
+	acc.i[ib + 0] = b;
+	acc.i[ib + 1] = b + 2;
+	acc.i[ib + 2] = b + 1;
+	acc.i[ib + 3] = b;
+	acc.i[ib + 4] = b + 3;
+	acc.i[ib + 5] = b + 2;
+	acc.q = k + 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -3304,6 +3458,7 @@ public:
 		std::vector<FRec> ro, rc_o, rk;
 		std::vector<XRec> rq;
 		std::vector<FluidRec> rf_w, rf_l;
+		std::vector<RampRec> rr; // AC-0205: the ramp records (empty when C.ramps is off)
 		std::vector<int> c_ns(slab_n, 0);
 		// AC-0234 vertical window: the keep mask (24 bytes, one per slab;
 		// empty = build every slab, the pre-AC-0234 behavior). A masked-out
@@ -3379,7 +3534,38 @@ public:
 							else
 								s_faces(rk, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
 						} else {
-							s_faces(ro, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab);
+							// AC-0205: one-block-step ramps. C.ramps off =
+							// the pre-feature path exactly (no rmask, no
+							// records — byte-identical output).
+							int rmask = 0;
+							if (C.ramps && !C.coarse && C.rtab[id] > 0) {
+								// P is a SURFACE block: the cell above is
+								// air (buried ground never ramps — the face
+								// it would replace is not emitted anyway).
+								if (y + 1 >= h || C.stab[snap[(size_t)(y + 1) * SNAP_ROW + (lz + 1) * SNAP_W + (lx + 1)]] == 0) {
+									for (int dir = 0; dir < 4; dir++) {
+										int nx = lx + RAMP_NXZ[dir][0];
+										int nz = lz + RAMP_NXZ[dir][1];
+										// The neighbour at P's level must be
+										// air (the face would be emitted);
+										// the cell below it a rampable solid
+										// (= the neighbour column's top is
+										// exactly ONE lower — Δ2+ never
+										// ramps, nor does a non-ground top).
+										int qid = snap[(size_t)y * SNAP_ROW + (nz + 1) * SNAP_W + (nx + 1)];
+										if (qid != 0 && C.stab[qid] > 0)
+											continue;
+										if (y == 0)
+											continue;
+										int qid2 = snap[(size_t)(y - 1) * SNAP_ROW + (nz + 1) * SNAP_W + (nx + 1)];
+										if (C.stab[qid2] == 0 || C.rtab[qid2] == 0)
+											continue;
+										rmask |= (1 << dir);
+										rr.push_back(RampRec{lx, y, lz, dir, id});
+									}
+								}
+							}
+							s_faces(ro, C.stab, lx, y, lz, id, snap, h, C.ktab, C.xtab, rmask);
 						}
 					}
 				}
@@ -3397,6 +3583,11 @@ public:
 				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true);
 			else
 				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);
+			// AC-0205: the ramp quads (into the SAME opaque acc — the
+			// collider is derived from it, so mesh and collider agree by
+			// construction). rr is empty when C.ramps is off.
+			for (const RampRec &r : rr)
+				emit_ramp(s_ao[r.y / 16], r, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz, snap);
 			phet[0] = now_msec() - te;
 			te = now_msec();
 			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);

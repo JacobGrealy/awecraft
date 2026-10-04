@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -227,7 +227,7 @@ quits.
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
 | `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4) + the **AC-0292 P4 families** (vanilla pillars in the deep branch, big ore veins, the 3-D biome field → deepslate/dripstone/sculk/moss surface rules + the post-carve drip pass — see the AC-0292 bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b; **AC-0387: the H is now the CARVED top** — the lane runs the full path's per-column sequence (cave-lattice dens_at scan + aquifer + the AC-0290 carver) on a mask so the far/veg H IS the height the full path would produce (the promotion contract); the 3 surface fields + the 8 cave-lattice fields + the aquifer table + the carver plan are built per chunk — the AC-0387 price, measured 95 → 3,353 µs/chunk vs 5,651 µs full on the 2026-10-01 box; still NO slabs) |
-| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched; the AC-0205 smooth-ground-ramp branch in the ro scan (guarded by the ctx `ramps` flag + `!coarse`: a Δ1 rampable step meeting air suppresses the vertical face via `rmask` and emits the 45° quad into the same opaque acc — off = the pre-feature byte path; the far/coarse tiers never enter it, so H stays bit-exact — see the AC-0205 bullet in §4) |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
@@ -736,6 +736,28 @@ Match these; do not improvise a different approach in a task.
   the LIVE RE-FLOOR storm (re-meshing the whole far field at once — the expensive ON
   direction) is DEFERRED, the follow-up designs both directions against measured
   churn.
+- **AC-0205 — smooth ground ramps (a geometry toggle, not H)**: the ro scan in
+  `build_accs` ramps the stair step where the rule fires — a rampable solid
+  block (the Data `"ramp"` flag: grass/dirt/sand/snowy-grass, ids 1/2/4/12)
+  with a non-solid cell above, one of whose four horizontal neighbours is
+  non-solid with a rampable solid one below (water counts as air; buried
+  ground and Δ2 never ramp). The vertical face is suppressed via `rmask` and
+  the 45° quad (shade 0.9, the AC-0159 `s_corner_tag(2, j, …)` corner
+  lighting of the riding column) is emitted into the SAME opaque acc, so the
+  collider (derived from that acc) carries the ramp by construction — the
+  `ramp` arm asserts mesh/collider agreement per slab in both toggle states.
+  The toggle SHORT-CIRCUITS BEFORE geometry: `Ctx.ramps` (parsed from the
+  dispatch ctx) off = rmask 0 + empty record list = the pre-feature byte
+  path (the arm's REF fingerprint checks the OFF state against the
+  pre-feature .so + `on_differs` proves the ON state moves it). FAR/COARSE
+  DECISION: the coarse/far tiers do NOT ramp — the branch is guarded by
+  `!C.coarse` and the far emits never enter it — so H stays bit-exact
+  (farab `h_mismatch` 0, genhash 25/25): ramps are geometry derived from H,
+  never H itself. Persistence follows the AC-0088/0089/0389 pattern: the
+  `smooth_ramps` setting (DEFAULT OFF, `sanitize_bool` clamped) on the
+  Settings surface + `world.note_ramps()` (the geom-epoch bump re-derives
+  mesh + collider band-wide) + the harness env override `AWECRAFT_RAMPS=0|1`
+  (written into `Settings.values` without `save()`).
 - **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
   per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is
   still the per-slab C++ avg emit (byte-identical — farab 1080/1080 + h_mismatch 0,
