@@ -70,3 +70,18 @@ silent, all now known:
 related trap that cost a day: a shader compiles LAZILY, when a material is first built, so a run that
 never builds the material reports **zero shader errors** while the shader is broken. A green check on a
 code path the run never reached is a false pass, not a pass.
+
+## The snapshot recipe that actually works (2026-10-04)
+
+Five attempts failed before this one. **Set NO `AWECRAFT_LOGIC` arm** - with any arm set,
+`main.gd:161` routes straight to `_run_game` and the *arm* owns the shot, so the snapshot write at
+`main.gd:179` never executes. The working path is the MENU boot:
+
+    AWECRAFT_SNAPSHOT=<ABSOLUTE path>        # no AWECRAFT_LOGIC
+    AWECRAFT_SIZE=1280,720                   # COMMA, not x
+    AWECRAFT_SNAP_DRAIN=600                  # FRAMES; 12000 at ~5 FPS exceeds any sane timeout
+    AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_CAM=<preset>
+
+Under `xvfb-run` + lavapipe + `--rendering-driver vulkan`. Verified: rc=0, zero shader errors, zero
+script errors, two PNGs written. **Always check the file exists afterwards** - a shot that writes
+nothing reports success just the same.
