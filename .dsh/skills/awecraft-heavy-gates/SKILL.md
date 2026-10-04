@@ -35,3 +35,12 @@ touches `godot/world/*` or the lighting path. UI/tool-only tickets get SMOKE onl
   `http://192.168.0.224:8080/AweCraft.exe`; board `http://192.168.0.224:5180/`.
 - A heavy failure is an **honest deviation + a follow-up ticket**, or a bounce — never a silent
   re-baseline. Commit/push only after the heavy stage passes (`awecraft-closeout`).
+
+## Gate and run logs go in the repo-root `.scratch/`, never `/tmp`
+
+`/tmp` does **not** persist between the coordinator's bash commands in this environment, so a redirect
+to `/tmp/foo.log` is unreadable in the very next call. A long run - a 300 s Forward+ render, a 420 s
+r16, a battery - whose output cannot be read afterwards has to be done twice. Write to
+`.scratch/<TICKET>-<what>.log` instead, which is where the existing gate jobs already put theirs and
+which survives across commands. Learned 2026-10-03 by losing the only copy of a SCRIPT ERROR line from
+a 620-second Forward+ render.

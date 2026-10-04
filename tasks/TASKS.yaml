@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T20:46
+  updated_at: 2026-10-03T20:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -23923,7 +23923,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T20:45
-  updated_at: 2026-10-03T20:45
+  updated_at: 2026-10-03T20:57
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -23981,7 +23981,41 @@ intake:
     turns out to be the ramps from AC-0205 - which default OFF, so they are NOT in the build the user
     tested - say so explicitly rather than assuming.
 
-    '
+
+
+    FIRST REPRODUCTION ATTEMPT 2026-10-03 by the coordinator. WHAT WORKED: the shipped Forward+ path ran
+    (boot line "Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe") with a SHADER ERROR
+    count of ZERO, which independently re-confirms AC-0392/AC-0393''s fixes on a second run and on a different
+    shot. WHAT DID NOT: the snapshot never fired (no PNG was produced before the 620 s timeout), and the
+    run emitted ONE SCRIPT ERROR.
+
+    AND I LOST THE EVIDENCE, which is my own process failure and worth recording so it does not repeat:
+    the run''s output went to /tmp/topshot.log, and /tmp DOES NOT PERSIST BETWEEN MY COMMANDS in this
+    environment - the next command found no such file, so the one script error the run reported is unread
+    and unexplained. The rule to carry: logs from any run whose output will be read later go into the
+    repo-root .scratch/ directory, which is where this project already puts gate logs and which IS durable
+    across commands. A 620-second run whose output cannot be read afterwards is a run that has to be done
+    twice.
+
+    WHAT TO DO NEXT, in order, because the next attempt should not repeat either mistake: (1) re-run with
+    the log under .scratch/ac0394/ and read the SCRIPT ERROR line - AN UNEXPLAINED SCRIPT ERROR IS EXACTLY
+    THE THING THIS PROJECT HAS JUST AGREED NOT TO IGNORE, since the last one of those sat in our logs
+    for days and turned out to be a shader that had never compiled; it may be an artefact of the coordinator''s
+    own invocation (AWECRAFT_CAM=top combined with the shot envs, or an interaction with the satellite
+    arm) rather than a product defect, but that has to be established rather than assumed. (2) find how
+    the camera actually gets taken to altitude for a satellite-style shot - the AC-0391 evidence files
+    are named sat_alt668_r4_fwd.png and sat_alt3000_r4_fwd.png, so that run had a mechanism, but an audit
+    of the presets in harness.gd found only top/iso/iso2/lodring/sky/eyeup/sandpad/shaft and NO satellite
+    or altitude preset, which means either a temporary preset was removed after use or a different hook
+    was used. A small purpose-built preset for "put the camera at N metres above the surface looking at
+    the planet" would be worth adding permanently, since this class of shot is now going to be routine.
+    (3) then reproduce the user''s four symptoms at the USER''S render settings (their fog reaches 332
+    m with the fade edge at 400 - the short distance that hid a haze bug from every arm).
+
+    ALSO WORTH KNOWING FOR THE NEXT ATTEMPT: the snapshot envs used were AWECRAFT_CAM, AWECRAFT_SNAPSHOT,
+    AWECRAFT_SIZE=1280x720, AWECRAFT_RADIUS=4, AWECRAFT_SNAP_DRAIN=1, AWECRAFT_TIME=0.35 - the wall was
+    about 300 s per snapshot per AC-0391, so a 620 s timeout should have been enough for one, which suggests
+    the snapshot hook did not engage rather than that it was too slow.'
   comments: []
 - id: AC-0395
   title: noclip-toggle-for-inspecting-geometry
