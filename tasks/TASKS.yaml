@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-03T21:10
+  updated_at: 2026-10-03T23:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0396
 - AC-0394
 - AC-0395
 - AC-0186
@@ -24198,11 +24197,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T21:00
-  updated_at: 2026-10-03T21:10
-  completed_at: null
+  updated_at: 2026-10-03T23:15
+  completed_at: 2026-10-03T23:15
   waiting_on: null
   parent_id: null
   notes: '1) User Story: When a shader in the game fails to compile, the game quietly draws something
@@ -24312,5 +24311,31 @@ intake:
     ACCEPTANCE, and it is a picture rather than a number: one capture through the Forward+ path showing
     the planet''s surface - terrain and ocean colour from the baked textures, not the flat pale disc of
     a fallback material - which is the visual confirmation that has been owed since the four shader defects
-    were fixed.'
+    were fixed.
+
+
+    CLOSED. Three things shipped, and the third is the one that ends a two-day bug. (1) G0 IS NOW ZERO
+    SCRIPT **AND** ZERO SHADER ERROR: a new tasks/scripts/gate_census.py counts both classes per run log,
+    names the shader responsible from the engine''s own at: line or the first call site in the error block''s
+    backtrace, and exits nonzero - because a broken shader draws a fallback material while the process
+    still exits rc=0, which is how five defects across two files survived days of green gates. (2) AWECRAFT_LOGIC=shaderforce
+    FORCES all twelve shipped shaders through the live renderer on the SHIPPED FORWARD+ path and judges
+    each in-engine, because shaders compile LAZILY and a check that never builds the material is a false
+    pass - the exact error that produced a false "the planet is fixed" claim one day earlier. New shader
+    files are picked up automatically. BOTH FAILURE CLASSES ARE NEGATIVE-TESTED, which is what makes this
+    trustworthy: a broken render_mode is caught LOUDLY by the census AND the arm, while a hash first line
+    - the defect that started everything - emits ZERO log lines and is caught ONLY by the arm, so a census
+    alone would have missed it. Both restored byte-identical and green. (3) AWECRAFT_CAM=planet finally
+    makes the planet photographable, and its capture tasks/AC-0396/planet_limb_2000m.png is the visual
+    confirmation of the four shader fixes: green landmasses, white ice, blue coastlines and inland water,
+    the pale limb haze and a starfield - read by the coordinator''s own eyes, plainly not the flat pale
+    fallback disc of AC-0391. It is self-contained like the shaft preset because a bare branch is silently
+    overridden by the on-demand player spawn, and R comes from Game.planet_R, its single source (game.gd:63,
+    passed to the body at world.gd:4768) rather than a guessed constant. THE INSTRUMENTATION DEFECT THAT
+    EXPLAINS FIVE WASTED SNAPSHOT ATTEMPTS is fixed in the same pass: Debug.snap printed "SNAP path ..."
+    even when save_png had failed, so a shot that wrote nothing still announced success - it now prints
+    SNAP FAIL and raises an error. Same silent-failure family as the shader that never compiled and the
+    size parser that accepted a zero dimension. Gates: G0 final 0/0, full battery 8 modes ok, genhash
+    25/25 byte-identical, shaderforce 12/12 clean, negatives red as required, harness.gd pure additions
+    with main.gd/game.gd/drop.gd untouched.'
   comments: []
