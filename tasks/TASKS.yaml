@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-03T21:04
+  updated_at: 2026-10-03T21:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -23953,7 +23953,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T20:45
-  updated_at: 2026-10-03T21:02
+  updated_at: 2026-10-03T21:09
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24074,7 +24074,61 @@ intake:
     the canvas_item COLOR output in a spatial shader), the satellite arm now reports zero shader errors
     AND zero script errors on the shipped Forward+ path. That is a real state change - before today every
     run of that arm carried a shader error line that its gate did not read - and it is the first evidence
-    that the body can draw anything but the white fallback.'
+    that the body can draw anything but the white fallback.
+
+
+    FIRST SUCCESSFUL RENDER ON THE SHIPPED RENDERER, 2026-10-04, and it is evidence for two different
+    questions at once. THE RECIPE THAT FINALLY WORKED, which is the thing three earlier attempts got wrong:
+    **set NO `AWECRAFT_LOGIC` arm at all** - with any arm set, main.gd:161 routes straight to `_run_game`
+    and the ARM owns the shot, so the snapshot file at main.gd:179 never runs. The capture path is the
+    MENU boot: `AWECRAFT_SNAPSHOT=<abs>` with no logic, the menu boots, `play_clicked()` fires, `_snapshot_finish(cam)`
+    writes the file. Also: `AWECRAFT_SNAP_DRAIN=600` works (the drain counts FRAMES, so 600 is affordable
+    where AC-0391''s 12000 would take 40 minutes at the Forward+ path''s ~5 FPS), and `AWECRAFT_SIZE=1280,720`
+    with the COMMA. The run completed rc=0 with ZERO shader errors and ZERO script errors, writing planet.png
+    and planet_placed.png. WHAT THE FRAME SHOWS (tasks/AC-0394/fwd_ground_first_look.png, 1280x720, read
+    by the coordinator with vision): a player standing on grass with red poppies and yellow dandelions,
+    a textured grass surface, a held stone block in the first-person hand at the lower right, the hotbar
+    and hunger HUD, and a dark tree or trunk at the top. THE WORLD RENDERS CORRECTLY - textures, held
+    item, flowers and HUD are all right, which is the first positive visual evidence this project has
+    had from the shipped renderer for anything at all. AND THE USER''S ARTIFACT IS REPRODUCED IN IT: diagonal
+    bands of alternating green STEP across the grass in broad stripes, together with thin BRIGHT CYAN
+    lines lying on the surface at angles. That matches the user''s description of ground that looks "distorted"
+    or stair-stepped. IT IS NOT THE TERRAIN GEOMETRY: AC-0205''s ramps are committed but DEFAULT OFF,
+    so they are not in the build that produced this frame - which leaves the per-vertex lighting and AO
+    from AC-0159 as the prime suspect, since a per-vertex gradient quantised across a 16x16 block grid
+    would produce exactly these hard diagonal boundaries, and AC-0159 was the last change to surface shading.
+    The cyan lines are a separate observation and may be a water-surface edge or a thin sliver of an adjacent
+    face; they are called out rather than folded in. WHAT IS STILL NOT ANSWERED: the planet itself. This
+    frame is at ground level looking DOWN (`AWECRAFT_CAM=sky` does not take the camera up), and the satellite
+    body is correctly invisible below the flight band, so the shader fix remains unconfirmed visually.
+    THE OWED PIECE IS NOW PRECISE: a camera preset that puts the viewer at a stated altitude looking at
+    the planet - without it, every altitude shot is a hunt, which is exactly how three attempts were lost.
+
+
+    SECOND SUCCESSFUL CAPTURE ON THE SHIPPED RENDERER, 2026-10-04 (tasks/AC-0394/fwd_sky_first_look.png,
+    1280x720, read by the coordinator with vision). The recipe worked again and is now repeatable: NO
+    logic arm, AWECRAFT_NO_WORLD_VIS=1, AWECRAFT_AERO=0, AWECRAFT_CLOUDS=0, AWECRAFT_CAM=eyeup, AWECRAFT_TIME=0.5,
+    AWECRAFT_RADIUS=4, AWECRAFT_SIZE=1280,720, AWECRAFT_SNAP_DRAIN=600, an absolute snapshot path - rc=0
+    with zero shader errors and zero script errors, two PNGs written. WHAT THE FRAME SHOWS, and it is
+    two useful facts at once: (1) THE SKY GRADIENT WORKS AND IS FINALLY SEEN - a deep blue overhead fading
+    to pale at the horizon, which is AC-0386''s altitude-driven space transition rendering on the shipped
+    path, verified visually for the first time; (2) THE SATELLITE BODY IS CORRECTLY INVISIBLE FROM GROUND
+    LEVEL - the sky is empty because the player is at sea level and the body''s Existence rule dissolves
+    it entirely below the flight band, which is exactly the no-pop contract AC-0310 designed and the dissolve
+    ladder measures. So this frame CONFIRMS A CONTRACT rather than revealing a bug, and it means the body''s
+    visual state at altitude is STILL unverified - two captures, neither showing the planet. The small
+    white specks near the horizon are far-terrain fragments that survive the world-hidden flag, not clouds
+    (clouds were explicitly off). ALSO NOTED AND WORTH A LOOK LATER: the held stone block at the lower
+    right is LARGE - plausible as a viewmodel, but the user has twice described a "sizing issue", and
+    AC-0113 has just moved every held pose into a per-type table with 0.0 m drift measured, so if the
+    held item''s scale reads wrong to a player that is a lead rather than a coincidence. THE PRECISE OWED
+    PIECE IS UNCHANGED AND NOW CONFIRMED NECESSARY: a camera preset that places the viewer at a stated
+    altitude above the surface looking at the planet. Two shots at ground level cannot show the body by
+    design, and AC-0391''s own satellite evidence (sat_alt668_r4_fwd.png, sat_alt3000_r4_fwd.png) proves
+    a mechanism existed - either a temporary preset it removed, or a hook not in the preset list (top,
+    iso, iso2, lodring, sky, eyeup, sandpad, shaft). Adding one permanently is a small, high-value harness
+    change: it turns "photograph the planet" from a hunt into one command, and this class of shot is now
+    routine.'
   comments: []
 - id: AC-0395
   title: noclip-toggle-for-inspecting-geometry
@@ -24147,7 +24201,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-03T21:00
-  updated_at: 2026-10-03T21:04
+  updated_at: 2026-10-03T21:10
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24215,5 +24269,48 @@ intake:
     shader check on 2026-10-03 reported zero SHADER ERROR and was a FALSE PASS, because shaders compile
     lazily and that run never reached the code that builds the satellite face. Any check this ticket adds
     must FORCE the compile rather than hope a code path reaches it - the arm that actually builds the
-    mesh (meshprobe) is the one that caught all four defects, and that is the model to follow.'
+    mesh (meshprobe) is the one that caught all four defects, and that is the model to follow.
+
+
+    ADD TO THIS TICKET: A CAMERA PRESET FOR THE PLANET SHOT, which is now the single thing blocking visual
+    verification of the satellite work. Found by the coordinator on 2026-10-04 after two successful captures
+    at ground level showed everything EXCEPT the body - the sky gradient rendered correctly and the body
+    was correctly dissolved (below the flight band, as its contract requires) - so a third ground-level
+    shot cannot answer the question. AC-0391''s own satellite evidence (sat_alt668_r4_fwd.png, sat_alt3000_r4_fwd.png)
+    proves a mechanism existed, but the preset list in the CURRENT tree is only top, iso, iso2, lodring,
+    sky, eyeup, sandpad, shaft (plus cave in main.gd), so whatever produced those files was temporary
+    and was cleaned up.
+
+    WHERE IT GOES, exactly: `godot/scenes/harness.gd`, in the camera-preset chain, as a new `elif` between
+    the `eyeup` branch (ends at line 1124 with `camera.current = true`) and the `sandpad` branch (starts
+    at line 1125). Every branch there follows the same four-step shape, which is what to copy: `camera
+    = main._make_camera()`, set `camera.position`, `camera.look_at(camera.position + dir, Vector3.UP)`,
+    `camera.current = true`.
+
+    WHAT IT MUST DO: place the camera at a STATED altitude above the surface looking OUT AT THE LIMB,
+    because the limb is where the satellite body''s dissolve is designed to be seen and is the view the
+    user has been describing. An env override for the altitude (for example `AWECRAFT_SAT_ALT`, defaulting
+    to about 2000 m, which is above the full-establishment height the arm''s own ladder uses) makes the
+    preset reusable for both the 668 m and 3000 m cases AC-0391 photographed.
+
+    THE ONE THING TO GET RIGHT, and the reason the coordinator did NOT write this itself: the local UP
+    at the spawn is `(spawn - planet_centre).normalized()` where the planet centre is `Vector3(0, -R,
+    0)` in the world frame (satellite_body.gd:182 sets exactly that), so the preset needs `R` from its
+    correct source - NOT a guessed constant. With only minutes of context left, editing a 33,000-line
+    file that every other gate depends on, to insert a value it could not verify, was the wrong trade;
+    that judgement is recorded here rather than left implicit. Find how R reaches the world and the satellite
+    body, use that same source, and say where it lives.
+
+    ALSO REQUIRED BY THE PROJECT''S OWN RULE: adding or changing an arm means TWO files - the branch in
+    harness.gd AND a row in `tasks/harness_data.yaml` (entry / tests / result_fields / envs / wall / notes),
+    then `python3 tasks/scripts/harness_doc.py --render`, with `--check` clean. The row should carry the
+    working snapshot recipe that took five attempts to find: NO logic arm (with any arm set, main.gd:161
+    routes to _run_game and the arm owns the shot, so the menu-path write at main.gd:179 never runs),
+    `AWECRAFT_SIZE=1280,720` with the COMMA, `AWECRAFT_SNAP_DRAIN=600` (it counts FRAMES, and this path
+    runs at about 5 FPS).
+
+    ACCEPTANCE, and it is a picture rather than a number: one capture through the Forward+ path showing
+    the planet''s surface - terrain and ocean colour from the baked textures, not the flat pale disc of
+    a fallback material - which is the visual confirmation that has been owed since the four shader defects
+    were fixed.'
   comments: []
