@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0396 — shader error gates: the SHADER ERROR census + the forced-compile check + the planet camera preset</title>
+<style>
+ body { font: 15px/1.5 system-ui, sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+ h1 { font-size: 1.4rem; } h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #ccc; padding-bottom: .2rem; }
+ h3 { font-size: 1rem; margin-top: 1.4rem; }
+ table { border-collapse: collapse; margin: .8rem 0; }
+ th, td { border: 1px solid #bbb; padding: .35rem .6rem; text-align: left; vertical-align: top; }
+ th { background: #f0f0f0; }
+ code, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; }
+ pre { background: #f6f6f6; border: 1px solid #ddd; padding: .6rem .8rem; overflow-x: auto; }
+ img { max-width: 640px; display: block; margin: .5rem 0; border: 1px solid #ccc; }
+ .ok { color: #0a7a2f; font-weight: 600; } .bad { color: #b3261e; font-weight: 600; } .warn { color: #8a6d00; font-weight: 600; }
+ .small { font-size: .85em; color: #555; }
+ figure { margin: 1rem 0; } figcaption { font-size: .85em; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>AC-0396 — the SHADER ERROR gates, the forced-compile check, the planet preset</h1>
+<p class="small">2026-10-04 · instrumentation + one camera preset · no game-behaviour change · no commits · shared ticket (TASKS.yaml untouched)</p>
+
+<h2>Report (the ≤12-line answer)</h2>
+<ol>
+<li><span class="ok">Census built:</span> <code>python3 tasks/scripts/gate_census.py LOG…</code> counts <code>SCRIPT ERROR</code> AND <code>SHADER ERROR</code> lines per run log (anchored: <code>^SHADER ERROR:</code> — an arm RESULT quoting the phrase no longer false-positives; first cut of it counted its own note line) and names each shader error — the <code>res://</code> path from the engine's <code>at:</code> line, else the GDScript call site from the block's backtrace. G0 is now zero <em>SCRIPT</em> AND zero <em>SHADER</em> ERROR (a broken shader draws the engine fallback material and the process still exits 0 — verified: every negative run below exited rc=0). Rule written into HARNESS.md §4/§5 and the <code>awecraft-run-verify</code> skill.</li>
+<li><span class="ok">Forced-compile check built:</span> new arm <code>AWECRAFT_LOGIC=shaderforce</code> (<code>_shaderforce_test`, harness.gd) — it must <em>force</em> because shaders compile lazily (a run that never builds a material reports zero shader errors while the shader is broken; the coordinator's earlier clean-looking Forward+ check was a false pass on exactly that). The arm globbed every shipped <code>.gdshader</code> (12, <code>res://core</code>+<code>res://world</code>, so a new one lands for free), forces each through the live renderer (material on a probe mesh in the main viewport; the one sky shader rides the scene sky), and judges each IN-ENGINE: (a) parse state — rendered parameter list vs declared uniforms (the silently dropped shader parses to zero while its text declares some); (b) draw state — 5-sample centre pixel readback (the engine fallback is a flat 0.2078 grey, measured 2026-10-04 under this path). Clean run: <span class="ok">12/12 ok, RESULT ok:true, census 0/0</span> (log: <code>.scratch/AC-0396/shaderforce_clean.log</code>).</li>
+<li><span class="ok">Hook points:</span> heavy-gate job = the arm's log through the census (twin of G0); the arm is BATTSKIP (a Forward+ run per gate — out of headless battery scope) and documented in the <code>shaderforce</code> row of <code>tasks/harness_data.yaml</code> (rendered, <code>--check</code> clean) + HARNESS.md §1/§4. SHIPPED FORWARD+ PATH ONLY — the headless dummy renderer never compiles the backend stage, so the check cannot run headless.</li>
+<li><span class="ok">Negative A (loud class) — the gate goes RED and names the file:</span> <code>render_mode …, transparent</code> injected into <code>core/cloud_layer.gdshader</code> → log: <code>SHADER ERROR: Invalid render mode: 'transparent'.</code> <code>at: (null) (res://core/cloud_layer.gdshader:2)</code> + backtrace <code>[0] _setup_aero (res://scenes/main.gd:1049)</code>; census <span class="bad">FAIL (SHADER ERROR 1, names the shader)</span>; arm: <code>SHADERFORCE … cloud_layer declared=10 params=0 verdict=params_mismatch</code>, RESULT <code>ok:false failed:[cloud_layer]</code>; engine rc=0 (the trap).</li>
+<li><span class="ok">Negative B (silent class) — the class NO log census can catch:</span> a <code>#</code> comment as line 1 of <code>core/satellite_body.gdshader</code> (the AC-0391 defect 1 class) → <span class="ok">zero</span> SHADER ERROR lines in the log (census: ok) BUT the arm: <code>SHADERFORCE … satellite_body declared=7 params=0 verdict=params_mismatch</code>, RESULT <code>ok:false failed:[satellite_body]</code>. The arm is the only detector of this class — that is why the check is in-engine, not just a log count.</li>
+<li>Both negative shaders restored byte-identical (<code>git diff</code> clean); a final clean re-run after restore: <span class="ok">12/12 ok, census 0/0</span> (<code>shaderforce_restored.log</code>). During this ticket the arm also caught 5 leftover temp probe shaders from AC-0394-era probing on its first real run (17 scanned, 2 flagged) — deleted, re-run clean.</li>
+<li><span class="ok">Planet preset built:</span> <code>AWECRAFT_CAM=planet</code> (harness.gd, between <code>eyeup</code> and <code>sandpad</code>) — self-contained like <code>shaft</code> (own snapshot + quit; a bare 4-step branch would be silently overridden by the on-demand player spawn making the PLAYER camera current — AC-0152/0160 finding). It flies a FROZEN player to the camera position (the body's visibility + uniforms ride the player's altitude — <code>satellite_body.gd</code> <code>_tick_view</code>), waits the body <code>LOADED</code> + 12 frames + <code>AWECRAFT_SNAP_DRAIN</code>, and aims at the tangent limb.</li>
+<li><span class="ok">How R is obtained (where it lives):</span> local up at spawn = <code>(spawn − centre).normalized()</code>, centre <code>(0, −R, 0)</code> — the exact pair the satellite body uses (<code>satellite_body.gd:90</code> <code>var R</code>, <code>:265 position = Vector3(0,-R,0)</code>). <strong>R's single source is <code>Game.planet_R</code></strong> — <code>godot/autoload/game.gd:63</code> (<code>var planet_R := 4000.0</code>; reset in <code>new_world</code> game.gd:79; clamped 2000–8000 on the save path at main.gd:537) — passed to the body at <code>world.gd:4768 satellite.configure(…, Game.planet_R, …)</code> → <code>satellite_body.gd:254 R = p_R</code>. The preset reads <code>Game.planet_R</code> directly; no constant is guessed. Altitude: <code>AWECRAFT_SAT_ALT</code> (default 2000 m, above the body's full-establishment height; 668/3000 reproduce AC-0391's two shots). Far plane = the body's own formula <code>h_band + 2·(R+SEA) + 200</code>.</li>
+<li><span class="ok">Planet capture (the shipped Forward+ path):</span> <code>tasks/AC-0396/planet_limb_2000m.png</code> (1280×720) — boot line <code>Vulkan 1.4.318 - Forward+ - … llvmpipe</code>, RESULT <code>{"planet":true,"cam":"planet","alt":2000.0,"R":4000.0,"body_phase":4(LOADED),…}</code>, census 0/0, run ~5 min. Recipe: fwdshot shell + <code>AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_SNAP_DRAIN=600 AWECRAFT_NO_FOG=1 AWECRAFT_CLOUDS=0</code> (NO_FOG: the engine env fog would repaint the km-out body in the fog colour — the body's own dissolve is camera-distance driven and stays correct; CLOUDS=0 keeps the 275–400 m cloud shells off the disc), NO logic arm, NO menu boot. <span class="warn">[PNG verification below]</span></li>
+<li>Gates: <span class="ok">G0</span> 0/0 (<code>g0.log</code>) · <span class="ok">full battery 8 modes + summary ok:true</span> (370 s, <code>battery.log</code>, census 0/0) · <span class="ok">genhash 25/25 byte-identical</span> to the newest tree reference (<code>.scratch/ac0394/g0_genhash.log</code>; the AC-0292 baseline in the standing row was superseded by later generation tickets — verified against the newest, not the stale, ref) · <span class="ok">shaderforce clean 12/12 + census 0/0</span> · <span class="ok">negatives A+B red as required, restore green</span>.</li>
+<li>Side fix (instrument honesty, in ticket scope): <code>Debug.snap</code> printed <code>SNAP path 1280x720</code> even when <code>save_png</code> failed (first capture run: engine <code>ERROR: Can't save PNG at path</code> — the directory didn't exist — yet the SNAP line claimed it). It now prints <code>SNAP FAIL path err=N</code> + <code>push_error</code> and skips the claim. No other game code touched; <code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code> (the other session's files) are read-only — the self-contained preset pattern needed no change there.</li>
+</ol>
+
+<h2>1 · The SHADER ERROR census (gate side)</h2>
+<p>G0's rule is zero <code>SCRIPT ERROR</code> lines, not <code>rc=0</code> — the engine exits 0 when scripts fail to compile. AC-0396 adds the twin: zero <code>SHADER ERROR</code> lines. A shader that fails to compile is replaced by the engine's fallback material and the process still exits 0; the only trace is the log line, and for a week nothing read it (the satellite shader's white-disc defect AC-0391 found had been printed on every run since the shader shipped).</p>
+<p>Helper: <code>tasks/scripts/gate_census.py</code> (stdlib only):</p>
+<pre>python3 tasks/scripts/gate_census.py &lt;run log&gt; [&lt;run log&gt; …]
+# per log: counts SCRIPT ERROR + SHADER ERROR lines (anchored ^…ERROR:),
+# names each shader error (res:// path from the `at:` line, else the first
+# GDScript call site in the block's backtrace), exits non-zero on any &gt; 0.
+python3 tasks/scripts/gate_census.py --allow-script N --allow-shader M …</pre>
+<p><strong>Anchoring matters:</strong> the engine prints <code>SHADER ERROR: …</code> at line start; a substring count false-positived on this arm's own RESULT note (which quotes the phrase) on the very first clean run. The anchored form (<code>^\s*SHADER ERROR:</code>) was validated against: the clean log (0/0), a broken log (2, both named), G0 and battery (0/0).</p>
+<p>Each engine error block carries its attribution — file shaders name the <code>res://</code> path on the <code>at:</code> line; embedded (in-code <code>set_code</code>) shaders carry no path, so the backtrace's first GDScript frame names the call site. Both forms, as produced live by Negative A:</p>
+<pre>SHADER ERROR: Invalid render mode: 'transparent'.
+          at: (null) (res://core/cloud_layer.gdshader:2)
+          GDScript backtrace (most recent call first):
+              [0] _setup_aero (res://scenes/main.gd:1049)
+…
+.scratch/AC-0396/shaderforce_negA.log: SCRIPT ERROR 0 (allow 0), SHADER ERROR 1 (allow 0) FAIL
+    line 10: res://core/cloud_layer.gdshader:2</pre>
+<p>Where it is wired: HARNESS.md §4 recipe (census on the G0 log + any run log + the shaderforce recipe), §5 G0 definition, the <code>awecraft-run-verify</code> skill tier table, the <code>shaderforce</code>/<code>fwdshot</code> rows of <code>tasks/harness_data.yaml</code> (rendered into HARNESS.md §1, <code>--check</code> clean).</p>
+
+<h2>2 · The forced-compile check (arm side, <code>AWECRAFT_LOGIC=shaderforce</code>)</h2>
+<p><strong>Why force:</strong> shaders compile lazily — the backend stage is compiled when a material is first built. A run that never builds the material reports zero shader errors while the shader is broken (the coordinator's Forward+ check passed exactly that way), and the headless dummy renderer never compiles the backend stage at all. So: the arm FORCES every shipped shader in front of the live renderer, on the shipped Forward+ path, and judges each in-engine — because one failure class produces no log line at all.</p>
+<p><strong>The rig:</strong> a probe <code>Camera3D</code> + 40×40×1 <code>BoxMesh</code> (box 12 m in front of the camera, high above the terrain at the world origin) added under <code>main</code>; each shader is put in front of the renderer (material override on the box; the one <code>shader_type sky</code> shader rides the scene sky), ~12 process frames + <code>frame_post_draw</code>, then a 5-sample pixel readback (centre ±30 px).</p>
+<p><strong>The per-shader verdicts:</strong></p>
+<table>
+<tr><th>Signal</th><th>What it catches</th><th>Log trace</th></tr>
+<tr><td><code>params_mismatch</code>: declared uniforms (source text) &gt; rendered parameter list (<code>RenderingServer.get_shader_parameter_list</code>)</td><td>a silently dropped file (first-line <code>#</code> → parses to ZERO parameters while the text declares some) AND any parse failure</td><td>silent class: NONE; loud class: <code>SHADER ERROR</code> + <code>at:</code> line</td></tr>
+<tr><td><code>fallback_material</code>: all 5 samples flat within 0.03 AND on the measured fallback grey 0.2078</td><td>a shader that compiles but draws the engine fallback material</td><td>none</td></tr>
+</table>
+<p>Shipped set: 12 shaders, all declare ≥1 uniform (1–12) → the parameter check covers the whole set today; the pixel check is the second layer for future zero-uniform shaders. (A shader whose default-uniform output is transparent — the cloud/fluid/star classes — shows the scene behind it; that is a valid compiled-and-ran state, and the parameter check still guards it. The probe runs with DEFAULT uniforms: the compile state is the subject; semantic correctness is the satellite arm's numeric-twin job.)</p>
+<h3>Clean run (the standing state)</h3>
+<pre>SHADERFORCE res://core/aero_sky_gradient.gdshader declared=12 params=12 sky=true verdict=ok
+SHADERFORCE res://core/aero_wash.gdshader declared=4 params=4 sky=false verdict=ok
+SHADERFORCE res://core/cloud_layer.gdshader declared=10 params=10 sky=false verdict=ok
+SHADERFORCE res://core/fluid_anim.gdshader declared=8 params=8 sky=false verdict=ok
+SHADERFORCE res://core/fluid_anim_bf.gdshader declared=8 params=8 sky=false verdict=ok
+SHADERFORCE res://core/lod_avg.gdshader declared=1 params=1 sky=false verdict=ok
+SHADERFORCE res://core/satellite_body.gdshader declared=7 params=7 sky=false verdict=ok
+SHADERFORCE res://core/star.gdshader declared=6 params=6 sky=false verdict=ok
+SHADERFORCE res://world/chunk_lit_cutout.gdshader declared=6 params=6 sky=false verdict=ok
+SHADERFORCE res://world/chunk_lit_flower.gdshader declared=6 params=6 sky=false verdict=ok
+SHADERFORCE res://world/chunk_lit_fluid.gdshader declared=8 params=8 sky=false verdict=ok
+SHADERFORCE res://world/chunk_lit_opaque.gdshader declared=6 params=6 sky=false verdict=ok
+RESULT {"count":12,"failed":[],…,"ok":true,…,"wall_ms":27613}
+.scratch/AC-0396/shaderforce_clean.log: SCRIPT ERROR 0 (allow 0), SHADER ERROR 0 (allow 0) ok</pre>
+<p>Boot line (the path assertion): <code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256 bits)</code>.</p>
+<h3>Negative A — the loud class (census AND arm red, file named)</h3>
+<pre># break: core/cloud_layer.gdshader line 2 → `render_mode unshaded, cull_back, fog_disabled, transparent;`
+SHADER ERROR: Invalid render mode: 'transparent'.
+          at: (null) (res://core/cloud_layer.gdshader:2)
+          GDScript backtrace (most recent call first):
+              [0] _setup_aero (res://scenes/main.gd:1049)
+SHADERFORCE res://core/cloud_layer.gdshader declared=10 params=0 sky=false verdict=params_mismatch
+RESULT {"count":12,"failed":["res://core/cloud_layer.gdshader"],…,"ok":false,…}
+.scratch/AC-0396/shaderforce_negA.log: … SHADER ERROR 1 (allow 0) FAIL → line 10: res://core/cloud_layer.gdshader:2
+# engine rc=0 — the gate is the census + the arm, never the exit code</pre>
+<h3>Negative B — the silent class (arm red, census GREEN — the class the log cannot see)</h3>
+<pre># break: `# AC-0396 negative test: this hash line swallows the whole shader silently` as line 1 of core/satellite_body.gdshader
+# log: ZERO SHADER ERROR lines — census: ok (it cannot see this class)
+SHADERFORCE res://core/satellite_body.gdshader declared=7 params=0 sky=false verdict=params_mismatch
+RESULT {"count":12,"failed":["res://core/satellite_body.gdshader"],…,"ok":false,…}
+# the arm is the only detector: this is why the check is in-engine, not just a log count</pre>
+<p>Restores: both shaders byte-identical after <code>cp</code> restore (<code>git diff --stat</code> empty); final clean re-run 12/12 ok + census 0/0 (<code>shaderforce_restored.log</code>).</p>
+
+<h2>3 · The planet camera preset (<code>AWECRAFT_CAM=planet</code>)</h2>
+<p>The view the satellite dissolve exists to be seen in: a camera at a stated altitude above the surface, looking at the limb (a ground-level shot cannot show the body — it is dissolved below the flight band by contract, AC-0310). Inserted in the preset chain (between <code>eyeup</code> and <code>sandpad</code>), <strong>self-contained like <code>shaft</code></strong>: it flies a frozen player to the camera position, waits the body <code>LOADED</code> + 12 frames + <code>AWECRAFT_SNAP_DRAIN</code> frames, takes its own snapshot and quits. The frozen player is required anyway — the body's visibility and uniforms are driven by the PLAYER's altitude (<code>satellite_body.gd</code> <code>_tick_view</code>: <code>h_band = |(ppos + (0,R,0))| − R</code>), so no player ⇒ body hidden and uniforms never pushed.</p>
+<p><strong>R's single source:</strong> <code>Game.planet_R</code> — <code>godot/autoload/game.gd:63</code> (<code>var planet_R := 4000.0</code>), reset in <code>new_world</code> (game.gd:79), clamped 2000–8000 on the save path (main.gd:537), passed to the body at <code>world.gd:4768 satellite.configure(0, seed, Game.planet_R, HEIGHT, SEA)</code> → <code>satellite_body.gd:254 R = p_R</code> → centre <code>(0,−R,0)</code> (satellite_body.gd:265). The preset reads <code>Game.planet_R</code> — not a guessed constant. Local up at spawn: <code>(spawn − (0,−R,0)).normalized()</code> — the exact pair the body uses.</p>
+<p>Framing math: camera <code>pl_pos = spawn + up·alt</code>; the look target is the tangent point of the line of sight to the sphere of radius R (in the centre–camera plane: <code>cos γ = R/|cam−cen|</code>, <code>sin γ = √(1−cos²γ)</code>, horizontal via a cross product with a fallback reference axis); <code>up</code> = the local radial (the body's own frame, not <code>Vector3.UP</code>); <code>far = alt + 2·(R+SEA) + 200</code> (the body's own far formula — the preset camera needs its own, since the body only extends the PLAYER camera's far). At the default 2000 m: <code>h_band ≈ 2142 ≫ h_first ≈ 32.6</code> (body fully established, op=1), far limb ≈ 10268 &lt; far 10452 (no clip), nadir terrain 2000 m below the camera in front of the body surface (2016 m) → real terrain + textured disc both visible.</p>
+<p>Capture recipe (shipped path): the fwdshot shell recipe + <code>AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_SNAP_DRAIN=600 AWECRAFT_NO_FOG=1 AWECRAFT_CLOUDS=0</code>, NO <code>AWECRAFT_LOGIC</code>, NO <code>AWECRAFT_MENU_BOOT</code> (with any arm set the arm owns the shot; with MENU_BOOT the menu path's player camera owns it). NO_FOG because the engine env fog would repaint the km-out body in the fog colour (the body shader has no <code>fog_disabled</code>; its own dissolve is camera-distance driven and stays correct); CLOUDS=0 keeps the 275–400 m cloud shells (R+275..R+400) off the disc. <code>AWECRAFT_SAT_ALT</code> overrides the altitude (668/3000 reproduce AC-0391's two satellite shots).</p>
+<figure><img src="planet_limb_2000m.png" alt="Planet limb shot at 2000 m altitude, Forward+, no HUD">
+<figcaption><strong>tasks/AC-0396/planet_limb_2000m.png</strong> — the planet preset at 2000 m (default), R4, Forward+ lavapipe, 1280×720, body LOADED (phase 4), census 0/0. <span class="ok">VERIFIED by reading the PNG: the disc shows the BAKED planet texture — green landmasses, blue ocean with shallow/deep variation, white ice — with the limb haze band and a starfield; it is plainly NOT the flat pale fallback disc</span> (contrast AC-0391's uniform (177,240,255) pale-cyan disc). No HUD in frame.</figcaption></figure>
+<figure><img src="planet_limb_2000m_hud_overprint.png" alt="First capture with the frozen player's HUD overprinting the shot" style="max-width:480px">
+<figcaption class="small">The first capture (kept as evidence): the frozen player's HUD — hotbar + hunger row — overprinted the bottom of the shot. The preset now hides <code>main.inventory_ui</code> for the capture (the inventory manages its children's visibility, never the layer's, so a one-shot hide holds); the re-run above is clean.</figcaption></figure>
+<p class="small">First capture attempt, second failure: the engine printed <code>ERROR: Can't save PNG at path</code> (the <code>tasks/AC-0396/</code> directory did not exist) while <code>Debug.snap</code> printed <code>SNAP … 1280x720</code> anyway — the SNAP line is the "it was taken" claim, so it now fails loudly (<code>SNAP FAIL path err=N</code> + <code>push_error</code>) instead of claiming a file that does not exist.</p>
+
+<h2>4 · Gates</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Log</th></tr>
+<tr><td>G0 (headless, zero SCRIPT AND zero SHADER ERROR) — final run on the delivered tree (after the debug.gd change)</td><td class="ok">0 / 0, rc=0</td><td>.scratch/AC-0396/g0_final.log (earlier: g0.log, same result)</td></tr>
+<tr><td>Full battery (player, interact, light, fluids, buckets, genhash, settings, controls) + summary</td><td class="ok">ok:true, 370 s, census 0/0</td><td>.scratch/AC-0396/battery.log</td></tr>
+<tr><td>genhash parity</td><td class="ok">25/25 byte-identical to the newest tree reference (.scratch/ac0394/g0_genhash.log)</td><td>genhash_new.txt vs genhash_ref_ac0394.txt (diff empty)</td></tr>
+<tr><td>shaderforce clean (Forward+)</td><td class="ok">12/12 ok, RESULT ok:true, census 0/0</td><td>.scratch/AC-0396/shaderforce_clean.log</td></tr>
+<tr><td>Negative A (loud) — break cloud_layer</td><td class="bad">census FAIL (names res://core/cloud_layer.gdshader:2) + arm ok:false params_mismatch — as required; engine rc=0</td><td>.scratch/AC-0396/shaderforce_negA.log</td></tr>
+<tr><td>Negative B (silent) — hash first line on satellite_body</td><td class="bad">arm ok:false params_mismatch with ZERO log lines (census ok) — as required; the class the census cannot see</td><td>.scratch/AC-0396/shaderforce_negB.log</td></tr>
+<tr><td>Restore after negatives</td><td class="ok">both shaders byte-identical (git diff empty); re-run 12/12 ok, census 0/0</td><td>.scratch/AC-0396/shaderforce_restored.log</td></tr>
+<tr><td>Planet capture (Forward+)</td><td class="ok">boot line Forward+, RESULT planet:true body_phase=4(LOADED), census 0/0, PNG exists 1280×720</td><td>.scratch/AC-0396/planet_capture.log</td></tr>
+</table>
+
+<h2>5 · Files</h2>
+<ul>
+<li><code>godot/scenes/harness.gd</code> — the <code>planet</code> preset branch (preset chain) + the <code>shaderforce</code> dispatch + <code>_shaderforce_test</code> (arm suite; inert during normal play, out of main.gd and the world per AC-0140)</li>
+<li><code>godot/autoload/debug.gd</code> — <code>snap()</code> fails loudly on a failed <code>save_png</code> (was: claimed the snapshot anyway)</li>
+<li><code>tasks/scripts/gate_census.py</code> — NEW: the SCRIPT+SHADER ERROR census helper</li>
+<li><code>tasks/harness_data.yaml</code> — <code>shaderforce</code> row (entry/tests/result_fields/envs/wall/notes) + the <code>fwdshot</code> note updated to the standing zero-SHADER-ERROR rule → rendered via <code>harness_doc.py --render</code>, <code>--check</code> clean</li>
+<li><code>godot/HARNESS.md</code> — §1/§3 regenerated (shaderforce row); §2 <code>AWECRAFT_CAM</code> row gains <code>planet</code> (recipe + self-containment + the AC-0152/0160 trap); §4 G0 recipe gains the census + the shaderforce recipe; §5 G0 definition = zero SCRIPT AND zero SHADER ERROR</li>
+<li><code>.dsh/skills/awecraft-run-verify/SKILL.md</code> — G0 tier = zero SCRIPT AND zero SHADER ERROR + the lazy-compile false-pass paragraph</li>
+<li><code>tasks/AC-0396/</code> — this page + <code>planet_limb_2000m.png</code> (the deliverable) + <code>planet_limb_2000m_hud_overprint.png</code> (first capture, kept as the HUD-trap evidence)</li>
+</ul>
+<p class="small">Constraints held: instrumentation + one preset, no game-behaviour change; the other session's files (<code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>) read-only — the self-contained preset needed no change in any of them; genhash 25/25; existing arms' RESULT fields unchanged; no R50; never the <code>load</code> arm; one godot at a time (<code>pgrep</code> before every call); no commits; TASKS.yaml untouched (shared ticket).</p>
+
+</body>
+</html>

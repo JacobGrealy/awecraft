@@ -1043,6 +1043,32 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			Game.start()
 			await _quitmenu_test(qslot, spawn)
 			return
+		if logic == "shaderforce":
+			# AC-0396: the forced-compile check. Shaders compile LAZILY -
+			# a run that never builds a material reports zero shader
+			# errors while the shader is broken (the false pass AC-0391/
+			# AC-0394 found off the coordinator's Forward+ check), so the
+			# arm forces EVERY shipped .gdshader through the live renderer
+			# and judges each one in-engine: (a) the parse state - the
+			# rendered parameter list (a silently dropped shader, e.g. a
+			# first-line `#` that swallows the file, parses to ZERO
+			# parameters while its text declares uniforms - the only
+			# failure class with NO log line, which this arm alone
+			# detects); (b) the draw state - a pixel readback of the
+			# probe mesh (the engine's fallback material is a flat
+			# 0.2078 grey, measured 2026-10-04 under Forward+ lavapipe,
+			# .scratch/AC-0396/ac0396_fwc_probe3.log). LOUD failures
+			# (invalid render_mode, unknown identifier, a backend compile
+			# failure) print SHADER ERROR lines to the run log with the
+			# shader's res:// path and the GDScript call site - the gate-
+			# side SHADER ERROR census (tasks/scripts/gate_census.py)
+			# fails on any of them, the twin of G0's zero-SCRIPT-ERROR
+			# rule. SHIPPED FORWARD+ PATH ONLY (the fwdshot shell recipe):
+			# the headless dummy renderer never compiles the backend
+			# stage. BATTSKIP (a Forward+ run per gate - out of battery
+			# scope); the heavy-gate job carries it.
+			await _shaderforce_test()
+			return
 		world.collision_enabled = false
 		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
 		if OS.get_environment("AWECRAFT_MESH_INFO") != "":
@@ -1122,6 +1148,95 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var edir := Vector3(-cos(epitch) * sin(eyaw), sin(epitch), -cos(epitch) * cos(eyaw)).normalized()
 		camera.look_at(camera.position + edir, Vector3.UP)
 		camera.current = true
+	elif cam == "planet":
+		# AC-0396: planet limb shot - the camera at a STATED altitude above
+		# the surface, looking OUT AT THE LIMB (the view the satellite
+		# dissolve exists to be seen in; a ground-level shot cannot show
+		# the body - it is dissolved below the flight band by contract,
+		# AC-0310). The local up at the spawn is
+		# (spawn - centre).normalized() with the centre (0, -R, 0) - the
+		# exact pair the satellite body uses (satellite_body.gd:90/265).
+		# R comes from its single source: Game.planet_R (game.gd:63,
+		# default 4000.0, reset in new_world at game.gd:79, clamped
+		# 2000-8000 on the save path at main.gd:537; world.gd:4768 passes
+		# the same value to satellite.configure) - NOT a guessed constant.
+		# AWECRAFT_SAT_ALT overrides the altitude (m); the 2000 default is
+		# above the arm's full-establishment height, 668/3000 reproduce
+		# AC-0391's two satellite shots.
+		# SELF-CONTAINED like `shaft` (it takes its own snapshot and
+		# quits): a bare 4-step branch would be silently overridden - the
+		# on-demand player spawn (snapshot_path != "" and player == null)
+		# below makes the PLAYER camera current after the named-camera
+		# block (AC-0152/0160 finding, HARNESS.md §2). The player it
+		# flies is needed regardless: the body's visibility + uniforms
+		# ride the player's altitude (satellite_body.gd _tick_view:
+		# h_band from ppos), so the preset flies a FROZEN player to the
+		# camera position - the satellite ladder arm's exact mechanism.
+		var pl_alt_env := OS.get_environment("AWECRAFT_SAT_ALT")
+		var pl_alt := 2000.0 if pl_alt_env == "" else pl_alt_env.to_float()
+		var pl_R := float(Game.planet_R)
+		var pl_cen := Vector3(0.0, -pl_R, 0.0)
+		var pl_spn := Vector3(spawn.x, spawn.y, spawn.z)
+		var pl_up := (pl_spn - pl_cen).normalized()
+		var pl_pos := pl_spn + pl_up * pl_alt
+		player = main._spawn_player()
+		player.set_physics_process(false)
+		player.hunger = 20.0
+		player.position = pl_pos  # direct scene-space set (the ladder's)
+		# the frozen player's HUD (hotbar + hunger) would overprint the
+		# shot; the instrument hides it for the capture (the inventory
+		# manages its children's visibility, never the layer's, so a
+		# one-shot hide holds until the snapshot)
+		if main.inventory_ui != null:
+			main.inventory_ui.visible = false
+		await main._await_spawn_floor(spawn, 300)
+		# the body must be LOADED (the startup bake may still be slicing)
+		# and a tick must have published the thresholds + visibility
+		if world.satellite != null:
+			var pl_wait := 0
+			while world.satellite.phase != SatelliteBody.Phase.LOADED and world.satellite.phase != SatelliteBody.Phase.FAILED:
+				await get_tree().process_frame
+				pl_wait += 1
+				if pl_wait > 6000:
+					break
+		for i in 12:
+			await get_tree().process_frame
+		camera = main._make_camera()
+		camera.position = pl_pos
+		# the far limb sits |cam - cen| + (R + SEA) out - the body's own
+		# far formula (satellite_body.gd: h_band + 2*RB + 200)
+		camera.far = pl_alt + 2.0 * (pl_R + float(Data.SEA)) + 200.0
+		# look at the LIMB: the tangent point of the line of sight to the
+		# sphere of radius pl_R about pl_cen. In the centre-camera plane
+		# the tangent direction is cos(gamma) along cam-cen + sin(gamma)
+		# horizontal, with cos(gamma) = pl_R / |cam - cen|.
+		var pl_a := camera.position - pl_cen
+		var pl_alen := pl_a.length()
+		var pl_cg := clampf(pl_R / pl_alen, 0.0, 1.0)
+		var pl_sg := sqrt(maxf(0.0, 1.0 - pl_cg * pl_cg))
+		var pl_ref := Vector3(0.0, 0.0, 1.0)
+		if absf(pl_a.normalized().dot(pl_ref)) > 0.99:
+			pl_ref = Vector3(1.0, 0.0, 0.0)
+		var pl_hd := pl_ref.cross(pl_a).normalized()
+		var pl_tan := pl_cen + pl_a * (pl_R * pl_cg / pl_alen) + pl_hd * (pl_R * pl_sg)
+		var pl_dir := (pl_tan - camera.position).normalized()
+		camera.look_at(camera.position + pl_dir, pl_up)
+		camera.current = true
+		# settle (AWECRAFT_SNAP_DRAIN counts FRAMES; the Forward+ path
+		# runs at ~5 FPS, so the recipe's 600 is ~2 min)
+		var pl_denv := OS.get_environment("AWECRAFT_SNAP_DRAIN")
+		var pl_drain := 600 if pl_denv == "" else maxi(1, pl_denv.to_int())
+		for i in pl_drain:
+			await get_tree().process_frame
+		var pl_phase := -1
+		if world.satellite != null:
+			pl_phase = int(world.satellite.phase)
+		Debug.result({"planet": true, "cam": "planet", "alt": pl_alt, "R": pl_R,
+				"body_phase": pl_phase, "drain": pl_drain,
+				"w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
+		await Debug.snap(snapshot_path)
+		get_tree().quit()
+		return
 	elif cam == "sandpad":
 		var pad_top := _build_sand_pad(spawn)
 		camera = main._make_camera()
@@ -14408,6 +14523,152 @@ func _occl111_test(spawn: Vector3) -> void:
 	out["wall_ms"] = wall
 	out["ok"] = ok_a and ok_b and ok_c and ok_e and wall <= 90000
 	Debug.result(out)
+
+# AC-0396: the forced-compile check (the dispatch comment owns the WHY).
+# SHIPPED FORWARD+ PATH ONLY (the fwdshot shell recipe) - the headless
+# dummy renderer never compiles the backend stage. Every shipped
+# .gdshader is forced through the live renderer (a material on a probe
+# mesh in the main viewport, or the scene sky for the one sky shader)
+# and judged in-engine per shader:
+#   (a) the PARSE state - the rendered parameter list vs the uniforms
+#       the source text declares. A silently dropped file (a first-line
+#       `#` that swallows the shader) parses to ZERO parameters while
+#       its text declares some - the only failure class with NO log
+#       line, which this arm alone detects (loud parse failures print
+#       SHADER ERROR to the log AND parse to zero, so both land here);
+#   (b) the DRAW state - a 5-sample pixel readback of the probe. The
+#       engine's fallback material is a flat 0.2078 grey under
+#       Forward+ lavapipe (measured 2026-10-04, .scratch/AC-0396/),
+#       while a compiled shader renders its own (textured or coloured)
+#       output; flat-across-all-samples AND on the grey = fallback.
+# The probe runs with DEFAULT uniforms (the compile state is the
+# subject; semantic correctness is the satellite arm's numeric-twin
+# job). Loud failures additionally print SHADER ERROR lines to the run
+# log with the shader's res:// path and the GDScript call site - the
+# gate-side census (tasks/scripts/gate_census.py) counts those; zero
+# SHADER ERROR + ok true is the standing state.
+func _shaderforce_test() -> void:
+	var t0 := Time.get_ticks_msec()
+	var out := {}
+	var ok := true
+	# The shipped shader set: every .gdshader under res://core and
+	# res://world (all twelve are load()ed from code; a new shader
+	# lands here automatically).
+	var paths: Array = []
+	for d in ["res://core", "res://world"]:
+		var dir := DirAccess.open(d)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var fn := dir.get_next()
+		while fn != "":
+			if not dir.current_is_dir() and fn.ends_with(".gdshader"):
+				paths.append(d + "/" + fn)
+			fn = dir.get_next()
+		dir.list_dir_end()
+	paths.sort()
+	# The probe rig: its own camera + a box that fills the centre of
+	# the probe view. It sits at (0, 500, z) - above the terrain (the
+	# spawn surface is ~142 at the world origin, the R4 band is +-64 m
+	# about the spawn), so the box is unoccluded and the horizontal
+	# view is open sky for the sky-shader case (the terrain horizon
+	# dips ~28 deg below horizontal at 500 m on the R=4000 sphere).
+	# Fog is ~0 at the 12 m box distance (the default fog window is
+	# 87% of fog_far..fog_far, ~60-70 m at R4) and the tonemap is the
+	# engine default (linear), so the centre readback IS the shader's
+	# own output.
+	var rig := Node3D.new()
+	rig.name = "ShaderforceProbe"
+	main.add_child(rig)
+	var pcam := Camera3D.new()
+	pcam.position = Vector3(0.0, 500.0, 2.0)
+	rig.add_child(pcam)
+	var pbox := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(40.0, 40.0, 1.0)
+	pbox.mesh = bm
+	pbox.position = Vector3(0.0, 500.0, -10.0)
+	rig.add_child(pbox)
+	pcam.current = true
+	# The scene environment's original sky material (restored after the
+	# loop; the game's own sky IS the one sky shader, aero_sky_gradient).
+	var wenv: WorldEnvironment = null
+	var orig_sky_mat: ShaderMaterial = null
+	for n in main.get_children():
+		if n is WorldEnvironment:
+			wenv = n
+			break
+	if wenv != null and wenv.environment != null and wenv.environment.sky != null:
+		orig_sky_mat = wenv.environment.sky.sky_material
+	var entries: Array = []
+	for path in paths:
+		var sh: Shader = load(path)
+		var code: String = sh.get_code()
+		var declared := 0
+		for line in code.split("\n"):
+			if line.strip_edges().begins_with("uniform "):
+				declared += 1
+		var params := -1
+		if sh.get_rid().is_valid():
+			params = RenderingServer.get_shader_parameter_list(sh.get_rid()).size()
+		var is_sky := code.contains("shader_type sky")
+		var entry := {"path": path, "sky": is_sky, "declared": declared, "params": params}
+		# FORCE: put the shader in front of the live renderer.
+		if is_sky:
+			if wenv != null and wenv.environment != null and wenv.environment.sky != null:
+				var smsk := ShaderMaterial.new()
+				smsk.shader = sh
+				wenv.environment.sky.sky_material = smsk
+			pbox.visible = false
+		else:
+			pbox.visible = true
+			var pm := ShaderMaterial.new()
+			pm.shader = sh
+			pbox.material_override = pm
+		for i in 12:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		var img := get_tree().root.get_viewport().get_texture().get_image()
+		var wx := int(img.get_width() * 0.5)
+		var wy := int(img.get_height() * 0.5)
+		var pxs: Array = []
+		for off in [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30]]:
+			pxs.append(img.get_pixel(wx + off[0], wy + off[1]))
+		var pxs_s: Array = []
+		for c in pxs:
+			pxs_s.append(str(c))
+		entry["px"] = pxs_s
+		var chmin := 1.0
+		var chmax := 0.0
+		for c in pxs:
+			chmin = minf(chmin, minf(c.r, minf(c.g, c.b)))
+			chmax = maxf(chmax, maxf(c.r, maxf(c.g, c.b)))
+		var fallback_like := (chmax - chmin) < 0.03 and absf(chmax - 0.2078) < 0.03
+		if declared > 0 and params < declared:
+			entry["verdict"] = "params_mismatch"
+		elif fallback_like:
+			entry["verdict"] = "fallback_material"
+		else:
+			entry["verdict"] = "ok"
+		entries.append(entry)
+		print("SHADERFORCE ", path, " declared=", declared, " params=", params, " sky=", is_sky, " verdict=", entry["verdict"])
+		if entry["verdict"] != "ok":
+			ok = false
+	if wenv != null and wenv.environment != null and wenv.environment.sky != null and orig_sky_mat != null:
+		wenv.environment.sky.sky_material = orig_sky_mat
+	var failed: Array = []
+	for e in entries:
+		if e["verdict"] != "ok":
+			failed.append(e["path"])
+	out["shaderforce"] = true
+	out["ok"] = ok
+	out["count"] = paths.size()
+	out["failed"] = failed
+	out["shaders"] = entries
+	out["wall_ms"] = Time.get_ticks_msec() - t0
+	out["note"] = "loud failures additionally print SHADER ERROR lines to the run log (res:// path + call site) - the gate-side census (tasks/scripts/gate_census.py) counts them; zero SHADER ERROR + ok true is the standing state; run under the fwdshot shell recipe (Forward+ lavapipe)"
+	Debug.result(out)
+	get_tree().quit()
 
 func _meshprobe_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()

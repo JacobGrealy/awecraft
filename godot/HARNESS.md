@@ -91,8 +91,48 @@ tasks/AC-0391/AC-0391-results.html): `render_mode transparent` is
 invalid in this engine (loud SHADER ERROR — `core/cloud_layer.gdshader`)
 and a .gdshader whose FIRST LINE is a `#` line is SILENTLY DROPPED with
 no error (the only shipped case: `core/satellite_body.gdshader` — it
-draws its default material). Until those are fixed, every Forward+ run
-logs the cloud SHADER ERROR (report it, don't chase it). |
+draws its default material). Those are fixed (AC-0392/0393); AC-0396
+makes the state checkable: the standing state of EVERY run is zero
+`SHADER ERROR` lines — counted per log by `python3 tasks/scripts/
+gate_census.py` (the twin of G0's zero-SCRIPT-ERROR rule; a heavy-
+gate job fails on it the way it fails on script errors) and forced
+to be honest by the `shaderforce` arm (lazy compilation made an
+earlier clean-looking Forward+ check a false pass). |
+| `shaderforce` | `_shaderforce_test` (AC-0396) | AC-0396 forced-compile check: every shipped .gdshader (all twelve,
+globbed from res://core + res://world, so a new shader lands here for
+free) is FORCED through the live renderer — a material on a probe
+mesh in the main viewport (the one sky shader rides the scene sky) —
+and each is judged in-engine: (a) PARSE state — the rendered
+parameter list vs the uniforms the source text declares (a silently
+dropped file, a first-line `#` that swallows the shader, parses to
+ZERO parameters while its text declares some — the only failure
+class with NO log line, which this arm alone detects); (b) DRAW
+state — a 5-sample pixel readback of the probe (the engine's
+fallback material is a flat 0.2078 grey under Forward+ lavapipe,
+measured 2026-10-04; flat-across-samples AND on the grey =
+fallback). LOUD failures (invalid render_mode, unknown identifier, a
+backend compile failure) additionally print SHADER ERROR lines to the
+run log with the shader's res:// path + GDScript call site — the
+gate-side census counts those. Zero SHADER ERROR + ok true is the
+standing state. The probe runs with DEFAULT uniforms — the compile
+state is the subject; semantic correctness is the satellite arm's
+numeric-twin job | `ok`, `count` (12), `failed` ([] when ok), `shaders` (per shader: `path`, `sky`, `declared`, `params`, `px` (5 centre-region samples), `verdict` ok|params_mismatch|fallback_material), `wall_ms`, `note`; plus one greppable `SHADERFORCE <path> declared= params= sky= verdict=` line per shader | `AWECRAFT_LOGIC=shaderforce` under the fwdshot shell recipe (xvfb +
+lavapipe + `--rendering-driver vulkan`, `AWECRAFT_SIZE=1280,720`) —
+the SHIPPED FORWARD+ PATH ONLY (the headless dummy renderer never
+compiles the backend stage) | ~3–5 min Forward+ (12 shaders × 12 frames + boot, ~5 FPS) | AC-0396 (2026-10-04): BATTSKIP probe (a Forward+ run per gate — out
+of battery scope); the heavy-gate job carries it and runs
+`python3 tasks/scripts/gate_census.py <this log>` on it (zero
+SHADER ERROR required, the twin of G0's zero SCRIPT ERROR). WHY THE
+FORCE: shaders compile LAZILY when a material is first built — a run
+that never reaches the material reports zero shader errors while the
+shader is broken (the coordinator's Forward+ check was a false pass
+on exactly that; meshprobe caught all four satellite defects only
+because ITS log carried the SHADER ERROR lines nobody read).
+Negative-tested both classes 2026-10-04 (tasks/AC-0396/): a broken
+render_mode keyword → loud SHADER ERROR in the log +
+`params_mismatch` in the RESULT + census FAIL; a first-line `#` →
+ZERO log lines but `params_mismatch` in the RESULT (the silent class
+the census cannot see — the arm is its only detector). |
 | `editperf` | `_editperf_test` | single block edit: flush frames, build cost, no hitch | `cell`, `edited_id`, `cell_after`, `flush_done`, `flush_frames`, `max_frame_build_ms`, `single_build_ms`, `total_ms` | — | ~5–10 s (not re-run 08-24) | |
 | `perf` | `_perf_test` | full-radius build/drain/first-draw/frame percentiles + memory | `chunks`, `render_radius`, `fog_near`/`fog_far`/`fog_edge`/`fog_ok`, `total_chunks`, `all_meshed`, `collision_shapes`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `total_ms`, `frames`, `recenter_ms`, `max_frame_ms`, `build_units`, `drain_frames`, `max_drain_ms`, `gen_ms`, `build_ms`, `first_draw_ms`, `p50_ms`, `p95_ms`, `frame_max_ms`, `mem_before_bytes`, `mem_after_bytes`, `drain_s` | `AWECRAFT_RADIUS`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE`, `AWECRAFT_DRAIN_MS`, `AWECRAFT_COLLIDE_MS` (AC-0340 staged collision cap, default 8 ms), `AWECRAFT_GEN_BUDGET`, `AWECRAFT_MESH_INFO` | r4 ≈12.3 s total_ms (measured `.scratch/ac0082_g4_perf_r4_t1.log` 2026-08-24); **r50 ≈850 s total_ms (from 2026-08-24 03:25 log `ac0082_g4_perf_r50_t1.log`)** | SLOW at r50 — use 3000 s timeout. **AC-0340: the per-frame collision budget (collide_drain_budget_ms, default 8 ms — the drain_budget_ms model) caps the staged lane; `col_deferred` counts budget-deferred (re-queued) columns, `col_deferred_in_footprint` the FENCE tripwire (must be 0), and `footprint` is the arm-side scan of the immediate footprint (Chebyshev ≤ 1 of the anchor + (0,0)) for meshed slabs missing a body (must be 0 — the "player falls through" class). `collision_n`/`collision_max_ms` now count PARTIAL batches (a column split across frames is 2+ batches, each ≤ budget); `collision_ms_total` and the per-slab census are invariant** |
 | `boundary` | `_boundary_test` (via `_await_boundary_core`) | chunk streaming: walk r chunks, crossings, bursts, forward/trailing wall, mem, marker round-trip | `ok`, `radius`, `walk_chunks`, `walk_speed`, `walk_s`, `crossings`, `p50_ms`, `p95_ms`, `max_ms`, `loads`, `unloads`, `flap`, `burst_ms_per_crossing`, `burst_p50_ms`, `burst_p95_ms`, `burst_max_ms`, `forward_wall_ms_per_crossing`, `forward_p95_ms`, `forward_max_ms`, `trailing_*`, `fluid_tick_ms_p95`, `mem_delta_mb`, `marker`, `marker_ok`, `remesh_ok`, `resident_final`, `built_final`, `in_radius_built_final`/`_max`/`_min`, `in_radius_present_final`, `target_in_radius`, `collision_ms_total`, `collision_n`, `collision_max_ms`, `collision_slabs`, `collision_slab_ms`, `collision_slab_max_ms`, `collision_slab_hist` (ms bins lt1/1_2/2_5/5_10/10_25/gte25), `reband_exit`, `reband_entry`, `reband_rearm_slabs`, `staged_drained`, `staged_dropped`, `col_deferred` (AC-0340 debt census), `col_deferred_in_footprint` (AC-0340 fence tripwire — 0), `footprint` {`cols`, `missing`} (AC-0340 arm-side fence scan — 0), `unbodied_built_final`, **AC-0348 crossing attribution (FRAME-LATENCY fields — never gate frame smoothness on the `burst_*` throughput fields above)**: `crossing_n` (the cross>0 ring entries over the walk), `crossing_other_n` (the cross==0 entries — snap-backs/Y recenters), `crossing_burst_ms` (list) + `crossing_burst_p50_ms`/`crossing_burst_p95_ms`/`crossing_burst_max_ms` (the SYNCHRONOUS recenter() sweep wall, from the world crossing ring `world.crossing_ring`), `crossing_frame_ms` (list) + `crossing_frame_p50_ms`/`crossing_frame_p95_ms`/`crossing_frame_max_ms` (the frame time OF the frame each crossing ran on — the GATE fields), `crossing_census` {`demoted`, `gen_far`, `gen_far_reuse` (AC-0387b — resident-payload reuses in _demote_to_far; the reuse path's proof of life), `promoted`, `halo_evicts`, `reentry_flips`, `scanned`} (per-crossing cause totals), `crossing_worst` {`seq`, `us_ms`, `scan_ms`, `frame_ms`, `cross`, `ahead`, `scanned`, `demoted`, `gen_far`, `gen_far_reuse`, `promoted`, `halo_evicts`, `reentry_flips`} (the max-sweep entry — the tail's named owner), **AC-0352 storm-tail attribution (the worst-frame class — the fields the standing R24 row gates on)**: `storm_walk_n` (walk frames over the 30 ms capture threshold), `storm_walk_p99_ms` (the p99 of the WALK frame list — the GATED worst-frame field; the percentile, stable across runs), `storm_walk_max_ms` (single-sample by nature — documented, NOT the gate), `storm_threshold_ms` (30 — the capture threshold), `wfc_total_n` (all over-threshold frames since boot — the load storm included), `wfc_boot_n` (the pre-walk share of that), `worst_frames` (list, worst 20 captured entries inside the walk window, each {`t_ms`, `ms`, `split` (13-slot stage split in ms: drain/low/handoff/io/recenter/misc + facelight/rescore/meshattach/low_poll/star/collide), `state` (queue/tm/tg/low/star/resident/inr_present/inr_built), `edit` (dispatches/defers/syncs cumulative + dirty_depth + remesh_depth + act_window/dirty_max_window/remesh_max_window — the re-mesh correlation lead)}), `census_walk_start`/`census_walk_end` {`tree_nodes`, `tree_mi`, `collision_bodies`, `resident`} (the blind-spot census — the instance-level ground for the costs outside `World._process`; headless has no rasterizer so draw-call counters are meaningless there) | `AWECRAFT_RADIUS` (r), `AWECRAFT_WALK`, `AWECRAFT_WALK_SPEED`, `AWECRAFT_TICKTIME`, `AWECRAFT_THREADGEN_N`/`TGDEBUG`, `AWECRAFT_RECPROBE` | r3 45 s, r4 46 s (measured 2026-08-24); r50 ≈1400 s wall (from 2026-08-24 10:34 log `.scratch/ac0079r3_battery/b_r50.log`); r24 ≈20 min wall (AC-0348, WALK=10 — the initial streaming storm dominates, the walk itself is ~10 s) — **AC-0352 (2026-09-23, post-AC-0356 tree): the stale 20-min estimate does not hold uniformly — AC-0356's post-fix run read ~130 s, this ticket's two WALK=10 runs read ~850 s on the dsh-web cgroup box; the wall is the frame-based settle/retreat loops scaled by the storm's slow frames (timeout 2400 s covers all readings; RSS-sample the run — the storm is flat at ~1.0–1.3 GB)** | **AC-0348: the `burst_*`/`forward_*`/`trailing_*` fields are wall-clock THROUGHPUT (resolved only when the whole forward wall is `mesh_built` — unresolvable at R24, so they read -1/0 there) and must NEVER be gated as frame latency; the AC-0348 `crossing_*` fields are the frame/sweep LATENCY (the synchronous recenter() sweep runs from the physics frame, outside the wprof partition — the world crossing ring is its home).** SLOW at r≥8 — 3000 s timeout; fluid sim enabled. **Off-default walk speeds read RED for a budget reason, not a world bug** — `ok = crossings == walk_lines and marker_ok` and the walk line is a fixed length, so at `AWECRAFT_WALK_SPEED=8` the arm needs ~2× the wall and finishes fewer crossings than `walk_lines` (measured 2026-09-17 at AC-0313: 7 crossings, `ok:false`, while the same run's world values were clean — p50 14, p95 21, `marker_ok`/`remesh_ok` true). Judge off-default runs on the p50/p95/`*_final` fields, not on `ok`. **AC-0340: the walk moves the immediate footprint continuously (and crosses the band edge on every crossing), so the `col_deferred_in_footprint` / `footprint` fence fields are the MOVING-footprint proof — both must read 0; the per-frame staged collision cap must not move walk p50/p95 (standing band 39–42)** AC-0311 PIECE 3 (band removal): RE-VERIFIED UNCHANGED — the C1 blend band removal (and the world.gd evict-margin re-base that dropped the 196 m band term, win+196.3+64 -> win+64 at R=4000) does not move the r4 boundary crossing latency; re-measured band-free at AC-0311 p3: built_final 57 (standing 56-59), crossing_frame p50 27 / p95 38 (drift band 35-55), footprint missing 0, col_deferred_in_footprint 0 — still discriminates (ok = crossings == walk_lines + marker_ok + the fence fields). |
@@ -221,7 +261,7 @@ suspiciously small PNG is a black frame.
 |---|---|---|
 | `AWECRAFT_SNAPSHOT=path.png` | boot world (menu-first unless `AWECRAFT_MENU_BOOT=1`), wait for build, snap viewport PNG | **path must be ABSOLUTE** (a relative path fails to save); the Forward+ recipe (`xvfb-run -a` + `VK_ICD_FILENAMES=…/lvp_icd.json` + `--rendering-driver vulkan`, AC-0391) — the boot line must assert `- Forward+ -` (§2); sets `RESULT {"m4":"ok",w,h,cam}`; `AWECRAFT_SNAP_DRAIN=frames` stretches the build wait (3000 default; a `SNAPDRAIN not fully drained after N frames` line = the budget ran out, the shot still happens) |
 | `AWECRAFT_SNAPSHOT2=path.png` | second snap in `AWECRAFT_CAM=shaft` (after fluid settle) | only with cam=shaft |
-| `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft\|cave` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; `cave` teleports into the first enclosed cave pocket + 3D torch array + 300-frame settle (AC-0110); default (empty) = first-person player spawn. **AC-0152/0160 finding:** the on-demand player spawn (main.gd:1310, `snapshot_path != "" and player == null`) makes the player camera current AFTER the named-camera block — `cam=top` snapshots silently come out first-person. For a true top-down band/LOD shot use `AWECRAFT_AIM="x,y,z,yaw,pitch"` (e.g. `8,240,8,0,-1.57` = 100 m above spawn, straight down) with the default cam |
+| `AWECRAFT_CAM=top\|iso\|iso2\|sky\|eyeup\|sandpad\|shaft\|planet\|cave` | camera preset for snapshot runs (main.gd:1003–1083) | `sky`/`eyeup` look at sun; `shaft` drops a water column + double-snap; `planet` (AC-0396) is the **planet limb shot** — SELF-CONTAINED like `shaft` (it flies a frozen player to the camera position — the body's visibility/uniforms ride the player's altitude — waits the body LOADED + `AWECRAFT_SNAP_DRAIN` frames, snapshots and quits): the camera sits at `AWECRAFT_SAT_ALT` m (default 2000, above the body's full-establishment height; 668/3000 reproduce AC-0391's two shots) above the surface on the local radial `(spawn − (0,−R,0)).normalized()` (R from `Game.planet_R`, the satellite body's own source) looking at the tangent limb; its far plane uses the body's own formula; recipe = the fwdshot shell recipe + `AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_SNAP_DRAIN=600 AWECRAFT_NO_FOG=1 AWECRAFT_CLOUDS=0` (NO_FOG: the engine's env fog would repaint the 2-km-out body in the fog colour — the body's own dissolve model is camera-distance driven and stays correct; CLOUDS=0 keeps the disc clear of the 275–400 m cloud shell), NO `AWECRAFT_LOGIC`, NO `AWECRAFT_MENU_BOOT` (with any arm set the arm owns the shot; with MENU_BOOT the menu path's player camera owns it); `cave` teleports into the first enclosed cave pocket + 3D torch array + 300-frame settle (AC-0110); default (empty) = first-person player spawn. **AC-0152/0160 finding:** the on-demand player spawn (main.gd:1310, `snapshot_path != "" and player == null`) makes the player camera current AFTER the named-camera block — `cam=top` snapshots silently come out first-person (which is why `planet` is self-contained rather than a bare 4-step branch). For a true top-down band/LOD shot use `AWECRAFT_AIM="x,y,z,yaw,pitch"` (e.g. `8,240,8,0,-1.57` = 100 m above spawn, straight down) with the default cam |
 | `AWECRAFT_SIZE=W,H` | force window size (e.g. `1280,720`) before boot | no-size → `Settings.apply_window` |
 | `AWECRAFT_MENU_SHOT=path.png` | snap the main menu (skips world boot); `AWECRAFT_MENU_VIEW=options` opens options panel | `RESULT {"menu":true,"mode",…,"build","values"}` |
 | `AWECRAFT_FLUID_SHOT=1` | with snapshot: teleport player to shore aim, place water bucket, snap before+after | needs player spawn (default cam) |
@@ -334,8 +374,20 @@ export HOME=/tmp/dsh_home; mkdir -p $HOME
 cd /home/angrygiant/github_projects/AweCraft   # engine: ~/tools/godot/godot, always --path godot
 S=/home/angrygiant/tools/godot/godot
 
-# G0 — headless load, zero script errors (~5 s, timeout 300 s):
-timeout 300 $S --headless --path godot --quit
+# G0 — headless load, ZERO SCRIPT ERROR AND ZERO SHADER ERROR lines
+# (AC-0396: the twin rule — the engine exits 0 on a broken shader too;
+# the census counts both and names each shader error), ~5 s:
+timeout 300 $S --headless --path godot --quit > .scratch/<ticket>-g0.log 2>&1
+python3 tasks/scripts/gate_census.py .scratch/<ticket>-g0.log
+
+# shader census on ANY run log (the standing state of every arm):
+python3 tasks/scripts/gate_census.py <run log>
+
+# forced-compile check (AC-0396, the `shaderforce` arm — every shipped
+# .gdshader forced through the live renderer; FORWARD+ ONLY, see §2):
+xvfb-run -a env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_LOGIC=shaderforce AWECRAFT_SIZE=1280,720 \
+  $S --path godot --rendering-driver vulkan
 
 # single logic mode (fast class, timeout 240 s):
 timeout 240 env AWECRAFT_LOGIC=fluids $S --headless --path godot
@@ -399,7 +451,11 @@ xvfb-run -a env AWECRAFT_SNAPSHOT=/abs/path/shot.png AWECRAFT_RADIUS=2 $S --path
 
 ## 5. Verification gates (per task)
 
-- **G0**: `--headless --path godot --quit` exits 0 with zero `SCRIPT ERROR` lines;
+- **G0**: `--headless --path godot --quit` exits 0 with zero `SCRIPT ERROR` lines AND
+  zero `SHADER ERROR` lines (AC-0396 — a shader that fails to compile is drawn with the
+  engine's fallback material and the process still exits 0; both counts via
+  `python3 tasks/scripts/gate_census.py <log>`); the standing `shaderforce` arm
+  (§1) additionally forces every shipped shader to compile on the Forward+ path;
   `git status --short` shows only the task's own new files.
 - **G1**: dependency-mapped mode(s) green (each `RESULT` ok / expected values).
 - **G2**: genhash 25/25 byte-identical to the last verified run **only if** `world/*`

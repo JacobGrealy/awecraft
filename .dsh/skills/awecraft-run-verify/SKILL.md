@@ -18,7 +18,7 @@ a parallel agent or a coordinator gate job may hold the slot.
 
 | Tier | What it is | When |
 |---|---|---|
-| **G0** | one headless load: **zero `SCRIPT ERROR` lines** | always, every task, hard |
+| **G0** | one headless load: **zero `SCRIPT ERROR` AND zero `SHADER ERROR` lines** (AC-0396) | always, every task, hard |
 | **SMOKE** | 2–4 dependency-mapped modes (+ `genhash` when `world/*` or `autoload/data.gd` changed) | every code task |
 | **PROBE** | the task's own arm, when the spec defines one | when the spec defines one |
 | **RENDER** | at most **one** shot, `AWECRAFT_RADIUS=1–2`, ~300 s budget, under `xvfb-run -a` | only when the change is visual |
@@ -26,6 +26,13 @@ a parallel agent or a coordinator gate job may hold the slot.
 
 **G0 is not `rc=0`.** The engine exits 0 even when scripts fail to compile (verified 2026-09-16: a
 broken `godot/scenes/harness.gd` parse printed 5 SCRIPT ERROR lines and exited 0). Count the errors.
+**The same is true of shaders** (AC-0396): a shader that fails to compile is drawn with the engine's
+fallback material (the white planet) and the process still exits 0 — the only trace is the
+`SHADER ERROR` line, so G0 is zero `SCRIPT ERROR` **and** zero `SHADER ERROR` lines, counted by
+`python3 tasks/scripts/gate_census.py <log>` (names each shader error). The lazy-compile trap: a run
+that never builds a material reports zero shader errors while the shader is broken, so the standing
+`shaderforce` arm (FORCES every shipped shader to compile, Forward+ only) is the check that keeps a
+clean-looking run honest — run it (and census its log) in the heavy stage, not just G0.
 
 ## Picking the modes
 

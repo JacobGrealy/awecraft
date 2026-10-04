@@ -328,8 +328,58 @@ modes:
       invalid in this engine (loud SHADER ERROR — `core/cloud_layer.gdshader`)
       and a .gdshader whose FIRST LINE is a `#` line is SILENTLY DROPPED with
       no error (the only shipped case: `core/satellite_body.gdshader` — it
-      draws its default material). Until those are fixed, every Forward+ run
-      logs the cloud SHADER ERROR (report it, don't chase it).
+      draws its default material). Those are fixed (AC-0392/0393); AC-0396
+      makes the state checkable: the standing state of EVERY run is zero
+      `SHADER ERROR` lines — counted per log by `python3 tasks/scripts/
+      gate_census.py` (the twin of G0's zero-SCRIPT-ERROR rule; a heavy-
+      gate job fails on it the way it fails on script errors) and forced
+      to be honest by the `shaderforce` arm (lazy compilation made an
+      earlier clean-looking Forward+ check a false pass).
+  shaderforce:
+    entry: '`_shaderforce_test` (AC-0396)'
+    tests: |-
+      AC-0396 forced-compile check: every shipped .gdshader (all twelve,
+      globbed from res://core + res://world, so a new shader lands here for
+      free) is FORCED through the live renderer — a material on a probe
+      mesh in the main viewport (the one sky shader rides the scene sky) —
+      and each is judged in-engine: (a) PARSE state — the rendered
+      parameter list vs the uniforms the source text declares (a silently
+      dropped file, a first-line `#` that swallows the shader, parses to
+      ZERO parameters while its text declares some — the only failure
+      class with NO log line, which this arm alone detects); (b) DRAW
+      state — a 5-sample pixel readback of the probe (the engine's
+      fallback material is a flat 0.2078 grey under Forward+ lavapipe,
+      measured 2026-10-04; flat-across-samples AND on the grey =
+      fallback). LOUD failures (invalid render_mode, unknown identifier, a
+      backend compile failure) additionally print SHADER ERROR lines to the
+      run log with the shader's res:// path + GDScript call site — the
+      gate-side census counts those. Zero SHADER ERROR + ok true is the
+      standing state. The probe runs with DEFAULT uniforms — the compile
+      state is the subject; semantic correctness is the satellite arm's
+      numeric-twin job
+    result_fields: |-
+      `ok`, `count` (12), `failed` ([] when ok), `shaders` (per shader: `path`, `sky`, `declared`, `params`, `px` (5 centre-region samples), `verdict` ok|params_mismatch|fallback_material), `wall_ms`, `note`; plus one greppable `SHADERFORCE <path> declared= params= sky= verdict=` line per shader
+    envs: |-
+      `AWECRAFT_LOGIC=shaderforce` under the fwdshot shell recipe (xvfb +
+      lavapipe + `--rendering-driver vulkan`, `AWECRAFT_SIZE=1280,720`) —
+      the SHIPPED FORWARD+ PATH ONLY (the headless dummy renderer never
+      compiles the backend stage)
+    wall: ~3–5 min Forward+ (12 shaders × 12 frames + boot, ~5 FPS)
+    notes: |-
+      AC-0396 (2026-10-04): BATTSKIP probe (a Forward+ run per gate — out
+      of battery scope); the heavy-gate job carries it and runs
+      `python3 tasks/scripts/gate_census.py <this log>` on it (zero
+      SHADER ERROR required, the twin of G0's zero SCRIPT ERROR). WHY THE
+      FORCE: shaders compile LAZILY when a material is first built — a run
+      that never reaches the material reports zero shader errors while the
+      shader is broken (the coordinator's Forward+ check was a false pass
+      on exactly that; meshprobe caught all four satellite defects only
+      because ITS log carried the SHADER ERROR lines nobody read).
+      Negative-tested both classes 2026-10-04 (tasks/AC-0396/): a broken
+      render_mode keyword → loud SHADER ERROR in the log +
+      `params_mismatch` in the RESULT + census FAIL; a first-line `#` →
+      ZERO log lines but `params_mismatch` in the RESULT (the silent class
+      the census cannot see — the arm is its only detector).
   editperf:
     entry: '`_editperf_test`'
     tests: |-
