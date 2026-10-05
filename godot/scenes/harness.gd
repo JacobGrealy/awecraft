@@ -13413,6 +13413,15 @@ func _satellite_test(spawn: Vector3) -> void:
 			continue
 		hd_faces_n += 1
 		var dL: PackedByteArray = img_loaded.get_data()
+		# AC-0384 r5: the satellite texture contract now ships a FULL MIP
+		# CHAIN (ARCHITECTURE.md texturas bullet), and 4.7.1's
+		# get_image() returns it - so get_data() yields level 0 first and
+		# every mip level after (5,592,404 bytes for a 1024^2 RGBA8 face,
+		# not 4,194,304). This check is BASE-LEVEL semantics (the loaded
+		# face must equal the encode output byte-for-byte), so compare
+		# only level 0.
+		if dL.size() > NPIX_SAT * NPIX_SAT * 4:
+			dL = dL.slice(0, NPIX_SAT * NPIX_SAT * 4)
 		# per-face localisation (AC-0384 r3: the bake run's 124 m max had to
 		# be pinned to a face/channel, not chased blind on a 13 min bake):
 		var f_diff_px := 0

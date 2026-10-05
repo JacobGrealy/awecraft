@@ -75,7 +75,19 @@ shader_type spatial;
 // fragments are discarded by `op` anyway, so no double-fog is possible.
 render_mode cull_back, depth_draw_always, fog_disabled;
 
-uniform sampler2D tex : filter_linear;
+// AC-0384 r5: the sampler must ask for mipmaps + anisotropy. The round-4
+// ladder measured the near disc 4x grainier than its own source texture
+// (grain 53.2 rendered vs 12.7 source on the archived crops) - a 1024^2
+// texture point/bilinear-sampled at sub-texel pitch across the curved
+// surface aliases into the stipple the frames showed. `filter_linear`
+// filters ONE level: no chain, no anisotropy. This hint (the 4.7.1 name -
+// `filter_anisotropy` alone does not exist in this engine) pairs the
+// linear mipmap filter with the renderer's max anisotropy. NOTE THE PAIR:
+// a mipmap-filtering sampler over a texture WITHOUT a chain is a no-op -
+// the texture side is fixed in the same task (satellite_body.gd generates
+// the chain on every load path, the 12 face imports carry
+// mipmaps/generate=true), or this line would re-ship the same static.
+uniform sampler2D tex : filter_linear_mipmap_anisotropic;
 uniform float u_fog_far : hint_range(0.0, 20000.0);
 uniform float u_render_edge : hint_range(0.0, 20000.0);
 uniform vec4 u_air : source_color;

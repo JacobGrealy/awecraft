@@ -111,6 +111,20 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         never player distance — so it cannot pop at the
 │                         satellite body's emergence. (Was: three flat
 │                         player-following QuadMeshes, AC-0235.)
+│                         AC-0384 r5: DISTANCE LOD on the noise field — each
+│                         fbm band's scale is clamped per fragment so its
+│                         FINEST octave (×2.03⁴) stays ≥ 2.5 px on screen
+│                         (u_cpxrad = px per radian, pushed per frame by
+│                         main.gd from window height + camera fov; the
+│                         per-fragment camera distance is the driver). A
+│                         per-fragment procedural field has no mip chain, so
+│                         its sub-2.5-px octaves alias into the salt-and-
+│                         pepper "near-disc static" (measured: 2600 m disc
+│                         grain 23.2 clouds-ON vs 0.81 clouds-OFF). The
+│                         no-pop argument survives: at or below the fog wall
+│                         (the body's emergence) every factor is 1.0, and the
+│                         clamp is a continuous function of camera position,
+│                         so the pattern stretches, never pops.
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -300,6 +314,14 @@ Build and loading:
    runtime to
   `user://satellite/p{planet}_r{R}_s{seed}_h/` (the _h token = the height-channel era; a
   pre-r2 RGB cache is a different format, so it triggers a one-time re-bake, loud)
+  **AC-0384 r5: the 12 face imports carry `mipmaps/generate=true`, and
+  `satellite_body.gd` guarantees a FULL MIP CHAIN on every texture-producing
+  path (res / cache / bake — `Image.generate_mipmaps()` before the
+  `ImageTexture` wrap; the bake path goes through no import at all, so the
+  code is the only place a chain can come from there). The body sampler is
+  `filter_linear_mipmap_anisotropic` (the 4.7.1 combined hint) — a
+  mipmap-filtering sampler over a chainless texture is a no-op, so the
+  sampler and the chain ship together.**
   (off-thread on one WorkerThreadPool slot —
   generate_far × 196,196 + colour + PNG + read-back + guard + geometry — keyed by
   (planet_id, R, seed); the main thread polls and consumes one face per frame, AC-0382).

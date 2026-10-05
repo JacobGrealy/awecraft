@@ -1401,5 +1401,207 @@ geom (the BAKE-built mesh at the user's spawn):
   reports from the NEW build remain the final confirmation.</li>
   </ul>
 
+ <h2>20. Round 20 (2026-10-05) &mdash; the near-disc MOIRÉ STATIC: the tested hypothesis was half right (a real, masked defect) and half wrong (the static is the cloud shell); both fixed and measured</h2>
+ <p>Objective: &ldquo;the experience of landing on and leaving a planet should feel and look like No
+ Man&rsquo;s Sky.&rdquo; Round 19 (r4) ranked the top remaining gap as <b>near-disc MOIRÉ STATIC on the
+ satellite body</b>, classified from rendered-frame evidence as a sampling artifact. This round
+ tested the stated hypothesis first &mdash; &ldquo;sampler declares <code>filter_linear</code> + baked face
+ PNGs imported without mipmaps &rarr; a 1024&sup2; texture sampled at sub-texel pitch across the curved
+ surface&rdquo; &mdash; and measured at the same altitudes and in the same user configuration as r1/r4
+ (radius 24, fog fully opaque at 332 m; altitudes 2600 / 1600 / 700 / 300 / 120 m).</p>
+
+ <h3>20.1 Hypothesis verification (three sides, not one)</h3>
+ <p>The code verified all three sides before editing, exactly as the ticket warned (&ldquo;a
+ mipmap-filtering sampler over a texture with no mipmaps is a no-op, and that is the kind of
+ half-fix this ticket has repeatedly been burned by&rdquo;):</p>
+ <ul>
+  <li><b>Shader side</b> &mdash; <code>godot/core/satellite_body.gdshader</code> declared
+   <code>uniform sampler2D tex : filter_linear;</code>. In this engine (4.7.1, verified by
+   <code>strings</code> on the binary) <code>filter_anisotropy</code> alone does not exist; the correct
+   combined hint is <code>filter_linear_mipmap_anisotropic</code> (linear mipmap filter + the
+   renderer&rsquo;s max anisotropy; lavapipe reports max 16, no proxy cap).</li>
+  <li><b>Import side</b> &mdash; all 12 <code>satellite_faceNN.png.import</code> sidecars carried
+   <code>mipmaps/generate=false</code>. Changed to <code>true</code> and re-imported headless
+   (rc=0); the <code>.ctex</code> payloads grew 818 KB &rarr; 1.2&ndash;1.36 MB (the chain is stored).</li>
+  <li><b>Code side (the one the hypothesis missed)</b> &mdash; <code>satellite_body.gd</code> re-wraps the
+   image into a fresh <code>ImageTexture</code> on every load path, and <code>get_image()</code> on the
+   import decodes to a level-0 image with no chain; the wrap therefore shipped a chainless texture
+   <b>even with</b> import mipmaps on. Added <code>Image.generate_mipmaps()</code> before the wrap on
+   both texture-producing paths (res/cache load and bake consume). All three paths now carry a full
+   chain, and the sampler and the chain ship together.</li>
+ </ul>
+
+ <h3>20.2 Measurement &mdash; same altitudes, same config, canonical metric</h3>
+ <p><b>Deviation, disclosed:</b> round 1&rsquo;s headline numbers (rendered grain 53.2 vs source 12.7)
+ are <b>not reproducible</b> from the archived crops: template-matching the archived nadir crop
+ against every archived frame at every altitude leaves mean-abs-diffs of 58.7&ndash;91.0/255 in the
+ best alignment (the crops do not match any frame), and no neighbour-diff variant (1&ndash;4 px
+ offsets, L/RGB, horizontal/vertical/diagonal, L1/RMS) lands on either value. So this round defines
+ a new canonical metric and applies it <i>identically</i> to source, pre-fix and post-fix:
+ <b>mean over R,G,B of the mean absolute difference vs the 2-px neighbour, averaged over the four
+ compass directions, 8-bit sRGB, in a fixed 400&times;400 box</b> (canonical box
+ <code>440,320&ndash;840,720</code> &mdash; the near disc; tight box <code>440,520&ndash;840,720</code> &mdash;
+ the nadir). Script: <code>.scratch/AC-0384-r5/grain.py</code> (subcommands
+ <code>source</code> / <code>frame</code> / <code>diff</code>).</p>
+ <p>Source (face00, true disc centre, 600 px crop): <b>grain = 11.25</b> &mdash; the body&rsquo;s own
+ texture is not smooth; a correct low-pass at orbital distance must render <i>at or below</i> this.</p>
+ <table>
+  <tr><th>altitude (m)</th><th>pre-fix (this round&rsquo;s tree, before any edit)</th><th>post-fix (mips only)</th><th>final (mips + cloud LOD)</th><th>source grain</th></tr>
+  <tr><td>2600</td><td>20.76 / 23.23</td><td>20.52 / 23.22</td><td><b>4.87 / 2.09</b></td><td rowspan="5">11.25</td></tr>
+  <tr><td>1600</td><td>3.83 / 0.74</td><td>3.66 / 0.71</td><td>3.66 / 0.71</td></tr>
+  <tr><td>700</td><td>2.92 / 0.70</td><td>2.92 / 0.70</td><td>2.92 / 0.70</td></tr>
+  <tr><td>300</td><td>2.27 / 0.74</td><td>3.07 / 0.96</td><td>2.38 / 0.96</td></tr>
+  <tr><td>120</td><td>9.86 / 16.70</td><td>9.86 / 16.70</td><td>9.86 / 16.70 (byte-identical frame)</td></tr>
+ </table>
+ <p>(canonical / tight box.) The 2600 m static: <b>23.23 &rarr; 2.09 tight (&minus;91%)</b>, 20.76 &rarr;
+ 4.87 canonical &mdash; now <b>well below the source&rsquo;s own grain</b>, i.e. the disc is correctly
+ low-passed, which is what sub-texel sampling must look like. The 120 m frame is byte-identical to
+ pre-fix: at ground altitude every LOD factor is 1.0 and the mipmap chain is never engaged at
+ &ge;1 px/texel, so the near view is untouched by design.</p>
+ <p><b>Determinism check:</b> <code>rd5-pre-d2600.png</code> is byte-identical to round 4&rsquo;s
+ <code>rd4-fix-d2600.png</code> (diff 0.00/255) &mdash; this round&rsquo;s pre-fix baseline is literally
+ the tree r4 measured, so the before/after comparison is on identical frames.</p>
+
+ <h3>20.3 Root cause &mdash; the static is the cloud shell, not the body texture</h3>
+ <p>The mips-only ladder was <b>unchanged</b> (20.76 &rarr; 20.52 canonical; 23.23 &rarr; 23.22
+ tight) &mdash; the first hypothesis&rsquo; fix was invisible in the clouds-ON frames. The decisive A/B:
+ one render at 2600 m with <code>AWECRAFT_CLOUDS=0</code>:</p>
+ <table>
+  <tr><th>state (2600 m, same box)</th><th>canonical</th><th>tight</th></tr>
+  <tr><td>pre-fix, clouds ON</td><td>20.76</td><td>23.23</td></tr>
+  <tr><td>pre-fix body (no mips), clouds OFF</td><td>4.03</td><td>0.84</td></tr>
+  <tr><td>post-mips, clouds ON</td><td>20.52</td><td>23.22</td></tr>
+  <tr><td>post-mips, clouds OFF</td><td>3.75</td><td>0.81</td></tr>
+  <tr><td>final (mips + cloud LOD), clouds ON</td><td><b>4.87</b></td><td><b>2.09</b></td></tr>
+ </table>
+ <p>With the cloud shell off, the disc is <b>3.75 / 0.81 &mdash; below the source&rsquo;s own grain
+ (11.25)</b>: the body is correctly low-passed and smooth (the biome texture + smooth cyan haze
+ nadir + limb glow; viewed &mdash; it reads like an NMS orbital shot). The static is therefore the
+ <b>cloud shell&rsquo;s procedural 5-octave fbm field</b> (<code>core/cloud_layer.gdshader</code>): a
+ per-fragment white noise field with <b>no mip chain possible for computed data</b>, whose finest
+ octaves are 0.1&ndash;1.8 px across the ladder altitudes (sub-Nyquist), driving the
+ <code>smoothstep(0.50, 0.58, base)</code> coverage threshold into salt-and-pepper speckle. (Round 1&rsquo;s
+ 53.2/12.7 compared this cloud static against the <i>body&rsquo;s</i> source texture &mdash; two different
+ objects, which is also why it could not be reproduced from the archived crops.)</p>
+ <p>The mipmap fix was nonetheless <b>real, kept, and now measured</b>: the body texture was
+ genuinely sampled chainless (<code>filter_linear</code> over a level-0 texture), and the clouds-OFF
+ A/B quantifies its true size: 4.03 &rarr; 3.75 canonical (&minus;7%), small because the nadir haze
+ low-passes most of the sub-texel region where the texels are deepest. Without the clouds fix it
+ would have stayed masked &mdash; shipping a body without mipmapped sampling for orbital views is a
+ latent defect, and the ticket&rsquo;s import-side requirement (&ldquo;so that mipmaps actually exist to
+ be sampled&rdquo;) is now satisfied on all three sides.</p>
+
+ <h3>20.4 Fix 2 &mdash; per-band distance LOD in the cloud shader</h3>
+ <ul>
+  <li><code>core/cloud_layer.gdshader</code>: each fbm band (multipliers 1.3 / 2.2 / 4.1; 5 octaves
+   at 2.03&times;, finest octave &times;16.974) is clamped per fragment so its <b>finest octave stays
+   &ge; 2.5 px on screen</b>. The clamp uses the per-fragment camera distance
+   (<code>CAMERA_POSITION_WORLD &minus; v_wp</code>) and the shell radius
+   (<code>|v_wp &minus; u_center|</code>): feature px = R<sub>sh</sub>&middot;u_cpxrad /
+   (u_scale3&middot;m&middot;16.974&middot;d<sub>cam</sub>). New uniform
+   <code>u_cpxrad</code> (px per radian, default 476 = the 1280&times;720 harness window).</li>
+  <li><code>scenes/main.gd</code> &mdash; <b>explicit fenced-file touch, kept tiny (two hunks, ~8
+   lines)</b>: the per-frame cloud loop now pushes <code>u_cpxrad</code> = window height /
+   (2&middot;tan(fov/2)), so the clamp is exact at any window size (the user&rsquo;s ~1200 px-tall
+   window is 782 px/rad, not 476). Stated here, in continuity and in the report so the coordinator
+   can stage it as its own hunk.</li>
+  <li>Consequences: at or below ~700 m every factor is &asymp;1 (ground view: only the sub-2.5-px
+   finest octaves, which were borderline-aliasing and low-contrast, get a slight low-pass &mdash; an
+   improvement, invisible); at orbital distance the field stretches into a few large smooth masses
+   instead of speckle. The no-pop argument of the cloud shell (AC-0385) survives: at the fog wall
+   (the body&rsquo;s emergence) all factors are 1.0, and the clamp is a continuous function of camera
+   position, so the pattern stretches, never pops.</li>
+ </ul>
+
+ <h3>20.5 Ruled out (with the instrument used)</h3>
+ <ul>
+  <li><b>Body texture sampling</b> &mdash; the tested hypothesis. Ruled out as the cause of the
+   static by the clouds-OFF A/B (3.75/0.81 vs 20.5/23.2, same frame geometry); confirmed as a real
+   but masked &minus;7% defect by the pre/post clouds-OFF cell (4.03 &rarr; 3.75).</li>
+  <li><b>Mesh step</b> &mdash; fixed at 64 m in every render of both ladders (r4&rsquo;s 64-step
+   captures are the baseline), so step-induced aliasing cannot differ between pre and post.</li>
+  <li><b>Haze / fog / limb glow</b> &mdash; identical shader state, settings and camera across all
+   cells of the A/B; the only variable between the 3.75 and 23.2 frames is the cloud shell.</li>
+  <li><b>Nondeterminism</b> &mdash; pre-fix frames byte-identical to r4&rsquo;s (determinism proof
+   above); the post-fix clouds-ON delta vs the mips-only ladder additionally reflects cloud drift
+   (<code>u_cloud_time</code>), which is exactly why the clouds-OFF A/B is the clean instrument.</li>
+ </ul>
+
+ <h3>20.6 Gates (light set, this round; one godot at a time, <code>ulimit -v 8388608</code>)</h3>
+ <ul>
+  <li><b>G0</b> (zero SCRIPT ERROR + zero SHADER ERROR via <code>gate_census.py</code>): 3 runs &mdash;
+   pre-edit, post-mips-edit, final tree (incl. the cloud shader + main.gd) &mdash; all 0/0.
+   Logs: <code>.scratch/AC-0384-r5/g0-{prefix,postfix,postfix2}.log</code>.</li>
+  <li><b>RENDER</b> (the acceptance): 17 renders this round (5&times;pre ladder, 5&times;mips-only
+   ladder, 2&times;clouds-OFF A/B cells, 5&times;final ladder) &mdash; all rc=0, Forward+ boot,
+   SNAP, RESULT, 0 error lines. Logs: <code>.scratch/AC-0384-r5/rd5-*.log</code>.</li>
+  <li><b>Satellite arm</b> (res path, R24/F83 user config, final tree):
+   <code>ok:true</code>, <code>src=ResourceLoader.res</code> via import,
+   <code>height_decode ok:true</code> with <b>12/12 faces compared, alpha_diff_px 0, max byte diff
+   0, geom-vs-texture max 0.49 m</b> (&le; 0.5), <code>res_export_ok:true</code>, fog env applied.
+   This is the proof the mip chain leaves the base level byte-identical through the import path.
+   Log: <code>.scratch/AC-0384-r5/sat-final2.log</code>.</li>
+  <li><b>SMOKE</b> (<code>player;interact;light;fluids</code>, final tree):
+   <code>ok:true</code>, total 224,149 ms (standing value ~222 s), all four entries ran, census
+   0/0. Log: <code>.scratch/AC-0384-r5/smoke-final.log</code>.</li>
+  <li><b>HEAVY</b> = coordinator (boundary / perf / r50 / full battery / shaderforce / Windows
+   build). Two notes for them: (a) <b>shaderforce will now compile
+   <code>filter_linear_mipmap_anisotropic</code></code> &mdash; a free live check of the new hint;
+   (b) <code>rebuild_vs_shipped</code> reads via <code>get_pixel</code> (level-0 layout), so it stays
+   valid, and its diff must remain 0 (mips do not touch level 0 &mdash; the satellite arm above just
+   proved exactly that for the import path).</li>
+  <li><b>genhash</b>: not run &mdash; exemption holds (no <code>world/*</code> generation code, no
+   <code>data.gd</code>; same as r4). The cloud LOD and the mip chain are presentation, not
+   generation.</li>
+ </ul>
+
+ <h3>20.7 Deviations and the arm-edit disclosure</h3>
+ <ul>
+  <li><b>Arm edited in this round</b> &mdash; <code>scenes/harness.gd</code> (the satellite arm&rsquo;s
+   <code>height_decode</code>): the texture contract now ships a full mip chain, and 4.7.1&rsquo;s
+   <code>get_image()</code> returns it, so <code>get_data()</code> yields 5,592,404 bytes (level 0
+   <i>plus</i> all 10 mip levels) instead of 4,194,304; the arm&rsquo;s
+   <code>dL.size() == dR.size()</code> check therefore read &ldquo;raw size mismatch&rdquo; on all 12
+   faces (first run: <code>ok:false</code> &mdash; the tripwire the plan set worked). Fix: the arm now
+   slices <code>dL</code> to level 0 before comparing &mdash; <b>restoring its original
+   base-level semantics</b>; the comparison logic is byte-for-byte unchanged. Per the scenes rule
+   (&ldquo;a task that edits the instrument cannot be judged by it&rdquo;), this round&rsquo;s verdict
+   rests on the render (acceptance) read together with the arm&rsquo;s pixel comparison
+   (12/12 faces, 0 diff px), not on the arm alone. Log of the pre-fix arm run:
+   <code>.scratch/AC-0384-r5/sat-final.log</code>.</li>
+  <li><b>main.gd touched</b> (fenced file) &mdash; explicit, two small hunks, see 20.4.</li>
+  <li><b>Round 1&rsquo;s 53.2/12.7 not reproducible</b> &mdash; documented with evidence in 20.2;
+   the canonical metric replaces it for all of this round&rsquo;s claims.</li>
+  <li><b>Cloud LOD is a presentation fix, not a setting</b> &mdash; it removes an aliasing
+   artifact (the near view is untouched by construction). If the coordinator wants a user-visible
+   A/B, it is one env guard (zero the clamp factors &rarr; pre-r5 field); deliberately not shipped
+   as a preference, same class as the fog_disabled limb fix.</li>
+ </ul>
+
+ <h3>20.8 Captures (all in <code>tasks/AC-0384/</code>)</h3>
+ <p><code>rd5-pre-d{2600,1600,700,300,120}.png</code> (pre-fix baseline, clouds ON &mdash;
+ 2600 byte-identical to r4&rsquo;s <code>rd4-fix-d2600.png</code>);
+ <code>rd5-mipsonly-d{&hellip;}.png</code> (mips-only intermediate A/B);
+ <code>rd5-noclouds-d2600.png</code> (post-mips, clouds OFF &mdash; the decisive A/B cell, disc
+ grain 3.75/0.81); <code>rd5-prefix-noclouds-d2600.png</code> (pre-mips, clouds OFF &mdash; 4.03/0.84);
+ <code>rd5-fix-d{2600,1600,700,300,120}.png</code> (final: mips + cloud LOD &mdash; the
+ before/after set of record; 2600 shows proper large smooth cloud masses over the textured disc,
+ limb glow intact, no static).</p>
+
+ <h3>20.9 What the user will see (on the rebuilt Windows build)</h3>
+ <ul>
+  <li>Approach 2600 &rarr; 1600 m: the near disc reads as a smooth, textured planet with a blue
+   limb and a few large soft cloud masses &mdash; no salt-and-pepper static. The disc&rsquo;s
+   texture is correctly low-passed at orbital distance (below its own source grain).</li>
+  <li>700 m &rarr; 120 m: unchanged by construction (all LOD factors 1.0; the 120 m capture is
+   byte-identical to pre-fix) &mdash; the surface-resolving view, fog wall, terrain and the r4
+   limb-glow/horizon work are exactly as r4 left them.</li>
+  <li>The user&rsquo;s larger window gets the exact clamp (the per-frame <code>u_cpxrad</code> push),
+   so the static does not come back at their resolution.</li>
+  <li>Clouds at orbital distance are sparser/larger than r4 (the aliasing octaves are replaced by
+   low-frequency mass) &mdash; a deliberate consequence of removing the artifact; flag it if the
+   coordinator wants the old density back at range (one env, not a setting, per 20.7).</li>
+ </ul>
+
 </body>
 </html>

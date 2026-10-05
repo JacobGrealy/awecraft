@@ -1312,6 +1312,14 @@ func _update_sky() -> void:
 			wm.set_shader_parameter("wash_amount", AeroLib.WASH_AMOUNT * (1.0 - space_t))
 	if not cloud_layers.is_empty():
 		var u2 := AeroLib.sky_uniforms(t)
+		# AC-0384 r5 (explicit, tiny main.gd touch): px per radian for the
+		# cloud noise's distance LOD (cloud_layer.gdshader's u_cpxrad).
+		# window height / (2*tan(fov/2)); the shader default covers the
+		# harness window, this makes it exact at any window size.
+		var cpxrad := 476.0
+		var cam3: Camera3D = get_viewport().get_camera_3d()
+		if cam3 != null:
+			cpxrad = float(get_viewport().get_visible_rect().size.y) / maxf(2.0 * tan(cam3.fov * PI / 360.0), 0.01)
 		# AC-0235 retest 2: clouds go dark at night (MC-style).
 		var cday := DayNight.day(t)
 		var ctint := Color8(46, 50, 66).lerp(Color(u2["cloud_color"]), cday)
@@ -1323,6 +1331,7 @@ func _update_sky() -> void:
 		var cloud_day := 0.18 + 0.82 * cday
 		var cloud_day_gain := 0.82 * cday
 		for cl in cloud_layers:
+			cl["mat"].set_shader_parameter("u_cpxrad", cpxrad)  # AC-0384 r5
 			cl["mat"].set_shader_parameter("u_cloud_time", _cloud_time)
 			cl["mat"].set_shader_parameter("u_coverage", float(u2["cloud_amount"]) * float(cl["cov"]))
 			cl["mat"].set_shader_parameter("u_cloud_tint", ctint)

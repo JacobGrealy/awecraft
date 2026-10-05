@@ -47,6 +47,11 @@ uniform float u_day : hint_range(0.0, 2.0) = 1.0;
 uniform float u_day_gain : hint_range(0.0, 2.0) = 0.82;
 // AC-0242: unshaded output needs the compat pre-decode like the chunks.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0384 r5: screen scale for the noise field's distance LOD (px per
+// radian at the current window size and camera fov). main.gd pushes it
+// per frame; the default is the 1280x720 harness window (720 /
+// (2*tan(37.5 deg)) - the 75 deg camera fov).
+uniform float u_cpxrad : hint_range(50.0, 4000.0) = 476.0;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
@@ -105,12 +110,31 @@ void fragment() {
 	float sa = sin(ang);
 	vec3 dr = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z);
 	vec3 q = dr * u_scale3;
+	// AC-0384 r5: distance LOD for the noise field (the round-4 "near-
+	// disc static"). fbm() is 5 octaves (2.03x), so a band with
+	// multiplier m has its finest octave at argument scale u_scale3*m*
+	// 2.03^4; on this shell (radius R_sh) that is a world feature of
+	// R_sh/(u_scale3*m*2.03^4), i.e. that/d_cam * u_cpxrad px on
+	// screen. Below ~2.5 px the per-fragment white noise aliases into
+	// the salt-and-pepper static (measured, 2600 m, same 400x400 box:
+	// grain 23.2 clouds-ON vs 0.81 clouds-OFF - the static is this
+	// field, not the body's texture). Each band is clamped so its
+	// finest octave stays >= 2.5 px; at ground view the factors are
+	// 1.0 (the finest octaves there are >= 1.8 px and low-contrast).
+	float d_cam = max(length(CAMERA_POSITION_WORLD - v_wp), 1.0);
+	float R_sh = length(v_wp - u_center);
+	float px13 = R_sh * u_cpxrad / (u_scale3 * 1.3 * 16.974 * d_cam);
+	float px22 = R_sh * u_cpxrad / (u_scale3 * 2.2 * 16.974 * d_cam);
+	float px41 = R_sh * u_cpxrad / (u_scale3 * 4.1 * 16.974 * d_cam);
+	float l13 = min(px13 / 2.5, 1.0);
+	float l22 = min(px22 / 2.5, 1.0);
+	float l41 = min(px41 / 2.5, 1.0);
 	// Three frequencies, as in AC-0235 retest 5 - now in 3-D so the
 	// pattern is continuous over the whole globe (no UV seam, no flat
 	// projection).
-	float base = fbm(q * 1.3);
-	float mid = fbm(q * 2.2 + vec3(13.7, 7.3, 5.9));
-	float fine = fbm(q * 4.1 + vec3(71.3, 33.9, 21.7));
+	float base = fbm(q * 1.3 * l13);
+	float mid = fbm(q * 2.2 * l22 + vec3(13.7, 7.3, 5.9));
+	float fine = fbm(q * 4.1 * l41 + vec3(71.3, 33.9, 21.7));
 	// AC-0385: coverage window 0.50-0.58 (was 0.62-0.88 - see header).
 	float cl = smoothstep(0.50, 0.58, base);
 	cl = smoothstep(0.0, 0.55, cl) * cl;
