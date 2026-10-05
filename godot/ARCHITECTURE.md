@@ -116,15 +116,19 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):
-│                         the 12-face great-circle chart (sphere_math.gd) at radius R + SEA,
+│                         the 12-face great-circle chart (sphere_math.gd) on the DISPLACED surface
+│                         (AC-0384 r2: each vertex at R + H(u,v), the baked terrain height on
+│                         a per-face 16 m grid — the body IS the terrain's far LOD; the height
+│                         channel travels in the face PNG's alpha),
 │                         unlit by the engine lights (the bake carries the piece-1 fixed-sun
 │                         lambert, re-weighted by the shader to track the world's actual sun —
 │                         the DayNight convention, AC-0382), per-fragment
 │                         dissolve into the drawn disc at the depth-fog wall
 │                         (core/satellite_body.gdshader); runtime bake cache
-│                         user://satellite/p{planet}_r{R}_s{seed}/, seeded from
-│                         godot/assets/satellite/ for the canonical seed 44; the bake pipeline
-│                         runs off-thread (one WorkerThreadPool slot, AC-0382)
+│                         user://satellite/p{planet}_r{R}_s{seed}_h/ (the _h token = the
+│                         height-channel era; pre-r2 RGB caches trigger a one-time re-bake),
+│                         seeded from godot/assets/satellite/ for the canonical seed 44; the
+│                         bake pipeline runs off-thread (one WorkerThreadPool slot, AC-0382)
 │     (scenes/test_range.tscn substitutes for World in the AC-0191 test range)
 ├─ Player                 player/player.tscn  →  player/player.gd
 │                         CharacterBody3D + CollisionShape3D + Camera3D
@@ -257,8 +261,14 @@ Build and loading:
   `AWECRAFT_IMPORT_PACK`). The runtime can also load a user resource pack (`*.zip`/`*.mcpack`)
   from the menu. `godot/assets/satellite/satellite_faceNN.png` (AC-0310 P2) are the 12
   per-face 1024² satellite textures of the canonical seed 44 (the piece-1 bake, 16.0 m²/texel
-  equal-area); any other seed bakes them at runtime to
-  `user://satellite/p{planet}_r{R}_s{seed}/` (off-thread on one WorkerThreadPool slot —
+  equal-area). **AC-0384 r2: they are RGBA8 — the alpha channel carries the terrain height
+   (A = round(H·255/HMAX)), so the cache and res paths rebuild the displaced body mesh (each
+   vertex at R + H on the 16 m grid) without the full payload; a legacy image without the
+   channel falls back to the constant R + SEA sphere, loud.** Any other seed bakes them at
+   runtime to
+  `user://satellite/p{planet}_r{R}_s{seed}_h/` (the _h token = the height-channel era; a
+  pre-r2 RGB cache is a different format, so it triggers a one-time re-bake, loud)
+  (off-thread on one WorkerThreadPool slot —
   generate_far × 196,196 + colour + PNG + read-back + guard + geometry — keyed by
   (planet_id, R, seed); the main thread polls and consumes one face per frame, AC-0382).
   **AC-0311 piece 3**: the in-engine bake's per-face SEED SALT was dropped in
@@ -267,8 +277,11 @@ Build and loading:
   bake must be the SAME field, not a per-face-salted variant). The SHIPPED seed-44 textures are
   re-baked + re-shipped post-port (AC-0311): the in-engine bake is salt-consistent with the
   world, and the satellite arm's rebuild_vs_shipped check (the forced re-bake pixel-compared
-  against the res:// assets) is the standing proof — 0-diff as of AC-0382. The satellite body's camera-far extension (the default
-  4000 m plane clips the body's far limb) is owned by the tier, not the camera.
+  against the res:// assets) is the standing proof — 0-diff as of AC-0382 (re-baselined to the
+   height-channel set in AC-0384 r2, RGB byte-identical). The satellite body's camera-far
+   extension (the default
+  4000 m plane clips the body's far limb) is owned by the tier, not the camera; the far
+   bound uses the displaced surface's max radius R + HMAX (AC-0384 r2).
 - **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
   blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
   `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). v6 = v5

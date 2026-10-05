@@ -707,6 +707,17 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _spherewalk_test()
 			get_tree().quit()
 			return
+		if logic == "rayline":
+			# AC-0394 TEMPORARY probe (in and out within the same task):
+			# back-projects the cyan bands + pale slab from
+			# fwd_ground_first_look.png into world space (same camera pose as
+			# the `sky` preset at the capture's env) and reports the voxel
+			# cells each ray meets.
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			await _rayline_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "lightaudit":
 			await _lightaudit_test(spawn)
 			return
@@ -13074,12 +13085,18 @@ func _satellite_test(spawn: Vector3) -> void:
 	var fog_pct_orig: int = int(Settings.values.get("fog_start_pct", 87))
 	if fog_pct_env != "":
 		Settings.set_value("fog_start_pct", int(fog_pct_env))
-	# (0) wait for the textures (the startup bake may still be slicing)
+	# (0) wait for the textures (the startup bake may still be slicing).
+	# AC-0384 r2: the wait was 30000 frames (~500 s) — too short for the
+	# height-channel bake on this box (~794 s worker wall, measured), so a
+	# non-canonical seed's startup bake timed out the arm MID-BAKE (and the
+	# abandoned worker then raced the shutdown, surfacing a spurious
+	# "Bad address index" / CowData line in the census). 90000 frames
+	# (~1500 s) covers the measured wall with ~90% margin.
 	var t_wait := 0
 	while sb.phase != SatelliteBody.Phase.LOADED and sb.phase != SatelliteBody.Phase.FAILED:
 		await get_tree().physics_frame
 		t_wait += 1
-		if t_wait > 30000:
+		if t_wait > 90000:
 			_sat_restore_fog_pct(fog_pct_env, fog_pct_orig)
 			Debug.result({"ok": false, "why": "texture wait timeout", "phase": sb.phase, "stats": sb.bake_stats})
 			return
@@ -13143,6 +13160,53 @@ func _satellite_test(spawn: Vector3) -> void:
 	# (2) the altitude ladder (vertical scene-space teleports, frozen
 	# player - the player's x,z never move, the disc is unchanged)
 	var p: Node3D = player
+	# (5) AC-0384 round 2 (2026-10-04): measured FIRST, before the ladder's
+	# teleports move the player off the terrain. The section-16 run measured
+	# the body MESH at R + SEA and stopped - it never measured the ACTUAL
+	# world-space radius of the terrain the player stands on (R + H, H the
+	# column top), and never the body node's transform/scale. The user (after
+	# a fresh rebuild): "a much smaller sphere than the high LOD … its
+	# surface is nowhere near the actual play area". Code reading shows both
+	# radii share Game.planet_R and the transform is (0,-R,0)/scale 1 - the
+	# suspect is the HEIGHT source: the body shell sits at the constant SEA
+	# while the terrain sits at the column's H. Measured, not assumed:
+	# nadir_offset = the body surface's world radius (the mesh vertex
+	# nearest the player's radial, read from the actual 12 face meshes)
+	# minus the terrain top's world radius under the player's feet.
+	var Cc: Vector3 = Vector3(0.0, -R, 0.0)
+	var ppos0: Vector3 = p.position  # the spawn pose (feet on the terrain top)
+	var player_radius: float = (ppos0 - Cc).length()
+	var terrain_top_radius: float = player_radius - float(player.EYE)
+	var dirn: Vector3 = (ppos0 - sb.position).normalized()  # body-local == radial (origin at the sphere centre)
+	var best_dot := -2.0
+	var nadir_radius := -1.0
+	var verts_n := 0
+	for mn in sb.face_nodes:
+		var arrs: Array = (mn as MeshInstance3D).mesh.surface_get_arrays(0)
+		var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		for v in vs:
+			verts_n += 1
+			var dn: float = v.normalized().dot(dirn)
+			if dn > best_dot:
+				best_dot = dn
+				nadir_radius = v.length()
+	var sea_r: float = R + float(SEA)
+	var off_m: float = nadir_radius - terrain_top_radius
+	var tr_ok: bool = sb.position.is_equal_approx(Vector3(0.0, -R, 0.0)) \
+			and sb.scale.is_equal_approx(Vector3.ONE)
+	var geom := {
+		"player_radius": _sat_rnd(player_radius, 2),
+		"terrain_top_radius": _sat_rnd(terrain_top_radius, 2),
+		"body_nadir_radius": _sat_rnd(nadir_radius, 2),
+		"sea_level_radius": _sat_rnd(sea_r, 2),
+		"body_node_pos": [sb.position.x, sb.position.y, sb.position.z],
+		"body_scale": [sb.scale.x, sb.scale.y, sb.scale.z],
+		"transform_ok": tr_ok,
+		"nadir_offset_m": _sat_rnd(off_m, 2),
+		"offset_deg_at_edge": _sat_rnd(rad_to_deg(atan(absf(off_m) / edge)), 2),
+		"verts_sampled": verts_n,
+		"ok": bool(tr_ok and absf(off_m) < 4.0),
+	}
 	p.set_physics_process(false)
 	p.hunger = 20.0
 	var levels: Array = [
@@ -13244,7 +13308,9 @@ func _satellite_test(spawn: Vector3) -> void:
 		while sb.bake_active:
 			await get_tree().physics_frame
 			t2 += 1
-			if t2 > 60000:
+			# AC-0384 r2: same margin as the startup wait (measured bake
+			# wall ~794 s on this box; 60000 left only ~26% headroom).
+			if t2 > 90000:
 				ok = false
 				out["rebake_timeout"] = true
 				break
@@ -13309,6 +13375,12 @@ func _satellite_test(spawn: Vector3) -> void:
 		ok = false
 		if ac.has("why"):
 			out["ac0390_fail"] = ac["why"]
+	# (5) report (the measurement ran at the arm's start, before the
+	# ladder's teleports - see there).
+	out["geom"] = geom
+	if not bool(geom["ok"]):
+		ok = false
+		out["geom_fail"] = "body surface %.1f m off the terrain top at nadir (body %s vs terrain %s, sea level %s) - the body shell is offset from the ground" % [off_m, str(_sat_rnd(nadir_radius, 1)), str(_sat_rnd(terrain_top_radius, 1)), str(_sat_rnd(sea_r, 1))]
 	_sat_restore_fog_pct(fog_pct_env, fog_pct_orig)
 	out["ok"] = ok
 	Debug.result(out)
@@ -33582,3 +33654,110 @@ func _sound_distinct(a: Dictionary, b: Dictionary) -> float:
 			absf(float(a["b2"]) - float(b["b2"])))))
 	d = maxf(d, absf(float(a["centroid"]) - float(b["centroid"])) / 6000.0)
 	return d
+
+# AC-0394 TEMPORARY probe (in and out within the same task): what surface is
+# at the cyan bands + pale slab of fwd_ground_first_look.png? The capture is a
+# MENU boot (no logic arm) so its camera is the aim-spot camera
+# (main.gd _find_aim_spot + _snapshot_finish) — replicated via main.
+func _rayline_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	res["spawn"] = [spawn.x, spawn.y, spawn.z]
+	res["tod"] = Game.time_of_day
+	# settle (meshes built + star idle), lightaudit pattern:
+	var rr: int = world.render_radius
+	var quiet := 0
+	var t0 := Time.get_ticks_msec()
+	var awaited := 0
+	while awaited < 900 and Time.get_ticks_msec() - t0 < 150000:
+		var n_in := 0
+		for key in world.chunks:
+			var cc: Node3D = world.chunks[key]
+			if absi(cc.cx) <= rr and absi(cc.cz) <= rr and cc.mesh_built:
+				n_in += 1
+		var queues_idle: bool = world.star_light_idle() \
+				and world.threadmesh_inflight.is_empty() and world._col_pending.is_empty()
+		if n_in == (2 * rr + 1) * (2 * rr + 1) and queues_idle:
+			quiet += 1
+		else:
+			quiet = 0
+		if quiet >= 5:
+			break
+		await get_tree().physics_frame
+		awaited += 1
+	res["settle_frames"] = awaited
+	# THE capture camera, verbatim:
+	var aim: Dictionary = main._find_aim_spot()
+	if aim.is_empty():
+		res["aim"] = "EMPTY"
+		Debug.result(res)
+		return
+	res["aim_cell"] = [int(aim["cell"].x), int(aim["cell"].y), int(aim["cell"].z)]
+	res["aim_id"] = int(aim["id"])
+	res["cam"] = [float(aim["cam"].x), float(aim["cam"].y), float(aim["cam"].z)]
+	res["yaw"] = float(aim["yaw"])
+	res["pitch"] = float(aim["pitch"])
+	var cpos: Vector3 = aim["cam"]
+	var yaw: float = aim["yaw"]
+	var pitch: float = aim["pitch"]
+	# AC-0384 r2 note: sinf/cosf do not exist in GDScript 4 (parse error,
+	# broke G0 for the whole tree while this temporary probe sat in the
+	# dirty tree) - corrected to sin/cos, same semantics.
+	var fwd := Vector3(-cos(pitch) * sin(yaw), sin(pitch), -cos(pitch) * cos(yaw))
+	var right := Vector3.UP.cross(fwd).normalized()
+	var upv := fwd.cross(right).normalized()
+	res["fwd"] = [fwd.x, fwd.y, fwd.z]
+	var tanh := tan(75.0 * PI / 360.0)
+	var asp := 1280.0 / 720.0
+	var samples: Array = [
+		[785, 117, "A_mid"], [712, 114, "A_left"], [858, 120, "A_right"],
+		[785, 104, "A_above"], [785, 131, "A_below"],
+		[990, 155, "B_left"], [1100, 157, "B_mid"], [1250, 160, "B_right"],
+		[990, 143, "B_above"], [990, 170, "B_below"],
+		[60, 71, "C_horiz_mid"], [500, 71, "C_horiz_far"], [60, 60, "C_above"], [60, 84, "C_below"],
+		[60, 220, "D_diag_lo"], [200, 120, "D_diag_mid"], [280, 84, "D_diag_hi"],
+		[1110, 85, "E_slab"], [1185, 55, "E_slab2"],
+		[400, 400, "G_flat_dark"], [700, 300, "G_flat_dark2"], [800, 200, "G_band_bright"],
+	]
+	for s in samples:
+		var u := float(s[0]) / 1280.0
+		var v := float(s[1]) / 720.0
+		var dir := (right * ((2.0 * u - 1.0) * tanh * asp) + upv * ((1.0 - 2.0 * v) * tanh) + fwd).normalized()
+		var x := int(floorf(cpos.x))
+		var y := int(floorf(cpos.y))
+		var z := int(floorf(cpos.z))
+		var sx := 1 if dir.x > 0.0 else -1
+		var sy := 1 if dir.y > 0.0 else -1
+		var sz := 1 if dir.z > 0.0 else -1
+		var tdx: float = INF if dir.x == 0.0 else absf(1.0 / dir.x)
+		var tdy: float = INF if dir.y == 0.0 else absf(1.0 / dir.y)
+		var tdz: float = INF if dir.z == 0.0 else absf(1.0 / dir.z)
+		var tmx: float = INF if dir.x == 0.0 else (absf(x + 1.0 - cpos.x) if dir.x > 0.0 else absf(cpos.x - float(x))) * tdx
+		var tmy: float = INF if dir.y == 0.0 else (absf(y + 1.0 - cpos.y) if dir.y > 0.0 else absf(cpos.y - float(y))) * tdy
+		var tmz: float = INF if dir.z == 0.0 else (absf(z + 1.0 - cpos.z) if dir.z > 0.0 else absf(cpos.z - float(z))) * tdz
+		var hits: Array = []
+		var t := 0.0
+		var air := 0
+		for i in 4096:
+			var b: int = world.get_block(x, y, z)
+			if b != 0:
+				hits.append([b, x, y, z, round(t * 10.0) / 10.0])
+				if hits.size() >= 6:
+					break
+			else:
+				air += 1
+			if tmx < tmy and tmx < tmz:
+				x += sx
+				t = tmx
+				tmx += tdx
+			elif tmy < tmz:
+				y += sy
+				t = tmy
+				tmy += tdy
+			else:
+				z += sz
+				t = tmz
+				tmz += tdz
+			if t > 800.0:
+				break
+		res[s[2]] = {"px": [int(s[0]), int(s[1])], "cells": hits, "air": air}
+	Debug.result(res)

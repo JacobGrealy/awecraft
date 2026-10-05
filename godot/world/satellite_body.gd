@@ -1,9 +1,25 @@
 # AC-0310 P2 - the satellite body tier (whole-planet view above the
 # atmosphere). Draws the planet as one closed body: the 12-face
-# great-circle chart (core/sphere_math.gd) at radius R + SEA, textured
-# with the per-face 1024^2 satellite textures. Per-fragment existence
-# and haze live in core/satellite_body.gdshader (the no-pop contract);
-# this node owns the geometry, the textures and the thresholds.
+# great-circle chart (core/sphere_math.gd), textured with the per-face
+# 1024^2 satellite textures. Per-fragment existence and haze live in
+# core/satellite_body.gdshader (the no-pop contract); this node owns
+# the geometry, the textures and the thresholds.
+#
+# SURFACE (AC-0384 round 2) - the body IS the terrain's far LOD: each
+# mesh vertex sits at R + H(u, v), H the baked terrain height (the same
+# field the far tiers draw), on a per-face 16 m grid (the column scale).
+# The pre-round-2 constant R + SEA sphere put the surface H - SEA metres
+# BELOW the ground wherever terrain rises above sea level (13.4 m at
+# the seed-44 spawn - a detached pale arc + a ~1.9 deg sky gap at the
+# 400 m horizon; the user's "much smaller sphere … nowhere near the
+# actual play area"). The height channel travels with the texture: the
+# face PNGs are RGBA8 with A = round(H * 255 / HMAX), so the cache and
+# res paths rebuild the same displaced mesh without the full payload
+# (a legacy image without an alpha channel falls back to the constant
+# R + SEA sphere, with a loud SATDIAG line - never silent). The
+# h_first/h_full thresholds stay derived from R + SEA (the per-fragment
+# op is the real controller; the rim shift from the displacement is a
+# few metres on a 70 m fade window).
 #
 # TEXTURE SOURCE - one of, in order:
 #  (1) the user:// cache, keyed (planet_id, R, seed) - the runtime bake
@@ -51,7 +67,22 @@ class_name SatelliteBody
 extends Node3D
 
 const NPIX := 1024
-const MESH_RES := 48  # per-face grid subdivisions (49x49 vertices)
+# AC-0384 r2: the body mesh grid step (metres) - the far tier's column
+# scale (CHUNK = 16 m). The body is the terrain's far LOD: one vertex per
+# 16 m of H, so the mesh carries the same height detail the far terrain
+# shows (the 28,812-vertex 49x49 grid was smooth sea level; this is the
+# ~1.7 M-vertex terrain surface at R = 4000, ~466 k at R = 2000).
+const MESH_STEP := 16.0
+
+
+func _mesh_grid(f: int) -> Vector2i:
+	# (u subdivisions, v subdivisions) of the displaced grid for face f.
+	# The home pair is the half-width face: u spans W/2 (196 steps at
+	# R = 4000), v spans W (393). Faces 2-11 span W x W (393 x 393).
+	var W: float = SphereMath.face_width(R)
+	if f <= 1:
+		return Vector2i(int(roundf(W / 2.0 / MESH_STEP)), int(roundf(W / MESH_STEP)))
+	return Vector2i(int(roundf(W / MESH_STEP)), int(roundf(W / MESH_STEP)))
 const HOME_HALF := 197  # home chunks per axis: cx, cz in [-197, 196]
 const HOME_N := HOME_HALF * 2  # 394
 const HOME_CHUNKS := HOME_N * HOME_N  # 155,236
@@ -142,6 +173,8 @@ var bake_result: Dictionary = {}
 var bake_worker_ms := 0
 var _worker_images: Array = []  # 12 decoded Images (the read-back the guard ran on)
 var _geom: Array = []  # 12 precomputed face geometries {v,u,n,i}
+var _hgrid := PackedInt32Array()  # AC-0384 r2: the current face's 1024^2 height grid (_step_face fills it; _geom_for_face + the PNG alpha consume it)
+var _hgrid_load: Array = []  # AC-0384 r2: face -> height grid derived from the PNG alpha (load path); an empty entry = a legacy image -> constant R + SEA
 
 # the per-frame state the probe arm reads (the shader-side values,
 # mirrored - headless has no GPU, the arm checks the contract numerically)
@@ -298,7 +331,11 @@ func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> vo
 
 
 func _cache_dir() -> String:
-	return "user://satellite/p%d_r%d_s%d" % [planet_id, int(R), seed]
+	# AC-0384 r2: the _h token = the height-channel era. Pre-r2 caches
+	# (RGB8, no height) are a DIFFERENT format: silently loading them
+	# would render the constant sea-level sphere with the r2 UI - a
+	# one-time re-bake is the honest path (loud in the configure line).
+	return "user://satellite/p%d_r%d_s%d_h" % [planet_id, int(R), seed]
 
 
 func _res_path(f: int) -> String:
@@ -363,6 +400,7 @@ func _start_bake() -> void:
 	textures.clear()
 	_worker_images = []
 	_geom = []
+	_hgrid_load = []  # AC-0384 r2: a bake supersedes any partial load's grids
 	color_face = 0
 	bake_consume = 0
 	bake_done = false
@@ -433,6 +471,24 @@ func _bake_main_step() -> void:
 			_fail("variance guard failed on face %d: %s" % [lf, str(gd)])
 			return
 		textures.append(ImageTexture.create_from_image(img))
+		# AC-0384 r2: the height channel (the PNG's alpha) - the grid the
+		# displaced mesh is built from. An image without an alpha channel
+		# (the legacy pre-r2 shipped/cache set) gets an empty grid:
+		# _geom_for_face falls back to the constant R + SEA sphere, loud.
+		# The pipeline's alpha formats: a PNG (cache or imported) with an
+		# alpha channel decodes to FORMAT_RGBA8. (get_format() - this
+		# build exposes the Image format via the method, not a property.)
+		if img.get_format() == Image.FORMAT_RGBA8:
+			var d8: PackedByteArray = img.get_data()
+			var hg := PackedInt32Array()
+			hg.resize(NPIX * NPIX)
+			for k in NPIX * NPIX:
+				hg[k] = int(roundf(float(d8[k * 4 + 3]) * float(HMAX) / 255.0))
+			_hgrid_load.append(hg)
+		else:
+			_hgrid_load.append(PackedInt32Array())
+			_satline("LOAD face %d: image has no height channel (legacy RGB) - "
+				+ "constant R+SEA sphere for that face; a re-bake restores the terrain surface" % lf)
 		color_face += 1
 		_load_ms += float(Time.get_ticks_usec() - t0l) / 1000.0
 		if color_face >= 12:
@@ -512,12 +568,14 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 			m.set_shader_parameter("u_sun", -DayNight.sun_direction(day_t))
 		# The camera far plane (default 4000) would clip the body's far
 		# limb (h + 2*RB out): extend it while the body is visible,
-		# restore it when hidden.
+		# restore it when hidden. AC-0384 r2: RB is now the displaced
+		# surface's max radius (R + HMAX) - the old R + SEA would clip
+		# the far limb by up to 2*(HMAX - SEA) on a mountain planet.
 		if _cam == null or not is_instance_valid(_cam):
 			var pl = Game.player
 			_cam = pl.get_node_or_null("Camera3D") if pl != null else null
 		if _cam != null:
-			var want: float = h_band + 2.0 * RB + 200.0
+			var want: float = h_band + 2.0 * (R + float(HMAX)) + 200.0
 			if absf(float(_cam.far) - want) > 1.0:
 				_cam.far = want
 	elif _cam != null and is_instance_valid(_cam) and absf(float(_cam.far) - 4000.0) > 1.0:
@@ -545,6 +603,7 @@ func opacity_at(d: float) -> float:
 # Single writer until bake_done (see the class header).
 func _bake_worker(g: Variant) -> void:
 	var err := ""
+	var ship_msg := ""  # AC-0384 r2: the AWECRAFT_SATELLITE_SHIP report
 	var w0 := Time.get_ticks_msec()
 	if g == null:
 		err = "no AweGen (WorldGen.gen_cpp() null)"
@@ -566,11 +625,37 @@ func _bake_worker(g: Variant) -> void:
 			_start_face()
 			while not _step_face(Time.get_ticks_usec(), 1e9):
 				pass
+			# AC-0384 r2: the geometry is built RIGHT AFTER the colour -
+			# the face's H grid (_hgrid) is live; one code path for bake
+			# and load (the pre-r2 second geometry loop ran after pay
+			# was freed and built the constant-radius sphere).
+			_geom.append(_geom_for_face(f, _hgrid))
 		# colour time = the face-pipeline wall minus the PNG writes (the
 		# old main-thread slice's field semantics: colour and png separate;
 		# _step_face accrues the png time into _png_ms inside the face).
 		_color_ms = float(Time.get_ticks_msec() - t_face) - _png_ms
 		pay = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
+		# AC-0384 r2 (harness-only): ship the freshly baked faces to a
+		# repo asset dir (the re-ship with the height channel). Env
+		# AWECRAFT_SATELLITE_SHIP=<abs dir>; unset = no-op (the
+		# canonical bake path). Reported via bake_result (worker thread:
+		# _satline is main-thread only).
+		var ship_dir := OS.get_environment("AWECRAFT_SATELLITE_SHIP")
+		if ship_dir != "":
+			for f in 12:
+				var rf := FileAccess.open(_cache_path(f), FileAccess.READ)
+				if rf == null:
+					err = "ship: cannot read %s" % _cache_path(f)
+					break
+				var wb := rf.get_buffer(rf.get_length())
+				rf.close()
+				var wf := FileAccess.open(ship_dir + "/satellite_face%02d.png" % f, FileAccess.WRITE)
+				if wf == null:
+					err = "ship: cannot write %s" % (ship_dir + "/satellite_face%02d.png" % f)
+					break
+				wf.store_buffer(wb)
+				wf.close()
+			ship_msg = "shipped 12 height-channel faces to %s" % ship_dir if err == "" else err
 	if err == "":
 		var t2 := Time.get_ticks_msec()
 		for f in 12:
@@ -585,10 +670,9 @@ func _bake_worker(g: Variant) -> void:
 				break
 			_worker_images.append(img)
 		_load_ms = float(Time.get_ticks_msec() - t2)  # ms
-	if err == "":
-		for f in 12:
-			_geom.append(_geom_for_face(f))
-	bake_result = {"ok": err == "", "why": err}
+	# (AC-0384 r2: the per-face geometry is built in the colour loop
+	# above, while each face's H grid is live - no separate pass.)
+	bake_result = {"ok": err == "", "why": err, "ship": ship_msg}
 	bake_worker_ms = int(Time.get_ticks_msec() - w0)
 	bake_done = true
 
@@ -626,6 +710,8 @@ func _start_face() -> void:
 	color_row = 0
 	_out = PackedByteArray()
 	_out.resize(NPIX * NPIX * 3)
+	_hgrid = PackedInt32Array()
+	_hgrid.resize(NPIX * NPIX)
 	if color_face > 1:
 		_h2 = PackedInt32Array()
 		_h2.resize(NPIX * NPIX)
@@ -736,14 +822,26 @@ func _step_face(t0: int, budget_ms: float) -> bool:
 				tv = int(_t2[pidx])
 				gx = (float(_h2[j * NPIX + mini(i + 1, NPIX - 1)]) - float(_h2[j * NPIX + maxi(i - 1, 0)])) / (2.0 * du_m)
 				gz = (float(_h2[mini(j + 1, NPIX - 1) * NPIX + i]) - float(_h2[maxi(j - 1, 0) * NPIX + i])) / (2.0 * dv_m)
+			_hgrid[j * NPIX + i] = hv  # AC-0384 r2: the height channel (the geometry + PNG alpha source)
 			_pixel((j * NPIX + i) * 3, hv, tv, gx, gz)
 		color_row += 1
 		if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
 			return false
 	# face complete - the PNG (the deflate spike lands on the calling
-	# thread - the pool worker since AC-0382)
+	# thread - the pool worker since AC-0382). AC-0384 r2: RGBA8 - the
+	# alpha channel carries the height (A = round(H * 255 / HMAX)) so
+	# the cache/res paths rebuild the displaced mesh without the
+	# payload. The RGB bytes are exactly the _pixel output (untouched:
+	# the colour stays canonical across the re-ship).
 	var t_png := Time.get_ticks_usec()
-	var img := Image.create_from_data(NPIX, NPIX, false, Image.FORMAT_RGB8, _out)
+	var out4 := PackedByteArray()
+	out4.resize(NPIX * NPIX * 4)
+	for k in NPIX * NPIX:
+		out4[k * 4] = _out[k * 3]
+		out4[k * 4 + 1] = _out[k * 3 + 1]
+		out4[k * 4 + 2] = _out[k * 3 + 2]
+		out4[k * 4 + 3] = clampi(int(roundf(float(_hgrid[k]) * 255.0 / float(HMAX))), 0, 255)
+	var img := Image.create_from_data(NPIX, NPIX, false, Image.FORMAT_RGBA8, out4)
 	img.save_png(_cache_path(f))
 	_png_ms += float(Time.get_ticks_usec() - t_png) / 1000.0
 	_out = PackedByteArray()
@@ -891,22 +989,33 @@ func _guard_check(img: Image) -> Dictionary:
 # The face geometry (pure SphereMath - thread-safe; the worker
 # precomputes all 12 before bake_done, the cache/res path computes
 # them on the main thread in _build_face). Cached in _geom.
-func _geom_for_face(f: int) -> Dictionary:
+func _geom_for_face(f: int, hgrid: PackedInt32Array = PackedInt32Array()) -> Dictionary:
 	if _geom.size() > f:
 		return _geom[f]
-	var RB: float = R + float(SEA)
+	# AC-0384 r2: the displaced surface - one vertex per MESH_STEP (16 m)
+	# of the H field, each at R + H(u, v) (the terrain's far LOD). The
+	# pre-r2 constant R + SEA sea-level shell is the fallback when the
+	# face's image carries no height channel (legacy set).
+	var nu_nv: Vector2i = _mesh_grid(f)
+	var nu: int = nu_nv.x
+	var nv: int = nu_nv.y
+	var has_h: bool = hgrid.size() == NPIX * NPIX
+	var RB: float = R + float(SEA)  # the winding-test radius (any radial scale works)
 	var verts := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var nrm := PackedVector3Array()
 	var idx := PackedInt32Array()
-	for j in MESH_RES + 1:
-		for i in MESH_RES + 1:
-			var u: float = float(i) / float(MESH_RES)
-			var v: float = float(j) / float(MESH_RES)
-			var p: Vector3 = SphereMath.uv_to_world(f, u, v, RB)
+	for j in nv + 1:
+		for i in nu + 1:
+			var u: float = float(i) / float(nu)
+			var v: float = float(j) / float(nv)
+			var rr: float = RB
+			if has_h:
+				rr = R + _hgrid_sample(hgrid, u, v)
+			var p: Vector3 = SphereMath.uv_to_world(f, u, v, rr)
 			verts.append(p)  # body origin = the sphere centre: local == radial
 			uvs.append(Vector2(u, v))
-			nrm.append(p / RB)
+			nrm.append(p / rr)
 	# winding per face: the chart axes differ per face; pick the
 	# order whose corner normal points outward (cull_back then keeps
 	# exactly the front hemisphere from outside - one front patch per
@@ -915,11 +1024,11 @@ func _geom_for_face(f: int) -> Dictionary:
 	var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
 	var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
 	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) >= 0.0
-	for j in MESH_RES:
-		for i in MESH_RES:
-			var a: int = j * (MESH_RES + 1) + i
+	for j in nv:
+		for i in nu:
+			var a: int = j * (nu + 1) + i
 			var b: int = a + 1
-			var c: int = a + (MESH_RES + 1)
+			var c: int = a + (nu + 1)
 			var d: int = c + 1
 			if outward:
 				idx.append_array([a, c, b, b, c, d])
@@ -931,12 +1040,37 @@ func _geom_for_face(f: int) -> Dictionary:
 	return ge
 
 
+func _hgrid_sample(hgrid: PackedInt32Array, u: float, v: float) -> float:
+	# Bilinear over the 1024^2 per-texel H grid. Texel centres sit at
+	# (k + 0.5) / NPIX in (u, v) - the same lattice the PNG texels and
+	# _step_face's H reads use (home pair: the 1 m cells, faces 2-11:
+	# the 6.135 m lattice) - so a mesh vertex lands on the H the
+	# terrain's far tier shows there, up to the 16 m grid's pooling.
+	var fx: float = clampf(u * float(NPIX) - 0.5, 0.0, float(NPIX) - 1.0)
+	var fy: float = clampf(v * float(NPIX) - 0.5, 0.0, float(NPIX) - 1.0)
+	var x0: int = int(fx)
+	var y0: int = int(fy)
+	var x1: int = mini(x0 + 1, NPIX - 1)
+	var y1: int = mini(y0 + 1, NPIX - 1)
+	var tx: float = fx - float(x0)
+	var ty: float = fy - float(y0)
+	var h00: float = float(hgrid[y0 * NPIX + x0])
+	var h10: float = float(hgrid[y0 * NPIX + x1])
+	var h01: float = float(hgrid[y1 * NPIX + x0])
+	var h11: float = float(hgrid[y1 * NPIX + x1])
+	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
+
+
 func _build_face(f: int) -> void:
 	# One face: the mesh node + material (the thin main-thread work; the
 	# geometry arrays come from _geom_for_face - worker-precomputed in
 	# bake mode, computed here in the cache/res mode).
-	var RB: float = R + float(SEA)
-	var ge: Dictionary = _geom_for_face(f)
+	# AC-0384 r2: the load path feeds the height grid derived from the
+	# PNG alpha (bake mode: the worker pre-built the displaced geometry,
+	# the _geom cache in _geom_for_face hits). RBx = the displaced
+	# surface's maximum radius (R + HMAX) for the enclosing cube.
+	var RBx: float = R + float(HMAX)
+	var ge: Dictionary = _geom_for_face(f, _hgrid_load[f] if f < _hgrid_load.size() else PackedInt32Array())
 	var mesh := ArrayMesh.new()
 	# 4.7 ArrayMesh does NOT compute the AABB from
 	# add_surface_from_arrays (it stays zero) and a degenerate AABB
@@ -950,7 +1084,7 @@ func _build_face(f: int) -> void:
 	arrs[Mesh.ARRAY_NORMAL] = ge["n"]
 	arrs[Mesh.ARRAY_INDEX] = ge["i"]
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
-	mesh.set_custom_aabb(AABB(Vector3(-RB, -RB, -RB), Vector3(RB * 2.0, RB * 2.0, RB * 2.0)))
+	mesh.set_custom_aabb(AABB(Vector3(-RBx, -RBx, -RBx), Vector3(RBx * 2.0, RBx * 2.0, RBx * 2.0)))
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	var sm := ShaderMaterial.new()
@@ -1008,7 +1142,11 @@ func _finish_bake() -> void:
 		"frame_ms_mean": roundf(_frame_sum_ms / maxf(float(_frame_n), 1.0) * 100.0) / 100.0,
 		"chunks": pay_total,
 		"guard": guard.duplicate(),
+		# AC-0384 r2: the AWECRAFT_SATELLITE_SHIP report (empty = unset).
+		"ship": str(bake_result.get("ship", "")),
 	}
+	if str(bake_result.get("ship", "")) != "":
+		_satline("SHIP: %s" % str(bake_result.get("ship", "")))
 	print("SATELLITE bake done: %s" % str(bake_stats))
 	_satline_config()  # AC-0384 diagnostic: the configured-state burst
 	_satdiag_write_report()  # AC-0384: the findable file, at configure time

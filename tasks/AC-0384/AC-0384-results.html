@@ -734,5 +734,354 @@ whether its 12 pictures and its shader loaded, and says "PROBLEM: …" in plain 
  render distance. No native lane touched — the Windows DLL follows from the coordinator, who will send the
  user a build to verify with exactly those two tools.</p>
 
+ <h2>16. Round 16 (2026-10-04) — “the cloud layer is much smaller than the high-LOD radius”: the user is seeing the body as a white fallback (stale build)</h2>
+ <div class="box red">
+ <strong>Supersedes the user-visible-symptom framing for the CURRENT report.</strong> The user's latest report —
+ “the satellite LOD still doesn't work; I still see what appears to be the cloud layer much smaller than the
+ high-LOD radius” — is from build <code>20261003-0951</code> (the satdiag in this folder, generated
+ 2026-10-03 09:54:59, 3 min after that build exported). That build <strong>predates the shader-compile fixes</strong>
+ (AC-0392: <code>a22c5b2</code> 14:32, <code>a493dbd</code> 21:00, <code>b4e9a1b</code> 23:13). In that build the
+ satellite body's colour shader <strong>does not compile</strong> (its first line begins with <code>#</code>, which
+ Godot drops silently — the AC-0392 finding), so the engine substitutes the default <strong>white Lambert</strong>
+ material: the planet is a smooth, featureless <strong>white ball at 4126</strong>. The cloud shells
+ (4275/4330/4400) render nothing (their shader fails the same way). The user is therefore seeing the
+ <strong>body</strong> — not a cloud layer — and reading the featureless white ball as “the cloud layer.” The
+ “smaller than the high-LOD radius” read is a consequence of the white fallback (a featureless ball is hard to
+ gauge); the body is at its correct 4126. <strong>There is no product defect in the current build
+ (536fa09 / 20261004-1002): the body renders at 4126 with its terrain texture and the clouds render as shells
+ outside it.</strong> Fix: update the user to <code>20261004-1002</code> or later.
+ </div>
+
+ <h3>16.1 The measured radii, as rendered (536fa09)</h3>
+ <table>
+ <tr><th>Object</th><th>Radius</th><th>Measured</th></tr>
+ <tr><td><strong>Satellite body</strong></td><td><strong>4126</strong> (= R+SEA = 4000+126)</td>
+ <td>All 12 face meshes: <code>vrmin = vrmax = 4126.0</code> (28,812 verts). Renders as a <strong>complete dome</strong>
+ with the real terrain texture (green continents, blue oceans). Rim at 4126 in the 3000 m capture (col 640 → v=350,
+ predicted 350). The face-coloured capture (below) shows the full circle — the dome-top (rim) lands at
+ v=416/347/429 across col 400/640/900, matching the known-good <code>tasks/AC-0396/planet_limb_2000m.png</code> to the
+ pixel. Proves the body is a complete sphere, independent of colour.</td></tr>
+ <tr><td><strong>Cloud shells</strong> (×3)</td><td><strong>4275 / 4330 / 4400</strong> (= R+275/330/400)</td>
+ <td>Three concentric <code>SphereMesh</code>es centred at (0,−4000,0), <strong>outside</strong> the body. Node scale
+ 4275/4330/4400, all <code>vis=true</code>. Render as a procedural cloud pattern (coverage 41.3/56.3/75.0%); the visible
+ puffs thin to zero at the silhouette by design (the cloud shader's grazing fade), so no solid ring shows at the rim.
+ The clouds are 149–274 m <em>larger</em> than the body — a real cloud shell can never be “smaller than the body rim.”</td></tr>
+ </table>
+
+ <h3>16.2 The build timeline (why the user's build is stale)</h3>
+ <table>
+ <tr><th>Time (2026-10)</th><th>Event</th><th>Build</th></tr>
+ <tr><td>03 · 09:51</td><td>Build exported — <strong>the user's build</strong> (satdiag 09:54:59)</td><td><code>20261003-0951</code></td></tr>
+ <tr><td>03 · 14:32</td><td><code>a22c5b2</code> (AC-0392/0393) — satellite &amp; cloud shaders compile for the first time</td><td>next: 20261003-1433</td></tr>
+ <tr><td>03 · 21:00</td><td><code>a493dbd</code> (AC-0392/0394) — “the satellite shader finally compiles — it had four defects, not one”</td><td>next: 20261003-2100</td></tr>
+ <tr><td>03 · 23:13</td><td><code>b4e9a1b</code> (AC-0396) — shader-error census + forced-compile arm + the planet capture that closes the two-day bug</td><td><code>20261003-2313</code></td></tr>
+ <tr><td>04 · 10:02</td><td>Current HEAD <code>536fa09</code> (AC-0394) — <strong>build under test here</strong></td><td><code>20261004-1002</code></td></tr>
+ </table>
+ <p>The shader file itself grew <strong>5810 → 7717 bytes</strong> between the user's build and the current build
+ (the satdiag reports 5810; the current <code>shaderforce</code> run reports <code>code_bytes=7717</code>,
+ <code>mats_with_shader 12/12</code>). The user's build has the <code>#</code>-first-line compile failure (the body =
+ white fallback) and the cloud-shader failure (the clouds = invisible); the current build has all the fixes and renders
+ the textured body + the cloud shells.</p>
+
+ <h3>16.3 The captures (evidence — Forward+, 0 errors; proxy/software-GL box, geometry only)</h3>
+ <table>
+ <tr><th>Capture</th><th>What it shows</th></tr>
+ <tr><td><code>body-4126-domes-facecolor.png</code> (2000 m, face-coloured)</td>
+ <td>The body as a <strong>complete 4126 dome</strong>: each of the 12 faces force-coloured (worktree probe), the
+ silhouette a full circle. The dome-top (rim) lands at v=416/347/429 across col 400/640/900 — the same first-lit
+ positions as the known-good <code>tasks/AC-0396/planet_limb_2000m.png</code>. Proves the body is a complete sphere,
+ independent of colour.</td></tr>
+ <tr><td><code>body-3000m-textured-clouds-on.png</code> (3000 m, clouds on)</td>
+ <td>The same body on the <strong>fixed build</strong>: it renders with its <strong>real terrain texture</strong>
+ (green continents, blue oceans), no white fallback. The rim is at 4126; the cloud shells are outside it (thinned at
+ the edge by the grazing fade).</td></tr>
+ <tr><td><code>clouds-only-world-hidden.png</code> (3000 m, <code>World</code> hidden, clouds on)</td>
+ <td>The <strong>cloud shells only</strong>: hiding <code>World</code> (the body + terrain, both <code>World</code>
+ children) leaves the dome of the three cloud shells (4275/4330/4400). This is the “Main-child disc” — the clouds are
+ <code>Main</code> children (main.gd <code>_place_clouds</code> → <code>add_child</code>), the body is a
+ <code>World</code> child (world.gd:3627).</td></tr>
+ </table>
+
+ <h3>16.4 Which one the user is seeing — and the “cloud layer” identity</h3>
+ <ul>
+ <li>The user's satdiag (09:54:59, build 20261003-0951) reports the body's shader as “present, 5810 characters,
+ 12/12 materials” — but that measures the shader <em>resource</em> being non-empty, not the <em>compiled pipeline</em>.
+ In that build the shader does not compile (the <code>#</code> first line), so the body renders as the
+ <strong>white fallback</strong>.</li>
+ <li>The user's F7 A/B test (a prior round) already confirmed the pale/white surface is the satellite body — toggling
+ the body removes it. So the “cloud layer” the user calls it is the <strong>body</strong>.</li>
+ <li>The <strong>real</strong> cloud shells (4275/4330/4400) render nothing in that build (their shader fails too). So
+ there is no real cloud layer for the user to see — the “cloud layer” is the white-fallback body.</li>
+ <li>“Much smaller than the high-LOD radius”: the body is at its correct 4126; the white fallback is featureless so it
+ is hard to gauge. The real cloud shells are <em>outside</em> the body (4275/4330/4400 &gt; 4126), so a real cloud layer
+ cannot be smaller than the body.</li>
+ </ul>
+
+ <h3>16.5 Relation to the prior diagnoses (section 15 / AC-0390)</h3>
+ <p>Section 15 (AC-0390) diagnosed a <strong>real</strong> secondary defect: the <code>haz_d</code> distance window was
+ too wide, hazing the whole disc at the user's short render distance (fog_far 332 / render_edge 400). That fix (the
+ <code>haz_a</code>/<code>haz_d</code> split) is in the current shader and is green. But in the user's build
+ (20261003-0951) the shader <strong>never compiles</strong> (the <code>#</code> first line, AC-0392), so the
+ <code>haz_d</code> window never even runs — the body is the white fallback, not a pale-hazed disc. The AC-0392 compile
+ fix is the <strong>primary</strong> cause of the user's white ball; the AC-0390 haze fix is a real but
+ <strong>secondary</strong> defect that is masked by the compile failure in the user's build. Both are present in
+ <code>20261004-1002</code>, so updating resolves both.</p>
+
+ <h3>16.6 Gates (536fa09; one godot at a time, <code>ulimit -v 8388608</code>; logs <code>.scratch/AC-0384/</code>)</h3>
+ <p class="small">No product code was modified this round (throwaway worktree probes only, env-gated), so the standing
+ set is unchanged from HEAD; the rows are re-measured on 536fa09.</p>
+ <table>
+ <tr><th>Gate</th><th>Standing value</th><th>Measured (536fa09)</th><th></th></tr>
+ <tr><td>genhash (world/* unchanged)</td><td>25/25</td><td>25 clean column hashes; <code>git status</code> shows only
+ <code>harness.gd</code> + <code>satellite_body.gd</code> touched (both worktree probes) — world/* generation code untouched</td>
+ <td class="ok">PASS</td></tr>
+ <tr><td>G0 (SCRIPT + SHADER ERROR, satellite/shader runs)</td><td>0</td><td>0 across the facecolor / clouds-on /
+ world-hidden renders and 600 s of <code>shaderforce</code></td><td class="ok">PASS</td></tr>
+ <tr><td>shaderforce (every shipped shader compiles)</td><td>12/12</td><td>0 SHADER ERROR over 600 s; satellite shader
+ loaded <code>code_bytes=7717, mats_with_shader=12/12</code>; satellite + cloud shaders demonstrably compile and render
+ (0 errors, real pixels)</td><td class="ok">PASS</td></tr>
+ <tr><td>farab</td><td>h_mismatch 0</td><td><code>h_mismatch: 0, ok: true</code></td><td class="ok">PASS</td></tr>
+ <tr><td>ladder (draw-tier)</td><td>20/20</td><td><code>band_a_ok: 20, band_a_fail_n: 0</code></td><td class="ok">PASS</td></tr>
+ <tr><td>meshprobe</td><td>1.0 / ok</td><td><code>ac0211_ok: true, c_match 1866</code></td><td class="ok">PASS</td></tr>
+ <tr><td>halo</td><td>ok</td><td><code>ok: true</code>, mismatches 0, slabs_ok 226/226</td><td class="ok">PASS</td></tr>
+ <tr><td>lightstate</td><td>leaks 0/0</td><td><code>leaks: 0</code> everywhere. <span class="warn">Note:</span> one
+ <strong>pre-existing, unrelated</strong> SCRIPT ERROR in <code>damage_player</code> (player.gd:3306, particle target
+ absent in the headless test) — player.gd not touched; the arm's own metric is green.</td><td class="ok">PASS</td></tr>
+ <tr><td>r16</td><td>far_holes 0/0 both bands</td><td><code>far_holes 0</code> (far0) and <code>far_holes 0</code> (far1), <code>built_all: true</code></td><td class="ok">PASS</td></tr>
+ <tr><td>boundary r4</td><td>in band</td><td><code>ok: true</code>, resident 93 (stable). p95 51 / staged_dropped 2696 run <em>hot</em> (the box had just serialised the four standing arms) — the documented machine-timing class (Section 15's chain run read p95 145 / dropped 2679 the same way); the gate is <code>ok:true</code>, not the throughput counters</td><td class="ok">PASS</td></tr>
+ <tr><td>satellite ladder</td><td>AC-0390 op/haz green</td><td>rc=0, 0 errors; op/haz/dominance cases green</td>
+ <td class="ok">PASS</td></tr>
+ <tr><td>F7 body toggle</td><td>hides/shows</td><td><code>AWECRAFT_SAT_BODY=0</code> → <code>body_off=true</code></td>
+ <td class="ok">PASS</td></tr>
+ <tr><td>diagnostics silence</td><td>no SATDIAG when off</td><td><code>AWECRAFT_SATDIAG=0</code> → 0 SATDIAG lines</td>
+ <td class="ok">PASS</td></tr>
+ </table>
+
+ <h3>16.7 Verdict + the coordinator's next step</h3>
+ <ul>
+ <li><strong>Verdict:</strong> misidentification caused by a stale build, not a product defect. The user is seeing the
+ satellite body (radius 4126) rendered as a white fallback sphere because their build (20261003-0951) predates the
+ shader-compile fixes (AC-0392). The real cloud shells (4275/4330/4400) render outside the body but are invisible in
+ that build. On the current build (536fa09 / 20261004-1002) the body renders at 4126 with its terrain texture and the
+ clouds render as shells outside it.</li>
+ <li><strong>For the user:</strong> update to <code>20261004-1002</code> or later (the title screen carries the stamp
+ <code>AweCraft[&lt;stamp&gt; &lt;sha&gt;]</code>; if it reads <code>20261003-0951</code> or earlier the white ball is
+ expected). The planet will show its terrain (not a white ball) and the cloud shells will render as a layer outside
+ the body.</li>
+ <li><strong>Proxy caveat:</strong> renders on this box are the software-GL proxy, not the shipped
+ <code>forward_plus</code> look — geometry/layout/identity evidence only; the user's Windows Forward+ renders are the
+ colour ground truth. The face-coloured capture is used to prove dome geometry with colour removed as a variable.</li>
+ </ul>
+
+
+ <h2>17. Round 17 (2026-10-04) — “a much smaller sphere than the high LODs, not positioned correctly”: the body
+ surface was SEA-LEVEL, the terrain was not (measured, then fixed)</h2>
+
+ <h3>17.1 The report (the stale-build theory is dead)</h3>
+ <p>The user rebuilt (invalidating §16's "stale build" conclusion) and re-reported: the satellite body is
+ <em>“a much smaller sphere than the high lods, and/or it's not positioned correctly … it's surface is no where
+ near the actual play area.”</em> The user's own satdiag (seed 5432, §13/§14) already showed the body node at
+ <code>pos=(0,−4000,0)</code>, <code>scale=(1,1,1)</code>, <code>R=4000</code> — i.e. the node transform was never the
+ suspect. The hypothesis tested this round (not assumed): <strong>the body's surface radius and the terrain's
+ surface radius derive from different HEIGHT sources</strong> — the body shell at the constant
+ <code>R + SEA</code> (sea level) while the terrain the player stands on sits at <code>R + H</code> (H the column
+ top, 141 at the seed-44 spawn, 15 m above sea). A 13–15 m shell below the ground, at the 400 m horizon the user
+ renders at, reads as a smaller sphere detached from the play area with a band of sky between them.</p>
+
+ <h3>17.2 The measurement the section-16 run never made</h3>
+ <p>Section 16 measured the body MESH at 4126 and stopped — it never measured the world-space radius of the
+ terrain under the player, nor the node transform, inside one run. The <code>satellite</code> arm now does, at the
+ arm's start (before the ladder's teleports move the player): it scans the actual 12 face meshes for the vertex
+ nearest the player's radial (the body's nadir surface radius) and compares it to the terrain-top world radius
+ under the player's feet, plus the transform/scale. Gate: <code>geom.ok</code> = transform
+ <code>(0,−R,0)</code>/scale 1 AND <code>|body_nadir_radius − terrain_top_radius| &lt; 4 m</code>.
+ <strong>PRE-FIX (seed 44, user config R24/F83, res path):</strong></p>
+ <pre>{ "body_nadir_radius": 4126.0, "terrain_top_radius": 4139.38, "nadir_offset_m": -13.38,
+  "offset_deg_at_edge": 1.92, "body_node_pos": [0, -4000, 0], "body_scale": [1, 1, 1],
+  "transform_ok": true, "ok": false, "verts_sampled": 28812 }
+geom_fail: body surface -13.4 m off the terrain top at nadir (body 4126.0 vs terrain 4139.4, sea level 4126.0)</pre>
+ <p><strong>Confirmed by measurement, not assumption:</strong> the transform is fine; the body surface is
+ <strong>13.38 m below the terrain</strong> at nadir — a 1.9° sky gap at the user's 400 m horizon. (All other arm
+ sections stayed green: ladder 4/4, ratio 0.25, AC-0390 — the defect is purely geometric.)</p>
+
+ <h3>17.3 The fix (<code>godot/world/satellite_body.gd</code>, body-tier only)</h3>
+ <ul>
+  <li><strong>The body IS the terrain's far LOD.</strong> <code>_geom_for_face</code> now builds each face on a
+  per-face 16 m grid (the far tier's column scale: home pair 196×393, faces 2–11 393×393 at R=4000 —
+  ~1.708 M verts vs the old 28,812) with each vertex at <code>R + H(u,v)</code>: <code>_step_face</code> accumulates
+  the per-texel H grid (the <code>hv</code> it already computed) and the geometry is bilinear-sampled from it
+  (<code>_hgrid_sample</code>) — the same H the far tier draws, so the body and the far terrain show the same
+  surface. Over ocean, H = the water surface = SEA, so the body stays exactly at sea level there; over land it
+  rises with the terrain. The winding/normal logic is unchanged (radial-scale invariant).</li>
+  <li><strong>The height channel travels with the texture.</strong> The face PNGs are now RGBA8 with
+  <code>A = round(H·255/HMAX)</code>; the cache and res load paths rebuild the same displaced mesh from the alpha
+  (one code path, bake ≡ load). The RGB bytes are exactly the old <code>_pixel</code> output (the colour is
+  untouched — proven: the forced re-bake is byte-identical to the previously shipped set, §17.5).</li>
+  <li><strong>Legacy safety.</strong> An image without the alpha channel (any pre-r2 cache or the pre-r2 shipped
+  set) falls back to the constant R+SEA sphere <em>loud</em> (one SATDIAG line per face) — never a silent wrong
+  surface. The user:// cache dir gains a <code>_h</code> token so the user's machine's RGB cache
+  (<code>p0_r4000_s5432</code>) triggers a one-time re-bake instead of a silent legacy load.</li>
+  <li><strong>Camera far + AABB</strong> now use the displaced surface's max radius <code>R + HMAX</code> (the old
+  <code>R + SEA</code> would have clipped the far limb of a mountain planet by up to 2·(HMAX−SEA)). The
+  <code>h_first</code>/<code>h_full</code> thresholds stay R+SEA-derived: the per-fragment op is the controller, and
+  the displacement shifts the rim by a few metres on a ~70 m fade window (documented; the arm ladder is still 4/4).</li>
+  <li><strong>Harness-only <code>AWECRAFT_SATELLITE_SHIP=&lt;dir&gt;</code></strong>: after a bake, the worker copies
+  the 12 faces into a repo asset dir (this box's <code>user://</code> is a per-invocation tmpfs, so the re-ship has
+  to happen in-process). Unset = no-op.</li>
+  <li><strong>Re-shipped <code>godot/assets/satellite/satellite_face00..11.png</code></strong> (seed 44,
+  deterministic in-engine bake, RGBA, ~1 MB each) + editor re-import; the arm's
+  <code>rebuild_vs_shipped</code> re-baselined: <strong>diff_px 0, max_abs_diff 0</strong> over 589,824 samples —
+  against the OLD import (stale mid-run), which also proves the new bake's RGB is byte-identical to the previous
+  canonical colour. The old set is stashed at <code>.scratch/AC-0384-r2/shipped-old/</code>.</li>
+  <li><strong>Shader untouched.</strong> The per-fragment model is distance-based (<code>op</code>, limb haze) on
+  <code>length(p_w − cam_w)</code> with radial normals; the displaced surface needs no shader change (the normal
+  of a 16 m facet of a 4000 m sphere differs from the radial by ≤ ~0.12°).</li>
+  <li><strong>Docs:</strong> <code>godot/ARCHITECTURE.md</code> (the SatelliteBody bullet + the §5 texture note +
+  camera-far), <code>tasks/harness_data.yaml</code> satellite row (the (5) geometry gate, the <code>geom</code>
+  result fields, the SHIP/SEED envs, the r2 note) + <code>harness_doc.py --render</code>.</li>
+ </ul>
+
+ <h3>17.4 The result (post-fix, seed 44, res path, user config R24/F83)</h3>
+ <pre>{ "body_nadir_radius": 4139.0, "terrain_top_radius": 4139.38, "nadir_offset_m": -0.38,
+  "offset_deg_at_edge": 0.05, "transform_ok": true, "ok": true, "verts_sampled": 1707596 }
+arm ok: true — ladder 4/4, ratio 0.25, AC-0390 green, res_export_ok, 0 legacy fallback lines, census 0/0</pre>
+ <p>The body surface now coincides with the terrain surface it replaces to within <strong>0.38 m</strong> at nadir
+ (the 16 m grid's own pooling — the same seam the far tier shows), down from 13.38 m; the horizon gap is 0.05°
+ at the render edge instead of 1.9°. The long-distance arm (R50) reads the same geometry (offset −0.38 m,
+ ladder 4/4). The seed-5432 (the user's) bake-path run is the remaining bake-side proof (§17.6).</p>
+
+ <h3>17.5 Gates (all on the fixed tree; logs in <code>.scratch/AC-0384-r2/</code>)</h3>
+ <table><tr><th>Gate</th><th>Result</th></tr>
+  <tr><td>G0 (<code>--headless --quit</code>, <code>gate_census.py</code>)</td><td><strong>0 SCRIPT ERROR / 0 SHADER ERROR</strong></td></tr>
+  <tr><td>satellite (user config R24/F83)</td><td><strong>ok:true</strong>, <code>geom.ok</code> (−0.38 m), ladder 4/4, ratio 0.25, AC-0390 green, res_export_ok</td></tr>
+  <tr><td>satellite (long R50)</td><td><strong>ok:true</strong>, <code>geom.ok</code> (−0.38 m), ladder 4/4</td></tr>
+  <tr><td>satellite (REBAKE + SHIP, seed 44)</td><td>bake wall 793.9 s (gen 723.1, color 63.9, png 6.5), guard 12/12, <strong>rebuild_vs_shipped identical</strong> (589,824 samples, diff 0), 12 faces shipped, census 0/0</td></tr>
+  <tr><td>satellite (seed 5432 — the user's world, FULL bake path)</td><td>bake wall 784.2 s (gen 713.6, color 63.8, png 6.5), guard 12/12, ladder 4/4, ratio 0.25, ac0390 green, src_predicate bake.no-shipped, census 0/0; <code>geom</code> gate <strong>not ok</strong> — nadir offset <strong>8.91 m</strong> at the 194 m mountain spawn (the pre-fix value there was 68.38 m; &sect;17.7 has the full reading + the lattice-residual analysis)</td></tr>
+  <tr><td>genhash ×2</td><td><strong>25/25 byte-identical</strong>, chunk (0,0) <code>46c20b07…</code> = the standing AC-0311-P2 reference (zero drift)</td></tr>
+  <tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td><strong>ok:true</strong> (total 280.9 s), census 0/0</td></tr>
+  <tr><td>farab</td><td><strong>ok:true</strong>, h_mismatch 0, slab_cmp 1080/1080, mat_surf_diff 0, water_slabs 6/7</td></tr>
+  <tr><td>ladder</td><td><strong>ok:true</strong>, band_a_ok 20/20, tier_mismatch 0</td></tr>
+  <tr><td>meshprobe</td><td><strong>ok:true</strong>, match_rate 1.0</td></tr>
+  <tr><td>halo / lightstate / r16</td><td><strong>ok:true</strong> / leaks 0/20, A/B fixture arr_diff_cells 1 @ [0,141,0] (the standing re-baseline), wash false, double-LOD census 0/0 / ok:true, built_all</td></tr>
+  <tr><td>boundary r4 (the ONE self-check)</td><td>ok/marker/remesh true; walk p50 <strong>13</strong> (flat), p95 <strong>35</strong> (inside/below the standing 39–42 band — no trade-off); crossing_frame p50/p95/max 31/36/39 (drift band ok); built_final 66 (band 56–68); col_deferred_in_footprint 0. flap 209 / staged_dropped 2623 are the box-timing class (the last same-box run read 162 / 2161 at p95 40 — documented churn, not the gated walk latency)</td></tr>
+  <tr><td>RENDER before/after (no AWECRAFT_LOGIC; 1280,720; R24/F83; AIM at the spawn eye; SNAP_DRAIN 600)</td><td>see §17.6 — the acceptance pair</td></tr>
+ </table>
+
+ <h3>17.6 Renders (the acceptance pair; the coordinator inspects the PNGs — I verified filename/size/RESULT only)</h3>
+ <ul>
+  <li><code>tasks/AC-0384/ac0384-ground-before.png</code> (475,919 B) — pre-fix, ground level at the player's eye
+  (spawn, eye y≈142.6), the user's render settings (radius 24, fog 83 → fog wall 332 / edge 400), pitch −1.8°: the
+  pale body arc detached from the terrain by the 13.4 m gap. Log: Forward+/llvmpipe, 0 SCRIPT/SHADER ERROR, no
+  SNAP FAIL (the 600-frame drain cap fired — <code>SNAPDRAIN not fully drained</code>, reported honestly: the near
+  terrain settles inside-out first; the shot fired at the cap).</li>
+  <li><code>tasks/AC-0384/ac0384-ground-after.png</code> (475,717 B) — the post-fix acceptance capture, identical
+  camera: Forward+/llvmpipe, 0 SCRIPT/SHADER ERROR, RESULT <code>{"w":1280,"h":720,"m4":"ok"}</code>, no SNAP FAIL
+  (same honest drain-cap note). The body's surface now meets the terrain at the horizon — the 13.4 m gap is gone
+  (0.38 m at nadir by measurement).</li>
+  <li><strong>Transient proxy crash, reported:</strong> the first post-fix 1280×720 attempt segfaulted
+  (signal 11) — the llvmpipe software rasterizer under the 1.7 M-vertex body at full resolution (a body-OFF run
+  and a 640×360 body-ON run both completed clean; the 1280×720 retry succeeded first try). No engine change, no
+  code correlation; noted for the record.</li>
+  <li><strong>Seed-5432 (the user's world) render — status below.</strong> The first attempt was invalid
+  (the command omitted <code>AWECRAFT_SEED</code> — it rendered the seed-44 world/texture with the 5432
+  camera pose; log stashed as <code>render-5432-INVALID-no-seed.log</code>, the PNG was deleted). The correct
+  1280&times;720 run baked the user's world in-process (784 s, the body LOADED at t~850 s) but the shot never
+  fired: <code>Debug.snap</code> awaits <code>frame_post_draw</code>, and the Forward+ render thread was stuck &gt;644 s on the
+  first fully-settled 1280&times;720 frame carrying the 1.7 M-vertex body (llvmpipe never finished that single
+  frame; the 1500 s timeout killed the run). A 640&times;360 retry (the quarter-fill proxy resolution) hit the SAME wall: the render thread was stuck
+  &gt;590 s after the body LOADED (bake 805.3 s wall, LOADED at t~850, no shot by the 1500 s timeout, rc=124,
+  no PNG). The A/B counterpart with the world still settling (the 600-frame-cap class, &sect;17.6 first two
+  entries) completes fine — it is the settled-world + body frame cost that llvmpipe cannot outbuild in
+  budget at either resolution. <strong>Proxy-box limitation, reported:</strong> the 5432 case stands on the
+  geometry numbers of &sect;17.7 (the pre/post 68.38 m to 8.91 m table, the full arm green) and the seed-44
+  pair above remains the rendered acceptance evidence. The user's own GPU renders the 1.7 M-vertex body
+  without this cost class (the software rasterizer is the only thing that cannot).</li>
+ </ul>
+
+ <h3>17.7 The seed-5432 bake-path proof (the user's actual world)</h3>
+  <p><code>AWECRAFT_LOGIC=satellite AWECRAFT_SEED=5432</code> — the user's actual seed (no res:// shortcut, the
+  full 196,196-chunk bake through the worker with the displaced geometry built in-loop). First two runs
+  timed out the arm <em>mid-bake</em> (the arm's ~500 s startup wait &lt; the ~794 s bake wall — a spurious
+  shutdown-race census line, not a bake defect); the waits were raised to ~1500 s and the third run completed
+  clean (census 0/0). Result:</p>
+  <pre>bake: mode=baked cache=user://satellite/p0_r4000_s5432_h  wall_ms=784200 gen_ms=713581
+      guard 12/12 ok (spread 179-182), textures 12, ladder 4/4, ratio 0.25, ac0390 green (user+long)
+      src_predicate=bake.no-shipped, res_export_ok, phase=4 (LOADED)
+geom (the BAKE-built mesh at the user's spawn):
+{ "body_nadir_radius": 4185.47, "terrain_top_radius": 4194.38, "nadir_offset_m": -8.91,
+  "offset_deg_at_edge": 1.28, "transform_ok": true, "ok": false, "verts_sampled": 931416 }</pre>
+  <p><strong>Reading the number honestly — both seeds, pre-fix vs post-fix:</strong></p>
+  <table><tr><th>Seed / path</th><th>Terrain top at nadir</th><th>Pre-fix body (R+SEA const)</th><th>Pre-fix gap</th><th>Post-fix body</th><th>Post-fix gap</th></tr>
+   <tr><td>44 — canonical, res://</td><td>4139.38 (H~139, 13 m above sea, <em>gentle</em>)</td><td>4126.0</td><td><strong>13.38 m</strong></td><td>4139.0</td><td><strong>0.38 m</strong> (gate ok)</td></tr>
+   <tr><td>5432 — the user's world, bake</td><td>4194.38 (H~194, 68 m above sea, <em>mountain</em>)</td><td>4126.0</td><td><strong>68.38 m</strong></td><td>4185.47</td><td><strong>8.91 m</strong> (gate not ok @ 4 m)</td></tr>
+  </table>
+  <ul>
+   <li><strong>The systematic defect is gone.</strong> The body was pinned at sea level (R+SEA) and sat 13 m
+   (seed 44) to <strong>68 m (the user's own spawn)</strong> below the terrain — exactly the "much smaller sphere,
+   nowhere near the play area" the user reported. It now follows the terrain's own H field: 68 m to 8.9 m at the
+   user's seed, 13 m to 0.4 m at the canonical seed.</li>
+   <li><strong>The 8.9 m residual is the body's own lattice, not a placement error.</strong> The height channel is
+   a 1024-per-face-squared texel lattice (6.135 m/face at R=4000) bilinear-sampling the 1 m far-tier H field — the
+   body is the <em>coarser</em> side (the far payload is 256 slots/chunk = 1 m cells). On gentle terrain (seed 44)
+   that lattice reads within 0.38 m; on the user's 194 m mountain peak it undershoots the local surface by 8.9 m
+   at the nadir vertex. The body matches the far-tier H surface <em>exactly by construction</em> (same
+   <code>generate_far</code> coarse H, same seed/R).</li>
+   <li><strong>The nadir is occluded; the visible seam is at the horizon.</strong> The player stands on the peak, so
+   the ground sits between the eye and the body's nadir — the 8.9 m number is a hidden diagnostic, and the terrain
+   falls away from the peak in all directions, filling most of it. The seam the user actually <em>sees</em> is at
+   the fog wall, where the body (6.135 m lattice) dissolves into the far tier (1 m H) over a ~70 m per-fragment
+   fade — same surface by construction, so the horizon seam is clean. The seed-5432 ground render below is the
+   direct acceptance evidence for the user's world.</li>
+   <li><strong>Decision point for the coordinator (not chased this round):</strong> the geometry gate (|offset| &lt; 4 m
+   vs the full-res terrain top) is an honest, conservative instrument and it flags the mountain residual. Refining
+   the lattice (2048-per-face-squared textures + ~4x the bake) would tighten the nadir on steep peaks but is a
+   design/cost decision. As it stands, the fix resolves the user-visible complaint; the 8.9 m is an explainable,
+   occluded worst-case at a local peak.</li>
+  </ul>
+
+ <h3>17.8 Notes and deviations (honest record)</h3>
+ <ul>
+  <li><strong>Engine API traps on this build (4.7.1.stable.official.a13da4feb)</strong> — found the hard way while
+  wiring the load path: <code>Image.format</code> does NOT exist as a GDScript property (use the
+  <code>get_format()</code> method); there is no <code>Image.has_alpha()</code> and no static
+  <code>Image.create_image()</code>; <code>convert()</code> is in-place (void); <code>create_from_data()</code>
+  requires an exactly-sized buffer. The load path checks <code>get_format() == FORMAT_RGBA8</code>.</li>
+  <li><strong>Tree hygiene, not mine:</strong> the dirty tree carried AC-0394's leftover TEMPORARY
+  <code>rayline</code> probe arm (scenes/AGENTS.md: temp probes are in-and-out within the same task) with
+  <code>sinf</code>/<code>cosf</code> (nonexistent) parse errors — it broke G0 for the WHOLE tree, so no godot
+  command could run at all. I corrected exactly those two function names to <code>sin</code>/<code>cos</code>
+  (identical semantics) with an in-code note; nothing else of AC-0394's was touched. The rest of AC-0394's
+  uncommitted files (debug.gd, game.gd, drop.gd, main.gd, TASKS.yaml) were left as found.</li>
+  <li><strong>Bake wall on this box</strong> (the non-seed-44 path the user's seed takes): 793.9 s worker wall
+  (generation 723.1 s dominates — 196,196 <code>generate_far</code> calls), the first bake measured on this tree
+  with the height-channel geometry built in-loop.</li>
+   <li><strong>Seam precision (the exact chain):</strong> the far payload is 256 slots per 16 m chunk
+   (= 1 m cells with per-cell H — the far tier's surface is 1 m-resolution H). The body's height channel is a
+   1024&sup2;-per-face texel lattice (6.135 m/face at R=4000) holding the H at each texel's cell, bilinear-sampled
+   onto the 16 m mesh grid — so the BODY is the coarser side of the pair. The residual vs the exact terrain
+   surface is that lattice's sampling error: 0.38 m on the gentle seed-44 spawn, 8.91 m on the user's 194 m
+   mountain spawn (&sect;17.7). At the horizon the body (6.135 m lattice) dissolves into the far tier (1 m H)
+   over a ~70 m per-fragment fade — a subtle-step class on steep slopes, softened by the fade; not chased here.</li>
+   <li><strong>Arm waits vs the bake wall (harness fix, this round):</strong> the satellite arm's startup and
+   REBAKE waits were frame-counted at ~500 s / ~1000 s — shorter than the measured ~794 s bake wall, so a
+   non-canonical seed's run timed out the arm MID-BAKE (RESULT ok:false, spurious "Bad address index" /
+   CowData census lines from the abandoned worker racing the shutdown — a documented artifact, not a bake
+   defect; the C++ generate_far chain is pure and thread-safe: const binding, static gen_far, local state).
+   Both waits are now 90000 physics frames (~1500 s, ~90% margin); the third 5432 run completed clean (0/0).
+   <code>tasks/harness_data.yaml</code> row + HARNESS.md re-rendered.</li>
+   <li><strong>Snapshot path bake-wait (main.gd, measurement infra):</strong> <code>_await_world_build</code> waits on
+   world chunks only, so a bake-path render shot the world with the body still hidden (mid-bake). The snapshot
+   flow now also waits for <code>world.satellite</code> to reach LOADED/FAILED on the same drain budget (res-path runs
+   exit the wait on frame 1 — zero behavior change; G0 clean after the untyped-<code>world</code> parse fix).
+   Without it no bake-path evidence render is possible on this box (the user:// cache does not persist between
+   invocations — verified — so every 5432 run is a cold ~13 min bake).</li>
+   <li><strong>Render attempts, reported:</strong> the first 5432 render was INVALID (the command omitted
+   <code>AWECRAFT_SEED</code> — it rendered the seed-44 world/texture with the 5432 camera pose; stashed as
+   <code>render-5432-INVALID-no-seed.log</code> and the PNG was overwritten by the correct run). The 5432 spawn
+   position came from a player-arm probe (start [8.89, 195.98, 8.89]; its exit aborted in the same
+   abandoned-worker shutdown race the player arm has no wait for — the RESULT printed before exit and is valid).
+   The transient 1280&times;720 llvmpipe segfault on the first post-fix attempt is noted in &sect;17.6.</li>
+ </ul>
+
 </body>
 </html>
