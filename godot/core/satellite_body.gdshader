@@ -62,7 +62,18 @@
 // the output are all sRGB-domain, the same convention the aero sky
 // shader and the env fog colour use). No linear conversion here.
 shader_type spatial;
-render_mode cull_back, depth_draw_always;
+// AC-0384 r3: fog_disabled - the body's own op/haz model IS the fog-wall
+// bridge: existence ramps over the world's fog window and haz_d mixes the
+// rim toward u_air (== env.fog_light_color) exactly where the world is
+// 100% fog colour (header items (1) and (2)(b)). With the engine env fog
+// still applied, every fragment beyond fog_depth_end is repainted fog
+// colour by the engine - the established disc is erased and the user
+// sees a featureless fog-colour ball with only the fog_disabled cloud
+// shell as detail (the cloud shader carries the same flag, its comment
+// naming this exact failure for the 4300 m shell). This flag is the
+// designed state, not a workaround: below the fog wall the body's
+// fragments are discarded by `op` anyway, so no double-fog is possible.
+render_mode cull_back, depth_draw_always, fog_disabled;
 
 uniform sampler2D tex : filter_linear;
 uniform float u_fog_far : hint_range(0.0, 20000.0);

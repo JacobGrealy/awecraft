@@ -13180,16 +13180,26 @@ func _satellite_test(spawn: Vector3) -> void:
 	var dirn: Vector3 = (ppos0 - sb.position).normalized()  # body-local == radial (origin at the sphere centre)
 	var best_dot := -2.0
 	var nadir_radius := -1.0
+	# AC-0384 r3: the body's FULL vertex radius range, in the same loop -
+	# the nadir alone can hide a shell that is right under the feet and
+	# wrong elsewhere (or vice versa).
+	var body_rmin := INF
+	var body_rmax := 0.0
 	var verts_n := 0
 	for mn in sb.face_nodes:
 		var arrs: Array = (mn as MeshInstance3D).mesh.surface_get_arrays(0)
 		var vs: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
 		for v in vs:
 			verts_n += 1
+			var vr: float = v.length()
+			if vr < body_rmin:
+				body_rmin = vr
+			if vr > body_rmax:
+				body_rmax = vr
 			var dn: float = v.normalized().dot(dirn)
 			if dn > best_dot:
 				best_dot = dn
-				nadir_radius = v.length()
+				nadir_radius = vr
 	var sea_r: float = R + float(SEA)
 	var off_m: float = nadir_radius - terrain_top_radius
 	var tr_ok: bool = sb.position.is_equal_approx(Vector3(0.0, -R, 0.0)) \
@@ -13207,6 +13217,57 @@ func _satellite_test(spawn: Vector3) -> void:
 		"verts_sampled": verts_n,
 		"ok": bool(tr_ok and absf(off_m) < 4.0),
 	}
+	# AC-0384 r3: the shared centre/radius source, measured LIVE in the
+	# loaded tree (the user's report: BOTH the body and the cloud layer
+	# read as shells inside the world). The clouds (main's _place_clouds)
+	# and the body (configure) are both supposed to sit on the planet
+	# centre (0,-R,0) with radii R+h and R+H; the terrain (the reference
+	# the user walks on) sits at R+H. One wrong shared value shows up
+	# here as a centre/scale mismatch - measured, not assumed. Peaks
+	# above h pierce a shell by design (HMAX 384 > h 275), so the cloud
+	# gate is on the CENTRE + the expected radius, not on "above every
+	# terrain point".
+	var clouds_out: Array = []
+	var clouds_centre_ok := true
+	var clouds_radius_ok := true
+	var clouds_n := 0
+	var main_n = get_tree().root.get_node_or_null("Main")
+	if main_n != null:
+		for cl in main_n.cloud_layers:
+			var cln: MeshInstance3D = cl["node"]
+			var clh: float = float(cl["h"])
+			var clr: float = cln.scale.x  # unit SphereMesh: scale == shell radius
+			clouds_out.append({
+				"h": clh,
+				"r_measured": _sat_rnd(clr, 1),
+				"r_expected": _sat_rnd(R + clh, 1),
+				"pos": [roundf(cln.position.x * 10.0) / 10.0, roundf(cln.position.y * 10.0) / 10.0, roundf(cln.position.z * 10.0) / 10.0],
+				"vis": cln.visible,
+			})
+			clouds_n += 1
+			if not cln.position.is_equal_approx(Cc):
+				clouds_centre_ok = false
+			if absf(clr - (R + clh)) >= 1.0:
+				clouds_radius_ok = false
+	if clouds_n > 0 and (not clouds_centre_ok or not clouds_radius_ok):
+		ok = false
+		out["clouds_fail"] = clouds_out
+	geom["clouds"] = clouds_out
+	geom["clouds_n"] = clouds_n
+	geom["clouds_centre_ok"] = clouds_centre_ok
+	geom["clouds_radius_ok"] = clouds_radius_ok
+	geom["body_radius_min"] = _sat_rnd(body_rmin, 2)
+	geom["body_radius_max"] = _sat_rnd(body_rmax, 2)
+	# the body follows the terrain's far LOD - including the ocean floor,
+	# where the column top H drops toward 0. It may therefore sit below
+	# SEA (body_radius_min < R+SEA is CORRECT over deep water); what is
+	# inside-the-world is below the BEDROCK radius R itself (H < 0 cannot
+	# exist) - the pre-r2 sea-level shell sat at exactly R+SEA with the
+	# terrain at R+H, never below bedrock, so this gate is a no-op on the
+	# old shell and fires only on a genuinely interior mesh:
+	if body_rmin < R - 1.0:
+		ok = false
+		out["body_below_bedrock"] = geom["body_radius_min"]
 	p.set_physics_process(false)
 	p.hunger = 20.0
 	var levels: Array = [
@@ -13302,6 +13363,172 @@ func _satellite_test(spawn: Vector3) -> void:
 	if sb._load_src == "res" and not sb._src_predicate.begins_with("ResourceLoader"):
 		ok = false
 		out["predicate_fail"] = "res path chosen but predicate is not ResourceLoader.*: %s" % sb._src_predicate
+	# AC-0384 r3: ENCODE vs DECODE - the bake ENCODES the height into the
+	# PNG alpha (A = round(H*255/HMAX)); the load path DECODES H from the
+	# alpha of the image it ACTUALLY loaded (res: the .ctex import decode,
+	# cache: the user:// PNG, bake: the worker image). Two separate code
+	# paths - compare their outputs per face and in aggregate:
+	#  (a) raw-file alpha (the encode's output on disk) vs loaded-image
+	#      alpha (formats, byte diffs, decoded-H diffs);
+	#  (b) the displaced MESH (R + bilinear H) vs the DECODED alpha at the
+	#      same (u,v) - the link from texture to surface. The encode ->
+	#      decode round trip is exact within 1 H (1.506 m per alpha step),
+	#      and both sides bilinear over the same lattice, so the mesh
+	#      tolerance is 2.0 m.
+	var NPIX_SAT: int = 1024
+	# the bake path leaves _load_src == "" (the configure line prints
+	# "baked") - normalise it for the RESULT.
+	var hd := {"src": sb._load_src if sb._load_src != "" else "bake", "faces": []}
+	var hd_fmt_loaded := -1
+	var hd_fmt_raw := -1
+	var hd_diff_px := 0
+	var hd_max_byte := 0
+	var hd_max_h := 0
+	var hd_geom_max := 0.0
+	var hd_faces_n := 0
+	var hd_legacy := 0
+	var hd_raw_unreadable := 0
+	for hf in 12:
+		var texf = sb.textures[hf]
+		var img_loaded: Image = (texf as ImageTexture).get_image()
+		if img_loaded == null:
+			break
+		var raw_path: String = sb._res_path(hf)
+		# the bake path leaves _load_src == "" (the configure line prints
+		# "baked") - its encode output is the cache PNG the worker just
+		# wrote; the res/cache paths compare against their own files.
+		if sb._load_src == "" or sb._load_src == "bake":
+			raw_path = sb._cache_path(hf)  # the bake's own disk output
+		var img_raw: Image = sb._load_png(raw_path)
+		var fl: int = img_loaded.get_format()
+		var fr: int = img_raw.get_format() if img_raw != null else -1
+		if hf == 0:
+			hd_fmt_loaded = fl
+			hd_fmt_raw = fr
+		var face_rec := {"f": hf, "fmt_loaded": fl, "fmt_raw": fr}
+		if fl != Image.FORMAT_RGBA8:
+			hd_legacy += 1
+			face_rec["note"] = "loaded image has no alpha (legacy RGB) - constant R+SEA face"
+			hd["faces"].append(face_rec)
+			continue
+		hd_faces_n += 1
+		var dL: PackedByteArray = img_loaded.get_data()
+		# per-face localisation (AC-0384 r3: the bake run's 124 m max had to
+		# be pinned to a face/channel, not chased blind on a 13 min bake):
+		var f_diff_px := 0
+		var f_max_byte := 0
+		var f_geom_max := 0.0
+		var f_al_min := 255
+		var f_al_max := 0
+		var f_al_sum := 0
+		for k in NPIX_SAT * NPIX_SAT:
+			var ak: int = dL[k * 4 + 3]
+			f_al_min = mini(f_al_min, ak)
+			f_al_max = maxi(f_al_max, ak)
+			f_al_sum += ak
+		if img_raw != null and img_raw.get_width() == NPIX_SAT and img_raw.get_height() == NPIX_SAT:
+			var dR: PackedByteArray = img_raw.get_data()
+			if dR.size() == dL.size():
+				for k in NPIX_SAT * NPIX_SAT:
+					var al: int = dL[k * 4 + 3]
+					var ar: int = dR[k * 4 + 3]
+					var db: int = absi(al - ar)
+					if db > 0:
+						f_diff_px += 1
+						hd_diff_px += 1
+					if db > f_max_byte:
+						f_max_byte = db
+					if db > hd_max_byte:
+						hd_max_byte = db
+					var dh: int = absi(int(roundf(float(al) * 384.0 / 255.0)) - int(roundf(float(ar) * 384.0 / 255.0)))
+					if dh > hd_max_h:
+						hd_max_h = dh
+			else:
+				hd_raw_unreadable += 1
+				face_rec["note"] = "raw size mismatch (encode output not comparable)"
+		else:
+			hd_raw_unreadable += 1
+			face_rec["note"] = "raw file unreadable at %s (encode output not comparable)" % raw_path
+		face_rec["diff_px"] = f_diff_px
+		face_rec["max_byte"] = f_max_byte
+		face_rec["alpha_min"] = f_al_min
+		face_rec["alpha_max"] = f_al_max
+		face_rec["alpha_mean"] = _sat_rnd(float(f_al_sum) / float(NPIX_SAT * NPIX_SAT), 1)
+		# (b) the mesh link, sampled (150 vertices per face):
+		var mnf = sb.face_nodes[hf]
+		var arrsf: Array = (mnf as MeshInstance3D).mesh.surface_get_arrays(0)
+		var vsf: PackedVector3Array = arrsf[Mesh.ARRAY_VERTEX]
+		var uvsf: PackedVector2Array = arrsf[Mesh.ARRAY_TEX_UV]
+		if uvsf.size() == vsf.size():
+			var stride: int = maxi(1, vsf.size() / 150)
+			var f_dgs: Array = []  # all sampled deltas (localisation)
+			var f_worst: Array = []  # top-3 {uv, radius, ht, dg}
+			var k2 := 0
+			while k2 < vsf.size():
+				var uv2: Vector2 = uvsf[k2]
+				var fx2: float = clampf(uv2.x * NPIX_SAT - 0.5, 0.0, float(NPIX_SAT - 1))
+				var fy2: float = clampf(uv2.y * NPIX_SAT - 0.5, 0.0, float(NPIX_SAT - 1))
+				var x0: int = int(fx2)
+				var y0: int = int(fy2)
+				var x1: int = mini(x0 + 1, NPIX_SAT - 1)
+				var y1: int = mini(y0 + 1, NPIX_SAT - 1)
+				var tx2: float = fx2 - float(x0)
+				var ty2: float = fy2 - float(y0)
+				var h00: float = float(dL[(y0 * NPIX_SAT + x0) * 4 + 3]) * 384.0 / 255.0
+				var h10: float = float(dL[(y0 * NPIX_SAT + x1) * 4 + 3]) * 384.0 / 255.0
+				var h01: float = float(dL[(y1 * NPIX_SAT + x0) * 4 + 3]) * 384.0 / 255.0
+				var h11: float = float(dL[(y1 * NPIX_SAT + x1) * 4 + 3]) * 384.0 / 255.0
+				var ht: float = lerpf(lerpf(h00, h10, tx2), lerpf(h01, h11, tx2), ty2)
+				var vr: float = vsf[k2].length()
+				var dg: float = absf(vr - R - ht)
+				if dg > hd_geom_max:
+					hd_geom_max = dg
+				if dg > f_geom_max:
+					f_geom_max = dg
+				f_dgs.append(dg)
+				f_worst.append({"uv": [_sat_rnd(uv2.x, 4), _sat_rnd(uv2.y, 4)], "radius": _sat_rnd(vr, 2), "ht": _sat_rnd(ht, 2), "dg": _sat_rnd(dg, 2)})
+				k2 += stride
+			f_dgs.sort()
+			f_worst.sort_custom(func(a, b): return float(a["dg"]) > float(b["dg"]))
+			face_rec["geom_dg"] = {
+				"n": f_dgs.size(),
+				"min": _sat_rnd(float(f_dgs[0]), 2) if f_dgs.size() > 0 else 0.0,
+				"p50": _sat_rnd(float(f_dgs[mini(f_dgs.size() / 2, f_dgs.size() - 1)]), 2) if f_dgs.size() > 0 else 0.0,
+				"p90": _sat_rnd(float(f_dgs[mini(int(float(f_dgs.size()) * 0.9), f_dgs.size() - 1)]), 2) if f_dgs.size() > 0 else 0.0,
+				"max": _sat_rnd(float(f_dgs[f_dgs.size() - 1]), 2) if f_dgs.size() > 0 else 0.0,
+			}
+			face_rec["geom_worst"] = f_worst.slice(0, 3)
+			# (c) mesh identity fingerprints (AC-0384 r3: the bake run
+			# showed every face node carrying face 0's geometry - pin down
+			# WHICH layer holds it: the node meshes, or the _geom cache
+			# itself): vertex count + first three vertex radii, for the
+			# node's mesh and the _geom cache entries 0 and f:
+			face_rec["fp_node"] = [vsf.size(), _sat_rnd(vsf[0].length(), 2), _sat_rnd(vsf[mini(1, vsf.size() - 1)].length(), 2), _sat_rnd(vsf[mini(2, vsf.size() - 1)].length(), 2)]
+			var ge0 = sb._geom[0] if sb._geom.size() > 0 else null
+			var gef = sb._geom[hf] if hf < sb._geom.size() else null
+			if ge0 != null and ge0.has("v"):
+				face_rec["fp_cache0"] = [ge0["v"].size(), _sat_rnd(ge0["v"][0].length(), 2), _sat_rnd(ge0["v"][mini(1, ge0["v"].size() - 1)].length(), 2), _sat_rnd(ge0["v"][mini(2, ge0["v"].size() - 1)].length(), 2)]
+			if gef != null and gef.has("v"):
+				face_rec["fp_cachef"] = [gef["v"].size(), _sat_rnd(gef["v"][0].length(), 2), _sat_rnd(gef["v"][mini(1, gef["v"].size() - 1)].length(), 2), _sat_rnd(gef["v"][mini(2, gef["v"].size() - 1)].length(), 2)]
+		face_rec["geom_max_m"] = _sat_rnd(f_geom_max, 2)
+		hd["faces"].append(face_rec)
+	hd["geom_cache_size"] = sb._geom.size()
+	hd["loaded_fmt"] = hd_fmt_loaded
+	hd["raw_fmt"] = hd_fmt_raw
+	hd["faces_compared"] = hd_faces_n
+	hd["legacy_faces"] = hd_legacy
+	hd["raw_unreadable"] = hd_raw_unreadable
+	hd["alpha_diff_px"] = hd_diff_px
+	hd["alpha_max_byte_diff"] = hd_max_byte
+	hd["alpha_max_h_diff"] = hd_max_h
+	hd["geom_vs_texture_max_m"] = _sat_rnd(hd_geom_max, 2)
+	hd["ok"] = bool(hd_faces_n == 12 and hd_legacy == 0 and hd_raw_unreadable == 0
+			and hd_fmt_loaded == Image.FORMAT_RGBA8 and hd_fmt_raw == Image.FORMAT_RGBA8
+			and hd_max_byte <= 1 and hd_max_h <= 1 and hd_geom_max <= 2.0)
+	out["height_decode"] = hd
+	if not hd["ok"]:
+		ok = false
+		out["height_decode_fail"] = "encode/decode or mesh link divergence: %s" % str(hd)
 	if OS.get_environment("AWECRAFT_SATELLITE_REBAKE") == "1":
 		sb.force_rebake()
 		var t2 := 0

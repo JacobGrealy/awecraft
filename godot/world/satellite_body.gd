@@ -1,3 +1,14 @@
+# MESH GRID (AC-0384 r3) - MESH_STEP is the displacement grid, in metres,
+# per face (the 16 m column scale at the shipped R = 4000). The shipped
+# default never changes; AWECRAFT_SAT_MESH_STEP overrides it for render
+# runs (clamped 4..256) so a software-renderer box can settle a frame
+# CARRYING the body: the r2 renders timed out at 1500 s on the settled
+# 1.7 M-vertex frame (HARNESS.md §2 documents the class), and a render
+# that never settles the body cannot show the seam this ticket is about.
+# At 64 the vertex count drops ~16x and the displaced surface keeps its
+# shape (the displacement is metres-scale; the extra facet pooling is a
+# few metres, inside the 70 m dissolve window).
+#
 # AC-0310 P2 - the satellite body tier (whole-planet view above the
 # atmosphere). Draws the planet as one closed body: the 12-face
 # great-circle chart (core/sphere_math.gd), textured with the per-face
@@ -73,6 +84,14 @@ const NPIX := 1024
 # shows (the 28,812-vertex 49x49 grid was smooth sea level; this is the
 # ~1.7 M-vertex terrain surface at R = 4000, ~466 k at R = 2000).
 const MESH_STEP := 16.0
+# AC-0384 r3: the LIVE grid step - MESH_STEP by default (byte-identical
+# behaviour), AWECRAFT_SAT_MESH_STEP overrides it (clamped 4..256) so a
+# software-renderer box can settle a frame carrying the body (see the
+# MESH GRID note above). Read once in _ready, before any geometry is
+# built (the bake worker and the load path both read this var, never the
+# const). It changes the MESH ONLY: the cache key, the textures and the
+# H grid are step-independent (the geometry is rebuilt from the grid).
+var mesh_step := MESH_STEP
 
 
 func _mesh_grid(f: int) -> Vector2i:
@@ -81,8 +100,8 @@ func _mesh_grid(f: int) -> Vector2i:
 	# R = 4000), v spans W (393). Faces 2-11 span W x W (393 x 393).
 	var W: float = SphereMath.face_width(R)
 	if f <= 1:
-		return Vector2i(int(roundf(W / 2.0 / MESH_STEP)), int(roundf(W / MESH_STEP)))
-	return Vector2i(int(roundf(W / MESH_STEP)), int(roundf(W / MESH_STEP)))
+		return Vector2i(int(roundf(W / 2.0 / mesh_step)), int(roundf(W / mesh_step)))
+	return Vector2i(int(roundf(W / mesh_step)), int(roundf(W / mesh_step)))
 const HOME_HALF := 197  # home chunks per axis: cx, cz in [-197, 196]
 const HOME_N := HOME_HALF * 2  # 394
 const HOME_CHUNKS := HOME_N * HOME_N  # 155,236
@@ -240,6 +259,12 @@ var _satdiag_last_op := -1.0
 
 func _ready() -> void:
 	_shader = load("res://core/satellite_body.gdshader")
+	# AC-0384 r3: the mesh-grid step override (default = MESH_STEP, no
+	# behaviour change). Read here so both geometry lanes (the bake
+	# worker, the load path) see the same value before the first grid.
+	var mst: String = OS.get_environment("AWECRAFT_SAT_MESH_STEP")
+	if mst != "" and mst.to_float() >= 4.0:
+		mesh_step = clampf(mst.to_float(), 4.0, 256.0)
 	# AC-0384 diagnostic: read the env knobs once, open the fallback log
 	# file (the windowed build may not keep a console), print the banner
 	# with the user's trigger instructions.
@@ -629,7 +654,14 @@ func _bake_worker(g: Variant) -> void:
 			# the face's H grid (_hgrid) is live; one code path for bake
 			# and load (the pre-r2 second geometry loop ran after pay
 			# was freed and built the constant-radius sphere).
-			_geom.append(_geom_for_face(f, _hgrid))
+			# AC-0384 r3: _geom_for_face self-appends to _geom when it
+			# builds (the f == _geom.size() append at its tail) - the
+			# pre-r3 _geom.append(...) HERE was a second append: after
+			# face 0 the cache size overshot the face index, so every
+			# later face hit the "return _geom[f]" early-out with face 0's
+			# geometry (the cache grew to 13, all g0, and the bake path's
+			# 11 non-home faces drew the home patch). Call it bare.
+			_geom_for_face(f, _hgrid)
 		# colour time = the face-pipeline wall minus the PNG writes (the
 		# old main-thread slice's field semantics: colour and png separate;
 		# _step_face accrues the png time into _png_ms inside the face).

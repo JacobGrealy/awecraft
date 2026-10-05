@@ -124,7 +124,19 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         lambert, re-weighted by the shader to track the world's actual sun —
 │                         the DayNight convention, AC-0382), per-fragment
 │                         dissolve into the drawn disc at the depth-fog wall
-│                         (core/satellite_body.gdshader); runtime bake cache
+│                         (core/satellite_body.gdshader); FOG-WALL CONTRACT (AC-0384 r3): the body's
+│                         render_mode is fog_disabled — the engine env fog must NOT be applied: the
+│                         body's own op/haz model IS the fog-wall bridge (existence ramps over [fog_far,
+│                         render_edge], haz_d mixes the rim toward u_air, which is env.fog_light_color
+│                         itself — DayNight sky_display), and with the env fog still on, everything
+│                         beyond fog_depth_end repaints fog colour: the established disc erases to a
+│                         featureless ball and only the fog_disabled cloud shell keeps detail (the cloud
+│                         shader carries the same flag, its comment naming this exact "erased by it"
+│                         failure); below the fog wall the body's fragments are discarded by op anyway,
+│                         so no double-fog is possible. The displaced grid step is the
+│                         AWECRAFT_SAT_MESH_STEP env override (default 16 = unchanged — software-renderer
+│                         render runs use ~64 so a settled frame carrying the body completes); runtime
+│                         bake cache
 │                         user://satellite/p{planet}_r{R}_s{seed}_h/ (the _h token = the
 │                         height-channel era; pre-r2 RGB caches trigger a one-time re-bake),
 │                         seeded from godot/assets/satellite/ for the canonical seed 44; the

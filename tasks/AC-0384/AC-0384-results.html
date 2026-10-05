@@ -1083,5 +1083,191 @@ geom (the BAKE-built mesh at the user's spawn):
    The transient 1280&times;720 llvmpipe segfault on the first post-fix attempt is noted in &sect;17.6.</li>
  </ul>
 
+ <h2>18. Round 18 (2026-10-04) — the user: &ldquo;not fixed — the satellite LOD is further away than the bedrock layer, the cloud layer is lower than the lowest terrain&rdquo;: the radii were right; the PIXEL PATH was not (fixed)</h2>
+
+ <h3>18.1 The report and the verdict on round 17</h3>
+ <p>User (2026-10-04, after the r2 rebuild): &ldquo;it is not fixed&rdquo; — the cloud layer &ldquo;should never be
+ under anything but it's lower than the lowest terrain&rdquo;, and the satellite LOD &ldquo;is not off by some
+ small amount, it is further away than the bedrock layer&rdquo;. Round 17's fix (the body follows the
+ terrain, R+H) was proven in the headless arm only; per the brief its conclusion is treated as
+ unproven. Round 18 measured the loaded game path end to end — geometry, every texture load path, and
+ the actual Forward+ pixels at the user's own settings (R24/F83, altitudes 200 m and 668 m).</p>
+
+ <h3>18.2 Root cause — the body was missing <code>fog_disabled</code> (one shared property, both clauses)</h3>
+ <p><b>The radii are correct; the pixels were not.</b> The body's per-fragment model
+ (<code>core/satellite_body.gdshader</code>) is built to <i>take over exactly where the world's depth fog
+ is 100%</i>: <code>op</code> ramps existence over the world's fog window [fog_far, render_edge],
+ <code>haz_a</code> hazes the limb, and <code>haz_d</code> mixes the rim toward <code>u_air</code> — which is
+ <code>DayNight.sky_display(t)</code>, the <b>identical colour of <code>env.fog_light_color</code></b>
+ (main.gd pushes both from the same value). For that model to work, the engine env fog must NOT be
+ applied to the body — but the render_mode was <code>cull_back, depth_draw_always</code>: no
+ <code>fog_disabled</code>. The cloud shell already carries the flag, and its comment names this exact
+ failure: &ldquo;a 4300 m shell would be erased by it&rdquo;. So in the user's game (R24/F83 →
+ <code>fog_depth_end</code> = 332 m): at the user's 668 m altitude every planet fragment is 474 m or
+ farther — the engine fog repaints the ENTIRE established body disc as the fog colour (a view-direction
+ gradient, census-verified below), and the only non-fogged detail left in the frame is the
+ fog_disabled cloud shell: white puffs on a featureless disc. Puffs on a featureless disc read as
+ &ldquo;lower than the lowest terrain&rdquo;; the featureless disc reads as a ball further inside than the
+ bedrock. Both clauses of the user's report fall out of <b>one shared property</b> — the body missing
+ the <code>fog_disabled</code> the clouds have. The arms measure radii (all correct); fog is a pixel
+ effect invisible to them — a check that cannot reach the defect is worse than none. The r2
+ &ldquo;acceptance render&rdquo; was at ground level, where the body is hidden/fogged anyway (the seam
+ never in frame); AC-0396's planet shot sidesteps the bug with <code>AWECRAFT_NO_FOG=1</code> in its
+ recipe (the recipe author knew the env fog repaints the body — the user's game has no such env).</p>
+ <p><b>The fix:</b> <code>render_mode cull_back, depth_draw_always, fog_disabled;</code>
+ (one word + the contract comment). Below the fog wall the body's fragments are discarded by
+ <code>op</code> anyway, so no double-fog is possible; at the wall <code>haz_d</code> blends the rim
+ from fog colour to texture over [332, 400] m — the seamless handoff the header's items (1) and (2)(b)
+ describe. Also added (render feasibility on this box): <code>AWECRAFT_SAT_MESH_STEP</code> env in
+ <code>world/satellite_body.gd</code> (default 16 = byte-identical behaviour; render runs use 64 →
+ ~108 k verts instead of 1.7 M, so a SETTLED frame carrying the body completes on the software
+ renderer — the r2 1500 s timeouts were exactly the settled 1.7 M-vertex frame).</p>
+
+ <h3>18.3 The pixel A/B (the loaded Forward+ path, seed 44, user config R24/F83, 668 m, 64 m mesh)</h3>
+ <table>
+ <tr><th>Render</th><th>File (bytes)</th><th>Census (32&times;18 grid, sRGB 0-255)</th><th>Reading</th></tr>
+ <tr><td><b>BEFORE</b> — old shader (no fog_disabled), fog ON — the user's current view</td><td><code>.scratch/AC-0384-r3/render-668-before.png</code> (65,625)</td><td>top (disc rim): (181,223,230)/(180,222,228); nadir: (151,189,200)/(131,164,174); maxspread 377</td><td>the disc is the <b>fog colour</b> (a view-direction gradient, rim→nadir) — the body's texture is ERASED; only the fog_disabled cloud puffs carry detail. A 65 KB image = nearly flat content.</td></tr>
+ <tr><td><b>AFTER</b> — fixed shader, fog ON</td><td><code>.scratch/AC-0384-r3/render-668-after-fogon.png</code> (109,794)</td><td>rim: (181,223,230)/(180,222,228); nadir: (144,181,190)/(125,157,165); maxspread 387</td><td>the disc is <b>textured</b> (the terrain's far LOD); the rim band is still fog-coloured — that is <code>haz_a</code> blending toward <code>u_air</code> (== the fog colour) at the limb, the designed bridge.</td></tr>
+ <tr><td>AFTER vs NO_FOG (fixed shader)</td><td><code>render-668-nofog.png</code> (113,226)</td><td>mean diff 1.20/765 scale, 1.2% of pixels differ (a few large-diff pixels = cloud puff drift between runs)</td><td>post-fix, the env fog no longer touches the visible planet — the designed state.</td></tr>
+ <tr><td>BEFORE vs AFTER (pixel diff)</td><td>—</td><td>41.3% of pixels differ, mean 8.67, max 77</td><td>the fix changes exactly the fog-erased band of the disc (the rim stays — both fog-coloured by design).</td></tr>
+ </table>
+ <p>The census is numeric (a grid-sample colour statistics pass), not a visual inspection; the PNGs are
+ never opened in a viewer. The BEFORE vs AFTER contrast is the defect and the fix, in pixels, on the
+ shipped renderer.</p>
+
+ <h3>18.4 Acceptance renders (1280&times;720, fixed shader, the loaded path, R24/F83, TIME 0.5)</h3>
+ <ul>
+  <li><code>.scratch/AC-0384-r3/render-668-after-1280.png</code> (380,369 bytes) — the user's altitude
+  (668 m): the body's disc (the terrain's far LOD, textured) with the cloud shell above it, the
+  haz_a-bridged rim at the horizon. Boot Forward+, <code>SNAP … 1280x720</code>,
+  <code>RESULT {"cam":"","h":720,"m4":"ok","w":1280}</code>, 0 SCRIPT/SHADER ERROR lines. This is the
+  deliverable view: terrain (as its far LOD), clouds above it, the body meeting the horizon.</li>
+  <li><code>.scratch/AC-0384-r3/render-200-seam-1280.png</code> (522,646 bytes) — 200 m: near terrain
+  textured (census (111,131,124) green), the depth-fog wall, the body's rim emerging exactly at the
+  fog wall, clouds overhead. Same boot/SNAP/RESULT/census-0/0 lines.</li>
+  <li>Deviation: both runs hit the <code>SNAPDRAIN</code> cap (world still streaming at shot time) — the
+  same documented class as r2's successful shots; the 668 m view is beyond the fog wall (independent
+  of terrain settle) and the 200 m view's spawn region builds first. The 1280 &ldquo;before&rdquo; record
+  shot was omitted: the 640 A/B pair (18.3) is the A/B evidence at the same pose; the 1280 shots are
+  the acceptance.</li>
+ </ul>
+
+ <h3>18.5 The shared centre/radius source, measured LIVE (the brief's question)</h3>
+ <p>The satellite arm now measures the body, the clouds and the terrain in the loaded tree:
+ <b>all three share the planet centre (0,&minus;4000,0) and Game.planet_R = 4000 — one correct shared
+ value</b> (no planet picker exists; every world is R=4000; the user's own satdiag says R=4000):</p>
+ <table>
+ <tr><th>Shell (seed 44, res path, R24/F83)</th><th>Measured</th><th>Expected</th><th>ok</th></tr>
+ <tr><td>cloud h=400</td><td>pos (0,&minus;4000,0), r 4400.0</td><td>(0,&minus;R,0), R+400</td><td>centre+radius exact</td></tr>
+ <tr><td>cloud h=330</td><td>pos (0,&minus;4000,0), r 4330.0</td><td>(0,&minus;R,0), R+330</td><td>centre+radius exact</td></tr>
+ <tr><td>cloud h=275</td><td>pos (0,&minus;4000,0), r 4275.0</td><td>(0,&minus;R,0), R+275</td><td>centre+radius exact</td></tr>
+ <tr><td>body</td><td>pos (0,&minus;4000,0) scale 1; vertex radius range 4000.0&ndash;4211.9 (min follows the ocean floor, max = highest displaced H); nadir 4139.0</td><td>centre (0,&minus;R,0), R+H per vertex, nadir = terrain</td><td>transform_ok, nadir_offset &minus;0.38 m (r2 standing value), nothing below bedrock (R)</td></tr>
+ <tr><td>terrain (reference the user walks on)</td><td>top under the feet 4139.38 (H&asymp;139.4 at the seed-44 spawn)</td><td>R+H</td><td>—</td></tr>
+ </table>
+ <p>At R=4000 the cloud shells (4275+275&hellip;) can never be globally below the terrain (max 4384):
+ the 275 m shell is pierced locally only by mountains above 275 m — by design (the user's 194 m spawn
+ sits below it). So the user's &ldquo;clouds lower than the lowest terrain&rdquo; is the <b>perception</b>
+ of 18.2 (puffs on a featureless fog disc, no depth cue), not a radius error. New arm fields:
+ <code>geom.clouds[]</code>, <code>clouds_centre_ok</code>, <code>clouds_radius_ok</code>,
+ <code>body_radius_min/max</code>, <code>body_below_bedrock</code> (a body below R is inside the world;
+ below R+SEA over deep water is CORRECT — the first draft of the gate tripped on this and was fixed to
+ the bedrock radius).</p>
+
+ <h3>18.6 Encode vs decode — the two paths, compared output (the brief's prime suspect)</h3>
+ <p>The bake encodes <code>A = round(H*255/HMAX)</code> into the face PNG alpha; the load path decodes
+ H from the alpha of the image it actually loads. The arm now compares the two paths' outputs per face
+ and in aggregate (formats, byte diffs, decoded-H diffs) <b>and</b> samples the displaced mesh against
+ the decoded alpha at the vertex's (u,v). All three load paths, this round:</p>
+ <table>
+ <tr><th>Path</th><th>Raw file (encode output)</th><th>Loaded image (decode)</th><th>Result</th></tr>
+ <tr><td><b>res</b> (the import system — <code>via: import</code>)</td><td>shipped <code>satellite_faceNN.png</code> (the bake's output on disk)</td><td>the <code>.ctex</code> import (VP8L lossless WebP inside) via <code>ResourceLoader</code></td><td>12/12 faces RGBA8 (fmt 5); <b>alpha_diff_px = 0</b>, max byte diff 0, max H diff 0; mesh vs decoded alpha &le; 0.49 m; <code>height_decode.ok = true</code></td></tr>
+ <tr><td><b>cache</b> (the user:// runtime cache — the user's 2nd+ runs)</td><td>shipped PNGs pre-seeded into <code>user://satellite/p0_r4000_s44_h/</code> (same command as the run)</td><td>raw <code>FileAccess</code> PNG read</td><td><code>src=cache</code>; identical geometry (nadir &minus;0.38 m), 0 alpha diffs, all standing values intact</td></tr>
+ <tr><td><b>export PCK</b> (the user's actual build condition — pure pack, <code>--main-pack</code>, no source dir)</td><td>raw PNG on the source disk (not in the pack — <code>FileAccess.file_exists = false</code>)</td><td><code>res://assets/satellite/satellite_face00.png</code> → <code>.import</code> → <code>.godot/imported/*.ctex</code> inside the pack → CompressedTexture2D</td><td><code>ResourceLoader.exists = true</code>; 12/12 RGBA8 import-loadable; loaded alpha vs raw PNG: <b>diff_px = 0, max byte diff 0, max H diff 0</b> — the export carries the encoded alpha byte-for-byte</td></tr>
+ </table>
+ <p><b>Verdict: there is no encode/decode divergence in any link</b> (import encode, PCK storage,
+ GPU-vs-headless decode) — the body's radius in the loaded game is the bake's radius. The r2 suspicion
+ (bake-vs-load decode divergence) is refuted by measurement; the defect was the pixel path (18.2).
+ API traps found while building the probes (4.7.1): <code>Image.load_png</code> does not exist (use
+ <code>Image.load</code>), the mesh UV constant is <code>Mesh.ARRAY_TEX_UV</code> (not
+ <code>ARRAY_UV</code>), <code>roundf()</code> takes one argument, and a <code>--main-pack</code> probe
+ with <code>--path</code> in the mix lets the source dir mask the pack — the export condition must be
+ probed in the pure pack context.</p>
+
+ <h3>18.7 Gates (light set, this round)</h3>
+ <table>
+ <tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+ <tr><td>G0 &times;3</td><td><code>--headless --path godot --quit</code> (before/after each code stage)</td><td>gate_census.py: 0 SCRIPT ERROR, 0 SHADER ERROR — ok (logs <code>.scratch/AC-0384-r3/g0*.log</code>)</td></tr>
+ <tr><td>satellite arm, res, user config</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_SEED=44 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code></td><td><b>ok:true</b>; nadir &minus;0.38 m; clouds perfect; height_decode 0-diff; ladder 4/4 (0.0/0.0/0.5/1.0); ratio 0.25; res_export_ok, via=import; census 0/0 (<code>sat-res-44-r3b.log</code>)</td></tr>
+ <tr><td>satellite arm, cache path</td><td>same + pre-seeded <code>user://</code> cache</td><td><b>ok:true</b>, <code>src=cache</code>, same numbers (<code>sat-cache-44-r3.log</code>)</td></tr>
+ <tr><td>PCK probe (export condition)</td><td><code>--export-pack</code> (9,855,720 B pack) + pure-pack <code>--main-pack</code> script probe</td><td>raw .png absent; import chain intact; 12/12 RGBA8; alpha byte-identical (<code>packed_probe_r3.log</code>)</td></tr>
+ <tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical vs the r2 reference; chunk (0,0) <code>46c20b07c95cb03b57772e1531c97f71</code> (<code>genhash-r3.log</code>)</td></tr>
+ <tr><td>smoke battery</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code></td><td><b>ok:true</b> (sprint_ok, place_ok, sea_stable, torch on, cave census); census 0/0 (<code>smoke-r3.log</code>)</td></tr>
+ <tr><td>renders (acceptance)</td><td>menu-boot snapshot, Forward+, user config</td><td>4 PNGs exist with sizes above; boot lines, SNAP lines, RESULT ok, 0 error lines in all run logs; pixel censuses in 18.3/18.4</td></tr>
+ <tr><td>satellite arm, bake, user's seed (pre-fix)</td><td><code>AWECRAFT_SEED=5432</code> (R24/F83, ~13 min)</td><td>census 0/0; bake 792.6 s worker wall, guard 12/12, clouds perfect, nadir &minus;8.91 m (r2 residual); <b>height_decode found the double-append mesh defect</b> (124 m, shared face-0 mesh, cache 13) — 18.8 (<code>sat-bake-5432-r3c.log</code>, fingerprint run <code>sat-bake-5432-r3d.log</code>)</td></tr>
+ <tr><td>satellite arm, bake, user's seed (POST-FIX)</td><td>same (r3e)</td><td>census 0/0; cache size 12, 12 distinct per-face meshes, <b>height_decode.ok = true</b> (0 alpha diff, mesh-vs-texture &le;0.74 m all faces), verts 1,707,596, range 4000.0&ndash;4222.27; only red = the documented 6.135 m lattice residual (<code>sat-bake-5432-r3e.log</code>)</td></tr>
+ <tr><td>genhash + res arm + smoke (post-fix re-runs)</td><td>as above, seed 44</td><td>genhash 25/25 identical (<code>46c20b07&hellip;</code>); res arm ok:true (nadir &minus;0.38 m, 0-diff decode); smoke ok:true; all 0/0 census</td></tr>
+ </table>
+ <p>HEAVY (boundary r4, flake, r50, full battery, shaderforce, Windows build + stamp) = the
+ coordinator's job; this run exits after the light set. <code>tasks/harness_data.yaml</code> satellite
+ row updated (new result fields + the r3 note) and <code>harness_doc.py --render</code> run;
+ <code>godot/ARCHITECTURE.md</code> gained the fog-wall contract + the mesh-step env.</p>
+
+ <h3>18.8 The user's seed (5432), bake path — SECOND ROOT CAUSE found and fixed (the bake-path mesh was face 0 twelve times)</h3>
+ <p>The 5432 bake arm (the user's first-run path: non-canonical seed &rarr; in-engine bake) came back
+ with the alpha side <b>byte-perfect on all 12 faces</b> (loaded worker image vs the worker's own
+ cache PNG: <code>diff_px = 0</code>, formats RGBA8/RGBA8 — encode/decode clean on every path, all
+ three brief suspects refuted) but a <b>124 m mesh-vs-texture divergence on 10 of 12 faces</b>
+ (face 0: 0.71 m). Per-face vertex instrumentation pinned it: identical (u,v)&rarr;radius pairs across
+ many faces (e.g. (0.4796,0.2392) &rarr; 4085.85 on six different faces) — the 12 face nodes carried
+ <b>one shared mesh: face 0's</b>. The r2 geom block's own vertex census proves the scale: the bake
+ run sampled 931,416 body vertices = 12&times;77,618 (twelve copies of the face-0 home-pair mesh,
+ 197&times;394), where the res/cache paths sample 1,707,596 (2&times;77,618 + 10&times;155,236).
+ Mesh fingerprints: the <code>_geom</code> cache held <b>13</b> entries (not 12), every entry the
+ identical face-0 fingerprint.</p>
+ <p><b>Mechanism — a double append introduced in r2:</b> <code>_geom_for_face(f, hgrid)</code>
+ self-appends when it builds (<code>if f == _geom.size(): _geom.append(ge)</code> — the single cache
+ writer the res/cache path relies on), and the r2 worker loop <i>also</i> appended the return value
+ (<code>_geom.append(_geom_for_face(f, _hgrid))</code>). After face 0 the cache size overshot the
+ face index (2 entries at f=1), so every later face hit the early-out <code>return _geom[f]</code>
+ with a copy of g0 — the cache grew to 13, all g0, and <b>all 12 face nodes drew the home patch</b>
+ (face 0's displaced shape, 11 of them with the wrong face's texture over it; the rest of the sphere
+ had no mesh at all). In the user's first run of their world that is the whole planet: a smearing of
+ the home region plus empty space, before the fog-erase of 18.2 on top. <b>Why r2's gate missed
+ it:</b> the nadir radius (the gate's measurement) sits at the player's spawn = the <i>home</i> face
+ = the only face with the correct mesh — nadir &minus;8.91 m (the real 6.135 m lattice residual at
+ the 194 m mountain spawn) read fine while 11 faces were garbage. The r2 closeout claim
+ &ldquo;bake path proven&rdquo; is void for the mesh (the alpha/colour side was genuinely fine);
+ subsequent runs load from the user:// cache, whose path was always correct (1,707,596 verts,
+ per-face &le;0.49 m) — so the user's steady-state world had the fog-erase but not the mesh defect;
+ a fresh world had both.</p>
+ <p><b>Fix:</b> the worker loop now calls <code>_geom_for_face(f, _hgrid)</code> bare — the
+ self-append is the single cache writer (one line + the contract comment,
+ <code>godot/world/satellite_body.gd</code>). <b>Verification bake (r3e, seed 5432, R24/F83):</b>
+ cache size <b>12</b>; 12 <b>distinct</b> per-face fingerprints (77,618&times;2 + 155,236&times;10,
+ per-face radii differ); <code>height_decode.ok = true</code> — alpha 0 diff, mesh-vs-texture
+ <b>&le;0.74 m on every face</b> (pure encode quantization, exactly the theoretical bound);
+ verts 1,707,596; body range 4000.0&ndash;4222.27 (the true full-sphere range, vs 4009.64&ndash;4206.0
+ face-0-only before); nadir &minus;8.91 m unchanged (the home face was always correct); clouds
+ perfect; ladder 4/4; ratio 0.25; census 0/0. The only remaining red on the 5432 arm is
+ <code>geom_fail</code> = that documented 6.135 m lattice residual (&minus;8.91 m at the 194 m
+ mountain spawn vs the 4 m gate — the body's 6.135 m height lattice sampling the 1 m far-tier H field
+ on a steep peak; nadir occluded by the ground it sits on; the visible seam is body-vs-far-tier, the
+ same surface by construction, softened by the fade — a design decision for the coordinator,
+ reported not chased, same as r2).</p>
+ <p><b>Gates re-run after the world/ change (standing obligations):</b> genhash 25/25
+ byte-identical (chunk (0,0) <code>46c20b07c95cb03b57772e1531c97f71</code>), res arm re-run
+ <b>ok:true</b> (nadir &minus;0.38 m, cache 12, height_decode 0-diff/0.49 m, ladder 4/4, via import),
+ smoke battery <b>ok:true</b> (player/interact/light/fluids, 0/0 census).</p>
+
+ <h3>18.9 What the user needs (and what to expect next build)</h3>
+ <ul>
+  <li>Rebuild the Windows artifact (coordinator, heavy). The current build predates
+  <code>fog_disabled</code> — until it is rebuilt, the 668 m view stays the fog disc of 18.3-BEFORE.</li>
+  <li>After the rebuild, the user's orbit view = 18.4's 668 m shot: a textured planet disc with cloud
+  puffs above it; at lower altitudes (140&ndash;330 m) the body's rim emerges exactly at the fog wall
+  (18.4's 200 m shot). If a satdiag from the NEW build ever prints the 12 legacy &ldquo;no height
+  channel&rdquo; lines, that is a stale pre-r2 <code>.ctex</code> in the build, not this defect.</li>
+ </ul>
+
 </body>
 </html>
