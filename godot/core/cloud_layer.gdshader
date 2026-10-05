@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode unshaded, cull_back, fog_disabled;
+render_mode unshaded, cull_disabled, fog_disabled;
 // (the dummy/headless renderer rejects `transparent` and logs a
 // SHADER ERROR - the same accepted condition satellite_body.gdshader
 // has lived with since AC-0310; the shipped forward_plus compiles it.)
@@ -36,6 +36,18 @@ render_mode unshaded, cull_back, fog_disabled;
 // player moves or climbs (the no-pop argument at the satellite body's
 // emergence). The grazing fade thins the mass to the silhouette, where
 // the body's own limb haze is strongest (no double-counted white rim).
+// AC-0384 r6: the NMS read - thick, banded, OCCLUDING decks with visible
+// depth and darker undersides, from orbit AND from below/inside the
+// layer. Changes vs r5: (1) cull_back -> cull_disabled + fragment-stage
+// cull emulation (the rasterizer cull killed the whole underside view;
+// with cull off the far side would draw through the near side in the
+// transparent pass, so back faces are discarded only while the camera is
+// outside the shell - the orbit view is unchanged by construction);
+// (2) broad warped latitude bands modulate the alpha (NMS banding);
+// (3) a soft bimodal contrast window (0.05/0.80) turns the haze/clear
+// split into thin veil vs opaque cores; (4) u_boost 2.0 clamps the dense
+// cores to full opacity (occlusion); (5) darker undersides - the albedo
+// darkens with optical thickness (u_under 0.70).
 uniform vec3 u_center = vec3(0.0, -4000.0, 0.0);  // planet centre (main.gd)
 uniform float u_scale3 = 107.92;  // 2*pi*(R+h)/feature, per layer (main.gd)
 uniform float u_drift = 0.00122;  // rad/s about world Y, per layer (main.gd)
@@ -52,6 +64,13 @@ uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 // per frame; the default is the 1280x720 harness window (720 /
 // (2*tan(37.5 deg)) - the 75 deg camera fov).
 uniform float u_cpxrad : hint_range(50.0, 4000.0) = 476.0;
+// AC-0384 r6: opacity boost - the dense cores clamp to 1.0 (the deck
+// occludes the sky/terrain behind it, the NMS "thick cloud" read).
+uniform float u_boost : hint_range(0.0, 4.0) = 2.0;
+// AC-0384 r6: underside darkening - the albedo of an optically thick
+// fragment is multiplied by u_under (the thinner the patch, the closer
+// to 1.0 - the full sun-lit albedo).
+uniform float u_under : hint_range(0.0, 1.0) = 0.70;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
@@ -140,18 +159,45 @@ void fragment() {
 	cl = smoothstep(0.0, 0.55, cl) * cl;
 	cl *= 0.75 + 0.25 * (0.55 * base + 0.45 * mid);
 	cl *= 0.85 + 0.15 * fine;
+	// AC-0384 r6: broad warped latitude bands - large-scale weather
+	// structure (the NMS deck is banded, not uniform). The band follows
+	// the drift-rotated direction so it scrolls with the weather.
+	float band = 0.5 + 0.5 * sin(dr.y * 11.0 + 2.2 * base);
+	cl *= mix(0.5, 1.0, smoothstep(0.18, 0.82, band));
+	// AC-0384 r6: soft bimodal contrast - the haze reads as a thin veil
+	// and the cores as opaque masses (wide window 0.05/0.80; the first
+	// pass 0.16/0.58 steepened the edges and raised the orbit grain).
+	cl = smoothstep(0.05, 0.80, cl);
 	// Grazing fade: thin the mass where the shell is seen edge-on, so the
 	// silhouette stays clean where the satellite body's own limb haze is
-	// strongest (no double white rim at the limb from orbit).
+	// strongest (no double white rim at the limb from orbit). AC-0384 r6:
+	// abs() - the same fade applies to the underside view from inside.
 	vec3 V = normalize(CAMERA_POSITION_WORLD - v_wp);
-	float graze = smoothstep(0.02, 0.18, max(dot(n, V), 0.0));
-	ALPHA = cl * graze * u_coverage;
+	float ndv = dot(n, V);
+	float graze = smoothstep(0.02, 0.18, abs(ndv));
+	// AC-0384 r6: occluding cores - the dense cores clamp to full opacity
+	// (u_boost 2.0), so the deck hides the sky and the terrain behind it.
+	float a = clamp(cl * u_coverage * u_boost, 0.0, 1.0);
+	// AC-0384 r6: fragment-stage cull emulation. cull_disabled is
+	// required to see the shell from inside (the rasterizer cull with
+	// cull_back discarded the whole underside), but with cull off the
+	// far side of the shell would draw through the near side (the
+	// transparent pass keeps no depth). Discard the back faces only
+	// while the camera is OUTSIDE this shell: the orbit view is exactly
+	// the r5 view, and the underside renders when the camera is inside.
+	float cam_out = step(R_sh, length(CAMERA_POSITION_WORLD - u_center));
+	if (cam_out > 0.5 && ndv < 0.0) {
+		discard;
+	}
+	ALPHA = a * graze;
 	// AC-0382 sun convention (the satellite body's exact uniform set):
 	// u_sun is the direction TO the sun, the light travels along
 	// DayNight.sun_direction. Noon (sun_l=1) is unchanged; the night
 	// floor 0.18 matches the satellite's pre-AC-0382 night.
 	float sun_l = clamp(dot(n, u_sun), 0.0, 1.0);
 	float light = u_day - u_day_gain * (1.0 - sun_l);
-	ALBEDO = u_cloud_tint * light;
+	// AC-0384 r6: darker undersides - the optically thicker the patch
+	// (the final alpha a), the less light leaks through it.
+	ALBEDO = u_cloud_tint * light * mix(1.0, u_under, a);
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

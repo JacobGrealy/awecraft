@@ -125,6 +125,37 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (the body's emergence) every factor is 1.0, and the
 │                         clamp is a continuous function of camera position,
 │                         so the pattern stretches, never pops.
+│                         AC-0384 r6: the NMS deck character (shader-side
+│                         defaults u_boost 2.0 / u_under 0.70 / contrast
+│                         window 0.05-0.80 — never pushed, so
+│                         main.gd is untouched): dense cores are occluding
+│                         (alpha = clamp(cl·u_coverage·u_boost,0,1)), thin
+│                         haze is collapsed to clear gaps (bimodal contrast),
+│                         broad warped latitude bands give large-scale
+│                         weather structure, and locally thick cloud shades
+│                         its own underside (u_under — grey cores, white
+│                         fringes). The grazing fade is now abs(dot(n,V)):
+│                         edge-on means thin on EITHER side, so the deck's
+│                         UNDERSIDE is visible from low altitude (the old
+│                         max(dot,0) zeroed it) while the orbit limb still
+│                         thins to the silhouette (no double white rim).
+│                         cull_back → cull_disabled, with the
+│                         missing back-face cull emulated in the
+│                         fragment stage (discard back faces only
+│                         while the camera is OUTSIDE the shell —
+│                         orbit view unchanged by construction,
+│                         underside renders from inside). KNOWN
+│                         LIMIT (r6, follow-up): the shells carry
+│                         the AC-0235 degenerate-bounds condition
+│                         — drawn only while the planet centre is
+│                         inside the camera frustum (≈ above 2429 m
+│                         on the planet preset), so the from-below
+│                         view is render-blocked below that until
+│                         set_custom_aabb lands in _place_clouds.
+│                         View-dependent alpha is the geometric graze only;
+│                         the weather field itself stays a function of world
+│                         direction + time-of-day. All r6 terms are
+│                         ≤ the clamped base-band frequency (grain-safe).
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in

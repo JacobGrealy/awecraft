@@ -1,169 +1,115 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AC-0384 r5 plan — satellite-disc moiré: mipmapped, anisotropic sampling</title>
+<title>AC-0384 r6 plan — the cloud deck: thick, banded, with depth (the NMS look)</title>
 <style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}</style></head><body>
-<h1>AC-0384 r5 — the near-disc moiré static (round-1 gap 3): mipmapped, anisotropic sampling</h1>
+<h1>AC-0384 r6 — the cloud layer: make it read like No Man&rsquo;s Sky (thick, banded, volumetric) without regressing the r5 anti-aliasing fix</h1>
 
 <h2>Goal</h2>
-<p>Make the satellite disc sample its 1024² face textures with mipmap + anisotropic filtering —
-sampler <em>and</em> texture both carrying a real mip chain — so the near-disc stipple
-(rendered grain 4&times; source in round 1) collapses toward the source's own grain, measured
-the same way at the same five altitudes and the same user config as the round-1 ladder.</p>
+<p>One sentence: make the cloud deck a <b>thick, occluding, banded layer with visible depth
+(darker undersides)</b> from both orbit and low altitude, while the disc grain at every ladder
+altitude stays at or below the round-2 baseline (2600 m: &le; 2.09 tight / &le; 4.87 canonical).</p>
 
-<h2>The hypothesis (tested first, it fits exactly) — VERIFIED IN CODE before any edit</h2>
-<ol>
-<li><b>Shader side</b> — <code>core/satellite_body.gdshader:78</code> declares
-<code>uniform sampler2D tex : filter_linear;</code> — bilinear, <b>no mip sampling, no anisotropy</b>.</li>
-<li><b>Import side</b> — all 12 <code>godot/assets/satellite/satellite_faceNN.png.import</code>
-carry <code>mipmaps/generate=false</code> (verified on all 12).</li>
-<li><b>The third side the hypothesis did not name (the half-fix trap)</b> —
-<code>world/satellite_body.gd</code> never binds the imported texture: it decodes
-<code>tex.get_image()</code> and wraps the <b>base level alone</b> in a fresh
-<code>ImageTexture.create_from_image(img)</code> (load path L498, bake path L532, cache path
-via <code>_load_png</code> L480). Even with <code>mipmaps/generate=true</code> in the import,
-the mip chain dies in that re-wrap. Import-only or shader-only would each be a no-op; all three
-sides move together in this task.</li>
-</ol>
-<p>Godot 4.7.1 (verified against the sampler-hint strings in this exact engine binary) accepts the
-combined hint <code>filter_linear_mipmap_anisotropic</code> — linear mipmap sampling plus the
-renderer's max anisotropy. (<code>filter_anisotropy</code> alone is not a 4.7.1 hint name.)</p>
+<h2>Current look (established before any change)</h2>
+<ul>
+<li><b>Frames of record</b> (current tree, byte-identical to r5&rsquo;s):
+<code>rd5-fix-d{2600,1600,700,300,120}.png</code>, viewed at the five ladder altitudes.
+Pre-fix grain measured from them this round (same boxes as r5):
+2600 m <b>4.87 / 2.09</b>, 1600 m 3.66 / 0.71, 700 m 2.92 / 0.70, 300 m 2.38 / 0.96,
+120 m 9.86 / 16.70 (canonical / tight) &mdash; identical to r5&rsquo;s published numbers.</li>
+<li><b>Orbit (2600 m):</b> clouds are faint, thin white mottling &mdash; sparse, low opacity,
+isotropic blobs, no banded structure, no depth. The deck does not occlude the surface.</li>
+<li><b>From underneath (120 m):</b> the sky is a flat white wash &mdash; <b>the cloud deck is
+invisible from below</b>. Code cause: <code>graze = smoothstep(0.02, 0.18, max(dot(n,V),0))</code>;
+viewed from below, <code>dot(n,V) &asymp; &minus;1</code> &rarr; graze 0 &rarr; alpha 0.
+The fade was tuned for the orbit silhouette (where it is correct) but it zeros the entire
+underside.</li>
+</ul>
+
+<h2>Changes (all in <code>core/cloud_layer.gdshader</code>, fragment stage; the r5 per-band
+distance-LOD clamp and <code>u_cpxrad</code> are untouched)</h2>
+<table>
+<tr><th>#</th><th>Change</th><th>Why (NMS cue)</th><th>Grain risk</th></tr>
+<tr><td>1</td><td>graze: <code>max(dot(n,V),0)</code> &rarr; <code>abs(dot(n,V))</code></td>
+<td>deck visible from below (underside) AND still thins at the tangential silhouette
+(orbit limb / the deck&rsquo;s own edge) &mdash; no double white rim. Thickness seen from underneath.</td>
+<td>zero (geometric, no noise)</td></tr>
+<tr><td>2</td><td><code>u_boost</code> (shader default 1.45):
+<code>ALPHA = clamp(cl &middot; u_coverage &middot; u_boost, 0, 1)</code></td>
+<td>dense cores reach &alpha;&asymp;1 &mdash; the masses occlude the surface (thin veils &rarr; thick deck).</td>
+<td>low (pointwise rescale; saturation lowers neighbor-diff)</td></tr>
+<tr><td>3</td><td>bimodal contrast: <code>cl = smoothstep(0.16, 0.58, cl)</code> before the boost</td>
+<td>clear gaps + opaque masses (weather, not haze). Edge width in field space unchanged, so the
+r5 LOD guarantee holds.</td>
+<td><b>the one risk</b> (edge steepening); measured, backed off if grain regresses</td></tr>
+<tr><td>4</td><td>latitude banding:
+<code>cl &middot;= mix(0.5, 1.0, smoothstep(0.18, 0.82, 0.5 + 0.5 &middot; sin(dr.y&middot;11 + 2.2&middot;base)))</code></td>
+<td>broad (~25&deg;) warped bands of latitude &mdash; large-scale weather systems, not speckle.</td>
+<td>zero (coarsest term; its edges are at the clamped base frequency, &ge; 2.5 px)</td></tr>
+<tr><td>5</td><td><code>u_under</code> (shader default 0.60):
+<code>ALBEDO &middot;= mix(1.0, u_under, smoothstep(0.42, 0.72, base))</code></td>
+<td>locally thick cloud shades its own underside &mdash; grey cores, white fringes; the volume cue
+(&ldquo;one mass over another&rdquo;).</td>
+<td>zero (albedo modulation of the clamped low-freq field)</td></tr>
+</table>
+<p>New uniforms are <b>shader-side defaults, never pushed</b> &mdash; <code>scenes/main.gd</code>
+(still fenced, another session&rsquo;s in-flight work) is <b>not touched at all</b>. The weather
+pattern (base/mid/fine/band) stays a function of world direction + time-of-day only; the only
+view-dependent term is the geometric graze fade (same class as before, corrected to handle the
+underside). No-pop argument survives: nothing new keys on player distance.</p>
+<p><b>Ruled out:</b> (a) a 4th shell &mdash; the 3 shells already provide the altitude spread;
+the problem is they read as separate thin veils, so opacity + depth cues fix that without a new
+draw call / mesh; (b) limb-thickening &mdash; view-dependent alpha would fight the graze fade and
+risk a hard white rim at the orbit silhouette; (c) raising <code>CLOUD_AMOUNT_DAY</code>
+(0.75) &mdash; shared AeroLib constant, would move the night deck too; <code>u_boost</code> does
+the job locally.</p>
 
 <h2>Files to touch</h2>
 <table>
 <tr><th>File</th><th>Change</th></tr>
-<tr><td><code>godot/core/satellite_body.gdshader</code></td>
-<td>L78 <code>filter_linear</code> &rarr; <code>filter_linear_mipmap_anisotropic</code> + a comment
-stating why (round-1 measured stipple; a mipmap-filtering sampler over a chainless texture is a
-no-op — the texture side is fixed in this same task, below).</td></tr>
-<tr><td><code>godot/world/satellite_body.gd</code></td>
-<td>Guarantee a mip chain on <b>every</b> texture-producing path — <code>img.generate_mipmaps()</code>
-before the <code>ImageTexture.create_from_image</code> wrap, on the res, cache and bake paths alike
-(1024² is power-of-two, so it is valid on every face; the bake path has no import at all, so the
-code-side chain is the only one that can reach it). VRAM: +33% on 12&times;4 MB &asymp; +16 MB,
-desktop-trivial. The guard + height-grid reads keep using the decoded base level (unchanged).</td></tr>
-<tr><td><code>godot/assets/satellite/satellite_faceNN.png.import</code> (&times;12)</td>
-<td><code>mipmaps/generate=false</code> &rarr; <code>true</code>, then a headless re-import so the
-shipped <code>.ctex</code> carries the chain in editor/PCK too — the matching import side the brief
-demands; with the code-side generation it is a correctness net (the loaded resource is mip-complete
-even if a future path binds it directly).</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td>
+<td>fragment stage per the table above; 2 new uniforms with defaults; header comment updated.</td></tr>
+<tr><td><code>.scratch/AC-0385/coverage.py</code> (the standing coverage instrument)</td>
+<td>updated <b>deliberately</b> to mirror the new shader math (graze abs, banding, contrast,
+boost) so its globe-coverage number stays faithful; re-run &rarr; new standing value replacing
+67.8%, recorded in the results page. Output PNGs go to <code>tasks/AC-0384/</code>
+(<code>COV_OUTDIR</code>), not over AC-0385&rsquo;s evidence.</td></tr>
+<tr><td><code>tasks/AC-0384/</code></td><td>plan (this file, r5 preserved as plan-round5.html),
+continuity entries, results section 21, captures <code>rd6-d{2600,1600,700,300,120}.png</code>.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>CloudLayer bullet: r6 line (deck character +
+abs-graze underside visibility).</td></tr>
 </table>
-<p><b>Not touched:</b> fenced <code>autoload/game.gd</code>, <code>entities/drop.gd</code>,
-<code>autoload/debug.gd</code>; <code>scenes/main.gd</code> — no change owed (no new uniforms this
-round; the <code>planet</code> camera hook already exists); <code>gdext/</code> untouched (no
-generation kernel touched &rarr; genhash not re-run, same exemption as round 4's core/+main.gd
-scope).</p>
 
-<h2>Measurement (round-1 numbers are the baseline; the ratio is the evidence)</h2>
-<p><b>Candid finding first:</b> round 1's exact 53.2/12.7 cannot be reproduced from the archived
-crops — the saved <code>d5-nadir.png</code> / <code>face00-centre.png</code> crops do not match the
-archived frames (mean abs diff 58.7 / 91.0 per channel against every candidate box), and no
-1–4 px neighbour-diff variant on them lands on 53.2/12.7. This round therefore defines a canonical
-metric and applies it <b>identically</b> to source, pre-fix and post-fix at the same altitudes;
-round 1's rendered/source &asymp; 4.2&times; stands as the directional baseline this must beat.</p>
+<h2>Harness gates</h2>
 <ul>
-<li><b>Grain metric (canonical, documented in the results)</b>: mean over R,G,B of the mean
-absolute per-channel difference between a pixel and its 2-px neighbour, averaged over the 4 compass
-directions (the same "mean neighbour diff, 2 px" shape as round 1), sRGB 8-bit units, over a fixed
-400&times;400 box.</li>
-<li><b>Source reference</b>: the true centre 400&times;400 of the shipped
-<code>satellite_face00.png</code> &rarr; measured <b>11.25</b> (round 1's source figure 12.7 was
-computed on a crop that no longer matches the shipped file — same order; the ratio is the
-comparison).</li>
-<li><b>Rendered</b>: the same fixed 400&times;400 nadir-disc box (440,320&ndash;840,720 — the
-dense-stipple region visible in every round-1 D5 frame; the planet camera + world are static
-between runs, so the box is comparable) on the new ladder at 2600/1600/700 m (where the body is
-drawn); 300/120 m are controls — the body is discarded by <code>op</code> below the fog wall, so no
-body grain is measurable there (the SATDIAG <code>op_nadir</code> lines prove the disc is absent,
-exactly as in round 1).</li>
-<li><b>Ladder</b>: identical recipe to round 1 — the loaded Forward+ path (lavapipe + xvfb +
-<code>--rendering-driver vulkan</code>, boot line must carry <code>- Forward+ -</code>), user config
-<code>RADIUS=24</code> / <code>FOG_PCT=83</code> (fog_far 332 / edge 400), <code>TIME=0.5</code>,
-seed 44, fog ON, clouds ON, <code>SIZE=1280,720</code> (COMMA), <code>CAM=planet</code> +
-<code>SAT_ALT</code> = 2600/1600/700/300/120, <code>SAT_MESH_STEP=64</code> (the settled 1.7 M-vertex
-frame never completes on llvmpipe — the round-2 measured timeouts; its silhouette stair-stepping is
-round-1 gap 6, a separate proxy-attributed item — holding the step fixed keeps the A/B on sampling
-only), <code>SNAP_DRAIN=1200</code> FRAMES, no <code>AWECRAFT_LOGIC</code> arm, 1200 s budget per
-frame, file-existence + <code>SNAP FAIL</code> + Forward+ boot line + 0 error census per run.</li>
-<li><b>Pre-fix ladder captured FIRST on the current tree</b> (launched before any edit) so the only
-difference between the two ladders is this fix. Captures: <code>rd5-pre-d{alt}.png</code> /
-<code>rd5-fix-d{alt}.png</code> in <code>tasks/AC-0384/</code> alongside round 1's
-<code>rd4-*</code> set; logs in <code>.scratch/AC-0384-r5/</code>.</li>
+<li><b>G0</b> &mdash; <code>--headless --path godot --quit</code>, <code>gate_census.py</code>:
+<b>zero SCRIPT ERROR and zero SHADER ERROR</b> (rc=0 is not the gate). Pre- and post-edit.</li>
+<li><b>RENDER (the acceptance)</b> &mdash; Forward+ ladder, exact r5 recipe (user config
+R24 / FOG_PCT=83 = fog_far 332 / edge 400, TIME 0.5, seed 44, 1280,720, SAT_MESH_STEP=64,
+fog ON clouds ON, <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code> &isin;
+{2600,1600,700,300,120}, SNAP_DRAIN=1200, NO <code>AWECRAFT_LOGIC</code>): all 5 frames
+rc=0, boot line <code>- Forward+ -</code>, SNAP + RESULT, 0 error lines.
+Captures <code>rd6-d*.png</code> next to the rd4/rd5 sets.</li>
+<li><b>GRAIN (the hard constraint)</b> &mdash; <code>.scratch/AC-0384-r5/grain.py</code> on the
+new frames, same boxes (canonical 440,320&ndash;840,720 / tight 440,520&ndash;840,720), all 5
+altitudes: <b>any altitude above its r5 baseline is a failure</b> (2600 m: &le; 2.09 tight /
+&le; 4.87 canonical). Documented instrument noise floor &asymp;1% (cloud drift, r5 evidence).
+If the contrast (item 3) regresses it: back off item 3 only, re-render 2600 m, re-measure.</li>
+<li><b>SMOKE</b> &mdash; battery <code>player;interact;light;fluids</code> ok:true (no
+<code>world/*</code> or <code>data.gd</code> touched &rarr; genhash exempt, as in r4/r5).</li>
+<li><b>Satellite arm (res path, R24/F83, seed 44)</b> &mdash; <code>ok:true</code>; its live cloud
+probe (3 shells on (0,&minus;R,0) at R+275/330/400) stays meaningful and green.</li>
+<li><b>Coverage instrument</b> &mdash; re-run updated <code>coverage.py</code>; report the new
+globe coverage distribution (deliberate re-baseline of AC-0385&rsquo;s 67.8%).</li>
+<li><b>HEAVY</b> (boundary/perf/r50/full battery/shaderforce/Windows build) = the
+coordinator&rsquo;s job &mdash; exit after the light set.</li>
 </ul>
 
-<h2>Harness gates (mode + ok condition, policy <code>awecraft-run-verify</code>)</h2>
-<table>
-<tr><th>Gate</th><th>Command</th><th>ok</th></tr>
-<tr><td>G0 &times;2 (pre/post edit)</td><td><code>timeout 300 $S --headless --path godot --quit</code> + <code>gate_census.py</code></td>
-<td>0 SCRIPT ERROR + 0 SHADER ERROR (rc is not the gate)</td></tr>
-<tr><td>satellite arm (res path)</td><td><code>AWECRAFT_LOGIC=satellite</code> headless</td>
-<td>ok:true, mode res, res_load_via import, ladder 4/4, ratio 0.25, geom &le; 0.5 m, height_decode
-clean (the mip change must not disturb the encode/decode census), census 0/0</td></tr>
-<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code></td><td>ok:true</td></tr>
-<tr><td>RENDER (acceptance — not optional)</td><td>the two 5-frame ladders above</td>
-<td>10 PNGs exist (none the black-frame class), every log Forward+ boot + SNAP + RESULT + 0 error lines</td></tr>
-</table>
-<p>genhash: not run — no <code>world/*</code> <em>generation</em> code, no <code>data.gd</code>
-(satellite_body.gd's texture path touches no genhash-covered kernel; same exemption as round 4).
-HEAVY (boundary/perf/flake/r50, full battery, shaderforce, Windows build) = the coordinator's job —
-exit after the light gates. Note for the heavy stage: <code>shaderforce</code> will now compile the
-<code>filter_linear_mipmap_anisotropic</code> hint on the Forward+ path — a free standing check that
-the hint string is live-valid on the shipped renderer.</p>
+<h2>Fences</h2>
+<p>No commits, no pushes, no TASKS.yaml edits. Do not touch <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code>.
+<code>godot/scenes/main.gd</code> &mdash; <b>zero changes</b> this round (the new uniforms are
+shader defaults). One godot at a time; <code>HOME=/tmp/dsh_home</code>; logs to
+<code>.scratch/AC-0384-r6/</code>; <code>pgrep</code> before every godot call.</p>
 
-<h2>Risks / fences</h2>
-<ul>
-<li><b>Half-fix trap (this ticket's recurring burn)</b>: shader-only or import-only would be a no-op —
-the code re-wrap kills any import-side chain. All three sides land in this one task; the satellite
-arm's <code>height_decode</code> + the grain ratio are the tripwires (a mipmap-filtering sampler over
-a chainless texture leaves the grain &asymp; unchanged — that is exactly the failure this measurement
-exists to catch).</li>
-<li><b>llvmpipe anisotropy cap</b>: the software driver may cap anisotropy (&le;2 likely) — the mip
-chain does the bulk of the work; anisotropy matters at the limb. If the ratio does not drop on the
-proxy, that is proxy-attribution and the fix still stands for the user's GPU (same code path).</li>
-<li><b>llvmpipe render-thread class</b>: the 64 m mesh step keeps the settled frame cheap (round 1's
-ladder completed; the timeouts were the 16 m default). 1200 s budget per frame + file-existence
-check (the <code>SNAP FAIL</code> class — the hook prints failure rather than silently succeeding).</li>
-<li>Fences: no commits/pushes, no TASKS.yaml edits, no fenced files, <code>main.gd</code> untouched
-(no new uniforms owed).</li>
-</ul>
-
-
-<h2>Outcome (2026-10-05, r5) — deviations from this plan</h2>
-<ul>
-<li><b>The tested hypothesis was half right and half wrong.</b> The mipmap chain was genuinely
-missing on all three sides (shader <code>filter_linear</code> + 12 imports
-<code>mipmaps/generate=false</code> + the code re-wrap shipping level-0 only) and is fixed as
-planned — but the measured effect is &minus;7% clouds-OFF (4.03 &rarr; 3.75), masked in the
-clouds-ON frames (20.76 &rarr; 20.52). The near-disc static is the <b>cloud shell&rsquo;s
-procedural fbm</b> (finest octaves sub-Nyquist, no mip chain possible for computed data): the
-decisive A/B is the 2600 m clouds-OFF frame (3.75/0.81, below the source&rsquo;s own grain of
-11.25) vs 20.5/23.2 clouds-ON.</li>
-<li><b>Second fix (scope addition, same objective)</b>: per-band distance LOD in
-<code>core/cloud_layer.gdshader</code> (each fbm band&rsquo;s finest octave clamped to &ge; 2.5 px,
-per-fragment camera distance + new <code>u_cpxrad</code> uniform) — the plan&rsquo;s fallback
-(&ldquo;find what is [the cause] and say what was ruled out&rdquo;) turned into a small, measured
-fix. Result: 2600 m grain 23.23 &rarr; 2.09 tight (&minus;91%), 20.76 &rarr; 4.87 canonical; the
-120 m frame byte-identical (all factors 1.0 at/near ground).</li>
-<li><b>Fence deviations, both explicit</b>: (a) <code>main.gd</code> touched (the plan said
-&ldquo;untouched&rdquo;): two small hunks pushing <code>u_cpxrad</code> per frame from window size +
-camera fov, so the clamp is exact at the user&rsquo;s window size — stated in continuity, the
-results page and the report. (b) <code>harness.gd</code> (the satellite arm) touched:
-<code>height_decode</code> now slices the loaded image to level 0 before comparing — restoring its
-original base-level semantics, which the new mip-chain contract had broken
-(4.7.1 <code>get_image()</code> returns the full chain: 5,592,404 bytes, not 4,194,304; first arm
-run read <code>ok:false</code>, &ldquo;raw size mismatch&rdquo; &mdash; the tripwire worked). Per the
-scenes rule, this round&rsquo;s verdict rests on the render read with the arm&rsquo;s pixel
-comparison (12/12 faces, 0 diff px), not the arm alone.</li>
-<li><b>Measurement deviation</b>: round 1&rsquo;s 53.2/12.7 is not reproducible from the archived
-crops (evidence in the results page &sect;20.2); the canonical neighbour-diff metric
-(<code>.scratch/AC-0384-r5/grain.py</code>) replaced it and was applied identically to
-source/pre/post. The pre-fix baseline is byte-identical to r4&rsquo;s captures (determinism proof).</li>
-<li><b>Gates as planned</b>: G0 &times;3 (0/0), 17 renders (all Forward+/SNAP/RESULT/0 errors),
-satellite arm <code>ok:true</code> (height_decode 12/12, 0 diff px, geom 0.49 m, res_export_ok),
-SMOKE <code>ok:true</code> (224 s). HEAVY = coordinator (note: shaderforce now live-checks
-<code>filter_linear_mipmap_anisotropic</code>). genhash exempt (no world/* or data.gd).</li>
-<li><b>Docs synced</b>: <code>ARCHITECTURE.md</code> — cloud-shell distance-LOD convention + the
-satellite texture contract (imports carry the chain; the code guarantees it on all three paths;
-sampler and chain ship together).</li>
-</ul>
-
-</body></html>
+</body>
+</html>

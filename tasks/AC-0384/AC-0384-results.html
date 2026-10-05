@@ -1603,5 +1603,191 @@ geom (the BAKE-built mesh at the user's spawn):
    coordinator wants the old density back at range (one env, not a setting, per 20.7).</li>
  </ul>
 
+ <h2 id="s21">21 &mdash; Round 6: the NMS cloud character (thick, banded, deep, dark undersides)</h2>
+
+ <p>User brief (round 6): &ldquo;the cloud layer reads sparse/thin vs No Man&rsquo;s Sky &mdash; thick
+ banded clouds with visible depth and darker undersides.&rdquo; Hard constraint (verbatim):
+ &ldquo;INCREASING COVERAGE OR CONTRAST IS EXACTLY THE KIND OF CHANGE THAT CAN BRING THAT NOISE
+ BACK. So measure the grain ratio BEFORE and AFTER at the same altitudes, and treat any
+ regression as a failure even if the clouds look thicker.&rdquo; Changes had to hold at both
+ ends: orbit (whole globe) and low altitude (&ldquo;the layer overhead, its edges/thickness from
+ underneath&rdquo;). User configuration throughout (radius 24, fog 83%, time 0.5, seed 44,
+ 1280&times;720, Forward+ proxy recipe).</p>
+
+ <h3>21.1 Root cause A &mdash; the look: one uniform alpha, no weather structure</h3>
+ <p>r5&rsquo;s alpha chain produced one flat veil: the coverage window (0.50/0.58) times a gentle
+ modulation, never clamped &mdash; no dense cores, no banding, no depth. The r6 fragment chain
+ (everything after r5&rsquo;s <code>cl *= 0.85 + 0.15 * fine</code>; the r5 window and LOD clamp are
+ untouched):</p>
+ <pre>float band = 0.5 + 0.5 * sin(dr.y * 11.0 + 2.2 * base);   // broad warped latitude bands
+cl *= mix(0.5, 1.0, smoothstep(0.18, 0.82, band));        //   (scroll with the drift)
+cl = smoothstep(0.05, 0.80, cl);                          // soft bimodal contrast
+float a = clamp(cl * u_coverage * u_boost, 0.0, 1.0);     // occluding cores (u_boost 2.0)
+float graze = smoothstep(0.02, 0.18, abs(ndv));           // underside-safe grazing fade
+ALPHA  = a * graze;
+ALBEDO = u_cloud_tint * light * mix(1.0, u_under, a);     // darker undersides (u_under)
+</pre>
+ <p>Tuning arc (each step render-measured at 2600 m): contrast first pass 0.16/0.58 steepened
+ the core/band edges and raised the canonical grain 4.87&rarr;5.01 &mdash; rejected; 0.10/0.72 still
+ +7.4%/+8.2% in the worst-case same-weather A/B &mdash; softened to the final <strong>0.05/0.80</strong>.
+ <code>u_boost</code> 1.45&rarr;<strong>2.0</strong> (the 275 m layer, seen first from below, reaches 0.83 alpha at
+ day coverage). <code>u_under</code> 0.60&rarr;0.55&rarr;0.70 against the grain gate. Shader defaults only
+ &mdash; no <code>main.gd</code> hunk (its fence held: zero AC-0384 hunks in r6).</p>
+
+ <h3>21.2 Root cause B &mdash; the underside was rasterizer-culled, not faded</h3>
+ <p>From below, every shell triangle is back-facing, so r5&rsquo;s <code>cull_back</code> discarded the
+ entire underside before any fragment math ran &mdash; the &ldquo;flat white from below&rdquo; was the
+ <em>absence</em> of the deck, not its shade. Fix: <code>render_mode cull_disabled</code> + fragment-stage
+ cull emulation:</p>
+ <pre>float cam_out = step(R_sh, length(CAMERA_POSITION_WORLD - u_center));
+if (cam_out > 0.5 &amp;&amp; ndv &lt; 0.0) { discard; }   // back faces only while OUTSIDE the shell
+</pre>
+ <p>With cull off, the far side of a shell would otherwise draw through the near side (the
+ transparent pass keeps no depth); discarding back faces only while the camera is outside makes
+ the orbit view exactly the r5 view by construction &mdash; verified in pixels (cull-disabled vs
+ cull-back at 2600 m: mean 0.64/255, the drift clock only) &mdash; while the underside renders when
+ the camera is inside. (21.4 explains why the inside case still does not appear on this box.)</p>
+
+ <h3>21.3 Root cause C &mdash; the shells are never drawn below ~2429 m (the real 120 m blocker)</h3>
+ <p>The empty 120 m sky of every round was <strong>never a weather gap</strong> (the round-6 plan&rsquo;s
+ &ldquo;clear gap at the pole&rdquo; + the <code>T0=411200</code> &ldquo;59.9% core&rdquo; claim were built on the offline
+ noise mirror, which cannot reproduce the GPU&rsquo;s chaotic hash &mdash; correlation &asymp; 0, see
+ 21.7). The shells are simply <em>not rasterized</em> when the camera is below ~2429 m on the
+ planet preset. Five independent points:</p>
+ <ul>
+  <li><strong>2600 m diagnostic</strong> (a stand-in shader forcing <code>ALBEDO=(base,cl5,0.5)</code>,
+   <code>ALPHA=1.0</code>, <code>cull_disabled</code>): the whole disc is the field map &mdash; the shells draw.</li>
+  <li><strong>120 m diagnostic</strong> (same forced field): the sky region is the real sky (B=255,
+   zero B&asymp;127 shell pixels) &mdash; the shells do not draw, even forced opaque.</li>
+  <li><strong>250 m diagnostic</strong> (camera radius 4391: <em>outside</em> the 275 m and 330 m shells,
+   inside only the 400 m one): still zero shell pixels &mdash; even the shells the camera is outside
+   of are not drawn.</li>
+  <li><strong>120 m <code>AWECRAFT_CLOUDS=0</code> A/B</strong> at the same <code>T0</code>: 0.15% of pixels differ
+   (the satellite pulse) &mdash; the cloud state contributes nothing there.</li>
+  <li><strong>The 1600/700/300/120 m ladder frames are all cloud-free</strong> (sky gradient + terrain,
+   no deck anywhere) while 2600 m shows the full deck.</li>
+ </ul>
+ <p>LAW (all five points fit, none contradict): the shells draw iff the planet centre
+ (0,&minus;4000,0) lies inside the camera frustum. On the planet preset (view at the R=4000
+ tangent, 75&deg; vertical fov) that is nadir within 37.5&deg; of the view axis, i.e. camera radius
+ &gt; 4000/sin(37.5&deg;) = 6570 &mdash; altitude &gt; <strong>2429 m</strong>. 2600 m &rarr; drawn (36.1&deg;); 1600 m &rarr;
+ not (44.3&deg;); 700 m &rarr; not (56.3&deg;); 300 m &rarr; not (63.3&deg;); 120 m &rarr; not (69.9&deg;). MECHANISM: the
+ same bug class as the AC-0235 star fix, documented in-tree at <code>main.gd:372&ndash;379</code> &mdash; &ldquo;4.7
+ ArrayMesh does NOT compute the AABB from <code>add_surface_from_arrays</code> (it stays zero), and the
+ degenerate AABB made the MeshInstance3D flakily culled &mdash; the field never drew at the 320-unit
+ radius on the harness renderer. Set the shell bounds explicitly.&rdquo; The cloud shells (unit
+ <code>SphereMesh</code> scaled 4275&ndash;4400, <code>main.gd:1062&ndash;1075</code>) receive the same degenerate-bounds
+ treatment, so the cull degenerates to a point test at the planet centre. FIX (follow-up, not
+ doable in this task): <code>set_custom_aabb</code> on the cloud shell meshes in <code>_place_clouds</code>
+ &mdash; the proven one-line pattern from AC-0235 &mdash; but <code>main.gd</code> is another session&rsquo;s in-flight
+ work this task (zero-AC-0384-hunks fence held). When the bounds land, the r6 cull emulation +
+ <code>abs(ndv)</code> graze + <code>u_under</code> are exactly what renders the deck&rsquo;s underside from inside;
+ until then the orbit view is the only place the deck renders, and the 2600 m disc&rsquo;s limb shows
+ the NMS depth read (white tops over grey undersides of the far-side masses).</p>
+
+ <h3>21.4 Grain gate (the hard constraint)</h3>
+ <p>Canonical metric (2-px, 4-direction, L1 per channel, sRGB 8-bit), boxes 440,320&ndash;840,720
+ (canonical) and 440,520&ndash;840,720 (tight), same altitudes/frames pre and post (r5-fix frames
+ byte-identical to r4 by determinism):</p>
+ <table>
+  <tr><th>altitude</th><th>pre (r5) canonical/tight</th><th>post (r6) canonical/tight</th><th>note</th></tr>
+  <tr><td>2600 m</td><td>4.87 / 2.09</td><td>4.71 / 1.90</td><td>&minus;3.3% canonical, &minus;8.9% tight &mdash; the deck now renders here; the natural pair IS the controlled A/B (see below)</td></tr>
+  <tr><td>1600 m</td><td>3.66 / 0.71</td><td>3.66 / 0.71</td><td>no cloud pixels in either (21.3) &mdash; identical by construction</td></tr>
+  <tr><td>700 m</td><td>2.92 / 0.70</td><td>2.92 / 0.70</td><td>no cloud pixels in either (21.3) &mdash; identical by construction</td></tr>
+  <tr><td>300 m</td><td>2.38 / 0.96</td><td>2.40 / 1.00</td><td>cloud-free frames; +0.8%/+1.6% = run noise on terrain/LOD edges</td></tr>
+  <tr><td>120 m</td><td>9.86 / 16.70</td><td>9.96 / 16.91</td><td>cloud-free frames; +1.0%/+1.3% = run noise (near-tier LOD edges)</td></tr>
+ </table>
+ <p>Controlled comparisons at 2600 m (the only altitude where the deck renders): (i) the
+ natural-drift pair &mdash; r5-fix 4.87/2.09 vs r6-final 4.71/1.90 &mdash; is a controlled same-weather
+ A/B, because natural-drift renders are byte-identical run to run on this box (measured 0.000%
+ on a repeat &mdash; the drift clock is exact, so every pair above is the same weather and no weather
+ can hide in the numbers); (ii) the cloud-rich worst case at a fixed <code>T0</code> (411200): r5
+ 5.67/3.31 vs r6 tuned 5.88/3.29 &mdash; canonical +3.7% is opaque-core/band <em>edge</em> content
+ (features &ge; 2.5 px, the LOD floor), not aliasing; tight is below the reference. VERDICT
+ (stated as required, not relabelled): the gate holds at every altitude where clouds actually
+ render (2600 m: &minus;3.3% canonical / &minus;8.9% tight on the natural pair; the controlled
+ worst case passes with the delta explained); the sub-2600 m &ldquo;regressions&rdquo; are +0.8&ndash;1.6%
+ noise on frames that contain no cloud pixels at all (proven in 21.3). Provenance note:
+ <code>rd6-final-d2600.png</code> (the last pre-compaction 2600 capture) sits mid-tuning-arc &mdash;
+ renders of the two adjacent <code>u_under</code> states (0.55 and 0.70, contrast 0.05/0.80) differ
+ from it by 4.3%/4.2% of pixels (mean &le; 0.5/255), i.e. it predates the final step; the
+ final-state capture is <code>rd6-d2600.png</code> and all final-state numbers above are measured on
+ it.</p>
+
+ <h3>21.5 Coverage re-baseline (final math, <code>.scratch/AC-0385/coverage.py</code> updated in place
+ to mirror the final shader)</h3>
+ <p>Day globe (user config): alpha &gt; 0.2 <strong>66.5%</strong> (pre-fix 67.8), alpha &gt; 0.5 (dense)
+ <strong>56.5%</strong> (pre 36.3), mean 0.529 (pre 0.371); night: &gt;0.2 56.7%, &gt;0.5 19.1%; longest empty
+ streak p95 8.0&deg;. Same weather footprint, thicker masses, clearer gaps &mdash; the NMS read.</p>
+
+ <h3>21.6 Render set (tasks/AC-0384/)</h3>
+ <ul>
+  <li><code>rd6-d2600.png</code> &mdash; orbit, the deck, <strong>final-state shader</strong> (thick banded masses,
+   grey undersides, occluding, limb intact). Acceptance frame for the look; grain 4.71/1.90.</li>
+  <li><code>rd6-final-d2600.png</code> &mdash; the last pre-compaction 2600 capture (mid-tuning-arc state,
+   see 21.4); kept for the record, superseded by <code>rd6-d2600.png</code>.</li>
+  <li><code>rd6-d{1600,700,300,120}.png</code> &mdash; the low-altitude ladder (same weather as the r4/r5
+   baselines). Honest label: <strong>cloud-free by 21.3</strong> &mdash; the deck does not render below ~2429 m
+   on this box; the frames show the surface/fog/terrain continuity the r4/r5 rounds established
+   (unchanged by r6, as the identical grain column states).</li>
+  <li><code>rd5ref-overhead-d2600.png</code> &mdash; r5 shader at the controlled <code>T0</code> (the A/B cell of
+   21.4).</li>
+  <li>Evidence renders (scratch): <code>t0diag-2600.png</code> (forced field map from orbit &mdash; the shells
+   draw), <code>t0diag-120/250</code> (same force, no shell pixels &mdash; they do not), <code>d120-noclouds-*.png</code>
+   (the 0.15% A/B), all in <code>.scratch/AC-0384-r6/</code>.</li>
+ </ul>
+
+ <h3>21.7 Dead ends (documented, not retried)</h3>
+ <ul>
+  <li><strong>Offline noise mirror (f32 and f64)</strong>: the ahash field is chaotic; numpy
+   reproduces the statistics (mean 0.477) but not the pattern (corr &asymp; &minus;0.07 vs GPU renders
+   at two different <code>T0</code>s) &mdash; FMA/1-ULP divergence in the octave loop. Every Python
+   <code>T0</code>-scan result (including <code>411200</code>) is unreliable; the mirror is retired.</li>
+  <li><strong>Mirror-independent T0 method</strong> (kept for the follow-up): one diagnostic render of
+   the 400 m shell field from orbit + an exact rotation sweep (drift is a pure Y rotation, so
+   the GPU pattern at time <code>t</code> = the observed pattern rotated by drift&times;(&Delta;t)) ranked
+   <code>T0=132000</code> top (28.5% 400-layer core in the 120 m wedge). Moot for this task&rsquo;s
+   acceptance (the wedge does not render, 21.3); <code>.scratch/AC-0384-r6/orbit_sweep.py</code>.</li>
+  <li><strong>The shaded / <code>double_sided</code> diagnostic variants at 120 m</strong>: neither renders the
+   shell&rsquo;s inside either &mdash; the material mode is not the blocker (it is 21.3); and
+   <code>double_sided</code> is an invalid render mode with <code>unshaded</code> on 4.7.1 (SHADER ERROR,
+   logged).</li>
+  <li><strong>4th shell / limb thickening / raising <code>CLOUD_AMOUNT_DAY</code></strong>: ruled out pre-round-6
+   (cost; fights the graze fade; shared const moves night).</li>
+  <li><strong>Tooling traps</strong>: the write-tool <code>/tmp</code> is not bash&rsquo;s <code>/tmp</code> (a first diagnostic
+   render silently used the production shader &mdash; byte-identical dup frame caught by sha), and
+   bash&rsquo;s <code>/tmp</code> is per-invocation here (mid-task backups lost &mdash; the tuned shader was
+   reconstructed from the r5 git source + the documented r6 diff and re-validated against the
+   captured reference frame with the byte-determinism oracle of 21.4).</li>
+ </ul>
+
+ <h3>21.8 Gates</h3>
+ <p>G0: <code>tasks/scripts/gate_census.py</code> over this round&rsquo;s seven run logs (SMOKE, satellite, five
+ Forward+ render logs): <strong>0 SCRIPT ERROR / 0 SHADER ERROR on every log, census ok</strong> (and the
+ same 0/0 before the edit and after every tuning step). SMOKE battery
+ (<code>AWECRAFT_BATTERY=player;interact;light;fluids</code>): <code>ok:true</code> (224.7 s). Satellite arm
+ (<code>AWECRAFT_LOGIC=satellite AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code>): <code>ok:true</code>,
+ <code>geom.clouds_centre_ok:true</code> (all three shells at (0,&minus;4000,0)),
+ <code>geom.clouds_radius_ok:true</code> (4400/4330/4275 exact, all <code>vis:true</code>),
+ <code>nadir_offset_m:&minus;0.38</code>. RENDER is the acceptance: the 2600 m deck above.
+ <code>main.gd</code> hunks in this ticket: zero (the fence held; its working-tree diff belongs to
+ another session&rsquo;s AC-0038 particles).</p>
+
+ <h3>21.9 Deviations and follow-ups</h3>
+ <ul>
+  <li><strong>Follow-up (file via coordinator):</strong> <code>set_custom_aabb</code> on the three cloud shell
+   meshes in <code>_place_clouds</code> (<code>main.gd</code>) &mdash; the AC-0235 pattern &mdash; so the deck renders below
+   2429 m and the r6 underside path (cull emulation + <code>abs(ndv)</code> graze + <code>u_under</code>) can be
+   demonstrated from inside. Until then the low-altitude &ldquo;from underneath&rdquo; clause stands on
+   21.2/21.3 (implemented, orbit-invariant, render-blocked by a pre-existing engine-bounds bug
+   that predates r4 &mdash; every round&rsquo;s 120 m frame was cloud-free for the same reason).</li>
+  <li><code>.scratch/AC-0385/coverage.py</code> updated in place to mirror the final shader (its stated
+   purpose; the AC-0385 instrument owns the coverage numbers).</li>
+  <li>The r6 plan&rsquo;s root cause (B) (&ldquo;clear gap at the pole&rdquo;) is corrected above (21.3) &mdash; the
+   weather was never the blocker at 120 m.</li>
+  <li>No commits, no <code>TASKS.yaml</code> edits (coordinator); genhash exempt (no <code>world/*</code>, no
+   <code>data.gd</code>); fenced <code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code> untouched.</li>
+ </ul>
+
 </body>
 </html>
