@@ -1045,6 +1045,14 @@ func _setup_aero() -> void:
 			sp.radius = 1.0
 			sp.radial_segments = 96
 			sp.rings = 48
+			# AC-0384 r7: the shell's explicit culling bounds - the unit
+			# box, the mesh's own local bounds; _place_clouds' node
+			# transform (position c, scale rsh) carries the centre and
+			# radius, so the world bounds are the shell sphere by
+			# construction. Set at creation, before the mesh reaches the
+			# tree (the AC-0235 star pattern: _build_star_mesh sets its
+			# bounds at construction time).
+			sp.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
 			var ln := MeshInstance3D.new()
 			ln.name = "CloudLayer"
 			ln.mesh = sp
@@ -1082,6 +1090,21 @@ func _place_clouds() -> void:
 		var ln: MeshInstance3D = cl["node"]
 		ln.position = c
 		ln.scale = Vector3.ONE * rsh
+		# AC-0384 r7: explicit culling bounds - the AC-0235 pattern (the
+		# star field fix above): on this engine build the instance's
+		# cull AABB degenerates to the node origin (the planet centre),
+		# so the shell drew only while the centre was inside the
+		# frustum (above ~2429 m on the planet preset). The unit box is
+		# the mesh's own local bounds; the world bounds are the node
+		# transform (position c, scale rsh) applied to it - derived from
+		# the shell radius and centre by construction, from the same
+		# rsh/c pair as the lines above. No padding.
+		var shmesh: SphereMesh = ln.mesh as SphereMesh
+		if shmesh != null:
+			# AC-0384 r7: the unit box is SphereMesh's own local bounds; the world
+			# bounds are the node transform (position c, scale rsh) applied to it,
+			# derived from the shell radius and centre by construction. No padding.
+			shmesh.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
 		cl["mat"].set_shader_parameter("u_center", c)
 		cl["mat"].set_shader_parameter("u_scale3", TAU * rsh / float(cl["scale"]))
 		cl["mat"].set_shader_parameter("u_drift", cl["wind"].length() / rsh)

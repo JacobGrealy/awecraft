@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-10-04T03:10
+  updated_at: 2026-10-04T20:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0394
+- AC-0397
 - AC-0395
 - AC-0186
 - AC-0130
@@ -22825,11 +22826,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: done
+  status: in-progress
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-02T17:11
-  completed_at: 2026-10-02T06:39
+  updated_at: 2026-10-04T15:09
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
@@ -24365,4 +24366,113 @@ intake:
     size parser that accepted a zero dimension. Gates: G0 final 0/0, full battery 8 modes ok, genhash
     25/25 byte-identical, shaderforce 12/12 clean, negatives red as required, harness.gd pure additions
     with main.gd/game.gd/drop.gd untouched.'
+  comments: []
+- id: AC-0397
+  title: carve-missing-from-low-lod-drawn-surface
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-04T20:29
+  updated_at: 2026-10-04T20:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The valleys are in the ground the player is standing on but not in the terrain\
+    \ further out. The carve now shows in the MED band, and it is still missing from the LOW (4x4x4) band,\
+    \ so the far terrain reads uncarved / flat-topped and the ground still changes shape as the player\
+    \ walks toward it. AC-0387 was closed as done - \"the carve applies to all LODs now\" - on a measurement\
+    \ of the far PAYLOAD, and the terrain each band actually DRAWS was never checked. This ticket is the\
+    \ player-visible half that AC-0387 did not measure.\n\n\n2) Technical Details:\n\nREPORTED BY THE\
+    \ USER (2026-10-04, Windows build AweCraft-20261004-2020, i.e. AFTER the AC-0387 fix and the AC-0388\
+    \ follow-up): \"the valley carving is supposed to be applying to all lods now but it appears to still\
+    \ not be applying to low lod\". Their settings are the short-render-distance pair they play at (fog\
+    \ 332 / edge 400 - CONTINUITY r24/r25), so low_start sits at its re-defaulted 16 and LOW = taxi 17..25\
+    \ = 272-400 m.\n\nWHICH BAND \"LOW\" IS - their word comes from the Options surface, not from us:\
+    \ ui/menu.gd:977 \"mid LOD distance\" = medium_start (the HIGH band's outer edge), settings.gd:505\
+    \ \"Low LOD start\" slider = low_start (the MED/LOW boundary). settings.gd:81-93 names the zones:\
+    \ HIGH = [0, medium_start), MED (8x8x8) = [medium_start, low_start), LOW (4x4x4) = [low_start, render_dist).\
+    \ So \"low lod\" = tier 3 = band C = the G=4 avg (world.gd:1798 _lod_tier_of; world.gd:6219 \"8 =\
+    \ MED 8x8x8 / 4 = LOW 4x4x4\"), and \"medium lod\" = tier 2 = band B = G=8.\n\nALREADY PROVEN - DO\
+    \ NOT REDO: the far PAYLOAD is carved and gated. gen_far/gen_veg_cells run the full path's own per-column\
+    \ sequence (carved_top_pass) and the farab gate compares the payload H + TOP against the carved_tops\
+    \ binding, negative-tested (gen.cpp:4056 region; AC-0387). So this is NOT a payload bug and re-running\
+    \ farab WILL read green - that green is not evidence about this defect.\n\nMEASURE FIRST, THEN FIX\
+    \ - the AC-0387 rule is to establish the class before choosing the fix, because the three candidates\
+    \ below need three different answers. Count, per column and per tier, the terrain the tier actually\
+    \ DRAWS versus carved_tops (the full path's carved top), split above/below sea, at G=4 and G=8, at\
+    \ the USER's settings.\n\n(a) TIER-SPECIFIC, and the leading candidate for \"MED right, LOW wrong\"\
+    . The avg emit's cell size is CELLB = 16 / G (mesh.cpp h_avg_emit_impl) - 4 blocks at the LOW tier\
+    \ (G=4), 2 at MED (G=8) - and a cell is SOLID iff MORE THAN HALF its sub-cells are solid (`if (cnt\
+    \ == 0 || (TOT - cnt) * 2 > TOT) grids_solid[t][idx] = 0;` in avg_grid_emit). A carved feature narrower\
+    \ than about half its cell footprint (a ravine) therefore classifies SOLID at CELLB=4 and is filled\
+    \ in: the emitted top returns to the RIDGE height, i.e. the LOW tier draws the UN-CARVED surface,\
+    \ while the same carve survives at MED's CELLB=2. This is the only mechanism that differs between\
+    \ MED and LOW, so it is the one that matches \"medium fixed, low still not\". Quantify it: the count\
+    \ of columns where the drawn top at tier 3 is taller than at tier 2 and both are above sea, and whether\
+    \ the disagreement is exactly the carved depth.\n\n(b) WHOLE-TIER, and a DOCUMENTED scope line rather\
+    \ than an oversight. Tier 1 / band A draws the generate_resl(skip=1) MATERIALIZATION fill, which is\
+    \ un-carved BY CONSTRUCTION - AC-0387 results section 8, \"Deliberate scope line: generate_resl(skip=1)\
+    \ (the band-A materialization fill) is UNCHANGED - it still fills solid 0..surface_h un-carved\",\
+    \ and its own measurement table reads \"skip (band-A materialization) gen_flat skip=1 he = H = surface_h\
+    \ (3218). Un-carved.\" world/AGENTS.md:26-28 restates it. The materialization landing keeps the far\
+    \ flag AND payload (world.gd:6721-6734 \"the far flag + payload are KEPT\"; chunk.gd:202-210 far_mat),\
+    \ so the far tiers still read the carved payload - but band A's own MESH is built from the un-carved\
+    \ skip=1 slabs (world.gd:6731-6757), and band A sits INSIDE the Options \"HIGH\" zone [0, medium_start).\
+    \ Also check whether any path can draw those slabs in tier 2/3: the low lane's non-far branch (world.gd:6285\
+    \ `low_emit_avg(entry[\"slabs\"], ...)`) is CORRECT for a demoted FULL column and WRONG for a skip=1\
+    \ fill, and the \"far\"/slabs choice at world.gd:6256-6285 / world.gd:2707 is `c.far` alone.\n\n(c)\
+    \ BELOW THE WATER LINE - needs no tier-specific mechanism to explain part of the report, and it is\
+    \ the piece AC-0387 saw and filed as something else. The avg emit's per-column solid top is S = max(H,\
+    \ sea) and it fills H+1..sea (mesh.cpp:2784 region: \"the skip fill is solid exactly 0..H (+ the aquifer\
+    \ H+1..sea when H < sea), so the per-(x,z) SOLID TOP is S = max(H, sea)\"), and the AC-0331 far-tier\
+    \ floor defaults to SEA (`yfloor_chunks_below_sea: 0` + `yfloor_enabled: true`, settings.gd:115-116;\
+    \ world.gd:588 `_far_floor_y`), whose post-fill mask zeroes every grid cell entirely below it (mesh.cpp:2462-2480).\
+    \ So any carved valley that cuts below y=126 is drawn as a flat cap at ~126 (G=8) / ~124 (G=4), and\
+    \ a DRY carved-below-sea land column draws a water plate. AC-0387 measured 556 such columns of 96,883\
+    \ and called it \"a pre-existing skip-lane seam\" about WATER - the carve being invisible there was\
+    \ never counted. Tie it to the report: how many of the LOW tier's columns are capped, and whether\
+    \ the user's valleys are among them.\n\nASK THE USER FOR A PICTURE. The project rule is that the artifact\
+    \ beats prose (their screenshot and satdiag.txt each broke open what hours of reasoning could not):\
+    \ one shot of the LOW band at their settings (fog 332 / edge 400) settles (a) vs (b) immediately,\
+    \ and the satellite/altitude preset owed by AC-0391/AC-0394 is the camera for it.\n\nTHE INSTRUMENT\
+    \ GAP THAT LET THIS SHIP AS \"DONE\" - fix the gate in the same task. NO arm compares the terrain\
+    \ a DRAW TIER actually renders against the carved full path. farab gates the payload H (the SOURCE);\
+    \ the ladder arm's band-B/C check is self-consistency only - `applied` versus a FRESH emit recomputed\
+    \ from the SAME source (harness.gd:11657-11669: `if c.far: h_avg_emit(c.far_h, ...) else: low_emit_avg(mc.slab_copy(c.data),\
+    \ ...)`); and AC-0387's mesh A/B reference `_farab_carved_slabs` was deliberately built to the EMIT's\
+    \ own cell rules, so it agrees with the emit by construction. A tier can therefore render un-carved\
+    \ terrain with every gate green - the same \"a gate that cannot see the defect standing next to it\"\
+    \ class AC-0387 itself diagnosed and repaired for the payload. The fix owes a per-tier DRAWN-surface\
+    \ census (each tier's emitted top vs carved_tops, above/below-sea split, G=4 and G=8) and it must\
+    \ be NEGATIVE-TESTED - it has to read RED on the pre-fix build, or it is not a gate.\n\nFIX SHAPE,\
+    \ once the measurement says which class it is - and note that \"run the carve on every tier\" is NOT\
+    \ the answer for (a) or (c):\n  (a) is a sampling/representation question: the answer is how the coarse\
+    \ tier's solid test and quantization PRESERVE a carve narrower than a cell (a carve-aware cell classification,\
+    \ or an H-driven top instead of the >half rule), not a denser carve run.\n  (b) is a genuine correctness\
+    \ bug and the cheapest of the three: the payload H is ALREADY carved, so the materialization fill\
+    \ can be driven from it instead of re-deriving surface_h.\n  (c) is a DELIBERATE cost feature (AC-0331)\
+    \ whose visual consequence was never evaluated - it needs a decision (cap only where there is water,\
+    \ or draw dry carved land below the line), not a silent change.\n\nCOST - PRICE IT, this is a draw-tier\
+    \ change: AC-0366's list is 5,502 us/chunk; AC-0381 re-measured the full path at 4,880-4,960; AC-0387\
+    \ moved far 95 -> 3,353 and veg 114 -> 3,390. State the per-chunk cost of whatever (a)/(c) turns out\
+    \ to be, and do not remove AC-0331's cost win without saying what it was worth.\n\nSWITCH - the filing\
+    \ rule (a look change ships with a Settings row) applies to the DECISION in (a)/(c), not to (b): (b)\
+    \ is a contract violation and needs no toggle. If (a) is answered by a finer LOW grid, that IS a real\
+    \ look-and-cost change, so it ships as an Options row (persisted, arm-asserted, short-circuiting before\
+    \ the work, defaulting to the CONSERVATIVE current resolution) and the arm asserts byte-identity with\
+    \ it off. Decide that when the measurement lands, not now.\n\nCONSTRAINTS: genhash 25/25 byte-identical\
+    \ - this is a draw-tier/emit concern and the world must not move; the standing set green (G0 zero\
+    \ SCRIPT ERROR, farab h_mismatch 0 - green here means nothing, ladder 20/20, meshprobe 1.0, halo ok,\
+    \ lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, the battery);\
+    \ read ARCHITECTURE.md section 6 (the promotion contract) and the AC-0312 band paragraph (~line 660)\
+    \ plus world/AGENTS.md:19-29 before touching any tier; and if the native lane is touched, rebuild\
+    \ and re-stage INCLUDING the Windows DLL - the product is Windows-only and the user is the one who\
+    \ has to retest it.\n\nCONTEXT: tasks/AC-0387/AC-0387-results.html sections 8-11 (the scope line,\
+    \ the cost, and the 556-column note); mesh.cpp's h_avg_emit_impl / avg_grid_emit / low_emit_avg_impl;\
+    \ world.gd:2596-2725 (the low-lane entry and the far-vs-slabs choice); world.gd:6700-6760 (the mat\
+    \ landing); world.gd:590-590, 860-910 (the floor derive) and 10010-10066 (_demote_to_far).\n"
   comments: []
