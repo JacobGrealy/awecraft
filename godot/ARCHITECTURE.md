@@ -77,6 +77,26 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         `env.background_color` and the satellite's `u_air` stay the
 │                         DayNight.sky_display reference at every altitude (no double-
 │                         darkening: the ground seen from orbit is depth-fog only).
+│                         AC-0384 r4 adds the ATMOSPHERIC LIMB GLOW: an additive rim
+│                         term in the background keyed to the view ray's IMPACT
+│                         PARAMETER about the planet centre (b = |cross(centre,
+│                         dir)| — the same grazing-ray physics as the body's haz_a),
+│                         exp-decaying 300 m outward from the tangent, coloured
+│                         horizon*0.5+mid*0.5 (day/night/dusk-adjusted, dies at night
+│                         for free) with a mild sun-side boost. It paints the region
+│                         the drawn disc does not cover — including the sub-horizon
+│                         band the camera's pitched-down view exposes between its own
+│                         horizon and the displaced limb (pre-r4 that band rendered
+│                         the dark h<0 sky: the measured (96,143,153) halo of the
+│                         700 m capture) — so it is the No Man's Sky blue rim. Uniforms
+│                         `u_limb_center` (centre minus CAMERA, per frame — the
+│                         AC-0036 no-CAMERA_POSITION-builtin precedent), `u_limb_radius`
+│                         (= R + SEA, the star-occlusion pair — one home),
+│                         `u_limb_amount` (AeroLib.limb_amount(), default 0.55,
+│                         AWECRAFT_LIMB env A/B; the term is off when radius = 0,
+│                         i.e. no player/world yet). NOT gated by S — the rim exists
+│                         at every altitude (at ground level it reads as the horizon
+│                         glow).
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
 │                         AC-0385): three concentric transparent SphereMeshes at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED

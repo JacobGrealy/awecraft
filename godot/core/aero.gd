@@ -95,6 +95,14 @@ static func srgb_pre() -> float:
 	return 1.0 if RenderingServer.get_current_rendering_method() != "gl_compatibility" else 0.0
 
 
+# AC-0384 r4: the atmospheric limb-glow amount (the sky's rim around the
+# planet). Default ON (the fix); AWECRAFT_LIMB=0 is the A/B off switch
+# (the pre-r4 sky, for before/after renders).
+const LIMB_AMOUNT := 0.55
+
+static func limb_amount() -> float:
+	return _envf("AWECRAFT_LIMB", LIMB_AMOUNT)
+
 static func glow_strength() -> float:
 	return _envf("AWECRAFT_GRADE_GLOW", GLOW_STRENGTH)
 

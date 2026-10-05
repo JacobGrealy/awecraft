@@ -1269,5 +1269,137 @@ geom (the BAKE-built mesh at the user's spawn):
   channel&rdquo; lines, that is a stale pre-r2 <code>.ctex</code> in the build, not this defect.</li>
  </ul>
 
+  <h2>19. Round 19 (2026-10-05) — the descent/leaving transition vs No Man&rsquo;s Sky: honest baseline from rendered frames, and the largest gap fixed (the missing atmospheric limb)</h2>
+
+  <h3>19.1 The capture (the loaded Forward+ path, the USER&rsquo;s configuration, a ladder not a frame)</h3>
+  <p>The transition is what is judged, so the capture is a 5-altitude ladder read as descent
+  (2600&thinsp;&rarr;&thinsp;120 m) and departure (the reverse — a static world: direction is a viewing order, not a
+  game state; the ladder was captured once and read in both orders). Every frame is a render of the
+  loaded game on the shipped Forward+ path (lavapipe, xvfb), read with vision (permitted this round).
+  User config throughout: <code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_FOG_PCT=83</code> (fog_far 332 /
+  render edge 400 — the user&rsquo;s short fog), <code>AWECRAFT_TIME=0.5</code>, fog ON, clouds ON, no
+  <code>AWECRAFT_LOGIC</code>, no <code>MENU_BOOT</code>, no <code>NO_FOG</code>/<code>CLOUDS=0</code> (those envs
+  existed to sidestep the r3 fog-erase bug — fixed — so the user&rsquo;s fog and clouds are in every frame).
+  Camera: <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code> (the r3-proven instrument: frozen
+  player at the camera position, HUD hidden, body uniforms ride the player&rsquo;s altitude),
+  <code>1280,720</code>, <code>AWECRAFT_SAT_MESH_STEP=64</code> (the settled 1.7 M-vertex frame does not complete
+  on llvmpipe — the r2 measured timeouts), <code>AWECRAFT_SNAP_DRAIN=1200</code> frames (shot fires at the cap,
+  the documented r3 class; the fog wall itself — 21–25 chunks — settles early in the outward stream).</p>
+  <table>
+  <tr><th>#</th><th>Alt (m)</th><th>What it brackets</th><th>File (in tasks/AC-0384/)</th><th>Run gate (log .scratch/AC-0384-r4/)</th></tr>
+  <tr><td>D5</td><td>2600</td><td>above the space band (S=1): sky-to-space end, stars, disc edge vs space</td><td><code>rd4-d2600.png</code> (466 KB)</td><td>Forward+ boot, <code>SNAP … 1280x720</code>, <code>RESULT {"planet":true,"alt":2600,…}</code>, 0 SCRIPT/SHADER ERROR</td></tr>
+  <tr><td>D4</td><td>1600</td><td>mid space band (S&asymp;0.82): the darkening transition, the limb</td><td><code>rd4-d1600.png</code> (522 KB)</td><td>same lines, alt 1600</td></tr>
+  <tr><td>D3</td><td>700</td><td>just above the band (S&asymp;0.04): full atmosphere, the haze band, clouds</td><td><code>rd4-d700.png</code> (382 KB)</td><td>same lines, alt 700</td></tr>
+  <tr><td>D2</td><td>300</td><td>at the fog wall (332 m): surface resolving, rim emerging, LOD handoff</td><td><code>rd4-d300.png</code> (410 KB)</td><td>same lines, alt 300</td></tr>
+  <tr><td>D1</td><td>120</td><td>approach: crisp near terrain, curvature, horizon scale</td><td><code>rd4-d120.png</code> (487 KB)</td><td>same lines, alt 120</td></tr>
+  </table>
+  <p><b>Deviations (stated):</b> (a) seed 44, not the user&rsquo;s 5432 — a multi-frame ladder at the user&rsquo;s
+  seed would need a 13-min in-process bake <i>per frame</i> and the settled 1.7 M-vertex frame times out on
+  llvmpipe (r2 measured: two 1500 s timeouts); the bake-path geometry was arm-proven in r3 (12 distinct
+  faces, &le;0.74 m vs the height channel), and the look is seed-invariant for every judgement item except
+  terrain detail variety. (b) <code>SAT_MESH_STEP=64</code> (render-only knob, default 16 unchanged) — the
+  silhouette below is partly its aliasing (flagged in the gap list). (c) a still cannot show cloud motion
+  or LOD pop-in over time — those are judged from placement/settle and stated as such.</p>
+
+  <h3>19.2 What already looks right (the honest baseline — the r3 fix holds)</h3>
+  <ul>
+  <li><b>The fog wall works.</b> D2 (300 m) and D1 (120 m): the surface resolves continuously out of the
+  haze; the body&rsquo;s rim emerges exactly at the wall with the soft <code>haz_a</code> rim on the disc side;
+  no hard pop at the LOD handoff, no seam step visible at the user&rsquo;s short fog (the r3
+  <code>fog_disabled</code> + haz bridge hold in pixels, not just in arms).</li>
+  <li><b>The day sky is clean.</b> D1–D3: a smooth bright gradient, no banding, no hard step at the
+  500/2000 m band edges (the AC-0386 transition is numerically smooth and visually continuous at the
+  altitudes where S is near 0).</li>
+  <li><b>Stars behave.</b> D4/D5: fully on at S&ge;0.82, correctly occluded by the disc (no dots on the
+  planet), the AC-0386 fade-in reads as intended.</li>
+  <li><b>Clouds exist at the right place.</b> The shells cross the view as a pale deck from below (D1,
+  upper-centre band) and as puffs from above (D3, right edge); positions/coverage match the arm
+  (R+275/330/400, day coverage 0.41–0.75) — the geometry was right; the character is the gap (19.3).</li>
+  <li><b>The near tier is crisp.</b> D1: block-level detail, the lake with its grid, trees — a proper
+  &ldquo;you are landing&rdquo; frame at 120 m.</li>
+  <li><b>The composition reads as a planet.</b> D2/D3: a curving surface dissolving into haze under a
+  full atmosphere — a genuine No Man&rsquo;s-Sky-shaped moment, which the limb gap (19.3) was what kept it
+  from landing.</li>
+  </ul>
+
+  <h3>19.3 The gap list, ranked (each with its evidence)</h3>
+  <table>
+  <tr><th>#</th><th>Gap (vs NMS)</th><th>Evidence from the frames</th><th>Disposition</th></tr>
+  <tr><td><b>1</b></td><td><b>No atmospheric limb glow — the disc edge is a hard line against space, and a dark blue-grey band halos the limb at mid altitudes.</b> The NMS signature is the bright blue rim, strongest from space; here the sky pass had no limb term at all.</td><td>D5/D4: the bright <code>haz_a</code> rim (on the disc) meets dead black sky (off the disc) — a 2–4 px hard edge (rim zoom <code>.scratch/AC-0384-r4/rd4-d2600-rimzoom.png</code>); D4 vs D5 are nearly identical black — the 500&ndash;2000 m transition is numerically real but visually imperceptible. D2/D3: a dark band hugs the rim — measured (96,143,153) at the band vs (146,193,203) sky above it. Root cause measured, not guessed: the camera looks at the R=4000 tangent, which sits <i>below</i> the displaced surface, so the camera&rsquo;s own horizon sits far above the frame centre and the sky&rsquo;s <code>h &lt; 0</code> branch (mix toward <code>horizon_color*0.5</code>) fills the band between that horizon and the drawn limb — a branch designed for ground-level views where it is always behind the ground.</td><td><b>FIXED this turn</b> (19.4) — the limb-glow term in the sky shader; A/B renders below.</td></tr>
+  <tr><td><b>2</b></td><td><b>Horizon scale / curvature.</b> R=4000 m is a small planet: the horizon sits ~1 km away at 120 m and the curvature is obvious; NMS horizons are near-flat at the same altitude. The &ldquo;feel&rdquo; of landing is different for this reason alone.</td><td>D1: the surface curves away strongly, horizon at the top third; D2: horizon at ~1.5 km. This is the W/R grid lock (W=1.5708&middot;R, AC-0143&thinsp;&rarr;&thinsp;AC-0306) — a standing design decision, and a save-format constant (planets:[{id,R,orbit}]).</td><td><b>Reported, not fixable in one turn</b> — it is the planet&rsquo;s radius, not a layer. If the coordinator wants the NMS horizon feel it is a design decision with a save/version cost; the numbers to start from: horizon distance &radic;(2Ra) = 693/979/1549/2190 m at 60/120/300/600 m altitude at R=4000.</td></tr>
+  <tr><td><b>3</b></td><td><b>Stippled near-disc texture (moir&eacute; static).</b> The disc&rsquo;s near side reads salt-and-pepper at orbital altitude; NMS shows smooth blended terrain.</td><td>D5 zoom (<code>.scratch/AC-0384-r4/rd4-d2600-zoom.png</code>): grain metric (mean neighbour diff, 2 px) = <b>53.2 on the rendered disc vs 12.7 on the shipped source texel</b> (<code>face00-centre</code>) — the noise is 4&times; the source content, so it is a sampling artifact (mip/anisotropy on the 1024&sup2; texture at sub-texel pitch, llvmpipe), not baked content. The 64 m render mesh step contributes the silhouette stair-steps.</td><td><b>Measured, not chased</b> — mostly proxy-attributed; the real-world levers (mip bias / anisotropy on the satellite import, the 16 m default mesh step) are a one-line import change with PCK impact — coordinator&rsquo;s call. The lake at the nadir (solid cyan with chunk-grid lines) is the LOD water material, correct behaviour, just flat-coloured (see 5).</td></tr>
+  <tr><td><b>4</b></td><td><b>Cloud character.</b> The shells read as sparse puffs / a thin haze deck, not NMS&rsquo;s thick dramatic clouds, especially from above (edge-on, where the grazing fade thins the mass by design).</td><td>D3: white speckles at the right rim, no continuous deck; D1: a pale band, not a cloud layer; coverage numbers (0.41/0.56/0.75 per shell) are healthy — the character, not the quantity, is off; the grazing fade (cloud shader) deliberately thins the silhouette so it does not double the body&rsquo;s limb haze.</td><td><b>Reported</b> — tuning (coverage windows, the grazing-fade curve, shell spacing 275/330/400) is a follow-up look ticket; one still cannot judge drift speed.</td></tr>
+  <tr><td><b>5</b></td><td><b>Flat far water / low near-disc contrast.</b> The ocean at orbital altitude is a uniform bright cyan with no specular sparkle; the nadir region is low-contrast pale.</td><td>D5/D4: the nadir lake reads as a flat cyan patch (the LOD water exception, flat material — no texture); NMS oceans glitter.</td><td><b>Reported</b> — a material question (specular term on the LOD water face), follow-up.</td></tr>
+  <tr><td><b>6</b></td><td><b>Disc silhouette aliasing.</b> The limb line is stair-stepped.</td><td>Every frame; worst at D5. Contributed by the 64 m render step (the render-only knob) and the lack of MSAA on this proxy; at the 16 m default step the silhouette is 4&times; finer.</td><td><b>Attributed to the render proxy + knob</b> — stated, not chased.</td></tr>
+  </table>
+
+  <h3>19.4 The fix: the atmospheric limb glow (gap 1 — the single largest, and in every frame)</h3>
+  <p><b>What was done.</b> <code>core/aero_sky_gradient.gdshader</code> gains an additive limb term in the
+  background: <code>b = |cross(u_limb_center, dir)|</code> — the view ray&rsquo;s IMPACT PARAMETER about the planet
+  centre, the same grazing-ray physics the body&rsquo;s <code>haz_a</code> uses (header item (2)(a)) — with an
+  <code>exp(-(b - u_limb_radius)/300)</code> decay (clamped at the tangent), coloured
+  <code>horizon_color*0.5 + mid_color*0.5</code> (the day/night/dusk-adjusted uniforms, so the rim dies at
+  night for free), a mild sun-side boost <code>(0.55 + 0.45&middot;dot&sup2;)</code>, and amount
+  <code>u_limb_amount</code> (default 0.55, <code>AWECRAFT_LIMB</code> env A/B, off when the radius uniform is 0 —
+  no player/world yet). <code>main.gd::_update_sky</code> pushes the three uniforms per frame from the AC-0386
+  values already there: <code>u_limb_center</code> = the planet centre <i>minus the camera</i> (the AC-0036
+  precedent — no <code>CAMERA_POSITION</code> builtin in a sky shader on the headless dummy renderer),
+  <code>u_limb_radius</code> = R + SEA (the star-occlusion radius — one home, no new constant), amount from
+  <code>AeroLib.limb_amount()</code> (<code>core/aero.gd</code>). <code>ARCHITECTURE.md</code> §3 synced (the SKY
+  PASS bullet).</p>
+  <p><b>Why it is one fix for two defects.</b> The term is painted in the BACKGROUND, so it shows exactly
+  where the drawn disc does not cover — including the gap between the geometric tangent (R+SEA) and the
+  lower displaced surface where the dark h&lt;0 sky bled through (the 19.3 band). The band region samples
+  the glow at 0.8&ndash;1.0, so the dark halo is replaced by the bright rim, and the hard black edge at
+  orbital altitude gains the NMS ring. <b>Deviation from the plan (stated):</b> the plan said the term
+  would be S-gated so the surface view stayed bit-identical; the implemented term is <i>not</i> gated —
+  the rim is physically present at every altitude, and at ground level it reads as the horizon glow
+  (NMS-correct, the NMS ground horizon glows too). The 120 m control frame below verifies the low view
+  is not blown out. Setting-surface note (the look-change rule): this ships a fix with an env A/B
+  (<code>AWECRAFT_LIMB</code>), default ON — an Options toggle would need a follow-up ticket; defaulting it
+  OFF would re-ship the broken look.</p>
+  <p><b>A/B (identical envs, same recipe, 1280&times;720, Forward+, user config, seed 44, 64 m mesh step):</b></p>
+  <table>
+  <tr><th>Alt (m)</th><th>Before</th><th>After (limb glow)</th><th>Pixel census (8 px sample grid)</th><th>Read (vision)</th></tr>
+  <tr><td>2600</td><td><code>rd4-d2600.png</code></td><td><code>rd4-fix-d2600.png</code> (478 KB)</td><td>2.2% of sampled px differ, mean 0.79/765, max 71 — the change is confined to the rim ring, as designed</td><td>a blue rim now traces the disc edge against space (before: a hard 2&ndash;4 px cut to black); the ring is thin at this altitude (300 m decay &asymp; 3&deg; angular) but present all the way round</td></tr>
+  <tr><td>1600</td><td><code>rd4-d1600.png</code></td><td><code>rd4-fix-d1600.png</code> (280 KB)</td><td>19.4% differ, mean 18.1, max 303 — the halo band + cloud drift between runs</td><td>a soft blue halo wraps the disc — the clearest NMS-moment of the pair; the 1600 vs 2600 frames now visibly differ (the transition band reads at last)</td></tr>
+  <tr><td>700</td><td><code>rd4-d700.png</code></td><td><code>rd4-fix-d700.png</code> (359 KB)</td><td>70% differ, mean 27.0 — the sky region (the glow brightens everything between the disc and the camera&rsquo;s horizon, most of the frame at this pitch)</td><td>the dark band is GONE: the measured band pixel (92,139,149) &rarr; (143,202,220); the rim and the sky now meet continuously (before: bright rim, dark band, bright sky — three zones)</td></tr>
+  <tr><td>120 (control)</td><td><code>rd4-d120.png</code></td><td><code>rd4-fix-d120.png</code> (457 KB)</td><td>61% differ, mean 32.5 — sky/horizon region + run-to-run water-phase/cloud drift; the near terrain (bottom half) is unchanged on inspection</td><td>the low view is intact: same crisp near tier, the far horizon slightly brighter (the horizon glow — intended, NMS-correct), nothing blown out</td></tr>
+  </table>
+  <p>Every log of the four A/B runs: <code>- Forward+ -</code> boot line, <code>SNAP … 1280x720</code>,
+  <code>RESULT {"planet":true,&hellip;}</code>, 0 SCRIPT/SHADER ERROR (<code>.scratch/AC-0384-r4/rd4-fix-d*.log</code>).</p>
+
+  <h3>19.5 Gates (light set, this round — policy <code>awecraft-run-verify</code>)</h3>
+  <table>
+  <tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+  <tr><td>G0 &times;2</td><td><code>--headless --path godot --quit</code> (pre-edit, post-edit)</td><td><code>gate_census.py</code>: 0 SCRIPT ERROR + 0 SHADER ERROR both times (rc is not the gate) — <code>.scratch/AC-0384-r4/g0.log</code>, <code>g0-postfix.log</code></td></tr>
+  <tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code> (post-fix)</td><td><code>ok:true</code>, total 222 s; sprint_ok, place_ok, torch_far_after 9, sea_stable true; census 0/0 (<code>smoke-postfix.log</code>)</td></tr>
+  <tr><td>genhash</td><td>not run — scope touched <code>core/</code> + <code>scenes/main.gd</code> only (no <code>world/*</code>, no <code>data.gd</code>); G2 is conditional</td><td>—</td></tr>
+  <tr><td>RENDER (the acceptance — not optional)</td><td>the 5-frame ladder (19.1) + the 4-frame A/B pair (19.4), all 1280&times;720 Forward+ at the user&rsquo;s config</td><td>9 PNGs exist in <code>tasks/AC-0384/</code> (382–522 KB each — none the black-frame class); every log carries the Forward+ boot line + SNAP + RESULT + 0 error lines; all frames read with vision (the instrument of this round)</td></tr>
+  </table>
+  <p>HEAVY (boundary r4, flake, r50, full battery, shaderforce, Windows build + stamp) = the
+  coordinator&rsquo;s job — this run exits after the light gates. Note for the heavy stage: the sky-shader
+  change is render-path only (no world/data), but the <code>shaderforce</code> arm will now also compile the
+  new limb term on the Forward+ path — a free standing check.</p>
+
+  <h3>19.6 What the coordinator needs to decide (the measured open items)</h3>
+  <ul>
+  <li><b>Gap 2 (the horizon scale)</b> is the next-largest &ldquo;feel&rdquo; difference and it is a design
+  decision (the planet radius — saves, the W/R lock, the flight band all key on it). The 19.3 numbers
+  are where to start if the NMS near-flat horizon is wanted.</li>
+  <li><b>Gap 3 (stippling)</b>: the real-GPU lever is mip bias / anisotropy on the 12 satellite imports
+  (one-line import change, PCK re-import, all seeds); the 16 m default mesh step already helps the
+  silhouette. The grain numbers (53.2 vs 12.7) are the baseline to beat.</li>
+  <li><b>Gaps 4/5 (cloud character, flat water)</b> are tuning follow-ups, each its own look ticket with
+  the setting rule.</li>
+  <li><b>Limb-glow tuning knobs</b> for the follow-up: amount (0.55 default), the 300 m decay width, the
+  sun-side boost — all in the shader&rsquo;s limb block; <code>AWECRAFT_LIMB</code> is the A/B env. At 2600 m the
+  ring is thinner than NMS&rsquo;s halo — if the coordinator wants a bolder rim, widen the decay before
+  raising the amount (width, not peak, is what reads at range).</li>
+  <li><b>The user&rsquo;s world</b> needs the rebuild (as of r3) and will now show: the textured disc with the
+  blue limb (19.4), the clouds above it, and at low altitude the horizon glow. Their satdiag/altitude
+  reports from the NEW build remain the final confirmation.</li>
+  </ul>
+
 </body>
 </html>

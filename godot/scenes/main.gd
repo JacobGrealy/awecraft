@@ -868,6 +868,21 @@ func _snapshot_finish(cam: String) -> void:
 			aim_pose_on = true
 			_aim_pose_guard(aim_pose, player._yaw, player._pitch, drain_max)
 	await _await_world_build(drain_at, drain_max)
+	# AC-0384 r2: on a non-canonical seed the satellite body BAKES in-process
+	# (~13 min worker wall on the dsh-web box) and stays hidden until LOADED —
+	# a bake-path snapshot must wait for the bake or it shoots the world with
+	# no body at all. Res-path runs are unaffected (LOADED in ~300 ms, the
+	# wait exits on the first frame). Capped on the same drain budget; a bake
+	# longer than AWECRAFT_SNAP_DRAIN frames prints SNAPDRAIN (satellite) and
+	# the shot fires anyway (the caller's existing trap semantics).
+	if world != null and world.satellite != null:
+		var sat = world.satellite
+		var sat_waited := 0
+		while sat.phase != SatelliteBody.Phase.LOADED and sat.phase != SatelliteBody.Phase.FAILED and sat_waited < drain_max:
+			await get_tree().physics_frame
+			sat_waited += 1
+		if sat.phase != SatelliteBody.Phase.LOADED and sat.phase != SatelliteBody.Phase.FAILED:
+			print("SNAPDRAIN satellite bake not done after %d frames" % drain_max)
 	if aim_pose_on and player != null:
 		player.position = aim_pose
 		player.look(player._yaw, player._pitch)
@@ -1275,6 +1290,20 @@ func _update_sky() -> void:
 			if k != "cloud_color" and k != "cloud_amount":
 				sky_mat.set_shader_parameter(k, u[k])
 		sky_mat.set_shader_parameter("u_space", space_t)  # AC-0386
+		# AC-0384 r4: the atmospheric limb glow. The centre is pushed
+		# RELATIVE TO THE CAMERA (the sky shader has no CAMERA_POSITION
+		# builtin on the headless dummy renderer - the AC-0036 precedent);
+		# the radius is the star-occlusion radius above (R + SEA, one
+		# home). No player/world yet -> ZERO/0 -> the term is off (the
+		# shader's u_limb_radius > 0 gate).
+		var limb_cam := Vector3.ZERO
+		if player != null:
+			var limb_c: Camera3D = player.get_node_or_null("Camera3D")
+			if limb_c != null:
+				limb_cam = limb_c.global_position
+		sky_mat.set_shader_parameter("u_limb_center", space_center - limb_cam)
+		sky_mat.set_shader_parameter("u_limb_radius", space_radius)
+		sky_mat.set_shader_parameter("u_limb_amount", AeroLib.limb_amount())
 	# AC-0386: the screen wash is an air-in-front-of-the-lens tint - it
 	# fades with the atmosphere (one uniform per frame; the quad stays up).
 	if aero and aero_wash != null:

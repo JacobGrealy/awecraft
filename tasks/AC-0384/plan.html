@@ -1,91 +1,111 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AC-0384 plan — round 3 (the loaded-game render path)</title>
-<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}.box{border-left:4px solid #b00020;background:#fdf2f4;padding:8px 12px;margin:10px 0}table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}</style>
+<title>AC-0384 plan — round 4 (the descent/ascent transition vs No Man's Sky)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}.box{border-left:4px solid #3b6fe0;background:#eef4ff;padding:8px 12px;margin:10px 0}table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}</style>
 </head><body>
-<h1>AC-0384 — round 3: the user says NOT FIXED (body inside the bedrock, clouds below the lowest terrain)</h1>
+<h1>AC-0384 — round 4: landing on and leaving a planet should feel like No Man's Sky (honest baseline + fix the largest gap)</h1>
 
 <h2>Goal</h2>
-<p>Find and fix the single shared property that makes the satellite body AND the cloud layer read as shells
-far inside the world in the user's loaded game, and prove it with an actual render of the loaded (shipped,
-Forward+) path measured at the user's own settings (R24/F83) and altitudes — not with arm geometry numbers.</p>
+<p>Capture the <i>actual</i> descent to, and departure from, a planet as <b>rendered frames of the loaded,
+shipped Forward+ path at the user's own configuration</b> (R24, fog full at 332 m / render edge 400 m),
+<b>look at those frames</b> (image reading is permitted this round — budget: a few decisive frames), write
+an <b>honest gap list against No Man's Sky</b> that names what already looks right as well as what does not,
+then fix the <b>single largest gap</b> if it is tractable in one turn — re-rendering to prove it — or measure
+it precisely enough for the next run to start from the numbers.</p>
 
-<h2>Diagnosis (code-verified; the renders below confirm it)</h2>
 <div class="box">
-<p><b>The radii are right; the pixels are not.</b> Every path the previous round measured (arm = the same
-<code>main.gd</code> game path) puts the body at R+H, the clouds at R+275/330/400, the terrain at R+H —
-a single shared centre (0,-R,0) and a single shared R (Game.planet_R=4000) for all three, verified in the
-code (<code>satellite_body.gd::configure</code>, <code>main.gd::_place_clouds</code>, the world column
-transforms) and re-measured live by this round's extended geom gate (clouds_centre_ok + body radius range).
-No planet picker exists; every world is R=4000; the user's own satdiag says R=4000 — the brief's
-wrong-shared-R hypothesis has no code path, and at R=4000 the 4275-4400 cloud shells can never be below
-terrain (max 4384).</p>
-<p><b>The defect:</b> <code>godot/core/satellite_body.gdshader</code> render_mode is
-<code>cull_back, depth_draw_always</code> — it does NOT disable the engine env fog. The body's own
-per-fragment model is built to TAKE OVER exactly where the world's depth fog is 100%: <code>op</code> ramps
-existence over the world's fog window [fog_far, render_edge], <code>haz_a</code> hazes the limb, and
-<code>haz_d</code> mixes toward <code>u_air</code> — which is <code>DayNight.sky_display(t)</code>, the
-IDENTICAL colour of <code>env.fog_light_color</code>. But with the env fog still applied to the body's
-fragments, everything beyond <code>fog_depth_end</code> (= 332 m at the user's R24/F83) is repainted fog
-colour, erasing the established disc at every orbital altitude. At the user's 668 m the whole planet
-(terrain + body) is a uniform fog-colour disc, and the only non-fogged detail is the cloud shell — which
-already carries <code>fog_disabled</code> (its comment literally names the failure: "a 4300 m shell would be
-erased by it"). Puffs on a featureless disc read as "lower than the lowest terrain"; the featureless disc
-reads as a ball further inside than the bedrock. One shared property (the body missing the fog_disabled the
-clouds have) explains both clauses of the user's report.</p>
-<p><b>Why the previous round proved nothing:</b> the arms measure radii (geometry) — fog is a pixel effect
-invisible to them; the r2 "acceptance" render was at ground level where the body is hidden/fogged anyway (the
-seam was never in frame); AC-0396's planet shot sidesteps the bug with <code>AWECRAFT_NO_FOG=1</code> in its
-recipe (the recipe author knew the env fog repaints the body — the user's game has no such env).</p>
+<p><b>Method (kept from round 3):</b> every claim about how something <i>looks</i> comes from a render of the
+loaded game read with vision — never from an arm's fields. The arms measure radii and they have been right
+every time; the pixel path is what has been wrong twice already.</p>
+<p><b>A transition, not a frame.</b> A single altitude proves nothing: the capture is an <b>altitude ladder</b>
+— several frames descending, and the same ladder reversed for departure (a static world: direction is a
+viewing order, not a game state; the ladder is captured once and read in both orders, stated explicitly in
+the results). <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code> (the round-3-proven instrument:
+frozen player at the camera position, HUD hidden, body visibility + uniforms ride the player's altitude).</p>
 </div>
 
-<h2>Files to touch</h2>
+<h2>The ladder (user config throughout)</h2>
+<p>Common envs: seed 44 (res path — no 13-min bake), <code>AWECRAFT_SIZE=1280,720</code>,
+<code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_FOG_PCT=83</code> (fog_far 332 / edge 400 — the user's
+short fog), <code>AWECRAFT_TIME=0.5</code>, <code>AWECRAFT_SAT_MESH_STEP=64</code> (settled frame must
+complete on llvmpipe), <code>AWECRAFT_SNAP_DRAIN=1200</code>, fog ON, clouds ON, <b>no
+<code>AWECRAFT_LOGIC</code>, no <code>MENU_BOOT</code>, no <code>NO_FOG</code>, no <code>CLOUDS=0</code></b>
+(the AC-0396 recipe's NO_FOG/CLOUDS=0 existed to sidestep the fog-erase bug — fixed in r3 — so the user's
+fog and clouds are in every frame).</p>
 <table>
-<tr><th>File</th><th>Change</th></tr>
-<tr><td><code>godot/core/satellite_body.gdshader</code></td><td>THE FIX: render_mode gains <code>fog_disabled</code> (verified-valid mode, AC-0396 probe list). The body's haz model then bridges the fog wall as designed; the env-fog double-fog is gone. One word + comment.</td></tr>
-<tr><td><code>godot/world/satellite_body.gd</code></td><td><code>AWECRAFT_SAT_MESH_STEP</code> env knob (default 16 = unchanged behaviour; clamp 4..256): a render-cost override so this box can show a SETTLED frame carrying the body — the previous round's 1500 s render timeouts were exactly the settled 1.7 M-vertex frame. Used at 64 (~1/16 the verts) for the renders only.</td></tr>
-<tr><td><code>godot/scenes/harness.gd</code></td><td>Satellite arm, geom block: (a) the shared centre/radius source measured LIVE — cloud shell pos + radius from <code>Main.cloud_layers</code>, body min/max vertex radius, terrain top under the feet, all vs (0,-R,0) → <code>clouds</code> + <code>clouds_centre_ok</code> + <code>body_radius_range</code>; (b) ENCODE vs DECODE compared as two separate paths — the baked PNG's alpha (the encode's output) vs the alpha of the texture the game actually loaded (the .ctex import decode), per face and aggregate: formats, byte diffs, decoded-H diffs → <code>height_decode</code>.</td></tr>
-<tr><td><code>tasks/harness_data.yaml</code> + <code>harness_doc.py --render</code></td><td>satellite row: new result fields + the r3 note.</td></tr>
-<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Sync: the body's fog-wall takeover contract (fog_disabled, haz bridge to the env fog colour) + the mesh-step env knob.</td></tr>
-<tr><td><code>tasks/AC-0384/{plan,continuity,AC-0384-results}</code></td><td>plan (this file; round-2 preserved as plan-round2.html), journal, results section 18.</td></tr>
+<tr><th>#</th><th>Alt (m)</th><th>What it brackets</th><th>File (in tasks/AC-0384/)</th></tr>
+<tr><td>D5</td><td>2600</td><td>above the space band (S=1): the sky-to-space end, stars, the disc edge against space</td><td><code>rd4-d2600.png</code></td></tr>
+<tr><td>D4</td><td>1600</td><td>mid space band (S≈0.82): the darkening transition, the limb's character</td><td><code>rd4-d1600.png</code></td></tr>
+<tr><td>D3</td><td>700</td><td>just above the band (S≈0.04): full atmosphere, the haze band, clouds crossing the view</td><td><code>rd4-d700.png</code></td></tr>
+<tr><td>D2</td><td>300</td><td>at the fog wall (332 m): the surface resolving, the body's rim emerging, the LOD handoff</td><td><code>rd4-d300.png</code></td></tr>
+<tr><td>D1</td><td>120</td><td>approach: crisp near terrain, curvature, horizon scale</td><td><code>rd4-d120.png</code></td></tr>
 </table>
+<p>Descent = D5→D1; departure = D1→D5. Per run: ~4–5 min wall at 5 FPS (shot fires at the 1200-frame drain
+cap, the round-3 1280-shot class), 1200 s budget. Seed-44 deviation (the user's own seed 5432 would need a
+13-min in-process bake <i>per frame</i> and its settled 1.7 M-vertex frame does not complete on llvmpipe —
+r2's measured timeouts): the bake-path geometry was arm-proven in r3 (12 distinct faces, ≤0.74 m vs the
+height channel); a multi-frame ladder at the user's seed is infeasible on this box and is documented as
+such in the results. The look is seed-invariant for every judgement item except terrain detail variety.</p>
 
-<h2>Harness gates (mode + the ok:true condition)</h2>
-<table>
-<tr><th>Gate</th><th>Mode / command</th><th>ok condition</th></tr>
-<tr><td>G0</td><td><code>--headless --path godot --quit</code></td><td>gate_census.py: 0 SCRIPT ERROR + 0 SHADER ERROR (rc is not the gate)</td></tr>
-<tr><td>PROBE res (user config)</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_SEED=44 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code></td><td>ok:true; geom.nadir_offset within ±4 m; clouds_centre_ok true; <b>height_decode.ok true</b> (raw PNG alpha == loaded .ctex alpha within ±1 byte, both RGBA8, 12/12 faces); ladder 4/4; ratio 0.25; res_export_ok</td></tr>
-<tr><td>PROBE cache (the user's 2nd-run load path)</td><td>same, with <code>user://satellite/p0_r4000_s44_h/</code> pre-seeded with the the 12 shipped PNGs</td><td>src=cache; same geom ok (the raw-PNG cache decode the user's steady state runs)</td></tr>
-<tr><td>PROBE packed (the export condition)</td><td>export <code>--export-pack Windows</code>, then <code>--main-pack awecraft.pck --script</code> standalone probe</td><td>ResourceLoader.exists true; loaded .ctex image RGBA8; loaded alpha == raw PNG alpha (±1); raw .png absent from the pack (the export condition holds)</td></tr>
-<tr><td>PROBE bake (the user's seed)</td><td><code>AWECRAFT_LOGIC=satellite AWECRAFT_SEED=5432</code> (R24/F83)</td><td>src=bake; geom ok (≤ lattice tolerance at the 194 m mountain); clouds_centre_ok; ~13 min wall</td></tr>
-<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical (world/* touched)</td></tr>
-<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids</code></td><td>ok:true, census 0/0</td></tr>
-<tr><td>RENDER — acceptance (the deliverable)</td><td>menu-boot snapshot (NO <code>AWECRAFT_LOGIC</code>), seed 44 res path, R24/F83, <code>AWECRAFT_SAT_MESH_STEP=64</code>, TIME=0.5, 1280,720 under xvfb + lavapipe + vulkan</td><td>A (200 m alt): near terrain + fog wall + the body's rim emerging exactly at the horizon + clouds above. B (668 m, the user's altitude): the body disc (the terrain's far LOD) with the cloud shell above it. Both: file exists, Forward+ boot line, SNAP line, 0 SHADER/SCRIPT ERROR in the run log. A before/after 640,360 pair at 668 m quantifies the fog-erase (before: uniform fog disc, census-verified; after: textured disc).</td></tr>
-</table>
-<p>HEAVY (boundary r4, flake, r50, full battery, shaderforce, Windows build + stamp) = the coordinator's job —
-exit after the light gates.</p>
-
-<h2>Fences</h2>
+<h2>Judgement list (each item judged from the frames, NMS as the bar)</h2>
 <ul>
-<li>No commits, no pushes, no TASKS.yaml edits (read-only git is fine).</li>
-<li>The dirty-tree AC-0394/AC-0038/AC-0088/AC-0396 hunks (debug.gd, drop.gd, game.gd particles var, main.gd
-particles/controls hunks) stay untouched; main.gd is not edited this round.</li>
-<li><code>AWECRAFT_SAT_MESH_STEP</code> is env-gated; default 16 = byte-identical behaviour (the standing
-satellite/ladder values must not move).</li>
-<li>Probe scripts and packs live under <code>.scratch/AC-0384-r3/</code>; logs there too (repo-root .scratch).</li>
-<li>One godot at a time; <code>HOME=/tmp/dsh_home</code> in the same command; <code>pgrep -af '[g]odot'</code>
-before every call; never kill a godot not started by this run.</li>
+<li><b>Atmosphere limb + fade</b> — the NMS signature: a bright blue glowing rim around the planet disc,
+strongest seen from space, fading into the blue haze at lower altitude.</li>
+<li><b>Haze transition as the surface resolves</b> — fog wall 332 m → edge 400 m: does the terrain dissolve
+into the haze continuously (no hard line) as it resolves? Does the body's rim emerge exactly at the wall?</li>
+<li><b>Terrain LOD</b> — do the far tiers (the avg-grid bands) POP into existence or blend in at the fog
+wall? Any visible seam step where a tier's H differs from its neighbour's?</li>
+<li><b>Cloud layer</b> — position (shells at +275/+330/+400 m), coverage (day ~68 %/41 %/37 %… per shell),
+character from altitude; motion is a slow Y-rotation — judged from placement/coverage, and stated honestly
+that a still cannot show speed.</li>
+<li><b>Sky-to-space transition</b> — the u_space band (500→2000 m): does the sky darken smoothly, do stars
+fade in, does the sun's glow die with the air (AC-0386) — any banding or hard step at 500/2000?</li>
+<li><b>Horizon curvature and scale</b> — R=4000 m is a small planet: the horizon sits ~1 km away at 120 m
+altitude. Judge how it reads against NMS's near-flat horizons (the W/R grid lock is a standing design
+decision — a finding, not a bug).</li>
+<li><b>Hard cuts / flicker</b> — disc edge against space, the star shell (320-unit re-centered shell,
+planet-disc occlusion), the cloud shells' silhouette, the AeroWash quad, anything popping as the ladder
+steps.</li>
 </ul>
+
+<h2>Files to touch</h2>
+<ul>
+<li><b>Captures + evidence:</b> <code>tasks/AC-0384/rd4-*.png</code> (5 ladder frames + post-fix pair),
+<code>tasks/AC-0384/AC-0384-results.html</code> (new §19), <code>tasks/AC-0384/continuity.md</code> (journal),
+this plan.</li>
+<li><b>Anticipated fix (pending the pixel read — the leading candidate):</b> the <b>atmospheric limb glow</b>.
+At altitude the sky pass (<code>core/aero_sky_gradient.gdshader</code>) mixes to <code>space_color</code>
+with weight S at the zenith / S² at the horizon and carries <b>no limb term</b>, so the disc's edge reads as a
+hard line against space — while NMS's identity <i>is</b> the glowing rim. Fix = a limb-glow term in the sky
+shader: a grazing-angle function of the view ray's impact parameter about the planet centre (the same
+physics the body's haz_a uses), weighted by the flight-band S so the surface view (S=0) stays
+bit-identical, driven by new <code>u_planet_center</code>/<code>u_planet_radius</code>/<code>u_space</code>
+uniforms pushed from <code>main.gd::_update_sky</code> (one home, the existing AC-0386 uniform). If the frames
+show the largest gap elsewhere (e.g. a hard LOD pop, or the R-scale reading wrong), the fix target changes and
+the results page records the deviation — including the precise numbers for it if it is not tractable this turn.</li>
+</ul>
+
+<h2>Harness gates (mode + ok:true condition)</h2>
+<table>
+<tr><th>Gate</th><th>Mode / command</th><th>ok:true condition</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code> (before + after any edit)</td><td><code>gate_census.py</code>: <b>0 SCRIPT ERROR AND 0 SHADER ERROR</b> lines (rc is not the gate)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids"</code></td><td>ok:true, census 0/0</td></tr>
+<tr><td>RENDER — acceptance (not optional)</td><td>the 5-frame ladder above + the post-fix A/B pair (the altitudes the fix changes: 2600 and 1600, 1280×720, identical envs)</td><td>every log: boot line <code>- Forward+ -</code> (the path assertion), <code>SNAP … 1280x720</code>, <code>RESULT {"planet":true,…}</code>, 0 error lines; file exists, dimensions 1280×720, size not the black-frame class (a 1280×720 surface shot is ≫100 KB)</td></tr>
+<tr><td>Negative A/B (only if the fix is the sky shader)</td><td>ladder re-shot at D1 (120 m) post-fix</td><td>120 m frame ≈ pre-fix 120 m frame (S=0 ⇒ the limb term is off below the band; any visible change = regression)</td></tr>
+</table>
+<p>HEAVY (boundary r4, flake, r50, full battery, shaderforce, Windows build + stamp) = the coordinator's
+job — this run exits after the light gates. Fences: no commits, no pushes, no TASKS.yaml edits,
+<code>harness.gd</code> stays pristine (the capture uses the existing <code>planet</code> preset; no new arms).</p>
 
 <h2>Risks</h2>
 <ul>
-<li>llvmpipe settled-frame stall with the body (the previous round's 1500 s timeouts): mitigated by the 64 m
-mesh step (~1/16 the vertices) + per-shot timeouts + the proven 600-frame-cap fallback class.</li>
-<li>The 5432 bake path costs ~13 min on this box: run it as a bounded background arm; it is the bake-side
-evidence, not the acceptance (the acceptance is the res-path renders).</li>
-<li>.ctex stores the image as VP8L (lossless WebP); if ANY link (import encode, PCK load, GPU-vs-headless
-get_image) altered the alpha, the height_decode / packed probes catch it numerically and the fix moves to the
-load path (a raw non-imported height sidecar would be the fallback design — only if a divergence is measured).</li>
+<li>llvmpipe wall cost: 5 ladder runs ≈ 25–35 min + fix re-shots ≈ 10 min; one godot at a time, 1200 s per
+run, <code>pgrep -af '[g]odot'</code> before every call, logs to repo-root <code>.scratch/AC-0384-r4/</code>.</li>
+<li>The shot fires at the drain cap with the world still streaming (the documented r3 class) — the fog wall
+itself (332–400 m ≈ 21–25 chunks) settles early in an outward stream, so the transition frames remain valid;
+the 2600/1600 frames are beyond the fog wall and independent of settle.</li>
+<li>The sky-shader change must stay bit-identical below the band (S=0): the limb term scales with the band
+factor and its radius comes from <code>Game.planet_R</code> (one home, never a constant).</li>
 </ul>
 
 </body></html>
