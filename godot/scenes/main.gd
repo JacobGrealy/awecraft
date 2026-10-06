@@ -305,6 +305,72 @@ static func _vl_mb_next(st: Array) -> float:
 	var r: int = t ^ _vl_mb_ursh(t, 14)
 	return float(_vl_mb_ursh(r, 0)) / 4294967296.0
 
+# AC-0384 r10: the cloud shell mesh - a custom ArrayMesh with EXPLICIT
+# bounds at construction (the AC-0235 star pattern, _build_star_mesh
+# below). On this engine build the scaled SphereMesh instances rasterize
+# only a partial, altitude-dependent cap (the r9 dump probe: cap ~41 deg
+# from nadir at 300 m, far-side only from inside, full shell at 2600 m -
+# the bottom dome the user has reported for days), while the ArrayMesh
+# bodies and the star field (the same construction pattern) draw fully
+# at every altitude; the r10 renderer A/B shows the cap pixel-identical
+# on Forward+ and Compatibility, i.e. the engine's shared cull of the
+# PrimitiveMesh bounds class, not a rasterizer quirk. The lattice is the
+# SphereMesh(radial 96, rings 48) lattice: 97x49 grid (seam column
+# duplicated, pole rows degenerate) = 9216 triangles, the same
+# silhouette. Unit radius in local space - _place_clouds carries the
+# shell radius as the node transform (position (0,-R,0), scale R+h), so
+# the geometry is exactly the proven shells (4275/4330/4400).
+func _build_cloud_shell_mesh() -> ArrayMesh:
+	var RSEG := 96
+	var RING := 48
+	var v := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	for y in RING + 1:
+		var theta: float = PI * float(y) / float(RING)
+		for x in RSEG + 1:
+			var phi: float = TAU * float(x) / float(RSEG)
+			var p := Vector3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi))
+			v.append(p)
+			nrm.append(p)
+			uvs.append(Vector2(float(x) / float(RSEG), float(y) / float(RING)))
+	for y in RING:
+		for x in RSEG:
+			var a := y * (RSEG + 1) + x
+			var b := a + 1
+			var c := a + (RSEG + 1)
+			var d := c + 1
+			# Outward-facing winding (front = CCW seen from outside): the
+			# cloud shader culls at the fragment stage from the geometric
+			# normal (cull_disabled), so this keeps the mesh well-formed
+			# for anything that uses the rasterizer front face (the
+			# opaque dump probe's depth, engine paths).
+			var n1: Vector3 = (v[b] - v[a]).cross(v[c] - v[a])
+			var outw: Vector3 = (v[a] + v[b] + v[c] + v[d]) * 0.25
+			if n1.dot(outw) < 0.0:
+				idx.append(a); idx.append(c); idx.append(b)
+				idx.append(b); idx.append(c); idx.append(d)
+			else:
+				idx.append(a); idx.append(b); idx.append(c)
+				idx.append(b); idx.append(d); idx.append(c)
+	var arrs: Array = []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = v
+	arrs[Mesh.ARRAY_NORMAL] = nrm
+	arrs[Mesh.ARRAY_TEX_UV] = uvs
+	arrs[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	# The star pattern (4.7's ArrayMesh keeps a ZERO aabb from
+	# add_surface_from_arrays - a degenerate bounds set is the cull
+	# defect class): the explicit unit box at construction, BEFORE the
+	# MeshInstance3D exists. _place_clouds' node transform carries the
+	# centre and radius, so the world bounds are the shell sphere by
+	# construction. No padding.
+	m.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
+	return m
+
 func _build_star_mesh() -> ArrayMesh:
 	var st := [42]
 	var v := PackedVector3Array()
@@ -1021,8 +1087,10 @@ func _setup_aero() -> void:
 	# AC-0235: the procedural cloud deck. AC-0235 retest 5: THREE
 	# layers with varying height, feature size and drift speed
 	# (user: vary height/size/speed). AC-0385: the geometry is now a
-	# SPHERICAL SHELL per layer (unit SphereMesh scaled to R+h and
-	# centred at (0, -R, 0)) instead of flat player-following quads -
+	# SPHERICAL SHELL per layer (unit-lattice ArrayMesh scaled to R+h
+	# and centred at (0, -R, 0); AC-0384 r10: a custom ArrayMesh with
+	# explicit construction-time bounds, see _build_cloud_shell_mesh)
+	# instead of flat player-following quads -
 	# the clouds wrap the planet from orbit. h = layer altitude,
 	# scale = feature size in BLOCKS (the shader converts to angular
 	# frequency: 2*pi*(R+h)/scale), wind = the old blocks/sec drift,
@@ -1041,18 +1109,13 @@ func _setup_aero() -> void:
 			var cm := ShaderMaterial.new()
 			cm.shader = load("res://core/cloud_layer.gdshader")
 			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
-			var sp := SphereMesh.new()
-			sp.radius = 1.0
-			sp.radial_segments = 96
-			sp.rings = 48
-			# AC-0384 r7: the shell's explicit culling bounds - the unit
-			# box, the mesh's own local bounds; _place_clouds' node
-			# transform (position c, scale rsh) carries the centre and
-			# radius, so the world bounds are the shell sphere by
-			# construction. Set at creation, before the mesh reaches the
-			# tree (the AC-0235 star pattern: _build_star_mesh sets its
-			# bounds at construction time).
-			sp.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
+			# AC-0384 r10: the shell is a custom ArrayMesh with explicit
+			# bounds at construction (the AC-0235 star pattern) - the
+			# scaled SphereMesh this replaced rasterized only a partial,
+			# altitude-dependent cap on the engine's shared cull path.
+			# Unit-radius lattice; _place_clouds carries the shell
+			# radius as the node scale, so the geometry is unchanged.
+			var sp := _build_cloud_shell_mesh()
 			var ln := MeshInstance3D.new()
 			ln.name = "CloudLayer"
 			ln.mesh = sp
@@ -1076,9 +1139,10 @@ func _setup_aero() -> void:
 		add_child(aero_wash)
 
 func _place_clouds() -> void:
-	# AC-0385: the cloud shell wraps the planet. Unit spheres scaled to
-	# R+h and centred at (0, -R, 0) (the surface plane y=0 is the top of
-	# the planet, so h stays the same altitude above it the quads used).
+	# AC-0385: the cloud shell wraps the planet. Unit-lattice spheres
+	# (custom ArrayMesh, AC-0384 r10) scaled to R+h and centred at
+	# (0, -R, 0) (the surface plane y=0 is the top of the planet, so h
+	# stays the same altitude above it the quads used).
 	# u_scale3 converts the per-layer feature size (in blocks) to the
 	# angular frequency on the shell; u_drift converts the old blocks/sec
 	# wind to rad/s about world Y (|wind|/(R+h)). Idempotent - called
@@ -1090,20 +1154,15 @@ func _place_clouds() -> void:
 		var ln: MeshInstance3D = cl["node"]
 		ln.position = c
 		ln.scale = Vector3.ONE * rsh
-		# AC-0384 r7: explicit culling bounds - the AC-0235 pattern (the
-		# star field fix above): on this engine build the instance's
-		# cull AABB degenerates to the node origin (the planet centre),
-		# so the shell drew only while the centre was inside the
-		# frustum (above ~2429 m on the planet preset). The unit box is
-		# the mesh's own local bounds; the world bounds are the node
-		# transform (position c, scale rsh) applied to it - derived from
-		# the shell radius and centre by construction, from the same
-		# rsh/c pair as the lines above. No padding.
-		var shmesh: SphereMesh = ln.mesh as SphereMesh
+		# AC-0384 r10: explicit culling bounds on the custom ArrayMesh -
+		# the unit box, the mesh's own local bounds (set at construction
+		# in _build_cloud_shell_mesh; re-set here on every (re)placement
+		# so the r7 behaviour holds when the tree is re-created). The
+		# node transform above carries the centre and radius, so the
+		# world bounds are the shell sphere by construction, from the
+		# same rsh/c pair as the lines above. No padding.
+		var shmesh: ArrayMesh = ln.mesh as ArrayMesh
 		if shmesh != null:
-			# AC-0384 r7: the unit box is SphereMesh's own local bounds; the world
-			# bounds are the node transform (position c, scale rsh) applied to it,
-			# derived from the shell radius and centre by construction. No padding.
 			shmesh.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
 		cl["mat"].set_shader_parameter("u_center", c)
 		cl["mat"].set_shader_parameter("u_scale3", TAU * rsh / float(cl["scale"]))

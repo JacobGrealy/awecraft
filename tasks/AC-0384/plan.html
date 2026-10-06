@@ -1,115 +1,147 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AC-0384 — plan (round 6: the sustained descent passage)</title>
-<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
-<h1>AC-0384 — plan, round 6 (2026-10-06): the sustained descent passage</h1>
+<title>AC-0384 — plan (round 7: draw-defect fix — renderer A/B + custom ArrayMesh shells)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0384 — plan, round 7 (r10, 2026-10-06): settle the draw defect, then fix the mesh</h1>
 
-<p><b>Goal.</b> A descent at the user's configuration (R24, fog full at 332 m) must pass through
-structured cloud over a sustained altitude band — the deck census (ON&minus;OFF pixel diff, % of
-frame) must show present, structured cloud at <em>every</em> ladder altitude (2600/1600/700/300/120 m)
-at the reference weather, and dense at some altitude at <em>every</em> observed weather — by making the
-three proven shells (4275/4330/4400 about (0,&minus;4000,0); radii/centre/transforms untouched) read
-as three distinct layers, each carrying its own structured coverage.</p>
+<p><b>Goal.</b> The r9 finding stands: the three cloud shells (true spheres at 4275/4330/4400
+about (0,&minus;R,0), geometry verified by pixel measurement) rasterize only
+PARTIALLY and ALTITUDE-DEPENDENTLY on Forward+/llvmpipe-Vulkan (near-wall cap ~41&deg; from
+nadir at 300 m, comparable at 1000 m, far-side-only at 200 m inside, NOTHING at 1600 m,
+full shell at 2600 m) — the bottom-dome-with-empty-sky the user has reported. Round 7:
+(1) A/B the per-shell solid-colour dump probe on the COMPATIBILITY renderer (and Forward+
+again) to settle engine-vs-rasterizer, and (2) rebuild the shells as custom
+<code>ArrayMesh</code>es with explicit bounds at construction — the <code>_build_star_mesh</code>
+pattern the r7 work cites — with the geometry UNMOVED. Acceptance is the DRAW: the dump
+probe shows the shell fully drawn (or at least across the whole visible hemisphere, not a
+cap) at EVERY ladder altitude, reported as % of frame the way r5/r6 did, plus the deck
+census (ON&minus;OFF) showing cloud across a sustained band.</p>
 
-<h2>Diagnosis (measured, round 5 = results &sect;23)</h2>
-<ul>
-<li>The r8b deck census at CLOUD_T0=411200: 2600 m <b>10.58%</b> (thick belt core — the NMS orbit
-read), 1600 m <b>0.000%</b>, 700 m <b>0.000%</b>, 300 m <b>4.36%</b> (thin veil), 120 m
-<b>0.22%</b> (limb strip). The descent crosses one wisp and then falls through empty sky.</li>
-<li>Geometry read of the preset views (camera radius 4141+alt; the deck is the shell wall the view
-rays cross): 2600 m sees the lower 46% of the frame as deck, 1600 m the lower 63%, 700 m the lower
-81%, 300 m the lower 75%, 120 m the top horizon strip (e &isin; [&minus;16&deg;, +21&deg;] below
-horizontal — the camera is 14 m inside the inner shell). The 1600/700 m zeros are not a cull or
-view problem: the base field is below the 0.46 coverage threshold in those deck regions at this
-weather, and the round-5 drift scan (6 clock values) found the belt limb in a clear phase at
-<em>every</em> phase — one weather draw cannot be relied on.</li>
-<li>All three shells currently sample the <em>same</em> fbm structure at their own feature scales
-(<code>u_scale3 = 2&pi;(R+h)/feature</code>, 256/160/110 blocks) — the decks are correlated views of one
-field, so a clear phase in the field is a clear phase in all three decks at once: one thin band.</li>
-</ul>
-
-<h2>The fix — per-shell pattern offset (the vertical phase), shader-side; window only if the mirror
-demands it</h2>
-<ul>
-<li><code>godot/core/cloud_layer.gdshader</code>: new uniform <code>vec3 u_phase</code> (default
-0 = today's pattern); the sampling coordinate becomes <code>q = dr * u_scale3 + u_phase</code>.
-Each shell then carries an <em>independent</em> structured pattern (the offsets are incommensurate
-lattice shifts, so the three decks decorrelate) while the latitude banding (shared
-<code>dr.y</code> term) keeps the decks' belts aligned in latitude — the layers read as a stack of
-banded decks, and the union of three independent coverages is dense where one field's phase is
-clear. The r5 distance-LOD clamp, the r6 contrast chain, the boost, and every shell geometric
-parameter are untouched. If the calibrated mirror shows the reference-weather 1600/700 m regions
-sit more than &asymp;0.02 below the window's lower bound, the coverage window widens one notch
-(0.46/0.54 &rarr; 0.45/0.55 or 0.44/0.56) — decided by measurement, reported either way.</li>
-<li><code>godot/scenes/main.gd</code>: <b>one hunk</b>, in <code>_place_clouds</code> — push
-<code>u_phase</code> per shell (constants beside the existing <code>u_scale3</code>/<code>u_drift</code>
-pushes). The top shell keeps phase 0 so the orbit view (and its grain baseline) is the measured
-r8b one; the 330 m and 275 m shells take the new phases (the decks the descent actually crosses).
-Listed verbatim in the results for hunk staging; no other main.gd hunk.</li>
-</ul>
+<h2>Order of work</h2>
+<ol>
+<li><b>Probe (temporary, reverted at closeout).</b> <code>cloud_layer.gdshader</code>:
+<code>u_dump</code> + <code>u_dump_color</code> uniforms, fragment early-out (solid colour,
+ALPHA 1, before the pattern AND before the fragment-cull emulation — it measures raw
+RASTERIZATION, which is exactly where the defect sits). <code>main.gd</code>:
+<code>AWECRAFT_DUMP</code> env (1 = dump only the top shell 4400; 3 = dump only the inner
+shell 4275 — the DECISIVE shell per altitude, the others hidden, one colour per frame =
+clean % of frame); world hidden via the existing <code>AWECRAFT_NO_WORLD_VIS=1</code>
+(includes the satellite body); the frozen player, the stars and the wash quad pinned
+hidden in <code>_process</code>. No <code>harness.gd</code> change (fenced): the planet preset's
+own camera stays active; hiding the player node cannot hide it.</li>
+<li><b>RENDERER A/B (pre-fix, SphereMesh tree).</b> Dump probe at 300 / 1600 / 120 m on
+Forward+ (llvmpipe Vulkan, the proven recipe) AND on
+<code>--rendering-method gl_compatibility</code> (llvmpipe GL, the legacy A/B recipe) — 6
+renders; each log's boot line must name the renderer it actually ran (a missing/wrong
+line FAILS the run, it does not become a result). Verdict: the cap present identically
+on two different renderers = engine-level; present on only one = a rasterizer property;
+if the compat side cannot boot on this box, the A/B is reported UNSETTLED — not
+implied.</li>
+<li><b>THE FIX (persistent).</b> <code>main.gd</code>: <code>_build_cloud_shell_mesh()</code> —
+a custom <code>ArrayMesh</code>, unit-radius sphere lattice 96&times;48 (same tessellation and
+lattice as the old <code>SphereMesh(radial 96, rings 48)</code> — same silhouette), with
+<code>set_custom_aabb(unit box)</code> at construction time, BEFORE the
+<code>MeshInstance3D</code> exists — the exact <code>_build_star_mesh</code> pattern (4.7's
+<code>ArrayMesh</code> keeps a zero AABB from <code>add_surface_from_arrays</code>; the star field
+draws fully on the proxy because its bounds were set that way). The node transform is
+UNCHANGED: position (0,&minus;R,0), scale R+h — so the satellite arm's live
+clouds radius/centre gate (its <code>scale.x</code>/<code>position</code> read,
+<code>harness.gd:13236-13251</code>, a fenced file) stays meaningful and green without any
+arm edit. <code>_place_clouds</code> re-sets the same custom AABB on the ArrayMesh (the r7
+behaviour, now on the new mesh type).</li>
+<li><b>ACCEPTANCE RENDERS (post-fix, Forward+).</b> Dump ladder: 2600/1600/700/300 m
+(decisive shell = 4400 — camera outside all shells, the nearest surface along every
+inward ray) + 120 m (decisive shell = 4275 — camera 14 m INSIDE the innermost shell;
+every ray exits it first). Per shell: % of frame (the r5/r6 style) + drawn angular
+extent from nadir vs the predicted silhouette (ray reconstruction of the exact preset
+pose, the <code>.scratch/AC-0384-measure/analyze.py</code> camera model). Acceptance: fully
+drawn — the whole visible hemisphere, not a cap — at EVERY altitude.</li>
+<li><b>DECK CENSUS (post-fix, normal renders, probe dormant).</b> clouds-ON minus
+clouds-OFF (<code>AWECRAFT_CLOUDS=0</code>), pixel diff &gt; 8, % of frame, at
+2600/1600/700/300/120 m, T0=411200, TIME 0.5, R24/F83, seed 44 — cloud present across a
+SUSTAINED band, not one altitude. Pre-fix r9 reference: 10.58 / 0.000 / 0.000 / 4.36 /
+0.22. This also answers whether the r9 pattern fixes (per-shell <code>u_phase</code>, window
+0.42 — in tree, correct, but inert while fragments were clipped) become visible: if
+1600/700 m now carry structured cloud at the reference weather, the draw was the blocker.</li>
+<li><b>GRAIN (2600 m, the r5 canonical metric).</b>
+<code>.scratch/AC-0384-r5/grain.py</code> (2-px, 4-dir, L1 per channel, sRGB 8-bit, fixed
+400&times;400 box): the pre-fix pair (SphereMesh, ON+OFF) vs the post-fix pair (ArrayMesh,
+ON+OFF — the post-fix pair doubles as the census 2600 pair). The lattice is unchanged,
+so at the already-fully-drawn 2600 m the swap should move nothing; if grain moves,
+quantify it the r5 way (multi-scale signature, weather-draw caveat) against the standing
+values (r6 gate 4.71/1.90; r8b standing 7.64/4.56 at the r9 tree).</li>
+</ol>
 
 <h2>Files to touch</h2>
 <table>
 <tr><th>file</th><th>change</th></tr>
-<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td><code>u_phase</code> uniform + the
-<code>q = dr * u_scale3 + u_phase</code> sampling line (+ window notch only if the mirror demands
-it). Shader-side only.</td></tr>
-<tr><td><code>godot/scenes/main.gd</code></td><td>ONE hunk: per-shell <code>u_phase</code> push in
-<code>_place_clouds</code> (quoted verbatim in results for the coordinator's hunk staging).</td></tr>
-<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Cloud-bullet sync: the per-shell phase offset
-(each deck its own pattern; banding shared) — a changed convention, same task.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>PERSISTENT: <code>_build_cloud_shell_mesh()</code>
++ the <code>_setup_aero</code> SphereMesh&rarr;ArrayMesh swap + the <code>_place_clouds</code>
+AABB re-set on the ArrayMesh. TEMPORARY (reverted before closeout): the
+<code>AWECRAFT_DUMP</code> probe (<code>_dump_mode</code> var, env parse in <code>_ready</code>, per-shell
+dump-colour push in <code>_place_clouds</code>, stars/wash/player pin in <code>_process</code>).
+Every hunk is listed verbatim in the results page for the coordinator's hunk staging —
+the file is dirty with another session's in-flight particle work, so the hunks stay
+self-contained and minimal.</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td>TEMPORARY ONLY: the
+<code>u_dump</code>/<code>u_dump_color</code> uniforms + the fragment early-out. Reverted before
+closeout; the persistent tree carries no probe code.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Sync in THIS task if the mesh-construction
+change counts as structure (the cloud shells are a documented component; the construction
+convention changes from "scaled SphereMesh + r7 re-set" to "custom ArrayMesh, bounds at
+construction, the star pattern").</td></tr>
 <tr><td><code>tasks/AC-0384/</code></td><td>plan.html (this), continuity.md entries,
-AC-0384-results.html section 24, captures <code>r9-*.png</code>.</td></tr>
+AC-0384-results.html section 24 (the r9 debt), captures <code>r10-*.png</code> +
+<code>r10ab-*.png</code>.</td></tr>
 </table>
 
-<h2>Verification</h2>
-<p>Design first on the calibrated offline mirror (<code>.scratch/AC-0384-r9/deckmirror.py</code> —
-exact preset camera, per-shell chain incl. r5 LOD clamp and per-T0 drift; calibrated until it
-reproduces the five measured r8b numbers at T0=411200), then the renders are the acceptance:</p>
+<h2>Harness gates (mode + ok:true condition)</h2>
 <table>
-<tr><th>gate</th><th>recipe</th><th>ok</th></tr>
-<tr><td>G0</td><td>headless load, <code>gate_census.py</code></td><td>0 SCRIPT ERROR <b>and</b>
-0 SHADER ERROR lines (rc is not the gate)</td></tr>
-<tr><td>SMOKE</td><td>battery <code>player;interact;light;fluids</code></td><td><code>ok:true</code>,
-census clean</td></tr>
-<tr><td>Probe — satellite arm</td><td><code>satellite</code> at R24/F83</td><td><code>ok:true</code>,
-ladder 4/4, ratio 0.25, <code>clouds_centre_ok</code>/<code>clouds_radius_ok</code> true (the deck
-geometry is asserted by the arm, unchanged)</td></tr>
-<tr><td><b>Acceptance renders</b></td><td>round-5 recipe 1:1 (R24, FOG_PCT=83, seed 44, 1280&times;720,
-Forward+/lavapipe, planet preset, SNAP_DRAIN=900, TIME=0.30 frozen, CLOUD_T0=411200): ON+OFF at
-2600/1600/700/300/120 m &rarr; deck census per altitude (threshold 8/255, as round 5). <b>Pass:
-structured cloud at every ladder altitude; the descent band (1600&rarr;120 m) sustained, not one
-band.</b></td></tr>
-<tr><td>Across-weather scan</td><td>same recipe, ON at T0 = 0/100000/300000/411200/411800/412400
-(round 5's six clocks) at 1600/700/120 m (the previously-zero altitudes; OFF frames are
-weather-independent and shared), + a 2600 m spot per weather</td><td>every weather dense at some
-altitude of the descent</td></tr>
-<tr><td>Grain (r2 distance-LOD guard)</td><td>r5 recipe: 2600 m, TIME=0.5 natural drift, no
-CLOUD_T0, ON+OFF, 2-px neighbour diff canonical box (440,320,840,720) + 1/2/4-px scale signature +
-flat-wall sub-region</td><td>any rise quantified against the SAME-WEATHER r8b baseline (7.64/4.56,
-one weather draw — not the 4.71/1.90 r6 reference in isolation) and classified content vs
-aliasing (structured edges monotone in offset = content; flat = aliasing static)</td></tr>
+<tr><th>gate</th><th>run</th><th>ok condition</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot</code>, census via
+<code>tasks/scripts/gate_census.py</code></td><td>zero <code>SCRIPT ERROR</code> AND zero
+<code>SHADER ERROR</code> lines (rc=0 is NOT the gate). Four runs: pre-change, post-probe,
+post-fix, final post-revert.</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>
+headless</td><td>all modes <code>ok</code>; genhash 25/25 vs the standing set (the dirty-tree
+guard — another session's leftovers broke G0 tree-wide in r2).</td></tr>
+<tr><td>PROBE — satellite arm (the shell-move guard)</td><td><code>AWECRAFT_LOGIC=satellite
+AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code> headless</td><td><code>ok:true</code>;
+clouds_n 3, <code>clouds_centre_ok</code> + <code>clouds_radius_ok</code> true (scale.x == R+h,
+pos == (0,&minus;R,0) — the guard against moving the shells); ladder 4/4, ratio 0.25,
+ac0390 green, body geom green.</td></tr>
+<tr><td>RENDER — A/B</td><td>6 dump renders (300/1600/120 m &times; Forward+/compat), boot line
+asserted per log</td><td>the verdict table: cap % of frame, per renderer, per altitude.</td></tr>
+<tr><td>RENDER — ACCEPTANCE</td><td>5 dump renders (2600/1600/700/300/120 m, Forward+)</td>
+<td>the decisive shell covers its FULL predicted silhouette at every altitude (no cap);
+% of frame reported per r5/r6.</td></tr>
+<tr><td>RENDER — CENSUS + GRAIN</td><td>10 census renders (ON/OFF &times; 5 altitudes) + the
+2600 m grain pairs (pre/post = 4 renders incl. the census 2600 pair)</td><td>sustained band
+(1600/700/300 m all carrying cloud); grain vs the pre-fix pair and the standing values —
+any move quantified, not re-baselined.</td></tr>
 </table>
 
 <h2>Risks</h2>
 <ul>
-<li>Union of three decorrelated decks can read as a uniform white blob at 2600 m — the bimodal
-contrast chain (0.05/0.80) + u_boost keep cores occluding and gaps clear; the 2600 m census + a
-viewed frame are the check, and the top shell's phase stays 0 so the grain box's baseline pattern
-is the measured one.</li>
-<li>Grain rise at 2600 m from more/moved deck in the grain box — quantified + classified per the
-table; if the scale signature flattens (white-noise static), roll the window notch back.</li>
-<li>Offline mirror vs fp32 render — the mirror is the design instrument only; the rendered census
-is the acceptance (the round-6 lesson). Calibration against the five r8b numbers is the gate on
-trusting it.</li>
-<li>Render wall budget (~4 min per 900-frame lavapipe snapshot): ~27 renders total for the
-acceptance set + scan + grain; run sequentially, one godot at a time.</li>
+<li>Compat GL may not initialize under xvfb on this box &rarr; report the A/B as unsettled
+for that side; do not infer a verdict.</li>
+<li>The ArrayMesh swap may NOT fix the rasterization &rarr; then the deliverable is the A/B
+verdict + a recommendation; the swap is kept only if the 2600 m pre/post grain pair proves
+it neutral where the shell already drew (and it is the geometry-unchanged pattern either
+way — documented in the results page).</li>
+<li>23 renders at ~5 FPS &asymp; 1 h: three managed background jobs (A/B+pre-grain,
+acceptance dump ladder, census), one godot at a time, one bash command per run, HOME set
+first, logs to repo-root <code>.scratch/AC-0384-r10/</code>, every shot file-existence-checked
+(a shot that writes no file proves nothing).</li>
 </ul>
 
 <h2>Fences</h2>
-<p>No commits/pushes/TASKS.yaml edits; <code>godot/autoload/game.gd</code>,
-<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> untouched (another
-session); shell radii/centre/transforms untouched; <code>harness.gd</code> pristine; the satellite
-arm and the cloud-coverage mirror stay meaningful (not edited).</p>
+<p>No commits, no pushes, no TASKS.yaml edits. Do not touch
+<code>godot/autoload/game.gd</code>, <code>godot/entities/drop.gd</code>,
+<code>godot/autoload/debug.gd</code>, <code>godot/scenes/harness.gd</code>.
+<code>godot/scenes/main.gd</code> MAY change — minimal hunks, every one listed. Shell
+radii/centre/transforms untouched (the satellite arm's live gate is the guard). HEAVY
+boundary/perf/flake/r50 and the full battery are the coordinator's — exit after the
+light gates.</p>
 
 </body></html>

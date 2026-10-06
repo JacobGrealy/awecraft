@@ -2287,5 +2287,317 @@ if (cam_out > 0.5 &amp;&amp; ndv &lt; 0.0) { discard; }   // back faces only whi
    untouched; main.gd changed in exactly the two quoted hunks; <code>harness.gd</code> pristine.</li>
  </ul>
 
+
+<h2>24. AC-0384 r10 (2026-10-06) &mdash; the draw defect: renderer A/B + the custom ArrayMesh shells</h2>
+<p>Round 9 root-caused &ldquo;landing on / leaving a planet does not read like NMS&rdquo; to a DRAW
+DEFECT: the three cloud shells (true spheres, radii 4275/4330/4400 about (0,&minus;4000,0), R=4000)
+rasterize only PARTIALLY and ALTITUDE-DEPENDENTLY on Forward+/llvmpipe&ndash;Vulkan (r9 dump probe:
+cap ~41&deg; from nadir at 300 m, a comparable cap at 1600 m, far-side only at 200 m from inside,
+NOTHING at 1600 m in the reference run, full shell at 2600 m). Shader fragment cull, clip
+planes, depth and occlusion were ruled out by measurement (r9). This round settles
+engine-vs-rasterizer by A/B, then changes the mesh.</p>
+
+<h3>24.1 What changed (persistent, in the tree)</h3>
+<ul>
+ <li><code>godot/scenes/main.gd</code> &mdash; new <code>_build_cloud_shell_mesh()</code> (a custom
+ <code>ArrayMesh</code>, the SphereMesh 96&times;48 lattice as an explicit 97&times;49 grid with the seam column
+ duplicated and pole rows degenerate = 9216 triangles, unit radius, outward winding, per-vertex
+ radial normals + UVs) with <code>set_custom_aabb(unit box)</code> at CONSTRUCTION (the AC-0235 star
+ pattern); <code>_setup_aero</code> builds each shell from it instead of <code>SphereMesh.new()</code>;
+ <code>_place_clouds</code> re-sets the same unit-box AABB on the <code>ArrayMesh</code> (was a
+ <code>SphereMesh</code> cast). Node transform UNCHANGED: position (0,&minus;R,0), scale R+h &mdash; so the
+ satellite arm&rsquo;s clouds guard (node <code>scale.x</code>/<code>position</code>) stays green without harness edits.
+ The r9 per-shell <code>u_phase</code> push is untouched. All hunks verbatim in &sect;24.9.</li>
+ <li><code>godot/core/cloud_layer.gdshader</code> &mdash; UNCHANGED in the persistent tree (a temporary
+ per-shell dump probe was in the tree for the measurement renders and is fully reverted;
+ &sect;24.7). <code>ARCHITECTURE.md</code> &mdash; the CloudLayer entry updated (mesh class, the r7&rarr;r10
+ bounds finding, the r9 u_phase convention).</li>
+</ul>
+
+<h3>24.2 The renderer A/B (first, as ordered)</h3>
+<p>Same per-shell dump probe (one shell solid-coloured, the others hidden; world/player/stars/wash
+pinned hidden &mdash; the probe early-outs BEFORE the pattern AND the fragment-cull emulation, so it
+measures raw rasterization) on the two renderer pipelines of this engine build. Boot lines
+asserted in every log: Forward+ runs as
+<code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256 bits)</code>;
+Compatibility runs as <code>OpenGL API 4.5 (Core Profile) Mesa 26.0.6 - Compatibility - Using
+Device: Mesa - llvmpipe</code>. Zero SHADER ERROR on either (the cloud shader compiles on both
+pipelines).</p>
+<table>
+ <tr><th>alt</th><th>Forward+ (llvmpipe Vulkan)</th><th>Compatibility (llvmpipe GL)</th><th>drawn fragment set</th></tr>
+ <tr><td>300 m (top 4400, red)</td><td>159571 px = 17.31% of frame (nadir 26.8&ndash;48.9&deg;)</td><td>159571 px = 17.31% (26.8&ndash;48.9&deg;)</td><td><strong>0 px apart &mdash; pixel-identical</strong></td></tr>
+ <tr><td>1600 m (top 4400, red)</td><td>210799 px = 22.87% (6.7&ndash;39.8&deg;)</td><td>210799 px = 22.87% (6.7&ndash;39.8&deg;)</td><td><strong>0 px apart &mdash; pixel-identical</strong></td></tr>
+ <tr><td>120 m (inner 4275, blue; camera inside)</td><td>114467 px = 12.42% (32.4&ndash;49.3&deg;)</td><td>114467 px = 12.42% (32.4&ndash;49.3&deg;)</td><td><strong>0 px apart &mdash; pixel-identical</strong></td></tr>
+</table>
+<p><strong>Verdict: the cap appears on BOTH renderers, with the drawn fragment set byte-for-byte
+identical</strong> (the frames differ only in the AC-0242 srgb sky tint). Per the decision rule, a cap
+identical on two different renderer pipelines is ENGINE level &mdash; it is not a property of the
+Forward+ pass. One honest caveat: both pipelines share the llvmpipe software rasterizer on this
+box, so the A/B isolates the engine&rsquo;s renderer class, not llvmpipe itself; the counter-evidence
+that rules the rasterizer out is (a) the ArrayMesh planet body and the star field (both
+construction-time-bounds ArrayMeshes) draw FULLY on this very rasterizer, and (b) the user sees
+the same bottom-dome symptom on real forward_plus hardware with a real GPU rasterizer. The
+shared factor across all three is the engine&rsquo;s instance cull of the <code>PrimitiveMesh</code> bounds
+class. The r7 unit-box <code>set_custom_aabb</code> on the SphereMesh was evidently not enough to
+reclassify the instance; the star pattern (ArrayMesh + bounds at construction) is the class that
+draws fully.</p>
+
+<h3>24.3 The acceptance: per-shell dump probe, post-fix, % of frame</h3>
+<p>Same probe, post-fix tree, all five ladder altitudes. Expected silhouette = the frustum-correct
+ray&ndash;sphere test (the preset&rsquo;s far plane <code>alt + 2*(R+SEA) + 200</code>; a ray from outside counts
+its near hit, from inside its far hit). The tool was validated against a 2D cross-section while
+rebuilding it &mdash; two sign bugs found and fixed there (&sect;24.7).</p>
+<table>
+ <tr><th>alt</th><th>dump shell</th><th>drawn pre-fix (SphereMesh)</th><th>drawn post-fix (ArrayMesh)</th><th>expected silhouette</th><th>covered, post</th></tr>
+ <tr><td>2600 m</td><td>4400 (top, red)</td><td>full per the r9 probe (no cap at this altitude)</td><td><strong>280666 px = 30.45%</strong> of frame</td><td>280834 px = 30.47%</td><td><strong>1.00</strong></td></tr>
+ <tr><td>1600 m</td><td>4400 (top, red)</td><td>210799 px = 22.87% (covered 0.57; cap 6.7&ndash;39.8&deg;)</td><td><strong>370945 px = 40.25%</strong></td><td>371408 px = 40.30%</td><td><strong>1.00</strong></td></tr>
+ <tr><td>700 m</td><td>4400 (top, red)</td><td>nothing drawn (r9 census 0.000%)</td><td><strong>487205 px = 52.87%</strong></td><td>488047 px = 52.96%</td><td><strong>1.00</strong></td></tr>
+ <tr><td>300 m</td><td>4400 (top, red)</td><td>159571 px = 17.31% (covered 0.25; cap 26.8&ndash;48.9&deg;)</td><td><strong>633777 px = 68.77%</strong></td><td>633845 px = 68.78%</td><td><strong>1.00</strong></td></tr>
+ <tr><td>120 m</td><td>4275 (inner, blue; camera 14 m inside)</td><td>114467 px = 12.42% (covered 0.12; 32.4&ndash;49.3&deg;)</td><td><strong>921600 px = 100.00%</strong> of the whole frame</td><td>921600 px = 100.00%</td><td><strong>1.00</strong></td></tr>
+</table>
+<p><strong>The shell is fully drawn &mdash; across the whole visible hemisphere &mdash; at EVERY ladder
+altitude</strong> (covered 1.00 at all five; the 300 m shortfall is 68 px, boundary tolerance). The
+post-fix 300 m frame shows the red filling the entire 4400 disc to its clean silhouette edge
+(<code>r10-dump-300.png</code>), against the pre-fix small dome (<code>r10ab-fwd-300.png</code>); at 120 m the frame
+is 100% blue (the camera is inside the inner shell &mdash; every ray hits it).</p>
+
+<h3>24.4 Deck census (ON &minus; OFF, max channel diff &ge;8, % of frame), normal render, user config</h3>
+<p>Recipe: R24/F83, seed 44, TIME 0.5, CLOUD_T0 411200, <code>AWECRAFT_CLOUDS=0</code> disables the shells
+entirely (the only consumer, core/aero.gd). Pre-fix values are the r9-tree tree measurements
+(&sect;23.4 for the r8b tree; the r9 tree&rsquo;s 2600 re-measured this round = 12.51%).</p>
+<table>
+ <tr><th>alt</th><th>before (r9 tree)</th><th>after (this tree)</th><th>what the view sees</th></tr>
+ <tr><td>2600 m</td><td>12.51%</td><td><strong>27.05%</strong> (core 25.25%)</td><td>the belt core over the disc &mdash; now drawn where the r9 cap was missing fragments too (&sect;24.7)</td></tr>
+ <tr><td>1600 m</td><td>0.000%</td><td><strong>4.83%</strong> (core 4.74%)</td><td>the NMS orbit read: a dark occluding deck band along the limb against the star field</td></tr>
+ <tr><td>700 m</td><td>0.000%</td><td><strong>44.86%</strong> (core 40.24%)</td><td>the deck seen from above as a pale flattening veil over the fogged surface</td></tr>
+ <tr><td>300 m</td><td>4.36%</td><td><strong>53.05%</strong> (core 46.91%)</td><td>the thick deck over the limb region</td></tr>
+ <tr><td>120 m</td><td>0.22%</td><td><strong>35.86%</strong> (core 31.57%)</td><td>the camera is INSIDE the shells: the banded deck fills the horizon-gap band (surface visible below; the rays that hit the surface pass inside the shells and never cross them)</td></tr>
+</table>
+<p><strong>The sustained band is there: clouds at every altitude of the descent ladder</strong>
+(27.05 / 4.83 / 44.86 / 53.05 / 35.86%), and r9&rsquo;s pattern fixes are now VISIBLE &mdash; they were
+inert while the fragments were clipped. Two mechanisms compound at 120 m: the r9 per-shell
+<code>u_phase</code> (the inner shell&rsquo;s offset (9.4, 2.8, 7.2) moved that shell&rsquo;s horizon band OUT of the
+clear phase that r8b measured there &mdash; &sect;23.4 &ldquo;deck alpha exactly 0&rdquo;) and the r10 draw fix
+(which now actually draws that band). The 120 m frame (<code>r10c-on-d120.png</code>) is the user&rsquo;s landing
+view: inside the deck, banded cloud wrapping the horizon, the surface visible below. The 1600 m
+frame (<code>r10c-on-d1600.png</code>) is the orbit read; 700 m (<code>r10c-on-d700.png</code> vs
+<code>r10c-off-d700.png</code>) shows the veil ON over the crisp OFF surface.</p>
+
+<h3>24.5 Grain at 2600 m (round-2 LOD clamp chain)</h3>
+<p>Pre/post pair, identical recipe (T0 411200, TIME 0.5, R24/F83, seed 44), r5 canonical 400&times;400
+box (440,320,840,720) + tight (440,520,840,720):</p>
+<table>
+ <tr><th></th><th>ON, canonical / tight</th><th>OFF, canonical / tight</th></tr>
+ <tr><td>pre-fix (SphereMesh tree)</td><td>7.09 / 4.67</td><td>6.05 / 2.29</td></tr>
+ <tr><td>post-fix (ArrayMesh tree)</td><td><strong>6.51 / 4.29</strong></td><td>6.08 / 2.34</td></tr>
+</table>
+<p>Cloud contribution = 1.02 &rarr; 0.43 on the canonical box; the OFF base frames are effectively
+identical across the swap (mean abs diff 0.02/255, the only changed pixels one or two star
+twinkles &mdash; the shells are the only thing CLOUDS=0 touches, so this is the control). Standing
+context: r6 reference 4.71/1.90, r8b final 7.64/4.56 (different recipe: no CLOUD_T0). The post-fix
+value (6.51/4.29) sits between the two standing values and BELOW the pre-fix value of the same
+round &mdash; the round-2 distance-LOD clamp chain is intact and the grain did not regress: the
+lattice is the same 96&times;48 tessellation of the same sphere, and the per-pixel field re-sampling
+(&sect;24.7) moved the pattern, not its edge statistics. No silent re-baseline: the numbers stand as
+measured.</p>
+
+<h3>24.6 Gates (all on the persistent tree, probe removed)</h3>
+<ul>
+ <li><strong>G0</strong> (final, after probe revert): <code>g0-final.log: SCRIPT ERROR 0 (allow 0), SHADER ERROR 0 (allow 0) ok</code>.
+ Also green pre/post every stage: g0-prefix, g0-postprobe6 (probe in), g0-postfix.</li>
+ <li><strong>Satellite arm</strong> <code>AWECRAFT_LOGIC=satellite AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code>:
+ <code>ok: true</code>, phase 4 (LOADED), meshes/textures 12/12, <code>geom.clouds_n: 3</code>,
+ <code>clouds_centre_ok: true</code>, <code>clouds_radius_ok: true</code> &mdash; all three shells on (0,&minus;4000,0) at
+ <strong>exactly</strong> 4275/4330/4400 (r_measured == r_expected, vis true); ladder 4/4
+ (hidden/rim/dissolve/full, nadir opacity 0/0/0.5/1.0); angular ratio 0.25; ac0390 ok;
+ geom ok (nadir offset &minus;0.38 m, transform (0,&minus;R,0)/scale 1). The mesh swap kept the node
+ transform semantics, so the arm is green with no harness edits.</li>
+ <li><strong>SMOKE battery</strong> <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>: 5/5 BATTMODE,
+ battery <code>ok: true</code>, and the 25 GENHASH lines are <strong>byte-identical to the r9 smoke run</strong>
+ (genhash-neutral by design &mdash; weather, not generation).</li>
+</ul>
+
+<h3>24.7 Deviations and tool notes</h3>
+<ul>
+ <li><strong>One world-tick flake:</strong> <code>r10c-on-d120</code> (the census ON render) crashed with
+ <code>signal 11 in _random_tick_pass (world.gd:12748)</code> &mdash; game logic, not cloud/mesh code (the
+ same-altitude OFF render and all other renders survived). Re-run once, clean (rc 0, snapshot ok);
+ the re-run log is <code>r10c-on-d120b.log</code>. No product change.</li>
+ <li><strong>The 2600 m census jump (12.51% &rarr; 27.05%) decomposes into two real effects</strong> of the
+ sanctioned mesh swap, cross-diffed pixel-by-pixel: 41% of the post-fix cloud pixels overlap the
+ pre-fix cloud; 59% are new where the pre-fix frame was clear. (a) The pre-fix 2600 m
+ SphereMesh was ALSO partially culled &mdash; r9&rsquo;s &ldquo;full shell at 2600 m&rdquo; came from a probe that
+ kept part of the pattern chain (its per-shell counts read lower than raw rasterization at every
+ altitude: 8 px at 1600 m vs 210799 px raw), so it under-measured the cap there. (b) The
+ 96&times;48 ArrayMesh triangulation is a different lattice instance of the same tessellation (seam
+ position/rotation differs from the SphereMesh&rsquo;s), so the direction field is re-sampled per
+ pixel at up to ~half the clamped finest octave &mdash; threshold flips near the coverage window. Both
+ effects are inherent to &ldquo;same field, same sphere, different rasterization lattice&rdquo;; the shader
+ is unchanged. Consequence to note: mid-descent deck census values are triangulation-sensitive
+ (they depend on which 96&times;48 lattice instance ships), though the field statistics are the
+ same field&rsquo;s.</li>
+ <li><strong>shell_dump.py was rebuilt</strong> (the r5 tool measured from the outward direction and
+ used a d_min-only silhouette): the nadir reference is now the direction TO the centre, and the
+ expected silhouette is the proper ray&ndash;sphere test clipped by the preset far plane. While
+ rebuilding, two sign bugs were found and verified against a 2D cross-section (the
+ <code>(C&minus;P)</code> vs <code>(P&minus;C)</code> quadratic sign, and the inside-branch <code>t2 &gt; 0</code> guard &mdash; without it,
+ rays outside the 82.21&deg; tangent cone at 300 m falsely count as hits; from outside a convex
+ sphere the silhouette is the tangent cone and nothing else). The tool reproduces r9&rsquo;s own
+ reported numbers on r9&rsquo;s frames (the 300 m cap edge at 41.0&deg; from nadir; 0 px drawn at 1600 m
+ on <code>dump1600-1.png</code>).</li>
+ <li><strong>The dump probe (reverted):</strong> shader + 2 <code>u_dump*</code> uniforms, a 7-line comment +
+ <code>if (u_dump &gt; 0.5) {ALBEDO=u_dump_color; ALPHA=1.0;} else {</code> wrapper around the UNTOUCHED
+ fragment body + the matching closing brace; main.gd + the <code>_dump_mode</code> var, the
+ <code>AWECRAFT_DUMP</code> env read in <code>_ready</code>, the per-shell push in <code>_place_clouds</code>, and the
+ star/wash/player pin in <code>_process</code>. All marked &ldquo;AC-0384 r10 (TEMPORARY draw probe &mdash; removed
+ at closeout)&rdquo;; all removed at closeout; final G0 green on the clean tree. The reason for the
+ in-place else-wrap (parser traps: no <code>return</code> in <code>fragment()</code>, no forward declarations,
+ <code>CAMERA_POSITION_WORLD</code> only inside <code>fragment()</code> itself) is documented in the r9-era probe
+ comments and this section.</li>
+ <li><strong>Census tool:</strong> <code>deck_census.py</code> (PIL-only &mdash; this box&rsquo;s python 3.13 has no numpy)
+ implements the r8 <code>seam_color.py</code> mask exactly (max channel diff, &ge;8 / &ge;24, % of frame).</li>
+ <li><strong>Render determinism:</strong> the OFF-frame control (&sect;24.5) shows the pair recipe is
+ deterministic to a star-twinkle pixel; the pre/post census comparison is controlled.</li>
+</ul>
+
+<h3>24.8 Captures (copied to <code>tasks/AC-0384/</code>)</h3>
+<p>A/B: <code>r10ab-fwd-300/1600/120.png</code> vs <code>r10ab-cmp-300/1600/120.png</code> (300/1600 top-shell red,
+120 inner-shell blue). Post-fix dump ladder: <code>r10-dump-2600/1600/700/300/120.png</code>. Census:
+<code>r10c-on-d{2600,1600,700,300,120}.png</code> + <code>r10c-off-d{...}.png</code>. Grain pair:
+<code>r10-pre-on-2600.png</code>/<code>r10-pre-off-2600.png</code> (pre) and the 2600 census pair (post). Logs in
+<code>.scratch/AC-0384-r10/</code> (boot-line assertions, G0 logs, satellite/smoke RESULT JSONs,
+<code>shell_dump.py</code>, <code>deck_census.py</code>, job scripts).</p>
+
+<h3>24.9 Every <code>main.gd</code> hunk, verbatim</h3>
+<p><em>Hunk 1 &mdash; new function, inserted immediately before <code>func _build_star_mesh()</code>:</em></p>
+<pre>
+# AC-0384 r10: the cloud shell mesh - a custom ArrayMesh with EXPLICIT
+# bounds at construction (the AC-0235 star pattern, _build_star_mesh
+# below). On this engine build the scaled SphereMesh instances rasterize
+# only a partial, altitude-dependent cap (the r9 dump probe: cap ~41 deg
+# from nadir at 300 m, far-side only from inside, full shell at 2600 m -
+# the bottom dome the user has reported for days), while the ArrayMesh
+# bodies and the star field (the same construction pattern) draw fully
+# at every altitude; the r10 renderer A/B shows the cap pixel-identical
+# on Forward+ and Compatibility, i.e. the engine's shared cull of the
+# PrimitiveMesh bounds class, not a rasterizer quirk. The lattice is the
+# SphereMesh(radial 96, rings 48) lattice: 97x49 grid (seam column
+# duplicated, pole rows degenerate) = 9216 triangles, the same
+# silhouette. Unit radius in local space - _place_clouds carries the
+# shell radius as the node transform (position (0,-R,0), scale R+h), so
+# the geometry is exactly the proven shells (4275/4330/4400).
+func _build_cloud_shell_mesh() -&gt; ArrayMesh:
+	var RSEG := 96
+	var RING := 48
+	var v := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	for y in RING + 1:
+		var theta: float = PI * float(y) / float(RING)
+		for x in RSEG + 1:
+			var phi: float = TAU * float(x) / float(RSEG)
+			var p := Vector3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi))
+			v.append(p)
+			nrm.append(p)
+			uvs.append(Vector2(float(x) / float(RSEG), float(y) / float(RING)))
+	for y in RING:
+		for x in RSEG:
+			var a := y * (RSEG + 1) + x
+			var b := a + 1
+			var c := a + (RSEG + 1)
+			var d := c + 1
+			# Outward-facing winding (front = CCW seen from outside): the
+			# cloud shader culls at the fragment stage from the geometric
+			# normal (cull_disabled), so this keeps the mesh well-formed
+			# for anything that uses the rasterizer front face (the
+			# opaque dump probe's depth, engine paths).
+			var n1: Vector3 = (v[b] - v[a]).cross(v[c] - v[a])
+			var outw: Vector3 = (v[a] + v[b] + v[c] + v[d]) * 0.25
+			if n1.dot(outw) &lt; 0.0:
+				idx.append(a); idx.append(c); idx.append(b)
+				idx.append(b); idx.append(c); idx.append(d)
+			else:
+				idx.append(a); idx.append(b); idx.append(c)
+				idx.append(b); idx.append(d); idx.append(c)
+	var arrs: Array = []
+	arrs.resize(Mesh.ARRAY_MAX)
+	arrs[Mesh.ARRAY_VERTEX] = v
+	arrs[Mesh.ARRAY_NORMAL] = nrm
+	arrs[Mesh.ARRAY_TEX_UV] = uvs
+	arrs[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
+	# The star pattern (4.7's ArrayMesh keeps a ZERO aabb from
+	# add_surface_from_arrays - a degenerate bounds set is the cull
+	# defect class): the explicit unit box at construction, BEFORE the
+	# MeshInstance3D exists. _place_clouds' node transform carries the
+	# centre and radius, so the world bounds are the shell sphere by
+	# construction. No padding.
+	m.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
+	return m
+</pre>
+<p><em>Hunk 2 &mdash; <code>_setup_aero</code>: the header comment&rsquo;s mesh class + the mesh construction
+(replacing the <code>SphereMesh.new()</code> block and the r7 unit-box comment):</em></p>
+<pre>
+	# AC-0235: the procedural cloud deck. AC-0235 retest 5: THREE
+	# layers with varying height, feature size and drift speed
+	# (user: vary height/size/speed). AC-0385: the geometry is now a
+	# SPHERICAL SHELL per layer (unit-lattice ArrayMesh scaled to R+h
+	# and centred at (0, -R, 0); AC-0384 r10: a custom ArrayMesh with
+	# explicit construction-time bounds, see _build_cloud_shell_mesh)
+	# instead of flat player-following quads -
+	...
+		for cl in CL:
+			var cm := ShaderMaterial.new()
+			cm.shader = load("res://core/cloud_layer.gdshader")
+			cm.set_shader_parameter("u_srgb_pre", _srgb_pre)
+			# AC-0384 r10: the shell is a custom ArrayMesh with explicit
+			# bounds at construction (the AC-0235 star pattern) - the
+			# scaled SphereMesh this replaced rasterized only a partial,
+			# altitude-dependent cap on the engine's shared cull path.
+			# Unit-radius lattice; _place_clouds carries the shell
+			# radius as the node scale, so the geometry is unchanged.
+			var sp := _build_cloud_shell_mesh()
+			var ln := MeshInstance3D.new()
+</pre>
+<p><em>Hunk 3 &mdash; <code>_place_clouds</code>: the doc comment&rsquo;s mesh class + the AABB re-set
+(replacing the r7 <code>SphereMesh</code> cast block):</em></p>
+<pre>
+func _place_clouds() -&gt; void:
+	# AC-0385: the cloud shell wraps the planet. Unit-lattice spheres
+	# (custom ArrayMesh, AC-0384 r10) scaled to R+h and centred at
+	# (0, -R, 0) (the surface plane y=0 is the top of the planet, so h
+	# stays the same altitude above it the quads used).
+	...
+		ln.position = c
+		ln.scale = Vector3.ONE * rsh
+		# AC-0384 r10: explicit culling bounds on the custom ArrayMesh -
+		# the unit box, the mesh's own local bounds (set at construction
+		# in _build_cloud_shell_mesh; re-set here on every (re)placement
+		# so the r7 behaviour holds when the tree is re-created). The
+		# node transform above carries the centre and radius, so the
+		# world bounds are the shell sphere by construction, from the
+		# same rsh/c pair as the lines above. No padding.
+		var shmesh: ArrayMesh = ln.mesh as ArrayMesh
+		if shmesh != null:
+			shmesh.set_custom_aabb(AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0)))
+</pre>
+<p><em>Temporary probe hunks (added for the measurement renders, ALL REVERTED at closeout; not in
+the tree):</em> main.gd &mdash; (a) <code>var _dump_mode := false</code> after <code>_star_mat</code>; (b) in
+<code>_ready</code> after the <code>AWECRAFT_CLOUD_T0</code> block: <code>_dump_mode =
+OS.get_environment("AWECRAFT_DUMP") != ""</code> (+4 comment lines); (c) in <code>_place_clouds</code> after the
+<code>u_phase</code> push: per-shell dump push (<code>AWECRAFT_DUMP=1</code> &rarr; top shell red, <code>=3</code> &rarr; inner
+shell blue; sets <code>u_dump</code>/<code>u_dump_color</code>, hides the non-selected shells); (d) in
+<code>_process</code> after the wash block: while <code>_dump_mode</code>, pin <code>_star_node</code>,
+<code>aero_wash</code> and <code>player</code> hidden every frame. Shader &mdash; the two <code>u_dump*</code> uniforms + the
+else-wrap (&sect;24.7).</p>
+<p><strong>r10 verdict: the cap is engine-level (pixel-identical on both renderer pipelines), and the
+custom ArrayMesh shells with construction-time bounds draw the whole visible hemisphere at every
+ladder altitude (covered 1.00 &times; 5); the deck is sustained across the entire descent
+(27.05/4.83/44.86/53.05/35.86% of frame at 2600/1600/700/300/120 m), r9&rsquo;s per-shell phase is
+now visible, the grain did not regress (6.51/4.29 post vs 7.09/4.67 pre, same recipe), and every
+gate is green on the clean tree.</strong></p>
+
 </body>
 </html>

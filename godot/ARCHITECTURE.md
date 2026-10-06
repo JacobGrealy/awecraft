@@ -113,7 +113,7 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         at every altitude (at ground level it reads as the horizon
 │                         glow).
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
-│                         AC-0385): three concentric transparent SphereMeshes at
+│                         AC-0385): three concentric transparent shells at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
 │                         (main.gd `_place_clouds()` re-places after the world
 │                         loads, since Game.planet_R is only final then). 3-D
@@ -165,14 +165,40 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         degenerates to the node origin (the planet
 │                         centre), so the shells drew only while the
 │                         centre was inside the frustum (≈ above 2429 m
-│                         on the planet preset) — _place_clouds now
-│                         sets an explicit unit-box custom AABB (the
-│                         AC-0235 star-fix pattern), so the deck draws
-│                         from below at every altitude. View-dependent
-│                         alpha is the geometric graze only; the weather
-│                         field itself stays a function of world
-│                         direction + time-of-day. All r6 terms are
-│                         ≤ the clamped base-band frequency (grain-safe).
+│                         on the planet preset) — _place_clouds set an
+│                         explicit unit-box custom AABB (the AC-0235
+│                         star-fix pattern), which was NOT enough: the
+│                         r9/r10 dump probe measured a partial,
+│                         ALTITUDE-DEPENDENT cap on the scaled
+│                         SphereMesh (cap ~41 deg from nadir at 300 m,
+│                         a comparable cap at 1600 m, far-side only
+│                         from inside, nothing at 1600 m, full at
+│                         2600 m — the bottom dome the user reported),
+│                         pixel-identical on Forward+ and Compatibility
+│                         (the r10 A/B), i.e. this build's shared cull
+│                         of the PrimitiveMesh bounds class. AC-0384
+│                         r10: the shell is a custom unit-lattice
+│                         ArrayMesh (_build_cloud_shell_mesh, the
+│                         SphereMesh 96x48 tessellation, 9216
+│                         triangles) with the explicit unit-box AABB at
+│                         CONSTRUCTION (the AC-0235 star pattern;
+│                         _place_clouds re-sets it on every re-place) —
+│                         the node transform (position (0,-R,0), scale
+│                         R+h) carries centre and radius, so the
+│                         geometry is the same shells, and the dump
+│                         ladder now shows the whole visible hemisphere
+│                         drawn at 2600/1600/700/300/120 m (30.45/40.25/
+│                         52.87/68.77/100.00% of frame). AC-0384 r9:
+│                         per-shell u_phase (a fixed per-shell offset
+│                         vector pushed by _place_clouds) decorrelates
+│                         the three shells' noise fields; the field
+│                         stays a function of world direction +
+│                         time-of-day (no-pop argument intact).
+│                         View-dependent alpha is the geometric graze
+│                         only; the weather field itself stays a
+│                         function of world direction + time-of-day.
+│                         All r6 terms are ≤ the clamped base-band
+│                         frequency (grain-safe).
 │                         AC-0384 r8: the PATTERN re-placement for the
 │                         descent view — coverage window 0.46-0.54
 │                         (centred on the fbm mean 0.485; was 0.50-0.58,
