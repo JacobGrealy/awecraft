@@ -36,3 +36,73 @@
 ## RUN - Mon Oct  5 14:34:39 EDT 2026 - AC-0384
 - R7 (this run) INVESTIGATION BEFORE FIX: (1) API probe: SphereMesh exposes custom_aabb property + set_custom_aabb method on this build (4.7.1.a13da4feb); get_custom_aabb() reflects the set value, but Mesh.get_aabb() does NOT reflect it (neither PrimitiveMesh nor ArrayMesh - the AC-0235 "ArrayMesh AABB stays zero" condition is NOT present in this build: a 3-vertex ArrayMesh get_aabb() computed correctly). Engine binary has an RS-level `instance_set_custom_aabb` symbol - the cull path may consume the custom AABB separately from get_aabb(); the culling mechanism is therefore verified only empirically (the acceptance ladder is that test). (2) GEOMETRY FINDING (headless vertex probe, exact shell params r=1.0/96/48): the CPU-side SphereMesh is an OBLATE SPHEROID - Y extent ±0.5 (poles at ±0.5, equator ±1), get_aabb() = P(-0.999,-0.5,-0.999) S(1.999,1.0,1.999). (3) RAY MEASUREMENT of r6's forced-opaque diagnostic (t0diag-2600.png, per-pixel camera rays, dome boundary model verified 36.40 deg): the rendered magenta region is SHARP at d_y (planet-direction Y from C) ~0.75: 0.0% magenta at d_y<=0.75, 53-70% at d_y>=0.75, uniform in azimuth. That is NOT the CPU spheroid (which predicts zero magenta in the whole visible dome) and not a true rsh sphere (front cap at d_y 0.634-0.653). The rendered shell behaves like a larger/Y-stretched surface (sphere-equivalent ~5056-5123 m, or an ellipsoid with Y semi-axis >= 4000 crossing the planet at d_y~0.75). Open question carried into the ladder: the ladder frames (production shader, all altitudes) will be ray-measured the same way to pin the actual surface. The culling law (shells draw iff planet centre in frustum, >2429 m) is unaffected by this: the instance's cull AABB is degenerate at the node origin in every case. (4) DEATH-SPHERE CHECK (code): the only instant kill is the void, player.gd:804 `flat_h < -12.0` (AC-0307: void is below the LOCAL surface; flat_h = sim_height, height above the local facet plane; the facet plane is tangent to the R sphere, so at the local nadir flat_h -12 <-> radius R-12 = 3988 m). No high-altitude kill exists (damage_player census: fall/void/lava/drown/starve only). 3988 < terrain top 4139 < innermost shell 4275: a descending player passes the full cloud deck 287 m above the death plane -> descent is reachable; the kill altitude is BELOW the deck, it cannot pre-empt the cloud pass.
 - R7 MECHANISM FINDINGS (interim): (1) hunk 1 alone (set_custom_aabb in _place_clouds, i.e. AFTER add_child) does NOT change the 120 m frame: rd7-d120 (hunk1) vs rd6-d120 A/B = mean abs diff 0.01/255, 0.2% px, max 30 — the 261 changed px localize to bbox (456,626)-(814,718) = the spawn farmland strip (attributed to the other session's in-flight AC-0038 particle work in the same tree, not the clouds). The bright horizon band in both frames is the fog wall + hazy terrain, present pre-fix: NOT the deck. (2) The in-tree working pattern (satellite_body.gd:1135 and _build_star_mesh) sets set_custom_aabb at MESH CONSTRUCTION, before the MeshInstance3D is created and before the node enters the tree; the body's geom aabb is a partial box (min=(0,2390,-2958) size=(2958,1770,5896)) yet the full body renders -> the culler in this build HONORS a creation-time custom aabb. (3) hunk 2 added: sp.set_custom_aabb(unit box) in _setup_aero right after SphereMesh creation, before ln.mesh = sp / add_child. (4) First 2400 m attempt segfaulted at world.gd:4847 (signal 11, 15 s post-LOADED, in the fluid/star remesh _process region) — same line as r2's documented "transient llvmpipe segfault on the first post-fix 1280,720 attempt" (r2 render-after.log); retry succeeded rc=0. (5) rd7-d2400.png (250964 B, both hunks) rendered — first frame with the effective fix; 2400 m has no pre-fix counterpart, so the A/B ladder re-renders 2600/1600/700/300/120 (all with r6 pre-fix frames) + 120 m at T0=482800 (r6's overhead state, 56.6% sky-band cloud core) for the from-below acceptance.
+
+## RUN - Mon Oct  5 17:52:35 EDT 2026 - AC-0384 (MEASUREMENT RUN: rendered numbers, no fix)
+- MEASUREMENT PLAN (this run): user config = R24/F83 (fog 332 m), 1280,720, seed 44 (deck geometry + cull are seed-independent; 5432 shifts thresholds ~50 m). Captures: planet-preset ladder at alt {2650, 2600, 2550, 2429, 1600, 700, 300, 120} m with clouds ON (T0=411200 fixed weather) and OFF (diff isolates the deck) + AWECRAFT_NO_WORLD_VIS=1 at 120/700 (shells only) + a 1800-frame 120 m control (far-band build-lag check). Drain 900 frames (uniform across altitudes => identical streaming state at snap). Measure: (A) far-terrain band presence per altitude (fogged silhouette beyond the body limb; band pixel census + vision); (B) cloud-pixel edge per altitude vs the predicted d_min silhouettes of the 4275/4330/4400 shells (exact camera pose from harness.gd:1162-1135 with spawn (8.5, 142.0, 8.5)); (C) 120 m whole-sky test (camera inside all shells at d=4261: true sphere => clouds fill the whole sky; an oblate-spheroid geometry (the r7 CPU probe found Y extent ±0.5) => clear zenith). CODE STATE at measurement: HEAD 3d804dd (r7: cloud shells have explicit unit-box custom AABBs set at creation - both _setup_aero and _place_clouds; ring sector MIs (world.gd _ring_mi_for/_ring_rebuild_sector) have NO custom AABB, node origin (0,0,0); body has custom AABB +/-(R+HMAX) at construction (satellite_body.gd:1119); stars have custom AABB (main.gd:379); high-LOD slab MIs are C++-built (AweMesh). Uncommitted dirty files (AC-0038 particle pool + controls arm) are render-inert.
+
+- **17:58** Render batch launched (job bash-521): 19 sequential Forward+ renders (8 ON altitudes
+  2600/2500/2450/2429/1600/700/300/120, 8 OFF counterparts, 2 NOWORLD 120/700, 1 OFF-120
+  l1800 control), recipe per plan, logs `.scratch/AC-0384-measure/`. First frame (on-d2600)
+  rc=0, Forward+ asserted. Note: with `AWECRAFT_TIME=0.30` the visible disc face is on the deck's
+  night side (dark masses = 18% night floor * u_under * srgb-pre, sun-lit patches white) — high
+  contrast for the diff; all frames share the state.
+- **18:02** Exact cull threshold computed (threshold.py): the ring MI origin (0,0,0) is
+  frustum-INSIDE at 2425 m (37.35 off-axis) and OUTSIDE at 2400 m (37.52) — predicted far-terrain
+  disappearance ~2403 m (seed 44), i.e. ~26 m BELOW the old cloud centre-test threshold 2429 m.
+  So 2429/2450/2500/2600 are all predicted DRAWN; the transition sits between 2429 and 1600 in the
+  capture set (bracket with 2350/2400 if 2429 draws).
+- **18:05** Fade-band math: ndv = sqrt(1-(dmin/r)^2) => a correct 4400 shell's visible edge sits at
+  d_min = 4400*sqrt(1-ndv^2) = [4328 (ndv .18) .. 4399 (ndv .02)] AT EVERY ALTITUDE (altitude
+  independent). At 120 m (camera 4261, inside all shells) the whole frame has ndv > 0.33 > 0.18:
+  full alpha, no fade, whole sky must carry pattern iff the deck is the true sphere.
+- **18:08** Bounds table complete: cloud shells (unit box, creation-time, main.gd:1077/1129); ring
+  MIs (none; zero ArrayMesh AABB, origin (0,0,0)); body faces (+-4384 cube, satellite_body.gd:1119,
+  node at (0,-R,0), satellite_body.gd:323); stars (+-(sr+3), main.gd:379); high-LOD slab MIs (none;
+  ArrayMesh, origins at slab corners cx*16,si*16,cz*16 — chunk.gd:1368,1397-1430).
+- **18:10** Results page: section 22 skeleton (22.1-22.7) appended, FILL markers for A/B/C/D tables.
+
+- **18:50** — 19-render batch done (bash-521, all rc=0, Forward+ asserted, census OK). Full v2 analysis
+  (`.scratch/AC-0384-measure/analyze.py`, ray reconstruction from the preset camera code; bugs fixed:
+  basis einsum, v-mapping, einsum operand): 0 cloud px outside the 4275 sphere at EVERY altitude;
+  deck cloud_px 71312/75173/77087/77859/90924/52947/32611/1707 (2600→120); pattern outer edge
+  dmin_max 3254/3240/3233/3230/3100/2933/2996/3855 (θ 28.7°→42.9° from nadir; the T0=411200 pattern is
+  LATITUDE-BANDED — a polar cap visible from 300-2600 m + a mid-latitude band; not a single edge).
+- **19:05** — NOWORLD-700 (shells only, camera 441 m outside 4400): rendered deck = TRUE SPHERICAL DOME
+  + soft grazing-fade rim; tone transitions sit at the predicted 4400 silhouette (θ 65.35°); pattern
+  concentrated at high incidence. The r6 "spheroid ~5056-5123" was the forced-opaque probe artifact;
+  the natural render is the true 4400 sphere. r7 AABB VERIFIED: deck drawn at 700/300 m with the
+  planet centre 64.0/65.6° off-axis (outside the frustum; pre-r7 cull = below 2429 m, the user's number).
+- **19:20** — (A) resolved differently than the plan assumed. The "dark farband beyond the body limb"
+  metric (308 px @2600) was geometrically empty: at these altitudes the far tier projects ON the disc,
+  and it is 100% env-fogged (fog far 332 m) above ~191 m altitude → flat fog colour (177,240,255) =
+  indistinguishable from the body's own haz model (the body is fog_disabled and paints the same
+  fog-emulating haz in the same region). Local-flatness census settles it: far tier PRESENT at every
+  altitude — 120 m: mottled textured band (13.4% of band px with local contrast >8, distance 309-464 m,
+  partially fogged, env fog working as coded); 300 m: 96.1% locally flat (fogged, few bright peaks
+  through the fog wall); 700/1600/2600: 93-94% flat (fogged peaks only). NO CULL ALTITUDE in 120-2600:
+  drawn at 120/300 m with the pole 66.6-70.1° off-axis REFUTES the zero-AABB point-test prediction
+  (~2403 m) — the ring MIs' ArrayMesh AABB is the sector-geometry box (box-frustum test), not a point.
+- **19:35** — tier boundaries pinned (settings.gd): R24 → medium_start 8, low_start 27 clamped to
+  midpoint 16 → band A (voxels) ≤128 m, band B (8x8 avg) 128-256 m, band C (4x4 avg) 256-384 m.
+  At 2600 m (900-frame drain = 180 s) the flat-fog patch (|Δ|<20 of the fog colour, the 100%-fogged
+  terrain) reaches only 256 m (a 16-chunk taxi diamond = exactly the low_start edge): band C NOT BUILT
+  at the satellite viewpoint after 180 s (its far annulus is OFF the view's leading arc — the camera
+  looks at the tangent limb 2741 m from the anchor, beyond the 384 m render edge — slow trailing fill).
+  At 120 m the full annulus IS built at 180 s (l900 ≡ l1800 frames, smooth band to the render edge) —
+  the leading arc there includes the annulus. So at the satellite view: built part (≤256 m) is 100%
+  fogged = invisible + band C absent = the whole far LOD visually gone. This + the fog (≥191 m
+  featureless) IS the user's "terrain LOD back but disappears below a certain altitude".
+- **19:40** — queued the 2600 m l1800 (360 s) control render (m384-off-d2600-l1800) to quantify the
+  streaming frontier at the satellite viewpoint (band C present or not at 360 s). Then: fill §22.3-22.6,
+  final report ≤15 lines.
+
+- **20:05** — correction to the 19:20 entry: pole (anchor (0,0,0)) off-axis is 70.0° @120 m / 64.2°
+  @300 m (I wrote 66.6/70.1 — arithmetic slip; the planet-centre values are 70.06/64.18, the pole is
+  ~0.16° less). The anti-cull conclusion is unchanged (both far outside the 37.5° frustum).
+- **20:10** — 2600 m l1800 control (bash-522, rc=0, Forward+ OK): flat-fog frontier at the satellite
+  viewpoint advanced 256 m (180 s, 16-chunk diamond) → ~365 m (360 s, ≈23 chunks): streaming
+  CONFIRMED (view-dependent leading-arc fill), not a cull and not a tier boundary. All (A)+(B) numbers
+  final.
+- **20:30** — §22.3/22.4/22.5/22.6 filled in tasks/AC-0384/AC-0384-results.html (22.2 method + 22.7
+  gates updated: 20 captures, analyze.py cited). Measurement run complete; final report to
+  coordinator. Fences held: no game-code edits, no commits, no TASKS.yaml edits.

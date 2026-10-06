@@ -1789,5 +1789,241 @@ if (cam_out > 0.5 &amp;&amp; ndv &lt; 0.0) { discard; }   // back faces only whi
    <code>data.gd</code>); fenced <code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code> untouched.</li>
  </ul>
 
+ <h2>22. MEASUREMENT RUN (2026-10-05, post-r7) — rendered numbers for the two open symptoms, no fix</h2>
+
+ <p class="meta">Symptoms as reported by the user against the current build: <strong>(A)</strong> &ldquo;terrain LOD is
+ back but disappears everywhere below a certain altitude&rdquo; (the satellite body draws again; the far terrain
+ tier stops drawing below some altitude); <strong>(B)</strong> &ldquo;clouds still below chunks&rdquo; (the cloud deck renders
+ below the near-terrain blocks). This round measures both from rendered pixels. No behaviour was changed;
+ the fix run follows once these numbers exist. G0 on the measured tree: 0 <code>SCRIPT ERROR</code> /
+ 0 <code>SHADER ERROR</code> (<code>gate_census.py</code>, <code>.scratch/AC-0384-measure/g0.log</code>).</p>
+
+ <h3>22.1 Measured state of the tree</h3>
+ <p>Tree = HEAD <code>3d804dd</code> (r7: explicit unit-box custom AABBs on the three cloud shells, set at mesh
+ construction in <code>_setup_aero</code> and re-set in <code>_place_clouds</code>, <code>main.gd:1077/1129</code>) plus the
+ uncommitted AC-0038 particle-pool hunks (render-inert). Code facts relevant to culling, all read from the
+ measured tree: the ring-sector MIs (<code>ring_t{2,3}_s0..31</code>, the far terrain tier,
+ <code>world.gd:1563&ndash;1570</code> + <code>_ring_rebuild_sector</code> 1733&ndash;1763) are <code>MeshInstance3D</code>s at the
+ World origin <code>(0,0,0)</code> wearing <code>ArrayMesh</code>es built with <code>add_surface_from_arrays</code> and
+ <strong>no <code>set_custom_aabb</code> anywhere in the file</strong>; per <code>main.gd:372&ndash;379</code> (the AC-0235 star
+ fix, in-tree) 4.7 <code>ArrayMesh</code> leaves a <strong>zero AABB</strong> after <code>add_surface_from_arrays</code>, and the
+ measured cull behaviour of 21.3 (shells drawn iff the planet centre is frustum-inside) is the
+ degenerate-bounds point test. The satellite body&rsquo;s 12 face meshes carry an explicit
+ &plusmn;(<code>R</code>+<code>HMAX</code>) = &plusmn;4384 cube set at construction (<code>satellite_body.gd:1119</code>); the star
+ field carries &plusmn;(<code>sr</code>+3) (<code>main.gd:379</code>); the high-LOD slab meshes (<code>chunk.gd:1368</code>,
+ <code>1397&ndash;1430</code>) are <code>ArrayMesh</code>es with no custom AABB, their MIs sitting at absolute
+ <code>(cx*16, si*16, cz*16)</code>. The cloud vertex shader is plain <code>v_wp = MODEL_MATRIX * VERTEX</code>
+ (no displacement) &mdash; the node transform (position <code>(0,&minus;R,0)</code>, scale <code>rsh</code>) carries the
+ geometry, so the rendered deck radius <em>should</em> be exactly R+275/330/400 = 4275/4330/4400 about
+ <code>(0,&minus;4000,0)</code>.</p>
+
+ <h3>22.2 Measurement method (checkable)</h3>
+ <p>Captures: the <code>AWECRAFT_CAM=planet</code> preset (no <code>AWECRAFT_LOGIC</code>; <code>harness.gd:1162&ndash;1249</code>) at
+ altitudes <strong>2600 / 2500 / 2450 / 2429 / 1600 / 700 / 300 / 120 m</strong>, the user&rsquo;s configuration
+ (<code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_FOG_PCT=83</code> &rarr; fog fully opaque at 332.0 m,
+ <code>DayNight.fog_far(24,83)</code>), 1280&times;720, Forward+ via lavapipe (boot line asserted
+ <code>Forward+ &ndash; Using Device</code> in every log), <code>AWECRAFT_SNAP_DRAIN=900</code> (uniform across altitudes, so
+ every frame snaps at the same streaming state), <code>AWECRAFT_TIME_FREEZE=1</code> + <code>AWECRAFT_TIME=0.30</code>,
+ deterministic weather <code>AWECRAFT_CLOUD_T0=411200</code>, seed 44 (the deck geometry and every cull test are
+ seed-independent; the user&rsquo;s 5432 world shifts the cull thresholds by &asymp; its 194&minus;141 m taller
+ spawn, &plusmn;26 m). Each altitude has a clouds-<strong>ON</strong> and a clouds-<strong>OFF</strong> (<code>AWECRAFT_CLOUDS=0</code>)
+ counterpart: their pixel diff isolates the deck&rsquo;s actual pixels (threshold 8/255 max-channel; core =
+ 24/255). Two <code>AWECRAFT_NO_WORLD_VIS=1</code> frames (120/700 m) isolate the shells (clouds + sky + stars,
+ no terrain/body), and a 120 m clouds-OFF control with a doubled drain (1800 frames) rules out
+ far-band build lag. Captures: <code>m384-{on,off,noworld}-d{alt}.png</code> in this folder; run logs
+ <code>.scratch/AC-0384-measure/</code>.</p>
+ <p>Two long-drain controls (1800 frames = 360 s): a 120 m clouds-OFF frame ruling out near-view build
+  lag, and &mdash; added during the run after &sect;22.3&rsquo;s method correction &mdash; a 2600 m clouds-OFF
+  frame (<code>m384-off-d2600-l1800.png</code>) to quantify the far-fill frontier at the satellite
+  viewpoint at 360 s (vs 180 s). Total: 20 captures. The plan&rsquo;s beyond-limb farband metric is
+  superseded by the on-disc flat-fog patch + local-flatness census described in &sect;22.3.</p>
+ <p>Geometry: the camera pose is reconstructed exactly from the preset code &mdash; spawn
+ <code>(8.5, 141.0, 8.5)</code> (live <code>SPAWNSEARCH</code> line of the measured run: seed 44, anchor [8,8],
+ top 140), camera at <code>spawn + up&middot;alt</code> with <code>up = normalize(spawn &minus; (0,&minus;4000,0))</code>, looking at
+ the tangent limb (75&deg; fov, 1280&times;720, aspect 16:9). For every pixel the ray is
+ <code>P + t&middot;w</code>; <code>d_min = |cross(P&minus;C, w)|</code> is the closest ray approach to the planet centre
+ <code>C = (0,&minus;4000,0)</code>. A shell of radius <code>r</code> about <code>C</code> is visible from a pixel iff
+ <code>d_min &le; r</code>, so the 4400 m shell&rsquo;s silhouette is the exact predicted outer edge of the deck;
+ at the shell hit the incidence <code>ndv = |n&middot;V|</code> gives the shader&rsquo;s graze-fade state (alpha 0 at
+ <code>ndv=0.02</code>, fully un-faded at <code>ndv=0.18</code>). The deck&rsquo;s rendered edge is extracted as the farthest
+ diff-mask pixel along 72 rays fanned from the frame centre, and reported as <code>d_min</code> (the effective
+ silhouette radius the rendered deck presents in that direction) against the predicted 4400 silhouette
+ and its fade band. A true 4275/4330/4400 shell deck must satisfy: (i) essentially no cloud pixels
+ outside the 4400 silhouette; (ii) the measured edge inside the 4400 fade band; (iii) at 120 m
+ (camera radius 4261 m, <em>inside all three shells</em>) the whole sky is inside the deck silhouette, so a
+ correct deck fills the entire sky with pattern. The far-terrain band (the fogged far-tier silhouette
+ beyond the body limb, dark against space) is counted per altitude on the clouds-OFF frames as
+ pixels with 8&le;max-channel&le;120 and <code>d_min &gt; 4300</code> (beyond the body limb).</p>
+
+ <h3>22.3 (A) The far terrain: altitude at which it stops drawing</h3>
+ <p><strong>It does not stop drawing anywhere in 120&ndash;2600 m.</strong> The far tier (ring-sector MIs,
+  bands B/C) is present and drawn in every clouds-OFF frame; what the user sees as &ldquo;disappearing&rdquo;
+  is (a) the env fog making it featureless above ~191 m, and (b) view-dependent streaming that leaves the
+  outer band unbuilt at the satellite viewpoint for the first minutes after load.</p>
+  <p><em>Method correction (transparent):</em> the plan&rsquo;s first far-terrain metric &mdash; a dark band
+  <em>beyond the body limb</em> (8&le;max-channel&le;120, <code>d_min &gt; 4300</code>) &mdash; is geometrically
+  empty at these altitudes: the far tier projects <em>on</em> the disc (128&ndash;384 m around the terrain
+  anchor), and once 100% fogged it is flat fog colour (177,240,255) &mdash; the same colour the satellite
+  body&rsquo;s own haz model paints in the same region (the body is <code>fog_disabled</code>,
+  <code>satellite_body.gdshader:76</code>, and its op/haz model emulates the fog wall). The usable
+  signatures are therefore: (i) the flat-fog patch &mdash; disc pixels within &plusmn;20/channel of the fog
+  colour (sampled once at 2600 m; the colour is constant, TIME frozen); (ii) the local-flatness census &mdash;
+  fraction of pixels with local contrast (5&times;5 window) &gt; 8, i.e. textured LOD surface vs featureless
+  fog; (iii) the 120 m pair, where the far tier is only partially fogged and shows its texture directly.</p>
+  <table>
+  <tr><th>Alt</th><th>Far-tier state (measured)</th><th>Textured px (contrast&gt;8)</th><th>Cam&rarr;tier distance</th><th>Fog state</th></tr>
+  <tr><td>120 (l900 &asymp; l1800)</td><td>Drawn, mottled 8x8/4x4-avg surface visible across the frame (smooth band, y 342&ndash;585)</td><td>13.4%</td><td>309&ndash;464 m</td><td>90&ndash;100% (fog factor (d&minus;100)/232)</td></tr>
+  <tr><td>300</td><td>Drawn, featureless flat fog; a few bright snow peaks poke through the fog wall (crisp voxels, bottom centre)</td><td>3.9%</td><td>460&ndash;535 m</td><td>100%</td></tr>
+  <tr><td>700</td><td>Drawn, featureless flat fog; one crisp fogged peak</td><td>6.1%</td><td>841&ndash;1160 m</td><td>100%</td></tr>
+  <tr><td>1600</td><td>Drawn, featureless flat fog; one crisp fogged peak (bottom centre)</td><td>7.3%</td><td>1741&ndash;1760 m</td><td>100%</td></tr>
+  <tr><td>2429&ndash;2600</td><td>Drawn, featureless flat fog (the flat-fog patch on the disc)</td><td>6.8% (2600)</td><td>2741&ndash;2830 m</td><td>100%</td></tr>
+  </table>
+  <p><strong>No cull altitude exists in the measured range.</strong> The flat-fog signature (drawn tier,
+  100% fogged) is present at every altitude; the textured LOD surface is directly visible at 120 m. The
+  decisive anti-cull evidence: at 120 m and 300 m the far tier is drawn although the ring MIs&rsquo; node
+  origin &mdash; the terrain anchor <code>(0,0,0)</code> &mdash; sits 70.0&deg;/64.2&deg; off-axis, <em>outside</em> the
+  37.5&deg; frustum. That refutes the degenerate-bounds point test that &sect;21.3 measured on the
+  pre-r7 cloud shells (which would have predicted a far-tier cull below ~2403 m, seed 44). The ring
+  MIs&rsquo; <code>ArrayMesh</code>es evidently carry the sector-geometry bounding box (box&ndash;frustum test),
+  so the far tier draws whenever any of the 128&ndash;384 m annulus is in frame &mdash; true at every measured
+  altitude.</p>
+  <p><strong>Why it looks like it disappears (two measured effects):</strong></p>
+  <p>(a) <em>Fog.</em> <code>DayNight.fog_far(24, 83) = 332 m</code> (<code>fog_near = 100 m</code>). The far
+  annulus (128&ndash;384 m from the anchor) lies entirely beyond the 332 m fog wall once
+  <code>141 + alt &ge; 332</code>, i.e. <strong>alt &ge; 191 m</strong> (seed 44, spawn top 141 m; the user&rsquo;s
+  5432 world, spawn top 194 m: <strong>138 m</strong>). Above that altitude the whole far tier is 100% fog
+  = featureless flat colour, and the body behind it paints the same colour via its haz model &mdash; the LOD
+  detail is gone. Measured: textured fraction 13.4% (120 m) &rarr; 3.9% (300 m) &rarr; 6&ndash;7%
+  (&ge;700 m, fogged peaks only).</p>
+  <p>(b) <em>Streaming at the satellite viewpoint.</em> The far fill prioritises the view&rsquo;s leading arc.
+  At 2600 m the camera looks at the tangent limb &mdash; 2741 m from the anchor, far beyond the 384 m render
+  edge &mdash; so the far annulus is trailing fill and fills slowly: the flat-fog patch (the built, 100%
+  fogged terrain) reaches <strong>256 m at 180 s</strong> (a 16-chunk taxi diamond &mdash; exactly the
+  <code>low_start_r = 16</code> boundary: band C, 256&ndash;384 m, not yet built) and
+  <strong>~365 m (&asymp; 23 chunks) at 360 s</strong> (control <code>m384-off-d2600-l1800.png</code>; the last
+  chunk still in flight). At 120 m the leading arc <em>includes</em> the annulus, so the full annulus is
+  built by 180 s (the l900 and l1800 frames are identical). At the satellite viewpoint the built part
+  (&le;256 m) is 100% fogged = invisible, and band C is absent &mdash; so the whole far LOD is visually gone
+  for the first minutes after load. R24 tier boundaries (settings: <code>medium_start 8</code>,
+  <code>low_start 27</code> clamped to the midpoint <strong>16</strong>): band A voxels &le;128 m, band B
+  8x8-avg 128&ndash;256 m, band C 4x4-avg 256&ndash;384 m, nothing beyond.</p>
+  <p><strong>Answer to the brief:</strong> the far terrain never stops <em>drawing</em> in 120&ndash;2600 m
+  (the user&rsquo;s &ldquo;terrain LOD is back&rdquo; is correct &mdash; it is drawn again, unlike the pre-r7
+  cull state). It stops being <em>visible</em> (featureless) above ~191 m / ~138 m (user seed), and at the
+  satellite viewpoint the outer band additionally stays unbuilt for minutes after load (frontier
+  256 &rarr; 365 m between 180 s and 360 s).</p>
+
+ <h3>22.4 (B) The cloud deck: rendered position and size per altitude</h3>
+ <p>Deck pixels (ON&minus;OFF diff mask, threshold 8/255; core 24/255) per altitude, with the pattern&rsquo;s
+  outer edge reported as the farthest mask pixel&rsquo;s <code>d_min</code> (the effective silhouette radius
+  the rendered deck presents) and its angle from the nadir:</p>
+  <table>
+  <tr><th>Alt</th><th>Cloud px</th><th>Core px</th><th>% of frame</th><th>Pattern edge dmin_max</th><th>&theta; from nadir</th><th>Predicted 4400 silhouette &theta;</th><th>px outside 4275</th></tr>
+  <tr><td>2600</td><td>71,312</td><td>64,579</td><td>7.7%</td><td>3254</td><td>28.9&deg;</td><td>40.75&deg;</td><td>0</td></tr>
+  <tr><td>2500</td><td>75,173</td><td>68,180</td><td>8.2%</td><td>3240</td><td>29.2&deg;</td><td>41.55&deg;</td><td>0</td></tr>
+  <tr><td>2450</td><td>77,087</td><td>69,874</td><td>8.4%</td><td>3233</td><td>29.4&deg;</td><td>42.05&deg;</td><td>0</td></tr>
+  <tr><td>2429</td><td>77,859</td><td>70,717</td><td>8.4%</td><td>3230</td><td>29.4&deg;</td><td>42.27&deg;</td><td>0</td></tr>
+  <tr><td>1600</td><td>90,924</td><td>84,913</td><td>9.9%</td><td>3100</td><td>32.7&deg;</td><td>48.96&deg;</td><td>0</td></tr>
+  <tr><td>700</td><td>52,947</td><td>47,277</td><td>5.7%</td><td>2933</td><td>37.3&deg;</td><td>65.35&deg;</td><td>0</td></tr>
+  <tr><td>300</td><td>32,611</td><td>29,209</td><td>3.5%</td><td>2996</td><td>42.4&deg;</td><td>75.0&deg;</td><td>0</td></tr>
+  <tr><td>120</td><td>1,707</td><td>1,633</td><td>0.19%</td><td>3855</td><td>64.8&deg; (horizon strip)</td><td>camera inside shells</td><td>0</td></tr>
+  </table>
+  <p><strong>Geometry verdict: the rendered deck is the true 4275/4330/4400 spheres about
+  <code>(0,&minus;4000,0)</code>.</strong> (i) <code>m384-noworld-d700.png</code> (shells only; camera 4841 m,
+  441 m <em>outside</em> the 4400 shell, planet centre 55.7&deg; off-axis) shows a <em>spherical</em> dome with
+  a soft grazing-fade rim: tone transitions sky 208 &rarr; veil band 182&ndash;184 &rarr; dome 198
+  (grayscale, centre column) sit at &theta; &asymp; 65.3&deg; = the predicted 4400 silhouette (65.35&deg;), with the
+  cloud pattern concentrated at high incidence (bottom of frame, the near nadir) &mdash; exactly the
+  <code>cloud_layer.gdshader</code> graze model (alpha 0 at ndv 0.02, full at ndv 0.18). No oblate-spheroid
+  or displacement signature (the vertex shader is plain <code>MODEL_MATRIX*VERTEX</code>; the r6
+  &ldquo;sphere-equivalent 5056&ndash;5123 m&rdquo; was the forced-opaque probe, not the natural render).
+  (ii) Zero deck pixels outside the 4275 m sphere at <em>every</em> altitude (and hence none outside 4400);
+  the camera pose is the self-check (the 2600 m pair&rsquo;s mask falls exactly inside the predicted
+  silhouette). No measurable centre offset (resolution &asymp; 1&deg; &asymp; 44 m at 700 m).</p>
+  <p><strong>The pattern is weather, not geometry.</strong> At <code>T0=411200</code>/<code>TIME 0.30</code> the
+  cloud pattern is latitude-banded (the shader&rsquo;s band term); the visible pattern edge changes with
+  altitude (28.9&deg; from 2600 m; 37.3&deg; from 700 m) because each view crosses a different band &mdash; not a
+  single geometric edge. Beyond the pattern the shells render only a faint veil (below the 8/255 diff
+  threshold in the lit frames; the 10-level tone step in NOWORLD-700) out to the 4400 silhouette.</p>
+  <p><strong>120 m (camera radius 4261 m, <em>inside all three shells</em>): the sky is essentially
+  pattern-free.</strong> Top-half pattern density 0.026 (&asymp; the smooth-gradient baseline), cloud mask in
+  the top half 0.0%, total 1,707 px = 0.19% of the frame &mdash; a mid-latitude pattern band seen near the
+  horizon (<code>d_min</code> 2626&ndash;3855). The polar-cap band (the pattern that fills the disc centre at
+  300&ndash;2600 m) is above the frame (frame top is 52.5&deg; from the zenith; the cap lies within 28.9&deg; of
+  the zenith). So from low altitude the deck&rsquo;s pattern is not overhead at this weather state.</p>
+  <p><strong>r7 verification:</strong> the deck is drawn at 700 m and 300 m although the planet centre sits
+  55.7&deg;/64.2&deg; off-axis &mdash; outside the frustum. Pre-r7 the shells were culled below 2429 m
+  (&sect;21.3 &mdash; the user&rsquo;s number); the explicit AABBs now keep them drawn.</p>
+  <p><strong>Answer to the brief:</strong> the deck&rsquo;s rendered position/size is exactly the code
+  geometry &mdash; three true spheres, radii 4275/4330/4400 about <code>(0,&minus;4000,0)</code> (275/330/400 m
+  above the 4000 m base). Minimum clearance above terrain: 4275&minus;4141 = <strong>134 m</strong> at the
+  spawn peak (innermost shell); 225&ndash;434 m over typical terrain (4000&ndash;4050 m). The deck is <em>not</em>
+  below the chunks: &ldquo;clouds below terrain&rdquo; at low altitude is the pattern band sitting elsewhere in
+  latitude (the 120 m sky is 99.8% pattern-free) plus a thin shell 134&ndash;434 m up reading visually as
+  below/beyond the terrain silhouette.</p>
+
+ <h3>22.5 Explicit culling bounds, per instance (the table)</h3>
+ <table>
+  <tr><th>Instance</th><th>Count</th><th>Node origin</th><th>Custom AABB</th><th>Effective cull bounds</th><th>Drawn in 120&ndash;2600 m (measured)?</th></tr>
+  <tr><td>Cloud shells 4275 / 4330 / 4400</td><td>3</td><td><code>(0,&minus;4000,0)</code></td><td><strong>Yes</strong> &mdash; unit box &times; scale, set at mesh construction and re-set each place (<code>main.gd:1077/1129</code>, r7)</td><td>&plusmn;4400 box about the planet centre (the outermost shell&rsquo;s box dominates)</td><td><strong>Yes at every altitude</strong> &mdash; incl. 700/300 m with the centre 55.7&deg;/64.2&deg; off-axis (r7 verified; &sect;21.3: culled below 2429 m pre-r7)</td></tr>
+  <tr><td>Ring-sector MIs, far LOD (tiers 2/3: bands B/C)</td><td>64 (<code>ring_t{2,3}_s0..31</code>)</td><td><code>(0,0,0)</code> (the terrain anchor)</td><td>None &mdash; <code>ArrayMesh</code> via <code>add_surface_from_arrays</code> (<code>world.gd:1563&ndash;1570</code>)</td><td>Sector-geometry bounding box (the 1/32-arc wedge of the 128&ndash;384 m annulus) &mdash; the pixel evidence below shows it is a real box, not the zero-AABB point of <code>main.gd:372&ndash;379</code></td><td><strong>Yes at every altitude</strong> &mdash; drawn at 120/300 m with the anchor 70.0&deg;/64.2&deg; off-axis (outside the frustum) &rarr; the ~2403 m point-test cull does not apply</td></tr>
+  <tr><td>High-LOD slab MIs (band A, per-slab voxels)</td><td>per slab (R16 census: 392 band-A MIs; R24 not re-censused this run)</td><td>absolute <code>(cx*16, si*16, cz*16)</code></td><td>None &mdash; <code>ArrayMesh</code> (<code>chunk.gd:1368</code>, <code>1397&ndash;1430</code>)</td><td>Per-slab geometry box (16&times;16&times;16&middot;si)</td><td><strong>Yes where the slab is in frame</strong> &mdash; the 16 m grid is directly visible in <code>m384-off-d120*.png</code> (frame bottom); the inner annulus falls below the frame at higher altitudes (out of frame, not culled)</td></tr>
+  <tr><td>Satellite body faces</td><td>12</td><td>body node at <code>(0,&minus;R,0)</code> (<code>satellite_body.gd:323</code>)</td><td><strong>Yes</strong> &mdash; &plusmn;(<code>R</code>+<code>HMAX</code>) = &plusmn;4384 cube at construction (<code>satellite_body.gd:1119</code>)</td><td>&plusmn;4384 cube about the planet centre</td><td><strong>Yes at every altitude</strong> (r6/r7 body fix; material is <code>fog_disabled</code>, its own haz model)</td></tr>
+  <tr><td>Star field</td><td>1</td><td><code>(0,0,0)</code></td><td><strong>Yes</strong> &mdash; &plusmn;(<code>sr</code>+3) (<code>main.gd:379</code>, the AC-0235 fix)</td><td>Large cube about the planet centre</td><td><strong>Yes</strong> (stars visible in every capture)</td></tr>
+  </table>
+  <p>So: every far-drawing instance either has an explicit, correctly-sized AABB (cloud shells, body,
+  stars) or carries a real geometry-bounding mesh box (ring sectors, high-LOD slabs). The one class
+  whose degenerate-bounds behaviour was <em>predicted</em> by <code>main.gd:372&ndash;379</code> (zero
+  <code>ArrayMesh</code> AABB &rarr; point test at the node origin) &mdash; the ring-sector MIs &mdash; is
+  <em>refuted by the pixels</em>: drawn at 120/300 m with the anchor far outside the frustum. (The pre-r7
+  cloud shells did exhibit the point test &mdash; &sect;21.3 &mdash; but their node origin is the planet centre
+  <code>(0,&minus;4000,0)</code>, and their measured cull below 2429 m is consistent with either the
+  point test or the then-current code path; the r7 AABBs make it moot.)</p>
+
+ <h3>22.6 Findings (numbers, no fix)</h3>
+ <p>(1) <em>Deck radius/position:</em> the rendered cloud deck is exactly the code geometry &mdash; three true
+  spheres of radius 4275/4330/4400 about <code>(0,&minus;4000,0)</code> (NOWORLD-700 dome + fade rim at the
+  predicted 4400 silhouette; 0 deck px outside the 4275 sphere at all altitudes; no measurable offset).
+  It is <strong>not below the terrain</strong>: 134 m above the highest terrain point (the 4141 m spawn
+  peak), 225&ndash;434 m above typical terrain. &ldquo;Clouds still below chunks&rdquo; = the
+  <code>T0=411200</code>/<code>TIME 0.30</code> pattern is latitude-banded and is not overhead from low
+  altitude (120 m sky: 0.19% pattern, 1,707 px) &mdash; a weather/altitude-view effect, not a radius error.
+  A fix run that wants the user to see clouds at low altitude must address pattern placement/coverage
+  (or the band structure), not the shell transforms.</p>
+  <p>(2) <em>r7 works:</em> the deck renders at 700 m and 300 m with the planet centre outside the frustum
+  (55.7&deg;/64.2&deg; off-axis); pre-r7 it was culled below 2429 m &mdash; the altitude the user has been
+  reporting. That part of the complaint is fixed in the current build.</p>
+  <p>(3) <em>Far terrain:</em> it does not stop drawing in 120&ndash;2600 m &mdash; drawn at every altitude
+  (flat-fog signature at &ge;300 m; textured LOD surface visible at 120 m; anti-cull evidence: drawn at
+  120/300 m with the ring MIs&rsquo; anchor 70.0&deg;/64.2&deg; off-axis, refuting the ~2403 m point-test
+  prediction). &ldquo;Terrain LOD back but disappears below a certain altitude&rdquo; = (a) the env fog
+  (<code>fog_far = 332 m</code> at F83) makes the whole far annulus 100% fog = featureless above
+  <strong>~191 m</strong> (seed 44; <strong>~138 m</strong> on the user&rsquo;s 5432) &mdash; textured fraction
+  13.4% (120 m) &rarr; 3.9% (300 m) &rarr; 6&ndash;7% (&ge;700 m); and (b) view-dependent streaming: at the
+  2600 m satellite viewpoint the far annulus is off the leading arc, so band C (256&ndash;384 m) is unbuilt
+  at 180 s (flat-fog frontier = 16-chunk diamond, 256 m) and only ~23 chunks by 360 s (control
+  <code>m384-off-d2600-l1800</code>); the built part is 100% fogged = invisible &mdash; so the far LOD is
+  visually absent at the satellite view for minutes after load, while at 120 m the full annulus is built
+  by 180 s.</p>
+  <p>(4) <em>Cull-bounds status (the table, &sect;22.5):</em> explicit AABBs on the cloud shells (r7),
+  the body (&plusmn;4384) and stars; real geometry-bounding mesh boxes on the 64 ring-sector MIs and the
+  high-LOD slabs (pixel-verified &mdash; the zero-AABB point test of <code>main.gd:372&ndash;379</code> does
+  not apply to them). No instance in the far-drawing path is left on a degenerate bounds in a way that
+  changes what the user sees in 120&ndash;2600 m.</p>
+  <p>(5) <em>Deck pattern numbers for the fix run:</em> pattern edge dmin_max per altitude
+  3254/3240/3233/3230/3100/2933/2996/3855 (2600&rarr;120 m; &theta; 28.9&deg;&rarr;42.4&deg; from nadir);
+  deck pixel counts 71,312 / 75,173 / 77,087 / 77,859 / 90,924 / 52,947 / 32,611 / 1,707. The visible
+  pattern covers 3.5&ndash;9.9% of the frame at 300&ndash;2600 m and 0.19% at 120 m &mdash; at this weather
+  state the deck reads as a dark, banded patch on the disc, not a sky-filling deck.</p>
+
+ <h3>22.7 Gates</h3>
+ <p>G0 census on the measured tree: 0 <code>SCRIPT ERROR</code> / 0 <code>SHADER ERROR</code>
+ (<code>.scratch/AC-0384-measure/g0.log</code>); every capture log asserts the Forward+ boot line and carries
+ zero error lines; all 20 PNGs exist (sizes in the run log <code>.scratch/AC-0384-measure/batch.log</code>
+ and the 2600 m control log <code>.scratch/AC-0384-measure/m384-off-d2600-l1800.log</code>). No game-code
+ edits this round (fences held); no commits. Analysis tooling:
+ <code>.scratch/AC-0384-measure/analyze.py</code> (ray reconstruction + per-altitude census; run with
+ numpy/Pillow under <code>.scratch/AC-0384-measure/pylibs</code>).</p>
+
 </body>
 </html>

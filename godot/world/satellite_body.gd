@@ -495,18 +495,6 @@ func _bake_main_step() -> void:
 		if not gd["ok"]:
 			_fail("variance guard failed on face %d: %s" % [lf, str(gd)])
 			return
-		# AC-0384 r5: build the mip chain BEFORE the wrap. The old code
-		# wrapped the bare base level in a fresh ImageTexture - the
-		# get_image() decode above already left any import-side chain
-		# behind, and this wrap added no chain of its own - so the
-		# body's sampler
-		# (now filter_linear_mipmap_anisotropic) had nothing to mipmap
-		# with: a 1024^2 texture bilinear-sampled at sub-texel pitch
-		# aliases into the stipple the round-4 ladder measured (4x the
-		# source's own grain). NPIX^2 is power-of-two, so this is valid
-		# on every face; it does not touch the base level, so the guard
-		# and the height-grid reads above are unaffected.
-		img.generate_mipmaps()
 		textures.append(ImageTexture.create_from_image(img))
 		# AC-0384 r2: the height channel (the PNG's alpha) - the grid the
 		# displaced mesh is built from. An image without an alpha channel
@@ -541,10 +529,6 @@ func _bake_main_step() -> void:
 		visible = false  # no un-uniformed flash (the first _tick_view sets it)
 	var lf: int = bake_consume
 	if lf < 12:
-		# AC-0384 r5: same mip chain on the bake path - the worker image
-		# goes through no import at all, so the code is the ONLY place a
-		# chain can come from here (see the LOAD-path note above).
-		_worker_images[lf].generate_mipmaps()
 		textures.append(ImageTexture.create_from_image(_worker_images[lf]))
 		_build_face(lf)
 		bake_consume += 1
