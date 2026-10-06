@@ -1,11 +1,12 @@
 meta:
-  updated_at: 2026-10-04T20:29
+  updated_at: 2026-10-06T15:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0394
+- AC-0398
 - AC-0397
+- AC-0394
 - AC-0395
 - AC-0186
 - AC-0130
@@ -24475,4 +24476,81 @@ intake:
     \ the cost, and the 556-column note); mesh.cpp's h_avg_emit_impl / avg_grid_emit / low_emit_avg_impl;\
     \ world.gd:2596-2725 (the low-lane entry and the far-vs-slabs choice); world.gd:6700-6760 (the mat\
     \ landing); world.gd:590-590, 860-910 (the floor derive) and 10010-10066 (_demote_to_far).\n"
+  comments: []
+- id: AC-0398
+  title: interpolated-modern-vertex-lighting
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-06T15:24
+  updated_at: 2026-10-06T15:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The ground should be lit the way a modern game lights it - smooth gradients across
+    a face rather than visible steps - so slopes, hills and block edges read as shape instead of as bands.
+    The user asked for exactly this while reporting the banding they photographed from the air: "for the
+    vertex lighting we should do interpolation and make it look like modern lighting".
+
+
+    2) Technical Details:
+
+    REQUESTED BY THE USER, and this ticket exists because the coordinator acknowledged the request in
+    conversation and then failed to file it - it was found again while reviewing the backlog for the "looks
+    like No Man''s Sky" objective. That objective makes it doubly relevant: modern lighting is most of
+    the difference between a voxel world seen from the air and the look the user is asking for.
+
+
+    THE CONCRETE CAUSE, already narrowed by measurement rather than guessed. `gdext/src/mesh.cpp` emits
+    per-face shading through `FSH[6] = {0.8, 0.8, 1.0, 0.5, 0.8, 0.8}` - top 1.0, the four sides 0.8,
+    bottom 0.5 - and per-corner ambient occlusion through `AO_MULT[4] = {1.0, 0.8, 0.6, 0.4}`, which is
+    FOUR DISCRETE LEVELS. AC-0159 introduced both deliberately and they are the blockiness the ticket
+    removes. The banding is visible as broad diagonal stripes across grass and was reproduced in a capture
+    (tasks/AC-0394/fwd_ground_first_look.png); cloud shadows were eliminated as a cause by source inspection,
+    and the per-face shade plus four-level corner AO is what remains.
+
+
+    WHAT TO BUILD: interpolate the light and occlusion across each face''s corners instead of stepping
+    between quantised levels, so a surface shades continuously. The per-corner values are already computed
+    per vertex by AC-0159''s `s_corner_tag`, so the work is largely in how they are combined and written
+    rather than in new sampling. Consider whether the AO curve itself should be smoothed (four levels
+    at 1.0/0.8/0.6/0.4 become a continuous function of the same neighbourhood sample) and whether the
+    per-face constant should become a per-vertex normal-derived term so a sloped quad no longer reads
+    as one flat shade. Whatever the mechanism, the acceptance is a visible gradient where there are currently
+    steps.
+
+
+    THE SETTING IS REQUIRED, per this project''s standing rule that a change to how the game LOOKS ships
+    with a switch: a persisted option on the Options surface, declared in DEFAULTS, clamped, persisted,
+    shown on the settings surface and arm-asserted, plus an env override so both states can be tested
+    without a save file. Decide the default deliberately and say why - the user asked for the feature,
+    so defaulting to the new look is defensible, but the conservative option is the old one and either
+    is acceptable provided the reasoning is stated. The switch must short-circuit BEFORE the geometry
+    and shading are emitted so the arm can assert byte-identity with the feature off.
+
+
+    CONSTRAINTS AND VERIFICATION: genhash 25/25 byte-identical - this changes shading, not H; if H moves
+    that is a finding, not a re-baseline; G0 zero SCRIPT ERROR and zero SHADER ERROR (tasks/scripts/gate_census.py
+    counts both); the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); AC-0159''s
+    own corner assertions must be updated deliberately rather than deleted, and if any standing value
+    moves, re-establish it with attribution; AC-0205''s smooth ground ramps (committed, default OFF) share
+    this code path and must keep working; the satellite ladder and its 0.25 texel-to-chunk ratio intact.
+    Negative-test whatever check proves the interpolation, because "the light changed" is exactly the
+    kind of assertion that passes for the wrong reason.
+
+    VISUAL ACCEPTANCE: renders work on the shipped Forward+ path (about 5 FPS, so ONE render per visual
+    ticket rather than per gate run - the recipe is in godot/HARNESS.md section 2 and the fwdshot row
+    in tasks/harness_data.yaml). Capture the same ground view as tasks/AC-0394/fwd_ground_first_look.png
+    before and after so the banding is directly comparable, plus a capture on a slope where the per-face
+    constant is most visible.
+
+    CONTEXT: read tasks/AC-0394/AC-0394-results.html (the banding narrowing and the captures), the AC-0159
+    entry in tasks/TASKS.yaml, and gdext/src/mesh.cpp around the `FSH`, `AO_MULT` and `s_corner_tag` definitions.
+
+    '
   comments: []
