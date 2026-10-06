@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-06T19:09
+  updated_at: 2026-10-06T19:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24,6 +24,7 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
+- AC-0399
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24572,4 +24573,70 @@ intake:
     more vertices, with every invariant still green; the standing note in HARNESS.md section 3 should
     be re-based with that attribution in a future documentation pass, which is a note-keeping task and
     not a correctness problem.'
+  comments: []
+- id: AC-0399
+  title: streaming-fill-follows-the-view
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-06T19:10
+  updated_at: 2026-10-06T19:10
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Taking off and flying toward a planet should look like arriving somewhere - the
+    ground resolving as you approach and the horizon filling in - instead of flying for minutes over a
+    world that has not been built yet. Landing and leaving a planet are the two halves of the experience
+    this project is currently trying to match to No Man''s Sky, and this is the half that fails on takeoff.
+
+
+    2) Technical Details:
+
+    MEASURED, not assumed - these numbers come from the round 4 measurement run (tasks/AC-0384/AC-0384-results.html
+    section 22, method stated there): at the 2600 m satellite view the far annulus is OFF THE LEADING
+    ARC of the streaming frontier. The built frontier was 256 m at 180 seconds and about 365 m at 360
+    seconds, and because the built part is also fogged at that distance it is invisible, so the far level
+    of detail is visually absent for minutes after load. At 120 m, by contrast, the FULL annulus is built
+    by 180 seconds. The fill works at ground level and fails from altitude.
+
+    THE LIKELY CAUSE AND THE SHAPE OF THE FIX: fill priority is PLAYER-RELATIVE - the world builds outward
+    from the player''s own column - which is correct when the player is standing in it and wrong when
+    the player is above or beside it looking at a distant arc. The priority should follow the CAMERA''S
+    VIEW: the sectors inside the frustum, and especially the arc the camera is actually looking at, should
+    be built before the ones behind the player. Round 6 named this as a target in its own words ("far-annulus
+    fill priority at the satellite view, leading-arc") and did not take it because it was outside that
+    run''s scope. Verify the cause before changing it, and say what the current ordering actually is.
+
+    SCOPE DISCIPLINE, because streaming is where a task can run away: do NOT rewrite the streaming architecture.
+    The specific, bounded goal is that the arc the player is looking at is built first and that a takeoff
+    at the user''s settings stops showing an unbuilt world. If the honest answer is that the fill rate
+    itself rather than its order is the limit, say so with measurements and stop - a clear "the order
+    is fine, the budget is the problem, here is the number" is a good outcome.
+
+    ACCEPTANCE IS A TIME-TO-VISIBLE MEASUREMENT AT ALTITUDE, using the same method as round 4 so the numbers
+    compare: at the 2600 m satellite view and at a descending ladder, report what fraction of the visible
+    arc is built at 60, 180 and 360 seconds before and after, plus captures showing the world present
+    in the view. Also CONFIRM YOU HAVE NOT REGRESSED THE GROUND CASE - the full annulus built by 180 s
+    at 120 m is the existing behaviour and must stay.
+
+    WORK AT THE USER''S CONFIGURATION: radius 24, fog reaching full at 332 m. Renders run on the shipped
+    Forward+ path at about 5 FPS so budget 1200 s per shot and check the file exists.
+
+    CONSTRAINTS: genhash 25/25 byte-identical - this is a load-order change and must not touch generation;
+    G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py; the standing set green
+    (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with
+    far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); AC-0205''s ramps (default OFF)
+    and AC-0398''s interpolated lighting share the mesh path and must keep working; the satellite ladder
+    and its 0.25 texel-to-chunk ratio intact. Negative-test whatever check proves the fill order, because
+    "the world built faster" is exactly the kind of assertion that passes for the wrong reason.
+
+    CONTEXT: read tasks/AC-0384/AC-0384-results.html section 22 (the streaming measurements and the method),
+    the round 6 findings in the r9 commit message, godot/HARNESS.md section 2 for the render recipe and
+    the fwdshot row in tasks/harness_data.yaml.
+
+    '
   comments: []
