@@ -1,115 +1,115 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AC-0384 r6 plan — the cloud deck: thick, banded, with depth (the NMS look)</title>
-<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}</style></head><body>
-<h1>AC-0384 r6 — the cloud layer: make it read like No Man&rsquo;s Sky (thick, banded, volumetric) without regressing the r5 anti-aliasing fix</h1>
+<title>AC-0384 — plan (round 6: the sustained descent passage)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0384 — plan, round 6 (2026-10-06): the sustained descent passage</h1>
 
-<h2>Goal</h2>
-<p>One sentence: make the cloud deck a <b>thick, occluding, banded layer with visible depth
-(darker undersides)</b> from both orbit and low altitude, while the disc grain at every ladder
-altitude stays at or below the round-2 baseline (2600 m: &le; 2.09 tight / &le; 4.87 canonical).</p>
+<p><b>Goal.</b> A descent at the user's configuration (R24, fog full at 332 m) must pass through
+structured cloud over a sustained altitude band — the deck census (ON&minus;OFF pixel diff, % of
+frame) must show present, structured cloud at <em>every</em> ladder altitude (2600/1600/700/300/120 m)
+at the reference weather, and dense at some altitude at <em>every</em> observed weather — by making the
+three proven shells (4275/4330/4400 about (0,&minus;4000,0); radii/centre/transforms untouched) read
+as three distinct layers, each carrying its own structured coverage.</p>
 
-<h2>Current look (established before any change)</h2>
+<h2>Diagnosis (measured, round 5 = results &sect;23)</h2>
 <ul>
-<li><b>Frames of record</b> (current tree, byte-identical to r5&rsquo;s):
-<code>rd5-fix-d{2600,1600,700,300,120}.png</code>, viewed at the five ladder altitudes.
-Pre-fix grain measured from them this round (same boxes as r5):
-2600 m <b>4.87 / 2.09</b>, 1600 m 3.66 / 0.71, 700 m 2.92 / 0.70, 300 m 2.38 / 0.96,
-120 m 9.86 / 16.70 (canonical / tight) &mdash; identical to r5&rsquo;s published numbers.</li>
-<li><b>Orbit (2600 m):</b> clouds are faint, thin white mottling &mdash; sparse, low opacity,
-isotropic blobs, no banded structure, no depth. The deck does not occlude the surface.</li>
-<li><b>From underneath (120 m):</b> the sky is a flat white wash &mdash; <b>the cloud deck is
-invisible from below</b>. Code cause: <code>graze = smoothstep(0.02, 0.18, max(dot(n,V),0))</code>;
-viewed from below, <code>dot(n,V) &asymp; &minus;1</code> &rarr; graze 0 &rarr; alpha 0.
-The fade was tuned for the orbit silhouette (where it is correct) but it zeros the entire
-underside.</li>
+<li>The r8b deck census at CLOUD_T0=411200: 2600 m <b>10.58%</b> (thick belt core — the NMS orbit
+read), 1600 m <b>0.000%</b>, 700 m <b>0.000%</b>, 300 m <b>4.36%</b> (thin veil), 120 m
+<b>0.22%</b> (limb strip). The descent crosses one wisp and then falls through empty sky.</li>
+<li>Geometry read of the preset views (camera radius 4141+alt; the deck is the shell wall the view
+rays cross): 2600 m sees the lower 46% of the frame as deck, 1600 m the lower 63%, 700 m the lower
+81%, 300 m the lower 75%, 120 m the top horizon strip (e &isin; [&minus;16&deg;, +21&deg;] below
+horizontal — the camera is 14 m inside the inner shell). The 1600/700 m zeros are not a cull or
+view problem: the base field is below the 0.46 coverage threshold in those deck regions at this
+weather, and the round-5 drift scan (6 clock values) found the belt limb in a clear phase at
+<em>every</em> phase — one weather draw cannot be relied on.</li>
+<li>All three shells currently sample the <em>same</em> fbm structure at their own feature scales
+(<code>u_scale3 = 2&pi;(R+h)/feature</code>, 256/160/110 blocks) — the decks are correlated views of one
+field, so a clear phase in the field is a clear phase in all three decks at once: one thin band.</li>
 </ul>
 
-<h2>Changes (all in <code>core/cloud_layer.gdshader</code>, fragment stage; the r5 per-band
-distance-LOD clamp and <code>u_cpxrad</code> are untouched)</h2>
-<table>
-<tr><th>#</th><th>Change</th><th>Why (NMS cue)</th><th>Grain risk</th></tr>
-<tr><td>1</td><td>graze: <code>max(dot(n,V),0)</code> &rarr; <code>abs(dot(n,V))</code></td>
-<td>deck visible from below (underside) AND still thins at the tangential silhouette
-(orbit limb / the deck&rsquo;s own edge) &mdash; no double white rim. Thickness seen from underneath.</td>
-<td>zero (geometric, no noise)</td></tr>
-<tr><td>2</td><td><code>u_boost</code> (shader default 1.45):
-<code>ALPHA = clamp(cl &middot; u_coverage &middot; u_boost, 0, 1)</code></td>
-<td>dense cores reach &alpha;&asymp;1 &mdash; the masses occlude the surface (thin veils &rarr; thick deck).</td>
-<td>low (pointwise rescale; saturation lowers neighbor-diff)</td></tr>
-<tr><td>3</td><td>bimodal contrast: <code>cl = smoothstep(0.16, 0.58, cl)</code> before the boost</td>
-<td>clear gaps + opaque masses (weather, not haze). Edge width in field space unchanged, so the
-r5 LOD guarantee holds.</td>
-<td><b>the one risk</b> (edge steepening); measured, backed off if grain regresses</td></tr>
-<tr><td>4</td><td>latitude banding:
-<code>cl &middot;= mix(0.5, 1.0, smoothstep(0.18, 0.82, 0.5 + 0.5 &middot; sin(dr.y&middot;11 + 2.2&middot;base)))</code></td>
-<td>broad (~25&deg;) warped bands of latitude &mdash; large-scale weather systems, not speckle.</td>
-<td>zero (coarsest term; its edges are at the clamped base frequency, &ge; 2.5 px)</td></tr>
-<tr><td>5</td><td><code>u_under</code> (shader default 0.60):
-<code>ALBEDO &middot;= mix(1.0, u_under, smoothstep(0.42, 0.72, base))</code></td>
-<td>locally thick cloud shades its own underside &mdash; grey cores, white fringes; the volume cue
-(&ldquo;one mass over another&rdquo;).</td>
-<td>zero (albedo modulation of the clamped low-freq field)</td></tr>
-</table>
-<p>New uniforms are <b>shader-side defaults, never pushed</b> &mdash; <code>scenes/main.gd</code>
-(still fenced, another session&rsquo;s in-flight work) is <b>not touched at all</b>. The weather
-pattern (base/mid/fine/band) stays a function of world direction + time-of-day only; the only
-view-dependent term is the geometric graze fade (same class as before, corrected to handle the
-underside). No-pop argument survives: nothing new keys on player distance.</p>
-<p><b>Ruled out:</b> (a) a 4th shell &mdash; the 3 shells already provide the altitude spread;
-the problem is they read as separate thin veils, so opacity + depth cues fix that without a new
-draw call / mesh; (b) limb-thickening &mdash; view-dependent alpha would fight the graze fade and
-risk a hard white rim at the orbit silhouette; (c) raising <code>CLOUD_AMOUNT_DAY</code>
-(0.75) &mdash; shared AeroLib constant, would move the night deck too; <code>u_boost</code> does
-the job locally.</p>
+<h2>The fix — per-shell pattern offset (the vertical phase), shader-side; window only if the mirror
+demands it</h2>
+<ul>
+<li><code>godot/core/cloud_layer.gdshader</code>: new uniform <code>vec3 u_phase</code> (default
+0 = today's pattern); the sampling coordinate becomes <code>q = dr * u_scale3 + u_phase</code>.
+Each shell then carries an <em>independent</em> structured pattern (the offsets are incommensurate
+lattice shifts, so the three decks decorrelate) while the latitude banding (shared
+<code>dr.y</code> term) keeps the decks' belts aligned in latitude — the layers read as a stack of
+banded decks, and the union of three independent coverages is dense where one field's phase is
+clear. The r5 distance-LOD clamp, the r6 contrast chain, the boost, and every shell geometric
+parameter are untouched. If the calibrated mirror shows the reference-weather 1600/700 m regions
+sit more than &asymp;0.02 below the window's lower bound, the coverage window widens one notch
+(0.46/0.54 &rarr; 0.45/0.55 or 0.44/0.56) — decided by measurement, reported either way.</li>
+<li><code>godot/scenes/main.gd</code>: <b>one hunk</b>, in <code>_place_clouds</code> — push
+<code>u_phase</code> per shell (constants beside the existing <code>u_scale3</code>/<code>u_drift</code>
+pushes). The top shell keeps phase 0 so the orbit view (and its grain baseline) is the measured
+r8b one; the 330 m and 275 m shells take the new phases (the decks the descent actually crosses).
+Listed verbatim in the results for hunk staging; no other main.gd hunk.</li>
+</ul>
 
 <h2>Files to touch</h2>
 <table>
-<tr><th>File</th><th>Change</th></tr>
-<tr><td><code>godot/core/cloud_layer.gdshader</code></td>
-<td>fragment stage per the table above; 2 new uniforms with defaults; header comment updated.</td></tr>
-<tr><td><code>.scratch/AC-0385/coverage.py</code> (the standing coverage instrument)</td>
-<td>updated <b>deliberately</b> to mirror the new shader math (graze abs, banding, contrast,
-boost) so its globe-coverage number stays faithful; re-run &rarr; new standing value replacing
-67.8%, recorded in the results page. Output PNGs go to <code>tasks/AC-0384/</code>
-(<code>COV_OUTDIR</code>), not over AC-0385&rsquo;s evidence.</td></tr>
-<tr><td><code>tasks/AC-0384/</code></td><td>plan (this file, r5 preserved as plan-round5.html),
-continuity entries, results section 21, captures <code>rd6-d{2600,1600,700,300,120}.png</code>.</td></tr>
-<tr><td><code>godot/ARCHITECTURE.md</code></td><td>CloudLayer bullet: r6 line (deck character +
-abs-graze underside visibility).</td></tr>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td><code>u_phase</code> uniform + the
+<code>q = dr * u_scale3 + u_phase</code> sampling line (+ window notch only if the mirror demands
+it). Shader-side only.</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>ONE hunk: per-shell <code>u_phase</code> push in
+<code>_place_clouds</code> (quoted verbatim in results for the coordinator's hunk staging).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Cloud-bullet sync: the per-shell phase offset
+(each deck its own pattern; banding shared) — a changed convention, same task.</td></tr>
+<tr><td><code>tasks/AC-0384/</code></td><td>plan.html (this), continuity.md entries,
+AC-0384-results.html section 24, captures <code>r9-*.png</code>.</td></tr>
 </table>
 
-<h2>Harness gates</h2>
+<h2>Verification</h2>
+<p>Design first on the calibrated offline mirror (<code>.scratch/AC-0384-r9/deckmirror.py</code> —
+exact preset camera, per-shell chain incl. r5 LOD clamp and per-T0 drift; calibrated until it
+reproduces the five measured r8b numbers at T0=411200), then the renders are the acceptance:</p>
+<table>
+<tr><th>gate</th><th>recipe</th><th>ok</th></tr>
+<tr><td>G0</td><td>headless load, <code>gate_census.py</code></td><td>0 SCRIPT ERROR <b>and</b>
+0 SHADER ERROR lines (rc is not the gate)</td></tr>
+<tr><td>SMOKE</td><td>battery <code>player;interact;light;fluids</code></td><td><code>ok:true</code>,
+census clean</td></tr>
+<tr><td>Probe — satellite arm</td><td><code>satellite</code> at R24/F83</td><td><code>ok:true</code>,
+ladder 4/4, ratio 0.25, <code>clouds_centre_ok</code>/<code>clouds_radius_ok</code> true (the deck
+geometry is asserted by the arm, unchanged)</td></tr>
+<tr><td><b>Acceptance renders</b></td><td>round-5 recipe 1:1 (R24, FOG_PCT=83, seed 44, 1280&times;720,
+Forward+/lavapipe, planet preset, SNAP_DRAIN=900, TIME=0.30 frozen, CLOUD_T0=411200): ON+OFF at
+2600/1600/700/300/120 m &rarr; deck census per altitude (threshold 8/255, as round 5). <b>Pass:
+structured cloud at every ladder altitude; the descent band (1600&rarr;120 m) sustained, not one
+band.</b></td></tr>
+<tr><td>Across-weather scan</td><td>same recipe, ON at T0 = 0/100000/300000/411200/411800/412400
+(round 5's six clocks) at 1600/700/120 m (the previously-zero altitudes; OFF frames are
+weather-independent and shared), + a 2600 m spot per weather</td><td>every weather dense at some
+altitude of the descent</td></tr>
+<tr><td>Grain (r2 distance-LOD guard)</td><td>r5 recipe: 2600 m, TIME=0.5 natural drift, no
+CLOUD_T0, ON+OFF, 2-px neighbour diff canonical box (440,320,840,720) + 1/2/4-px scale signature +
+flat-wall sub-region</td><td>any rise quantified against the SAME-WEATHER r8b baseline (7.64/4.56,
+one weather draw — not the 4.71/1.90 r6 reference in isolation) and classified content vs
+aliasing (structured edges monotone in offset = content; flat = aliasing static)</td></tr>
+</table>
+
+<h2>Risks</h2>
 <ul>
-<li><b>G0</b> &mdash; <code>--headless --path godot --quit</code>, <code>gate_census.py</code>:
-<b>zero SCRIPT ERROR and zero SHADER ERROR</b> (rc=0 is not the gate). Pre- and post-edit.</li>
-<li><b>RENDER (the acceptance)</b> &mdash; Forward+ ladder, exact r5 recipe (user config
-R24 / FOG_PCT=83 = fog_far 332 / edge 400, TIME 0.5, seed 44, 1280,720, SAT_MESH_STEP=64,
-fog ON clouds ON, <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code> &isin;
-{2600,1600,700,300,120}, SNAP_DRAIN=1200, NO <code>AWECRAFT_LOGIC</code>): all 5 frames
-rc=0, boot line <code>- Forward+ -</code>, SNAP + RESULT, 0 error lines.
-Captures <code>rd6-d*.png</code> next to the rd4/rd5 sets.</li>
-<li><b>GRAIN (the hard constraint)</b> &mdash; <code>.scratch/AC-0384-r5/grain.py</code> on the
-new frames, same boxes (canonical 440,320&ndash;840,720 / tight 440,520&ndash;840,720), all 5
-altitudes: <b>any altitude above its r5 baseline is a failure</b> (2600 m: &le; 2.09 tight /
-&le; 4.87 canonical). Documented instrument noise floor &asymp;1% (cloud drift, r5 evidence).
-If the contrast (item 3) regresses it: back off item 3 only, re-render 2600 m, re-measure.</li>
-<li><b>SMOKE</b> &mdash; battery <code>player;interact;light;fluids</code> ok:true (no
-<code>world/*</code> or <code>data.gd</code> touched &rarr; genhash exempt, as in r4/r5).</li>
-<li><b>Satellite arm (res path, R24/F83, seed 44)</b> &mdash; <code>ok:true</code>; its live cloud
-probe (3 shells on (0,&minus;R,0) at R+275/330/400) stays meaningful and green.</li>
-<li><b>Coverage instrument</b> &mdash; re-run updated <code>coverage.py</code>; report the new
-globe coverage distribution (deliberate re-baseline of AC-0385&rsquo;s 67.8%).</li>
-<li><b>HEAVY</b> (boundary/perf/r50/full battery/shaderforce/Windows build) = the
-coordinator&rsquo;s job &mdash; exit after the light set.</li>
+<li>Union of three decorrelated decks can read as a uniform white blob at 2600 m — the bimodal
+contrast chain (0.05/0.80) + u_boost keep cores occluding and gaps clear; the 2600 m census + a
+viewed frame are the check, and the top shell's phase stays 0 so the grain box's baseline pattern
+is the measured one.</li>
+<li>Grain rise at 2600 m from more/moved deck in the grain box — quantified + classified per the
+table; if the scale signature flattens (white-noise static), roll the window notch back.</li>
+<li>Offline mirror vs fp32 render — the mirror is the design instrument only; the rendered census
+is the acceptance (the round-6 lesson). Calibration against the five r8b numbers is the gate on
+trusting it.</li>
+<li>Render wall budget (~4 min per 900-frame lavapipe snapshot): ~27 renders total for the
+acceptance set + scan + grain; run sequentially, one godot at a time.</li>
 </ul>
 
 <h2>Fences</h2>
-<p>No commits, no pushes, no TASKS.yaml edits. Do not touch <code>godot/autoload/game.gd</code>,
-<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code>.
-<code>godot/scenes/main.gd</code> &mdash; <b>zero changes</b> this round (the new uniforms are
-shader defaults). One godot at a time; <code>HOME=/tmp/dsh_home</code>; logs to
-<code>.scratch/AC-0384-r6/</code>; <code>pgrep</code> before every godot call.</p>
+<p>No commits/pushes/TASKS.yaml edits; <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> untouched (another
+session); shell radii/centre/transforms untouched; <code>harness.gd</code> pristine; the satellite
+arm and the cloud-coverage mirror stay meaningful (not edited).</p>
 
-</body>
-</html>
+</body></html>

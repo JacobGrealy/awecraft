@@ -214,3 +214,42 @@
   120}.png + r8b-grain{,-noclouds}-d2600.png + r8b-on-d120-t{0,100000,300000}.png in
   tasks/AC-0384/. G0 0/0, smoke ok, genhash 25/25, satellite arm R24/F83 ok. Fences held;
   no commits (subagent scope).
+
+## RUN - 2026-10-06 09:16 UTC - AC-0384
+- R9 (round 6, the sustained descent passage) — ROOT-CAUSED, BLOCKED ON AN ENGINE/RASTERIZER
+  DRAW DEFECT (reported to the coordinator, NOT shipped unfixed). r9 pattern changes
+  (per-shell u_phase decorrelation + window lower bound 0.46->0.42, both in
+  cloud_layer.gdshader + the main.gd u_phase push) are in the tree and gate-clean, but they
+  are INERT at the gap altitudes: the r8b 0.000% census at 1600/700 m is a DRAW defect
+  (shell fragments never rasterized there), not a clear pattern, so no pattern change can
+  raise it. THE DRAW DEFECT (isolated with a per-shell solid-red u_dump probe + world/
+  player/stars/wash all hidden): the three shells (SphereMesh 4400/4330/4275 @ (0,-4000,0))
+  rasterize only PARTIALLY, altitude-dependently, on the proxy renderer (software Vulkan
+  llvmpipe, Godot 4.7.1.a13da4feb): 300 m (cam 41 m outside) = a ~54 m / ~41 deg-from-nadir
+  near-wall cap only; 1000 m = ~1006 m / ~39 deg; 200 m (inside) = far side drawn, near side
+  NOT; 1600 m = NOTHING (0%); 2600 m = full shell (10.58%). The cap boundary is NOT the
+  shader fragment cull (ndv boundary is 8 deg from nadir; the cap is ~40 deg), NOT the camera
+  clip planes (54/1006 m != near 0.05 / far 8752|4000), NOT depth (depth_draw_never
+  changes nothing), NOT occlusion (hiding everything -> byte-identical frames, cap persists).
+  Geometry is verified CORRECT (satellite arm: r_measured 4400/4330/4275 @ (0,-4000,0),
+  clouds_radius_ok + clouds_centre_ok + transform_ok all true). This is the RESIDUAL of the
+  engine-build cull-AABB degeneracy r7 documented (the instance cull AABB degenerates to the
+  node origin; r7's set_custom_aabb fix repaired whole-mesh culling — the shell now draws
+  above ~2429 m — but a per-fragment, altitude-dependent cap remains in the engine build +
+  llvmpipe rasterizer). NOT fixable within the fence (cloud shader + main.gd cloud uniforms).
+  Evidence in .scratch/AC-0384-r9/: sel_top_300.png (dome, with world), sel_top_noworld.png +
+  sel_top_noplayers.png + sel_top_alone.png (dome persists with everything hidden, 76741 px),
+  normal_alone.png (NORMAL render: dark cloud deck only as a bottom dome, top 2/3 pure sky),
+  red300_nobody.png (byte-identical to red300), sel_top_alt200.png (inside view),
+  sel_top_alt1000.png (1000 m cap) + matching .log files. COORDINATOR DECISION NEEDED:
+  (1) engine-level investigation of SphereMesh per-fragment culling on this build (is the
+  custom AABB honored per-fragment? llvmpipe rasterizer bug? test a custom ArrayMesh / the
+  compatibility renderer / the Windows forward_plus target), or (2) re-scope acceptance if the
+  proxy culling is known to diverge from the shipped target. TEMP probes all REVERTED (shader
+  u_dump/dump-block/depth_draw_never; main.gd NO_*/camprint/aabb/dump-env; probe_mesh.gd
+  deleted). Persistent r9 work KEPT: shader (r9 header, u_phase uniform, q=dr*u_scale3+u_phase,
+  window smoothstep(0.42,0.54)); main.gd (u_phase push: top=0, 330 m=(3.7,6.1,8.9),
+  275 m=(9.4,2.8,7.2)). Light gates GREEN on the final tree: G0 (0 SCRIPT / 0 SHADER ERROR),
+  satellite arm (ok, geometry intact), smoke battery (ok). OWE (blocked): census at all 5
+  altitudes, across-weather scan, grain check, captures, results section 24, ARCHITECTURE.md
+  sync for the u_phase convention + the draw finding. Fences held; no commits (subagent scope).

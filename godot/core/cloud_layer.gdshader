@@ -33,6 +33,23 @@ render_mode unshaded, cull_disabled, fog_disabled;
 // from inside the shells - carries clearly visible cloud (the r6 window
 // left it at 0.19% pattern at CLOUD_T0=411200). Globe coverage is
 // re-measured in the ticket's coverage probe (results §23).
+// AC-0384 r9 (round 6): the sustained descent passage. r8b made the
+// belt VISIBLE, but the three shells still sampled ONE shared field at
+// their three feature scales, so a clear phase of that field cleared
+// all three decks at once - the deck read as ONE thin band (the round-5
+// census: 1600/700 m at 0.000% at CLOUD_T0=411200, the belt limb in a
+// clear phase at every one of the six clock values scanned). Two
+// levers, both here: (1) each shell now samples the field at its OWN
+// lattice offset (u_phase, pushed per shell by main.gd; the top shell
+// keeps 0), so the decks carry independent structured coverage and a
+// clear phase of one deck's pattern no longer clears the others; (2)
+// the coverage window's lower bound moves 0.46 -> 0.42, so a
+// below-mean coarse phase (the ~0.45 descent-cap field at the
+// reference weather) still carries structured cloud - the effective
+// threshold lands at ~0.464 on the top shell, inside the field's
+// one-sigma band, at every observed weather. Together: a descending
+// player is inside cloud structure over the whole 275-400 m band.
+// Shell radii/centre/transforms are untouched.
 // AC-0385 lighting: lit by the SAME DayNight.sun_direction convention
 // AC-0382 wired into the satellite body (u_sun = direction TO the sun;
 // u_day = 0.18 + 0.82*day; u_day_gain = 0.82*day - the satellite's exact
@@ -57,6 +74,14 @@ render_mode unshaded, cull_disabled, fog_disabled;
 uniform vec3 u_center = vec3(0.0, -4000.0, 0.0);  // planet centre (main.gd)
 uniform float u_scale3 = 107.92;  // 2*pi*(R+h)/feature, per layer (main.gd)
 uniform float u_drift = 0.00122;  // rad/s about world Y, per layer (main.gd)
+// AC-0384 r9 (round 6): per-shell pattern offset in the noise lattice -
+// each deck carries its OWN structured coverage (main.gd pushes a
+// constant per shell; 0 = the shared-field pattern of r8b and earlier,
+// where a clear phase of the field cleared all three decks at once -
+// the "one thin band" descent). The latitude banding stays shared (it
+// is built on dr.y), so the decks keep aligned belts while the pattern
+// within each belt is per-layer.
+uniform vec3 u_phase = vec3(0.0);
 uniform float u_cloud_time = 0.0;
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.5;
 uniform vec3 u_cloud_tint : source_color = vec3(1.0);
@@ -138,7 +163,7 @@ void fragment() {
 	float ca = cos(ang);
 	float sa = sin(ang);
 	vec3 dr = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z);
-	vec3 q = dr * u_scale3;
+	vec3 q = dr * u_scale3 + u_phase;  // AC-0384 r9: the per-shell pattern offset
 	// AC-0384 r5: distance LOD for the noise field (the round-4 "near-
 	// disc static"). fbm() is 5 octaves (2.03x), so a band with
 	// multiplier m has its finest octave at argument scale u_scale3*m*
@@ -173,7 +198,19 @@ void fragment() {
 	// deg from the zenith) at 0.19% pattern at CLOUD_T0=411200 - the
 	// player's reported "clouds below the terrain" (the visible sliver
 	// was a band-phase at the horizon, the dense cap above the frame).
-	float cl = smoothstep(0.46, 0.54, base);
+	// AC-0384 r9 (round 6): the lower bound moves to 0.42. r8b's window
+	// (0.46) left the descent views (1600/700 m: the spawn-side cap the
+	// tangent-limb frame sees) below the threshold at the reference
+	// weather (CLOUD_T0=411200: 0.000% census - the coarse field there
+	// sits ~0.45, one clear phase of the shared field). The r9 lower
+	// bound sets the effective threshold (window lower bound + the
+	// 0.05/0.80 contrast floor + the boost/cov chain) at ~0.464 on the
+	// top shell, so every descent view carries structured cloud at every
+	// observed weather instead of relying on a lucky phase; the per-shell
+	// u_phase offsets above keep the three decks' patterns independent.
+	// The 0.05 contrast floor still kills the thin haze below it (no
+	// milk; the cores stay occluding through u_boost).
+	float cl = smoothstep(0.42, 0.54, base);
 	cl = smoothstep(0.0, 0.55, cl) * cl;
 	cl *= 0.75 + 0.25 * (0.55 * base + 0.45 * mid);
 	cl *= 0.85 + 0.15 * fine;

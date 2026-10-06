@@ -1108,6 +1108,19 @@ func _place_clouds() -> void:
 		cl["mat"].set_shader_parameter("u_center", c)
 		cl["mat"].set_shader_parameter("u_scale3", TAU * rsh / float(cl["scale"]))
 		cl["mat"].set_shader_parameter("u_drift", cl["wind"].length() / rsh)
+		# AC-0384 r9 (round 6): the per-shell pattern offset (u_phase in
+		# cloud_layer.gdshader) - the decks carry INDEPENDENT structured
+		# coverage, so a clear phase of the field no longer clears all
+		# three decks at once (the "one thin band" descent; results §24).
+		# The top shell keeps 0: the orbit view and its 2600 m grain
+		# baseline (r8b) stay the measured pattern.
+		var cph := Vector3(0.0, 0.0, 0.0)
+		if is_equal_approx(float(cl["h"]), 330.0):
+			cph = Vector3(3.7, 6.1, 8.9)
+		elif is_equal_approx(float(cl["h"]), 275.0):
+			cph = Vector3(9.4, 2.8, 7.2)
+		cl["mat"].set_shader_parameter("u_phase", cph)
+
 
 func _aero_camera() -> Camera3D:
 	if camera != null and camera.is_inside_tree():
