@@ -98,6 +98,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -225,6 +226,19 @@ struct Ctx {
 	// never enters the ramp branch (no rmask, no ramp records), so the
 	// emitted mesh is byte-identical to the pre-AC-0205 build.
 	bool ramps = false;
+	// AC-0398: the modern per-vertex lighting toggle (Settings
+	// "modern_light", game default ON). POLARITY NOTE: the GAME default is
+	// on, but the key-absent default HERE is OFF — the arms build their ctx
+	// dicts by hand (the ramp arm's _ramp_build, meshprobe) and never carry
+	// the key, and the ramp arm's stored _RAMP_REF fingerprint was captured
+	// pre-AC-0398, so a hand-built ctx must take the pre-feature path to
+	// keep that standing byte-identity green (harness.gd is pristine — the
+	// REF cannot be re-captured here). The live world always writes the key
+	// (world.gd note_modern at boot + on change), so the game path is
+	// explicit in both states. FALSE = the pre-feature path exactly: the
+	// column-top grid is never built and every emit site takes its existing
+	// branch, so the mesh is byte-identical to the pre-AC-0398 build.
+	bool modern = false;
 	int uv_scale = 1;
 	float ppb = 31.0f;
 	uint8_t oktab[256];
@@ -276,6 +290,7 @@ static void parse_ctx(const Dictionary &ctx, Ctx &out) {
 	out.has_tex = (bool)ctx.get("has_tex", false);
 	out.coarse = (bool)ctx.get("coarse", false);
 	out.ramps = (bool)ctx.get("ramps", false); // AC-0205 (default = off = pre-feature)
+	out.modern = (bool)ctx.get("modern", false); // AC-0398 (key-absent = off = pre-feature; game default ON — see Ctx.modern)
 	out.uv_scale = (int)ctx.get("uv_scale", 1);
 	out.ppb = 31.0f / (float)out.uv_scale;
 	copy_table(ctx.get("oktab", PackedByteArray()), out.oktab, 256);
@@ -578,6 +593,94 @@ static inline void s_corner_tag(int fi, int j, int wx, int y, int wz, const Vect
 // a dark cave can sit below the 0.08 floor — the point of the feature).
 static inline float s_corner_sl(int lsum, int ao) {
 	return clampf((float)lsum / 4.0f / 15.0f, MIN_AMB, 1.0f) * AO_MULT[ao];
+}
+
+// ---------------------------------------------------------------------------
+// AC-0398: modern per-vertex lighting (Settings "modern_light", game default
+// ON; ctx key-absent = the pre-feature path — see Ctx.modern).
+//
+// The AC-0159 corner model has TWO quantized terms: the per-face constant
+// FSH (top 1.0 / sides 0.8 / bottom 0.5) and the 4-level AO_MULT corner
+// multiplier. Both plateau across the terrain, so a step edge renders as a
+// hard 40-60% band on every stair contour (the banding photographed in
+// tasks/AC-0394). The modern model replaces both with CONTINUOUS geometric
+// fields computed from a per-build 18x18 column-top grid (topmost-solid y
+// per snap-box column, -1 = none, the same coordinates as `snap`):
+//
+//  sl (the sky term — the r/g channel and part of the b multiplier):
+//      sl = clampf(1.0 - K * occl, MIN_AMB, 1.0),  K = 0.4
+//      occl = Σ over the 4 cardinal (w 0.5) + 4 diagonal (w 0.25) columns
+//             around the corner's column:  w * max(0, H_d - by + 1)
+//             (H_d = the neighbour's topmost solid y, by = the corner's y;
+//             a neighbour whose top sits at or above the corner's height
+//             blocks that many horizon levels).
+//      0 occluders -> 1.0, 1 -> 0.8, 2 -> 0.6, 3 -> 0.5 — the Java Fancy
+//      AO levels, but a continuous function of the neighbour HEIGHTS: a
+//      2-tall step reads 0.6 at the corner and 0.4 at its foot, and the
+//      value eases off over ~2 cells instead of plateauing. A buried
+//      corner (a cave) saturates to the MIN_AMB floor — AC-0159's
+//      "caves feel dark" property is preserved.
+//
+//  oshade (the face-shade term — replaces the per-face FSH constant so a
+//      sloped quad no longer reads as one flat shade):
+//      oshade = 0.5 * FSH[fi] + 0.5 * lam
+//      lam = clampf(dot(N, SUN) / SUN_y, 0.0, 1.0), N = the per-vertex
+//      geometric normal — the central difference of the 4 cardinal column
+//      tops around the corner's column (a missing neighbour reads as the
+//      corner column's own top, so a chunk-edge corner never invents a
+//      slope — the accepted boundary-artifact class).
+//      SUN = normalize(0.25, 1.0, 0.10): a mostly-overhead sun with a
+//      slight +x/+z tilt; the /SUN_y normalization keeps a FLAT TOP at
+//      exactly 1.0 (flat fully-lit ground is unchanged), a flat side
+//      reads 0.4-0.525 (directional shading), and a slope vertex falls
+//      smoothly in between.
+// ---------------------------------------------------------------------------
+
+static const float MODERN_SUN_X = 0.241403f;
+static const float MODERN_SUN_Y = 0.965590f;
+static const float MODERN_SUN_Z = 0.096559f; // normalize(0.25, 1.0, 0.10)
+static const float MODERN_OCCL_K = 0.4f;
+static const float MODERN_OCCL_W_CARD = 0.5f;
+static const float MODERN_OCCL_W_DIAG = 0.25f;
+
+// The column top at snap-grid (gx, gz); off-grid reads as the corner
+// column's own top (flat continuation).
+static inline int16_t mod_top(const int16_t *hg, int gx, int gz, int16_t self) {
+	if (gx < 0 || gx >= SNAP_W || gz < 0 || gz >= SNAP_W)
+		return self;
+	return hg[gz * SNAP_W + gx];
+}
+
+// The modern per-corner terms at world column (wx, wz), world y by. fi
+// selects only the FSH face-shade term. Writes sl + oshade.
+static inline void s_modern_corner(int fi, int wx, int by, int wz, int wx0, int wz0, const int16_t *hg, int16_t self, float &osl, float &oshade) {
+	int gx = (wx - wx0) + 1;
+	int gz = (wz - wz0) + 1;
+	static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+	static const int DZ[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+	float occl = 0.0f;
+	for (int d = 0; d < 8; d++) {
+		int16_t hd = mod_top(hg, gx + DX[d], gz + DZ[d], self);
+		if (hd < by)
+			continue; // the neighbour's top sits below the corner's height: no horizon block
+		float block = (float)(hd - by + 1);
+		occl += (d < 4 ? MODERN_OCCL_W_CARD : MODERN_OCCL_W_DIAG) * block;
+	}
+	osl = clampf(1.0f - MODERN_OCCL_K * occl, MIN_AMB, 1.0f);
+	// The geometric normal: central difference of the 4 cardinal tops.
+	int16_t hw = mod_top(hg, gx - 1, gz, self);
+	int16_t he = mod_top(hg, gx + 1, gz, self);
+	int16_t hs = mod_top(hg, gx, gz - 1, self);
+	int16_t hn = mod_top(hg, gx, gz + 1, self);
+	float nx = (float)(hw - he) * 0.5f;
+	float ny = 1.0f;
+	float nz = (float)(hn - hs) * 0.5f;
+	float inv = 1.0f / sqrtf(nx * nx + ny * ny + nz * nz);
+	nx *= inv;
+	ny *= inv;
+	nz *= inv;
+	float lam = (nx * MODERN_SUN_X + ny * MODERN_SUN_Y + nz * MODERN_SUN_Z) / MODERN_SUN_Y;
+	oshade = 0.5f * FSH[fi] + 0.5f * clampf(lam, 0.0f, 1.0f);
 }
 
 // AC-0128 vColor repack: has_tex -> r = sky s (or 0), g = s (only when the
@@ -1251,7 +1354,9 @@ static const int RAMP_LC[4][4][3] = {
 	{ {0, 1, 3}, {0, 0, 3}, {0, 1, 2}, {0, 0, 2} }, // +z
 };
 
-static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap) {
+// AC-0398: hg = the modern column-top grid (null = pre-feature path; see
+// Ctx.modern). The pre-feature build never touches it.
+static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const int16_t *hg) {
 	const int dir = r.dir;
 	const int n[3] = {RAMP_N[dir][0], RAMP_N[dir][1], RAMP_N[dir][2]};
 	const int (*cor)[3] = RAMP_COR[dir];
@@ -1265,6 +1370,8 @@ static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uin
 	int chan[4];
 	float uv[8];
 	Color col[4];
+	float msl[4];
+	float mosh[4];
 	bool uni = true;
 	for (int j = 0; j < 4; j++) {
 		int bx = lc[j][0];
@@ -1283,9 +1390,27 @@ static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uin
 			uv[j * 2] = ((float)tl.x + (0.5f + uo * ctx.ppb)) / ctx.atlas_px;
 			uv[j * 2 + 1] = ((float)tl.y + (0.5f + vo * ctx.ppb)) / ctx.atlas_px;
 		}
-		col[j] = light_color(s_corner_sl(lsum[j], ao[j]), 0.9f, chan[j], ctx.cs[r.id], has_tex);
-		if (j > 0 && (lsum[j] != lsum[0] || ao[j] != ao[0] || chan[j] != chan[0]))
-			uni = false;
+		// AC-0398: pre-feature = the fixed 0.9 ramp shade; modern = the
+		// per-vertex oshade at the VERTEX position (the sloped quad's
+		// corners each carry their own geometric shade — a 45 deg step is
+		// no longer one flat 0.9 quad). s_corner_tag still runs in both
+		// states: the chan (block-light evidence) term is shared.
+		msl[j] = s_corner_sl(lsum[j], ao[j]);
+		mosh[j] = 0.9f;
+		if (ctx.modern) {
+			int gx = r.lx + cor[j][0];
+			int gz = r.lz + cor[j][2];
+			s_modern_corner(2, wx0 + gx, r.y + cor[j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+		}
+		col[j] = light_color(msl[j], mosh[j], chan[j], ctx.cs[r.id], has_tex);
+		if (j > 0) {
+			if (ctx.modern) {
+				if (msl[j] != msl[0] || mosh[j] != mosh[0] || chan[j] != chan[0])
+					uni = false;
+			} else if (lsum[j] != lsum[0] || ao[j] != ao[0] || chan[j] != chan[0]) {
+				uni = false;
+			}
+		}
 	}
 	int k = acc.q;
 	acc.ensure(k + 1);
@@ -1324,7 +1449,9 @@ static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uin
 // AC-0159: smooth = per-vertex Java Fancy light + AO (ro + rc_o). Cutouts
 // (ktab) stay flat in BOTH paths — fancy lighting is full-block only, as in
 // Java; the flat path is byte-identical to the pre-AC-0159 code.
-static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth) {
+// AC-0398: hg = the modern column-top grid (null = pre-feature path; the
+// flat branch never touches it — see Ctx.modern).
+static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg) {
 	int h = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1362,17 +1489,36 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 			int lsum[4], ao[4], chan[4];
 			for (int j = 0; j < 4; j++)
 				s_corner_tag(fi, j, wx0 + lx, y, wz0 + lz, lmn, larr, lw, ld, h, wx0, wz0, snap, stab, bmask, bmask_sz, lsum[j], ao[j], chan[j]);
+			// AC-0398: modern = the geometric field per corner (sl from the
+			// neighbour column tops, oshade from the per-vertex normal); the
+			// uniform test compares the FINAL floats then. Pre-feature =
+			// the AC-0159 integer test, verbatim.
+			float msl[4];
+			float mosh[4];
+			bool mod_uniform = true;
+			if (ctx.modern) {
+				for (int j = 0; j < 4; j++) {
+					int gx = lx + FCV[fi][j][0];
+					int gz = lz + FCV[fi][j][2];
+					s_modern_corner(fi, wx0 + gx, y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+					if (j > 0 && (msl[j] != msl[0] || mosh[j] != mosh[0] || chan[j] != chan[0]))
+						mod_uniform = false;
+				}
+			}
 			bool uniform = lsum[0] == lsum[1] && lsum[0] == lsum[2] && lsum[0] == lsum[3] && ao[0] == ao[1] && ao[0] == ao[2] && ao[0] == ao[3] && chan[0] == chan[1] && chan[0] == chan[2] && chan[0] == chan[3];
-			if (uniform) {
-				float sl = s_corner_sl(lsum[0], ao[0]);
-				Color c = light_color(sl, FSH[fi], chan[0], face_color, has_tex);
+			if (ctx.modern ? mod_uniform : uniform) {
+				float sl = ctx.modern ? msl[0] : s_corner_sl(lsum[0], ao[0]);
+				float osh = ctx.modern ? mosh[0] : FSH[fi];
+				Color c = light_color(sl, osh, chan[0], face_color, has_tex);
 				if (has_tex)
 					c = mul_cc(c, tint);
 				qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
 			} else {
 				Color cc[4];
 				for (int j = 0; j < 4; j++) {
-					cc[j] = light_color(s_corner_sl(lsum[j], ao[j]), FSH[fi], chan[j], face_color, has_tex);
+					float sl = ctx.modern ? msl[j] : s_corner_sl(lsum[j], ao[j]);
+					float osh = ctx.modern ? mosh[j] : FSH[fi];
+					cc[j] = light_color(sl, osh, chan[j], face_color, has_tex);
 					if (has_tex)
 						cc[j] = mul_cc(cc[j], tint);
 				}
@@ -1409,6 +1555,11 @@ struct MergedCell {
 	int fni;
 	float shade;
 	float s;
+	// AC-0398: the modern per-vertex face-shade term (valid only when
+	// Ctx.modern — the merge key becomes the (s, oshade) pair then; the
+	// product alone is not enough, the r and b channels carry s and
+	// oshade*s separately). Pre-feature builds never read it.
+	float oshade;
 	int mask;
 	int u0;
 	int v0;
@@ -1435,7 +1586,10 @@ static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0
 		face_idx = 2;
 		tint = ctx.tint_bottom[id];
 	}
-	Color c = light_color(s, FSH[fi], mask, face_color, has_tex);
+	// AC-0398: modern mode carries the per-vertex face-shade term (every
+	// corner of a merged quad is uniform by construction — the merge key
+	// includes it); pre-feature = the FSH face constant.
+	Color c = light_color(s, ctx.modern ? c0.oshade : FSH[fi], mask, face_color, has_tex);
 	if (has_tex)
 		c = mul_cc(c, tint);
 	const Vector2i &tl = ctx.brect[id][face_idx];
@@ -1548,7 +1702,11 @@ static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0
 // UVs, like the non-merged path) and cannot merge: a gradient cannot cross a
 // merge. Java disables merging entirely under fancy; keeping it for uniform
 // regions is strictly cheaper. Cutouts stay flat (see emit_faces).
-static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth) {
+// AC-0398: hg = the modern column-top grid (null = pre-feature path — see
+// Ctx.modern). Modern changes the merge key from (id, fni, FSH*sl) to
+// (id, fni, mask, s, oshade): a gradient cannot cross a merge, and the
+// colour needs s and oshade separately (the product alone is not enough).
+static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg) {
 	int hgt = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1563,13 +1721,29 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 		const int n[3] = {FN[r.fi][0], FN[r.fi][1], FN[r.fi][2]};
 		float sl;
 		int mask;
+		float osh0 = 0.0f; // AC-0398: the modern per-vertex oshade (0 = pre-feature)
 		int fi = r.fi;
 		if (smooth && ctx.ktab[r.id] == 0) {
 			int lsum[4], ao[4], chan[4];
 			for (int j = 0; j < 4; j++)
 				s_corner_tag(fi, j, wx0 + r.lx, r.y, wz0 + r.lz, lmn, larr, lw, ld, hgt, wx0, wz0, snap, stab, bmask, bmask_sz, lsum[j], ao[j], chan[j]);
 			bool uniform = lsum[0] == lsum[1] && lsum[0] == lsum[2] && lsum[0] == lsum[3] && ao[0] == ao[1] && ao[0] == ao[2] && ao[0] == ao[3] && chan[0] == chan[1] && chan[0] == chan[2] && chan[0] == chan[3];
-			if (!uniform) {
+			// AC-0398: modern — the geometric field per corner. The merge
+			// key becomes (mask, s, oshade); a non-uniform face emits its
+			// own 4-colour quad exactly like pre-feature (per-face UVs).
+			float msl[4];
+			float mosh[4];
+			bool mod_uniform = true;
+			if (ctx.modern) {
+				for (int j = 0; j < 4; j++) {
+					int gx = r.lx + FCV[fi][j][0];
+					int gz = r.lz + FCV[fi][j][2];
+					s_modern_corner(fi, wx0 + gx, r.y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+					if (j > 0 && (msl[j] != msl[0] || mosh[j] != mosh[0] || chan[j] != chan[0]))
+						mod_uniform = false;
+				}
+			}
+			if (ctx.modern ? !mod_uniform : !uniform) {
 				// One quad, one colour per vertex — straight out of the grid.
 				int face_idx = 0;
 				Color face_color = ctx.cs[r.id];
@@ -1585,7 +1759,9 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 				}
 				Color cc[4];
 				for (int j = 0; j < 4; j++) {
-					cc[j] = light_color(s_corner_sl(lsum[j], ao[j]), FSH[fi], chan[j], face_color, has_tex);
+					float s1 = ctx.modern ? msl[j] : s_corner_sl(lsum[j], ao[j]);
+					float osh = ctx.modern ? mosh[j] : FSH[fi];
+					cc[j] = light_color(s1, osh, chan[j], face_color, has_tex);
 					if (has_tex)
 						cc[j] = mul_cc(cc[j], tint);
 				}
@@ -1593,13 +1769,19 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 				qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1]);
 				continue;
 			}
-			sl = s_corner_sl(lsum[0], ao[0]);
+			sl = ctx.modern ? msl[0] : s_corner_sl(lsum[0], ao[0]);
 			mask = chan[0];
+			osh0 = ctx.modern ? mosh[0] : 0.0f;
 		} else {
 			// Flat (cutouts / smooth off) — byte-identical to pre-AC-0159.
 			sl = s_face_light(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, larr, lw, ld, hgt);
 			mask = face_mask(r.id, wx0 + r.lx, r.y, wz0 + r.lz, n, lmn, hgt, bmask, bmask_sz);
 		}
+		// Pre-feature: the merge key (id, fni, shade) with shade = FSH*sl —
+		// FSH is constant per face, so it is an sl-key. AC-0398: the key
+		// becomes (id, fni, mask, s, oshade) — shade is then not the colour
+		// driver (qwrite_merged reads s + oshade) and is only kept so the
+		// cell layout is stable.
 		float shade = FSH[r.fi] * sl;
 		size_t idx;
 		if (fi == 2 || fi == 3)
@@ -1608,7 +1790,7 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 			idx = (size_t)r.lx * (hgt * 16) + r.y * 16 + r.lz;
 		else
 			idx = (size_t)r.lz * (hgt * 16) + r.y * 16 + r.lx;
-		cells[fi].push_back(MergedCell{r.id, r.fni, shade, sl, mask, 0, 0, 0});
+		cells[fi].push_back(MergedCell{r.id, r.fni, shade, sl, osh0, mask, 0, 0, 0});
 		MergedCell &cell = cells[fi].back();
 		if (fi == 2 || fi == 3) {
 			cell.u0 = r.lx;
@@ -1643,7 +1825,11 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 					int w = 1;
 					while (u0 + w < 16) {
 						MergedCell *cn = g[vi + (u0 + w)];
-						if (cn == nullptr || cn->id != c0->id || cn->fni != c0->fni || cn->shade != c0->shade)
+						// AC-0398: modern merges on (id, fni, mask, s, oshade)
+						// — a gradient cannot cross a merge; pre-feature =
+						// the (id, fni, shade) key, verbatim.
+						if (cn == nullptr || cn->id != c0->id || cn->fni != c0->fni
+								|| (ctx.modern ? (cn->mask != c0->mask || cn->s != c0->s || cn->oshade != c0->oshade) : (cn->shade != c0->shade)))
 							break;
 						w += 1;
 						g[vi + (u0 + w - 1)] = nullptr;
@@ -1653,7 +1839,8 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 						bool vmatch = true;
 						for (int u = u0; u < u0 + w; u++) {
 							MergedCell *cc = g[vi + h * 16 + u];
-							if (cc == nullptr || cc->id != c0->id || cc->fni != c0->fni || cc->shade != c0->shade) {
+							if (cc == nullptr || cc->id != c0->id || cc->fni != c0->fni
+									|| (ctx.modern ? (cc->mask != c0->mask || cc->s != c0->s || cc->oshade != c0->oshade) : (cc->shade != c0->shade))) {
 								vmatch = false;
 								break;
 							}
@@ -3366,6 +3553,30 @@ public:
 		build_snap_data(snap, snap_fl, dflat, fflat, &dsrc, &fsrc, nv, h, b_lo, b_hi);
 		ph_box = now_msec() - tb;
 
+		// AC-0398: the modern column-top grid (topmost solid y per snap-box
+		// column, -1 = none; hg[gz*SNAP_W+gx] = the column (gx+wx0, gz+wz0)'s
+		// top). Row-wise top-down scan over the solid snap — ~0.1-0.3 ms per
+		// build, once per chunk. Built ONLY when modern && !coarse: hgp null
+		// = every emit site takes its pre-feature branch, so the mesh is
+		// byte-identical to the pre-AC-0398 build.
+		std::vector<int16_t> hgrid;
+		const int16_t *hgp = nullptr;
+		if (C.modern && !C.coarse) {
+			hgrid.assign((size_t)SNAP_W * SNAP_W, -1);
+			for (int y = b_hi; y >= b_lo; y--) {
+				const uint8_t *row = snap.data() + (size_t)y * SNAP_ROW;
+				for (int gz = 0; gz < SNAP_W; gz++) {
+					int16_t *col = hgrid.data() + (size_t)gz * SNAP_W;
+					const uint8_t *srow = row + (size_t)gz * SNAP_W;
+					for (int gx = 0; gx < SNAP_W; gx++) {
+						if (col[gx] == -1 && C.stab[srow[gx]] > 0)
+							col[gx] = (int16_t)y;
+					}
+				}
+			}
+			hgp = hgrid.data();
+		}
+
 		bool has_tex = C.has_tex;
 		const uint8_t *bmask_ptr = nullptr;
 		int bmask_sz = 0;
@@ -3580,17 +3791,17 @@ public:
 		{
 			int64_t te = now_msec();
 			if (M.nonempty && !ro.empty() && !scoped)
-				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true);
+				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
 			else
-				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);
+				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
 			// AC-0205: the ramp quads (into the SAME opaque acc — the
 			// collider is derived from it, so mesh and collider agree by
 			// construction). rr is empty when C.ramps is off.
 			for (const RampRec &r : rr)
-				emit_ramp(s_ao[r.y / 16], r, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz, snap);
+				emit_ramp(s_ao[r.y / 16], r, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz, snap, hgp);
 			phet[0] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true);
+			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
 			phet[1] = now_msec() - te;
 			te = now_msec();
 			emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, C, h);
@@ -3599,7 +3810,7 @@ public:
 			emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, C, h);
 			phet[3] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, false);
+			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, false, hgp);
 			phet[4] = now_msec() - te;
 			te = now_msec();
 			emit_xquad(rq, s_ax, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz);

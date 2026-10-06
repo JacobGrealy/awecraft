@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and the `AWECRAFT_MODERN=0|1` harness env; see the AC-0398 bullet in §4) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -369,7 +369,7 @@ quits.
 |---|---|
 | `awe_common.{h,cpp}` | shared helpers/registration |
 | `gen.cpp` | terrain, biome, cave and ore generation (the density-field generator) + the **AC-0290 classic carver pass** (the post-density room/trunk/canyon carve — see the carver bullet in §4) + the **AC-0292 P4 families** (vanilla pillars in the deep branch, big ore veins, the 3-D biome field → deepslate/dripstone/sculk/moss surface rules + the post-carve drip pass — see the AC-0292 bullet in §4); `generate_resl`'s `skip` arg: 0 = full / 1 = **band-A materialization fill** (no cave field, solid 0..H + aquifer + surface top + veg — the drain's high lane runs it on each band-A column's first mesh, AC-0312) / 2 = **far h-only** (AC-0284b; **AC-0387: the H is now the CARVED top** — the lane runs the full path's per-column sequence (cave-lattice dens_at scan + aquifer + the AC-0290 carver) on a mask so the far/veg H IS the height the full path would produce (the promotion contract); the 3 surface fields + the 8 cave-lattice fields + the aquifer table + the carver plan are built per chunk — the AC-0387 price, measured 95 → 3,353 µs/chunk vs 5,651 µs full on the 2026-10-01 box; still NO slabs) |
-| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched; the AC-0205 smooth-ground-ramp branch in the ro scan (guarded by the ctx `ramps` flag + `!coarse`: a Δ1 rampable step meeting air suppresses the vertical face via `rmask` and emits the 45° quad into the same opaque acc — off = the pre-feature byte path; the far/coarse tiers never enter it, so H stays bit-exact — see the AC-0205 bullet in §4) |
+| `mesh.cpp` | chunk meshing (greedy/FACE-BLOCK path); the avg far emitters `AweMesh.h_avg_emit` / `low_emit_avg` at a grid G (4 or 8 — AC-0312's band C / band B), byte-identical to the slab emitter on the same fill (shared `avg_grid_emit`), with the WATER EXCEPTION (a water-topped cell emits its top face with the translucent water material — `top_water` + atlas-rect params) and the `AweMesh.sky_eff` heightmap-sky light/strips builder (band A + the G-grid avg lanes); the far-tier floor (AC-0331) as a `p_yfloor` param on all three (−1 = off): a post-fill mask in the shared `avg_grid_emit` tail (avg tiers) + the per-voxel row gate + si0 in `build_accs` (band A) — the fill loops and the float32 op order are untouched; the AC-0205 smooth-ground-ramp branch in the ro scan (guarded by the ctx `ramps` flag + `!coarse`: a Δ1 rampable step meeting air suppresses the vertical face via `rmask` and emits the 45° quad into the same opaque acc — off = the pre-feature byte path; the far/coarse tiers never enter it, so H stays bit-exact — see the AC-0205 bullet in §4); the AC-0398 modern per-vertex lighting (guarded by the ctx `modern` flag + `!coarse`: the per-build 18×18 column-top grid + `s_modern_corner` replace the per-face `FSH` constant and the 4-level `AO_MULT` steps with continuous geometric `(sl, oshade)` per corner in `emit_ro_merged`/`emit_faces`/`emit_ramp` — `hgp == null` = the pre-feature byte path; H stays bit-exact — see the AC-0398 bullet in §4) |
 | `strips.cpp` | strip meshing lane |
 | `chunk_io.cpp` | column/slab blob encode+decode, region disk I/O |
 | `lighting.cpp` | **test-only reference**: the legacy `AweLighting` flood kernel (AC-0283 P4) |
@@ -916,6 +916,48 @@ Match these; do not improvise a different approach in a task.
   `smooth_ramps` setting (DEFAULT OFF, `sanitize_bool` clamped) on the
   Settings surface + `world.note_ramps()` (the geom-epoch bump re-derives
   mesh + collider band-wide) + the harness env override `AWECRAFT_RAMPS=0|1`
+  (written into `Settings.values` without `save()`).
+- **AC-0398 — modern per-vertex lighting (a SHADING toggle, not H)**: the
+  per-face shading constant `FSH` and the 4-level `AO_MULT` corner steps
+  (both AC-0159) plateau across the terrain, so a step edge renders as a hard
+  40–60% band on every stair contour. The modern model replaces both with
+  CONTINUOUS geometric fields derived from a per-build **18×18 column-top
+  grid** (topmost solid y per snap-box column, −1 = none; the same
+  coordinates as `snap`, built once per chunk in `build_accs` — row-wise
+  top-down scan — ONLY when `ctx.modern && !coarse`): the sky term
+  `sl = clampf(1 − 0.4·occl, MIN_AMB, 1)`, `occl = Σ_d w_d·max(0, H_d − by +
+  1)` over the 4 cardinal (w 0.5) + 4 diagonal (w 0.25) neighbour columns of
+  the corner (0→1.0, 1→0.8, 2→0.6, 3→0.5 — the Java Fancy levels as a
+  continuous function of the neighbour HEIGHTS; a buried corner saturates to
+  the MIN_AMB floor so caves stay dark), and the face-shade term
+  `oshade = 0.5·FSH[fi] + 0.5·clamp(dot(N, SUN)/SUN_y, 0, 1)` where N is the
+  per-vertex geometric normal (central difference of the 4 cardinal column
+  tops; a missing neighbour reads the corner column's own top, so a
+  chunk-edge corner never invents a slope) and SUN = normalize(0.25, 1,
+  0.10) — a flat TOP stays exactly FSH (1.0), a flat side reads 0.4–0.525,
+  a slope vertex falls in between (the ramp quad's corners each carry their
+  own — the fixed 0.9 is gone). The three smooth emit sites
+  (`emit_ro_merged`/`emit_faces`/`emit_ramp`) take the grid (`hgp`, null =
+  pre-feature) and compute the per-corner `(sl, oshade)` in the modern
+  branch; the MERGE key becomes `(id, fni, mask, s, oshade)` (a gradient
+  cannot cross a merge — the product alone is not enough, the r and b
+  channels carry s and oshade·s separately). The toggle SHORT-CIRCUITS
+  BEFORE shading: `hgp == null` = every emit site takes its pre-feature
+  branch, so OFF is byte-identical to the pre-AC-0398 mesh. **POLARITY
+  NOTE**: the game default is ON (`modern_light`, the user asked for the
+  interpolated look) but the C++ `parse_ctx` key-absent default is OFF — the
+  arms build their ctx dicts by hand (no `modern` key) and the ramp arm's
+  stored `_RAMP_REF` fingerprint is pre-AC-0398, so a hand-built ctx must
+  stay on the pre-feature path (harness.gd is pristine). The live world
+  always writes the key at boot (`note_modern`), so the game path is
+  explicit in both states. The change is COLOUR-ONLY: no geometry, so
+  `note_modern()` re-meshes through the tex-refresh drain but does NOT bump
+  `geom_epoch` (the collider is derived from the slab's opaque surface and
+  is untouched — unlike `note_ramps`). H is untouched (the grid is derived
+  from `snap`, never written back — genhash 25/25 byte-identical).
+  Persistence follows the AC-0205 pattern: the `modern_light` setting
+  (DEFAULT ON, `sanitize_bool` clamped) on the Settings surface +
+  `world.note_modern()` + the harness env override `AWECRAFT_MODERN=0|1`
   (written into `Settings.values` without `save()`).
 - **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
   per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is

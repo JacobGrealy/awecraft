@@ -51,6 +51,21 @@ const DEFAULTS := {
 	# disagree. The AWECRAFT_RAMPS harness env overrides the stored value
 	# at boot (world.gd) so the arms test both states without a save file.
 	"smooth_ramps": false,
+	# AC-0398: the modern per-vertex lighting toggle. UNLIKE smooth_ramps
+	# this DEFAULTS ON — the user asked for the interpolated look in their
+	# own words, and the project rule (AC-0205) says default to the
+	# conservative behaviour only when the user has NOT asked for the new
+	# one. Same switch discipline as every other look change: persisted on
+	# the Options surface, clamped to a bool, env-overridable
+	# (AWECRAFT_MODERN=0|1 at boot, world.gd), and the C++ ctx flag
+	# short-circuits BEFORE any shading is emitted, so OFF is byte-identical
+	# to the pre-AC-0398 mesh. POLARITY NOTE: the game default is ON but
+	# the C++ key-absent default is OFF — the arms build their ctx dicts by
+	# hand (no "modern" key) and the ramp arm's stored _RAMP_REF fingerprint
+	# is pre-AC-0398, so a hand-built ctx must stay on the pre-feature path
+	# (harness.gd is pristine). The live world always writes the key at boot
+	# (note_modern), so the game path is explicit in both states.
+	"modern_light": true,
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
@@ -241,6 +256,11 @@ func _clamp(k: String, v) -> void:
 		# never raise and abort the whole load (the invert_y precedent).
 		"smooth_ramps":
 			values[k] = AnalogTune.sanitize_bool(v)
+		# AC-0398: the modern-lighting toggle — sanitize_bool for the same
+		# reason as smooth_ramps (a hand-edited string fails to false,
+		# never raises and aborts the load).
+		"modern_light":
+			values[k] = AnalogTune.sanitize_bool(v)
 		"fullscreen":
 			values[k] = bool(v)
 		"hunger_enabled":
@@ -342,6 +362,13 @@ func set_value(k: String, v) -> void:
 	# settings arm's standalone context).
 	if k == "smooth_ramps":
 		apply_ramps()
+	# AC-0398: the modern-lighting toggle — the world re-derives the worker
+	# ctx flag ("modern") and re-meshes every resident column (note_modern,
+	# the same apply-step seam; colour-only, so no geom_epoch bump). A
+	# no-op while Game.world is absent (menu / the settings arm's
+	# standalone context).
+	if k == "modern_light":
+		apply_modern()
 	# AC-0088: the remap layer applies to the live InputMap in the same
 	# apply step (the clamp chain above already sanitized the value).
 	if k == "controls":
@@ -574,3 +601,14 @@ func apply_yfloor() -> void:
 func apply_ramps() -> void:
 	if Game.world != null and Game.world.has_method("note_ramps"):
 		Game.world.note_ramps()
+
+
+# AC-0398: the modern-lighting toggle — the world re-derives the worker
+# ctx flag ("modern") and re-meshes every resident column through the
+# tex-refresh drain. The change is COLOUR-ONLY (per-vertex light values,
+# no geometry — the collider is untouched and geom_epoch is NOT bumped,
+# unlike note_ramps). The has_method guard keeps the _StubWorld / range
+# arms clean (the AC-0332 note_yfloor / AC-0205 note_ramps precedent).
+func apply_modern() -> void:
+	if Game.world != null and Game.world.has_method("note_modern"):
+		Game.world.note_modern()

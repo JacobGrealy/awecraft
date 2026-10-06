@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0398 plan — interpolated modern vertex lighting</title></head>
+<body style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:1100px;margin:2em auto;line-height:1.45">
+<h1>AC-0398 — plan: interpolated modern vertex lighting</h1>
+
+<h2>Goal</h2>
+<p>Replace the per-face shading constant <code>FSH</code> and the 4-level <code>AO_MULT</code> corner
+steps in <code>gdext/src/mesh.cpp</code> with a continuous per-vertex geometric light field
+(height-field sky openness + per-vertex normal-derived face shade), behind a persisted switch
+(<code>modern_light</code>, env <code>AWECRAFT_MODERN</code>) that short-circuits BEFORE any shading
+is emitted so the arm can assert byte-identity with it off.</p>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>gdext/src/mesh.cpp</code> — the whole mechanism:
+  <ul>
+  <li><code>Ctx.modern</code> (parse default <b>false</b> = pre-feature when the key is absent);</li>
+  <li>once-per-build 18×18 column-top grid (topmost-solid scan of the snap box, row-wise,
+      computed only when <code>modern &amp;&amp; !coarse</code>);</li>
+  <li><code>s_modern_corner(fi, wx, by, wz, …)</code>: <code>sl = clampf(1 - 0.4·occl, MIN_AMB, 1)</code>,
+      <code>occl = Σ w_d·max(0, H_d - by + 1)</code> over the 8 neighbour columns (cardinal w 0.5,
+      diagonal w 0.25; missing neighbour → no occlusion / own height); <code>oshade = 0.5·FSH[fi] +
+      0.5·clamp(dot(N,SUN)/SUN.y, 0, 1)</code>, N = central-difference geometric normal of the column
+      tops, SUN = normalize(0.25, 1, 0.1) (flat top stays exactly FSH; flat side → 0.4–0.525; slope
+      vertices tilt between).</li>
+  </ul>
+  The 3 smooth emit sites take the grid: <code>emit_ro_merged</code> (merged key = (s, oshade) pair
+  when modern), <code>emit_faces</code> (uniform/non-uniform branches), <code>emit_ramp</code> (the
+  fixed 0.9 becomes per-vertex oshade — the sloped quad stops reading as one flat shade).
+  OFF = the pre-feature code paths, untouched.</li>
+<li><code>godot/autoload/settings.gd</code> — <code>"modern_light": true</code> in DEFAULTS,
+    <code>sanitize_bool</code> clamp, <code>apply_modern()</code> apply step (has_method guard,
+    _StubWorld-safe) — mirrors <code>smooth_ramps</code> (AC-0205).</li>
+<li><code>godot/world/world.gd</code> — <code>note_modern()</code> (ctx key + tex_refresh re-mesh;
+    NO geom_epoch bump — colour-only, collider untouched) + boot derive +
+    <code>AWECRAFT_MODERN=0|1</code> env preload (mirrors <code>note_ramps</code>, world.gd:3697).</li>
+<li><code>godot/ui/menu.gd</code> — Options row + toggle handler (mirrors <code>ramp_check</code>).</li>
+<li><code>godot/ARCHITECTURE.md</code> — Settings row + mesh.cpp lane row + AC-0398 bullet in §4
+    (convention: new look-switch; the C++ key-absent default OFF vs game default ON polarity).</li>
+</ul>
+<p><b>Not touched:</b> <code>godot/scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code> (fenced — another session),
+<code>godot/scenes/harness.gd</code> (pristine — no arm changes), the far/avg emitters
+(<code>h_avg_emit</code>/<code>low_emit_avg</code>), the starlight engine, the satellite bake.</p>
+
+<h2>The switch</h2>
+<ul>
+<li>Setting <code>modern_light</code>, <b>DEFAULT ON (true)</b> — the user asked for this in their own
+  words; the project rule (AC-0205 harvest) says default to the conservative behaviour <i>unless the
+  user asked for the new one</i>. Persisted on the Options surface, clamped, env-overridable.</li>
+<li>C++ <code>parse_ctx</code> default for the key is <b>OFF</b>: the arms' hand-built ctx dicts
+  (the ramp arm's <code>_ramp_build</code>, meshprobe) carry no key, so they stay on the pre-feature
+  path — the ramp arm's stored <code>_RAMP_REF</code> fingerprint (pre-AC-0398) therefore stays
+  byte-green, no harness edit owed. The game always writes the key at boot, so the polarity split is
+  an arm-side detail, documented here and in ARCHITECTURE.md.</li>
+<li>Short-circuit: <code>ctx.modern == false</code> → the height grid is never computed and the
+  three emitters take their existing branches verbatim (byte-identity).</li>
+</ul>
+
+<h2>Why this produces a gradient where there are steps</h2>
+<p>The bands photographed in AC-0394 come from corner values that plateau: at a step edge the
+starlight sum drops to 0.5/0.75 and the AO multiplier steps 1.0→0.8/0.6, so a 2-cell-wide 40–60 %
+dark band sits on every stair contour. Modern mode makes both terms a continuous function of the
+neighbour <b>heights</b>: the sky term eases off over ~2 cells (1.0 → 0.8 → 0.6 → 0.4 scale,
+deepening with cliff height), and the face-shade term tilts with the per-vertex geometric normal —
+so the same terrain renders as a soft ramp instead of a contour line, while fully flat, fully
+lit ground stays bit-identical (sl 1.0, oshade = FSH) and caves saturate to the MIN_AMB floor
+(AC-0159's "caves feel dark" property is preserved).</p>
+
+<h2>Harness gates (mode + ok condition)</h2>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>gate</th><th>mode / how</th><th>ok condition</th></tr>
+<tr><td>G0</td><td>headless load, <code>gate_census.py</code></td><td>0 <code>SCRIPT ERROR</code> AND 0 <code>SHADER ERROR</code> lines</td></tr>
+<tr><td>SMOKE — ramp</td><td><code>AWECRAFT_LOGIC=ramp</code></td><td>RESULT ok true; <b>ref_res.ok true</b> = the OFF build is byte-identical to the pre-AC-0398 REF constant (the byte-identity-with-it-off evidence); on_differs true</td></tr>
+<tr><td>SMOKE — lightstate</td><td><code>AWECRAFT_LOGIC=lightstate</code></td><td>RESULT ok true, vc_diff in the standing 1–2, mismatch 0/0</td></tr>
+<tr><td>SMOKE — meshprobe</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td>RESULT ok true (C++ lanes carry the work, sentinel 0)</td></tr>
+<tr><td>SMOKE — genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 GENHASH byte-identical to the standing table (shading is not H — a move is a finding)</td></tr>
+<tr><td>PROBE — boundary r4 (ONE-SHOT)</td><td><code>AWECRAFT_LOGIC=boundary</code> r4</td><td>walk/p95 in the standing band; if a trade-off shows, record the honest deviation and exit</td></tr>
+<tr><td>RENDER (Forward+, lavapipe)</td><td>xvfb-run + lvp ICD + <code>--rendering-driver vulkan</code>; no AWECRAFT_LOGIC; SIZE 1280,720 (comma); SNAP_DRAIN 600 (frames); RADIUS 4; TIME 0.5; CLOUD_T0/ANIM_PHASE pinned; budget 1200 s; check file exists + Forward+ boot line</td><td>
+4 shots in <code>tasks/AC-0398/</code>: <code>before_ground</code> (old .so — same auto-aim view as
+AC-0394), <code>before_slope</code> (old .so, <code>CAM=iso</code>), <code>after_ground</code> (new .so,
+modern ON by default), <code>after_ground_off</code> (new .so, <code>AWECRAFT_MODERN=0</code> —
+negative test: ground region must match <code>before_ground</code>), <code>after_slope</code>
+(new .so, <code>CAM=iso</code>). The before/after ground pair = the banding comparison; the slope
+shots = the per-face-constant view.</td></tr>
+</table>
+
+<h2>Snapshot names</h2>
+<p><code>before_ground.png</code>, <code>before_slope.png</code>, <code>after_ground.png</code>,
+<code>after_ground_off.png</code>, <code>after_slope.png</code> — all in <code>tasks/AC-0398/</code>.</p>
+
+<h2>Risks and fences</h2>
+<ul>
+<li>No <code>world/*</code> data/generation change (settings/world glue only) — genhash run anyway
+  as proof; no Frozen-refs block owed.</li>
+<li>Perf: +18×18 column-top scan per chunk build (row-wise, ~0.1–0.3 ms) + 8 grid reads per corner —
+  watched by the one-shot boundary r4 + r16-style build cost (coordinator's heavy set re-confirms).</li>
+<li>Chunk-edge corners: missing neighbour column → flat fallback (no invented slope), the accepted
+  AO-boundary-artifact class; the seamcensus arm watches faces, not colours.</li>
+<li>Ramp arm's stored REF must stay green — the C++ key-absent default OFF exists precisely for
+  that; if it moves, it is a FINDING to report, not a re-baseline I may perform (harness.gd pristine).</li>
+<li>Do not touch the four fenced GDScript files; one godot at a time; logs to repo-root
+  <code>.scratch/AC-0398-gates/</code>.</li>
+</ul>
+
+</body></html>

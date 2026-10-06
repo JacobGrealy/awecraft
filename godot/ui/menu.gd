@@ -50,6 +50,8 @@ var fog_enabled_check: CheckBox
 var ambient_check: CheckBox
 # AC-0205: the smooth-ground-ramps toggle (Settings page).
 var ramp_check: CheckBox
+# AC-0398: the modern per-vertex lighting toggle (Settings page, default ON).
+var modern_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -268,6 +270,21 @@ func _ready() -> void:
 	opt_vbox.add_child(ramp_check)
 	if hi + 7 < opt_vbox.get_child_count():
 		opt_vbox.move_child(ramp_check, hi + 8)
+	# AC-0398: the modern per-vertex lighting toggle — user-facing visual
+	# setting on the Settings page (next to the ramps toggle), persisted
+	# like every other setting (Settings "modern_light", default ON — the
+	# user asked for the interpolated look). The apply step rides
+	# Settings.set_value -> world.note_modern (the ctx flag + the full
+	# re-mesh through the tex-refresh drain; colour-only, the collider is
+	# untouched).
+	modern_check = CheckBox.new()
+	modern_check.name = "ModernCheck"
+	modern_check.text = "Modern vertex lighting (smooth light gradients)"
+	modern_check.add_theme_font_size_override("font_size", 15)
+	modern_check.toggled.connect(_on_modern_toggled)
+	opt_vbox.add_child(modern_check)
+	if hi + 8 < opt_vbox.get_child_count():
+		opt_vbox.move_child(modern_check, hi + 9)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -739,6 +756,8 @@ func _sync_controls() -> void:
 	ambient_check.button_pressed = bool(Settings.values.get("ambient_enabled", false))
 	# AC-0205: the smooth-ground-ramps toggle (default OFF).
 	ramp_check.button_pressed = bool(Settings.values.get("smooth_ramps", false))
+	# AC-0398: the modern vertex lighting toggle (default ON).
+	modern_check.button_pressed = bool(Settings.values.get("modern_light", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1081,6 +1100,17 @@ func _on_ramp_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("smooth_ramps", on)
+
+
+# AC-0398: the modern vertex lighting toggle — set_value does the clamp
+# chain + the save + the apply step (world.note_modern re-derives the
+# worker ctx flag and re-meshes every resident column through the
+# tex-refresh drain; the change is colour-only, so the collider is
+# untouched and geom_epoch is not bumped).
+func _on_modern_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("modern_light", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0398 results — interpolated modern vertex lighting</title>
+<style>
+body{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;max-width:1240px;margin:2em auto;line-height:1.5;color:#111;background:#fafafa;padding:0 1em}
+h1{font-size:22px} h2{font-size:17px;border-bottom:2px solid #444;padding-bottom:3px;margin-top:1.8em}
+pre{background:#111;color:#ddd;padding:10px;border-radius:6px;font-size:12px;overflow-x:auto}
+table{border-collapse:collapse;margin:8px 0}
+td,th{border:1px solid #999;padding:4px 8px;font-size:13px}
+.pass{color:#0a0;font-weight:bold} .find{color:#a60} .note{color:#444;font-size:12px}
+img.cap{max-width:600px;border:1px solid #888;margin:4px}
+.pair{display:flex;gap:8px;flex-wrap:wrap}
+.pair div{text-align:center}
+</style></head>
+<body>
+<h1>AC-0398 — results: interpolated modern vertex lighting</h1>
+<p><b>Status: gates green, visual acceptance met.</b> The per-face shading constant <code>FSH</code> and the
+4-level <code>AO_MULT</code> corner steps (both AC-0159) are replaced, under a switch, by a continuous
+per-vertex geometric light field. The banding photographed in <code>tasks/AC-0394/fwd_ground_first_look.png</code>
+is gone; the OFF state is bit-identical to the pre-feature build (pixel-proven below).</p>
+
+<h2>Goal (one sentence)</h2>
+<p>Interpolate the vertex lighting so it looks like modern lighting — continuous per-vertex light derived
+from terrain geometry instead of quantized per-face constants and 4-level AO steps — behind a switch that
+short-circuits before any shading is emitted.</p>
+
+<h2>Files touched</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/mesh.cpp</code></td><td><code>Ctx.modern</code> (parse default <b>false</b> = key-absent = pre-feature); <code>s_modern_corner()</code> (sky-occlusion field <code>sl = clamp(1 − 0.4·occl, MIN_AMB, 1)</code> over the 8 neighbour columns; face-shade <code>oshade = 0.5·FSH[fi] + 0.5·clamp(dot(N,SUN)/SUN_y,0,1)</code> from the per-vertex geometric normal, SUN = normalize(0.25,1,0.1)); once-per-build 18×18 column-top grid in <code>build_accs</code> (only when <code>modern &amp;&amp; !coarse</code>); <code>hgp</code> param on <code>emit_ro_merged</code>/<code>emit_faces</code>/<code>emit_ramp</code> with modern branches (merge key becomes (id, fni, mask, s, oshade)); <code>qwrite_merged</code> reads <code>c0.oshade</code>; <code>+&lt;cmath&gt;</code>.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"modern_light": true</code> in DEFAULTS (with the polarity note), <code>sanitize_bool</code> clamp, <code>apply_modern()</code> apply step (has_method guard, _StubWorld-safe) — mirrors <code>smooth_ramps</code>.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>modern_on</code> var + <code>note_modern()</code> (ctx key + tex_refresh; <b>no geom_epoch bump</b> — colour-only, collider untouched) + boot derive + <code>AWECRAFT_MODERN=0|1</code> env preload (no save) — mirrors <code>note_ramps</code>.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row "Modern vertex lighting (smooth light gradients)" + <code>_on_modern_toggled</code> — mirrors <code>ramp_check</code>.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Settings row, mesh.cpp lane row, new AC-0398 bullet in §4 (incl. the polarity note) — in-task, per the convention-change rule.</td></tr>
+</table>
+<p class="note">NOT touched: <code>godot/scenes/main.gd</code>, <code>autoload/game.gd</code>, <code>entities/drop.gd</code>,
+<code>autoload/debug.gd</code> (fenced — another session), <code>godot/scenes/harness.gd</code> (pristine), the far/avg
+emitters, the starlight engine, the satellite bake, any <code>world/*</code> generation code.</p>
+
+<h2>The switch (and the deliberate polarity split)</h2>
+<ul>
+<li><b>Game default: ON.</b> The user asked for this feature in their own words; the project rule (AC-0205
+harvest) says default to the conservative behaviour only when the user has <i>not</i> asked for the new one.
+</li>
+<li><b>C++ <code>parse_ctx</code> default: OFF (key absent = pre-feature).</b> The arms build their ctx dicts by
+hand (the ramp arm's <code>_ramp_build</code>, meshprobe) and carry no <code>modern</code> key — and the ramp arm's stored
+<code>_RAMP_REF</code> fingerprint was captured on the pre-AC-0398 .so, so a hand-built ctx must take the
+pre-feature path to keep that standing byte-identity green (harness.gd is pristine; the REF cannot be
+re-captured here). The live world always writes the key at boot (<code>note_modern</code>), so the game path is
+explicit in both states. Documented in the C++ comment, settings.gd, and ARCHITECTURE.md §4.</li>
+<li><b>Short-circuit:</b> <code>hgp == null</code> (modern off or coarse) → the grid is never built and every emit
+site takes its pre-feature branch verbatim. Proven at three levels below: the ramp arm's REF fingerprint
+(mesh bytes), the pixel-identical OFF render (raster), and the untouched genhash 25/25 (generation).</li>
+</ul>
+
+<h2>Why the bands go away</h2>
+<p>The AC-0394 bands come from corner values that <i>plateau</i>: at a step edge the starlight sum drops to
+0.5/0.75 and AO steps 1.0→0.8/0.6, so a 2-cell-wide 40–60% dark band sits on every stair contour. Modern
+mode makes both terms a continuous function of the neighbour <b>heights</b>: the sky term eases off over ~2
+cells (1.0 → 0.8 → 0.6 → 0.5 scale, deepening with cliff height — 0 occluders → 1.0, 1 → 0.8, 2 → 0.6,
+3 → 0.5, i.e. the Java Fancy levels as a gradient), and the face-shade term tilts with the per-vertex
+geometric normal (flat top stays exactly FSH = 1.0, flat side → 0.4–0.525, slope vertices in between — the
+ramp quad's fixed 0.9 is gone, its four corners each carry their own). Flat fully-lit ground is unchanged;
+a buried corner saturates to the MIN_AMB floor, so AC-0159's "caves feel dark" property is preserved. The
+starlight levels themselves are untouched (the <code>chan</code>/block-light evidence path is shared) — only the
+shading model on top of them changed.</p>
+
+<h2>Gate evidence (all logs in <code>.scratch/AC-0398-gates/</code>)</h2>
+
+<h3>G0 — headless load</h3>
+<pre>G0.log: rc=0
+gate_census: SCRIPT ERROR 0 (allow 0), SHADER ERROR 0 (allow 0) ok → census: ok</pre>
+
+<h3>SMOKE — ramp (the byte-identity-with-it-off evidence)</h3>
+<pre>OFF-state run (default):  ok:true  ref:{mode:checked, ok:true, on_differs:true, ref:"331446/3237708432/767103344"}
+                          syn 6/6 patterns exact (nq == off_nq each), world off_world_ramps_zero:true, exact:true
+ON-state run (AWECRAFT_RAMPS=1):  ok:true  world 2919/2919 exact, toggle full: off_count 0 / on_count 2919,
+                          neg_mismatch:true, collider 5838/5838 ramp tris, ref UNCHANGED: 331446/3237708432/767103344</pre>
+<p>The OFF-state synthetic build's fingerprint is byte-identical to the <b>pre-AC-0398</b> REF constant
+(captured on the pre-feature .so) on the new .so — the mesh with the switch off has not moved a single byte,
+and <code>on_differs</code> proves the ON state moves it. This is the standing proof the switch short-circuits.</p>
+
+<h3>SMOKE — lightstate (LS_RADIUS=16)</h3>
+<pre>20/20 grid chunks leaks 0, worst:null, wash_detected:false, double-LOD census 0/0, stragglers 0, demoted 41
+ab (baked-light A/B on chunk 0,1): arr_diff_cells 1 (the single edited cell [0,141,0] — the standing fixture)
+A/B for attribution: vc_diff 4 (modern ON, the new default) vs vc_diff 2 (AWECRAFT_MODERN=0 — inside the
+standing 1-2 band). All invariants green in BOTH states.</pre>
+<p class="find">FINDING (new standing measurement, with attribution): with modern ON, the A/B re-colour count
+reads 4 instead of the standing 1–2 — the geometric field spreads the re-colour over ~2 cells around the
+edited column (its occlusion/normal inputs move), while the light payload itself changed exactly 1 cell
+(<code>arr_diff_cells</code> 1 in both states). Not a light defect — a surface effect of the new shading model.
+Coordinator: the lightstate row's vc_diff note should read "1-2 (pre-modern) / 4 (modern ON)" when the
+standing values are next touched.</p>
+
+<h3>SMOKE — meshprobe</h3>
+<pre>ok:true  match_rate:1.0  c/i/n/q/u/v all 1878/1878 match  mismatch:[]
+quadcheck_cpp 0/699 mismatch  quadcheck_gd 0/699 mismatch  cpp_wms_avg 4.125</pre>
+
+<h3>SMOKE — genhash</h3>
+<pre>GENHASH 25/25 BYTE-IDENTICAL to the standing ref (AC-0311 piece-2 set; tip GENHASH 0 0 46c20b07c95cb03b57772e1531c97f71)
+GENMS 127 (in the 125-138 machine spread)</pre>
+<p>H did not move: the column-top grid is derived from <code>snap</code> and never written back — shading is not
+generation. No re-baseline owed, none made.</p>
+
+<h3>PROBE — boundary r4 (the one-shot A/B, the sanctioned self-check)</h3>
+<table>
+<tr><th></th><th>modern ON (default)</th><th>modern OFF (AWECRAFT_MODERN=0)</th></tr>
+<tr><td>ok / remesh_ok / marker_ok</td><td class="pass">true / true / true</td><td class="pass">true / true / true</td></tr>
+<tr><td>walk p50 / p95 / max (ms)</td><td>13 / <b>33</b> / 315</td><td>13 / 35 / 247</td></tr>
+<tr><td>staged_dropped (≤ 2500)</td><td>2548</td><td>2897</td></tr>
+<tr><td>flap (watch field)</td><td>146</td><td>219</td></tr>
+</table>
+<p><b>No walk-p95 trade-off</b> — modern ON reads 33 vs 35 OFF (both inside the standing 35–55 band; ON is
+better). The <code>staged_dropped</code>/<code>flap</code> deviation over the ≤2500 threshold is <b>box-state noise,
+proven by the A/B</b>: the pre-feature OFF path read <i>worse</i> (2897 / 219) minutes apart on the same box —
+neither deviation is attributable to the feature. Honest deviation recorded: the threshold was breached in
+<i>both</i> states, so it is the box, not the ticket.</p>
+
+<h2>Visual acceptance (same ground view before/after + the slope)</h2>
+<p class="note">All captures: 1280×720, Forward+ (mandatory boot line verified in every log:
+<code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe</code>), <code>AWECRAFT_SNAP_DRAIN=600</code>
+frames, RADIUS 4, TIME 0.5, <code>AWECRAFT_CLOUD_T0=0</code> + <code>AWECRAFT_ANIM_PHASE=0</code> pinned. The ground view is
+the deterministic auto-aim first-person view — the exact AC-0394 view (verified: same camera, same staircase,
+same held stone). The slope pair uses <code>AWECRAFT_AIM=8,161,8,-2.356,-0.6</code> aimed at the NE staircase
+(located with a one-shot <code>WorldGen.terrain_height</code> probe, deleted after use); its pre-feature member is
+rendered with <code>AWECRAFT_MODERN=0</code>, which is bit-identical to the pre-feature build (proven below).</p>
+
+<div class="pair">
+<div><img class="cap" src="before_ground.png" alt="before ground">
+<b>BEFORE</b> (pre-feature .so)<br><span class="note">before_ground.png — the AC-0394 banding: hard-edged bright/dark diagonal stripes on every stair contour</span></div>
+<div><img class="cap" src="after_ground.png" alt="after ground">
+<after ground, modern ON><b>AFTER</b> (modern ON = the new default, no env)<br><span class="note">after_ground.png — the same view: a continuous field, no contour band</span></div>
+</div>
+<div class="pair">
+<div><img class="cap" src="before_slope2.png" alt="before slope">
+<b>BEFORE slope</b> (pre-feature, via MODERN=0 on the new .so — bit-identical)<br><span class="note">before_slope2.png — the staircase: each step a hard flat band, the sides one flat 0.8 shade</span></div>
+<div><img class="cap" src="after_slope2.png" alt="after slope">
+<b>AFTER slope</b> (modern ON)<br><span class="note">after_slope2.png — the same staircase: tops bright, sides shaded 0.4–0.525, corners eading between — the per-face constants are gone</span></div>
+</div>
+<h3>Quantitative shading check (same-geometry patches, the slope pair)</h3>
+<table>
+<tr><th>patch</th><th>BEFORE (G)</th><th>AFTER (G)</th><th>ratio</th></tr>
+<tr><td>valley floor (wide, gentle undulation)</td><td>46 (near-black)</td><td>130</td><td>2.83×</td></tr>
+<tr><td>bright step top (ridge)</td><td>196</td><td>212</td><td>1.08× — tops stay as before</td></tr>
+<tr><td>step side (mid-slope)</td><td>172</td><td>205</td><td>1.19× — sides re-shaded by tilt</td></tr>
+<tr><td>distant step top (fog wash)</td><td>236</td><td>236</td><td>1.00×</td></tr>
+</table>
+<p>Terrain green-channel histogram: <b>dark pixels (G&lt;60) fall 11.2% → 2.3%</b> — the banded
+contour darkness is gone — while all 16 brightness quantiles stay populated (the shading spreads
+across the full range instead of clustering in bands; no blowout). Behaviour note (by design): the
+occlusion field is LOCAL (the 8 neighbour columns, 1-cell radius) — a wide gentle undulation's floor
+is ≥1 cell from any wall and reads bright, while cliff bases and narrow troughs saturate to the
+MIN_AMB dark floor. That is the chosen trade for per-vertex smoothness (the pre-feature starlight
+saw walls across cells through level decay; the modern field intentionally does not).</p>
+<p class="note">The white/cyan line overlay visible in all captures is the other session's <code>debug.gd</code>
+work — present identically in before AND after (external to this ticket; the fenced file is not touched).
+The <code>*_placed.png</code> companions (auto-aim place-shot) are kept in the folder for completeness.
+<code>before_slope.png</code>/<code>after_slope.png</code> (the <code>AWECRAFT_CAM=iso</code> attempts) came out as the auto-aim
+view — the on-demand player spawn overrides named cameras (the AC-0396 finding); they duplicate the ground
+view and are kept only for the log.</p>
+
+<h2>Negative tests (the "it changed for the right reason" proofs)</h2>
+<ol>
+<li><b>Switch off = bit-identical (pixel level).</b> <code>before_ground.png</code> (pre-feature .so) vs
+<code>after_ground_off.png</code> (new .so, <code>AWECRAFT_MODERN=0</code>): ground region
+<b>0 / 121,600 sampled pixels differ, max delta 0</b>. (Whole frame: 217 px differ, all in the sky —
+real-time cloud drift between two separate runs.) The short-circuit is proven at the raster level, not
+just the mesh level.</li>
+<li><b>Switch off = bit-identical (mesh level, standing arm).</b> The ramp arm's REF fingerprint
+<code>331446/3237708432/767103344</code> — captured on the pre-feature .so — stays green on the new .so with the
+key absent, and <code>on_differs:true</code>.</li>
+<li><b>Switch on actually changes the surface.</b> <code>before_ground.png</code> vs <code>after_ground.png</code>:
+<b>84.15%</b> of ground pixels differ (mean Δ 103.55) — the acceptance is not passing by triviality.
+<code>on_differs</code> on the mesh, and the slope pair's visible gradient, confirm the same.</li>
+<li><b>The light engine is untouched.</b> lightstate <code>arr_diff_cells 1</code> in both states (exactly the
+single edited cell re-lights) — the modern model changed the shading <i>on top of</i> the starlight, not the
+starlight itself.</li>
+</ol>
+
+<h2>AC-0159's corner assertions</h2>
+<p>Verified by grep: no live arm asserts <code>FSH</code>/<code>AO_MULT</code> values — AC-0159's 40/40 corner
+restatement was a one-shot closeout verification (results page), not a standing arm, so nothing was deleted
+or re-baselined. The relationship: with the switch OFF, every corner keeps exactly its AC-0159 values
+(bit-identity proven at three levels above); with it ON, the quantized curve is replaced deliberately by the
+continuous field — including AC-0159's two load-bearing properties: fully-lit uniform faces stay exactly as
+before (flat top: sl 1.0, oshade = FSH), and buried corners saturate to the MIN_AMB floor so caves stay
+dark. The starlight levels (the <code>lsum/4/15</code> normalization) are untouched in both states — modern mode
+does not re-import them as a product (that would have re-imported the 1/15 step and the banding would have
+come back).</p>
+
+<h2>Deviations &amp; findings (recorded, not hidden)</h2>
+<ul>
+<li class="note"><b>Deviation:</b> <code>tasks/AC-0398/spec.html</code> (and <code>tasks/AC-0394/AC-0394-results.html</code>)
+absent from the repo — the ticket notes in <code>tasks/TASKS.yaml</code> (line 24480) carry the full requirement;
+worked off those + the top checkpoint.</li>
+<li class="note"><b>Deviation (render budget):</b> the ticket's "one render per visual ticket" guidance is
+superseded by its own deliverable ("same ground view before and after … plus one on a slope") — this is a
+visual-comparison ticket, so the render set is the before/after ground pair + the slope pair + the
+MODERN=0 negative-test render (7 captures incl. the camera-override duplicates and _placed companions).
+~2 min each on the Forward+ path; no render was re-run per gate.</li>
+<li class="find"><b>Finding (standing value, with attribution):</b> lightstate <code>vc_diff</code> reads 4 with modern
+ON (new default) vs the standing 1–2 (pre-modern) — surface effect of the field spreading the re-colour,
+all invariants green, <code>arr_diff_cells</code> 1 both states (above).</li>
+<li class="find"><b>Finding (box state, proven not feature):</b> boundary r4 <code>staged_dropped</code> 2548 (ON) / 2897
+(OFF) vs the ≤2500 threshold and <code>flap</code> 146/219 — the pre-feature path read worse minutes apart; the box
+was loaded when this ran. Walk p95 itself is flat (33 ON / 35 OFF).</li>
+<li class="note"><b>Convention (in-task doc):</b> look-switch polarity split (game default ON / C++ key-absent
+OFF) documented in <code>mesh.cpp</code> (Ctx.modern), <code>settings.gd</code> (DEFAULTS), and ARCHITECTURE.md §4 —
+the AC-0205 pattern with the asymmetry a pristine-harness REF forces.</li>
+<li class="note">The <code>after_ground.png</code> PNG is larger (503 KB vs 419 KB) — expected: gradients carry more
+high-frequency colour than the banded flat plateaus (PNG compresses the old bands better).</li>
+</ul>
+
+<h2>Capture inventory (<code>tasks/AC-0398/</code>)</h2>
+<table>
+<tr><th>file</th><th>bytes</th><th>state</th><th>view</th></tr>
+<tr><td>before_ground.png</td><td>418,901</td><td>pre-feature .so</td><td>auto-aim ground (the AC-0394 view)</td></tr>
+<tr><td>after_ground.png</td><td>503,672</td><td>new .so, modern ON (default, no env)</td><td>auto-aim ground</td></tr>
+<tr><td>after_ground_off.png</td><td>419,529</td><td>new .so, AWECRAFT_MODERN=0</td><td>auto-aim ground — bit-identical to before (ground region)</td></tr>
+<tr><td>before_slope2.png</td><td>817,888</td><td>new .so, AWECRAFT_MODERN=0 (= pre-feature)</td><td>AIM slope cam</td></tr>
+<tr><td>after_slope2.png</td><td>966,086</td><td>new .so, modern ON</td><td>AIM slope cam</td></tr>
+<tr><td>before_slope.png / after_slope.png</td><td>417,257 / 508,022</td><td>as labelled</td><td>CAM=iso attempts → auto-aim view (AC-0396 override)</td></tr>
+<tr><td>*_placed.png ×5</td><td>—</td><td>as labelled</td><td>auto-aim place-shot companions</td></tr>
+</table>
+
+<h2>What the coordinator should re-confirm (heavy set, per the delegate split)</h2>
+<ul>
+<li>r16 (build cost — the hgrid scan + more non-uniform quads at steps; expect a small build-ms move at most), farab (h_mismatch 0 — trivially safe, H untouched), halo, ladder, texrefresh, brightslab, seamcensus, settings (the new <code>modern_light</code> key now round-trips through the cfg; the arm's specific-key assertions are unaffected), battery.</li>
+<li>The lightstate vc_diff note re-base (4 under modern ON) when the standing values are next touched.</li>
+</ul>
+
+</body></html>

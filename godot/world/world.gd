@@ -947,6 +947,34 @@ func note_ramps() -> void:
 		_tm_ctx["ramps"] = en
 		tex_refresh = chunks.keys().duplicate()
 
+
+# AC-0398: the modern per-vertex lighting toggle (Settings "modern_light",
+# game default ON — the user asked for the interpolated look; the C++
+# key-absent default is OFF, so the arms' hand-built ctx dicts stay on the
+# pre-feature path and the ramp arm's pre-AC-0398 _RAMP_REF fingerprint
+# stays green — see the settings.gd DEFAULTS comment). The flag rides the
+# worker ctx ("modern"): the C++ build computes the 18x18 column-top grid
+# ONLY when modern && !coarse, and every emit site takes its pre-feature
+# branch when it is off, so OFF rebuilds are byte-identical to the
+# pre-AC-0398 mesh.
+#
+# The change is COLOUR-ONLY: per-vertex light values move, no geometry —
+# so a toggle re-derives the ctx and re-dispatches every resident column
+# through the tex_refresh drain (the settled star payload is reused, the
+# light did not move) but does NOT bump geom_epoch (the collider is
+# derived from the slab's opaque surface and is untouched — unlike
+# note_ramps, which changes the geometry and must re-stamp the bodies).
+var modern_on := false
+
+func note_modern() -> void:
+	var en := bool(Settings.values.get("modern_light", true))
+	if en == modern_on:
+		return
+	modern_on = en
+	if threadmesh:
+		_tm_ctx["modern"] = en
+		tex_refresh = chunks.keys().duplicate()
+
 func _rescore_kick() -> void:
 	_rescore_ver += 1
 	_rescore_due = true
@@ -3701,6 +3729,15 @@ func _ready() -> void:
 	if rpe != "":
 		Settings.values["smooth_ramps"] = rpe == "1"
 	note_ramps()  # AC-0205: the boot derive (after the env preload)
+	# AC-0398: harness env preload (the AWECRAFT_RAMPS pattern) —
+	# AWECRAFT_MODERN=<0|1> overrides the STORED setting for this process
+	# (written to Settings.values WITHOUT save, so the arms never clobber
+	# the user's cfg) and lets the render A/B test both states without a
+	# save file.
+	var mde := OS.get_environment("AWECRAFT_MODERN")
+	if mde != "":
+		Settings.values["modern_light"] = mde == "1"
+	note_modern()  # AC-0398: the boot derive (after the env preload)
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
