@@ -73,10 +73,25 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         S² at the horizon (the grazing column of air keeps its blue
 │                         longest); S=0 is bit-identical to the pre-AC-0386 sky. The
 │                         sun's glow (scattering) fades ×(1-S); the disc stays. The
-│                         space gradient touches the BACKGROUND ONLY — the fog color,
-│                         `env.background_color` and the satellite's `u_air` stay the
-│                         DayNight.sky_display reference at every altitude (no double-
-│                         darkening: the ground seen from orbit is depth-fog only).
+│                         space gradient touches the BACKGROUND ONLY —
+│                         `env.background_color` stays the DayNight.sky_display
+│                         reference (no double-darkening: the ground seen from
+│                         orbit is depth-fog only). AC-0384 r8: the fog colour
+│                         and the satellite's `u_air` are now the SAME single
+│                         source — `Aero.fog_display(t)`, the sky pass's
+│                         exact h=0 output (horizon mixed with the haze by
+│                         haze_amount, 8-bit sRGB-rounded) — so 100%-fogged
+│                         terrain, the dome's haz, and the sky's horizon are
+│                         one colour by construction (pre-r8 all three took
+│                         the separate DayNight.sky_display lerp; main.gd
+│                         pushes env.fog_light_color, satellite_body.gd
+│                         pushes u_air). It is deliberately NOT
+│                         space-adjusted: the AC-0386 contract (above) says
+│                         the space gradient touches the background only —
+│                         the first r8 pass mixed this value to SPACE_SKY by
+│                         S² and it erased the fog wall at flight altitude
+│                         (measured 2600 m nadir (177,240,255) → (24,25,23));
+│                         reverted and documented in aero.gd.
 │                         AC-0384 r4 adds the ATMOSPHERIC LIMB GLOW: an additive rim
 │                         term in the background keyed to the view ray's IMPACT
 │                         PARAMETER about the planet centre (b = |cross(centre,
@@ -126,8 +141,8 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         clamp is a continuous function of camera position,
 │                         so the pattern stretches, never pops.
 │                         AC-0384 r6: the NMS deck character (shader-side
-│                         defaults u_boost 2.0 / u_under 0.70 / contrast
-│                         window 0.05-0.80 — never pushed, so
+│                         defaults u_boost 2.2 (r8b, was 2.0) / u_under 0.70
+│                         / contrast window 0.05-0.80 — never pushed, so
 │                         main.gd is untouched): dense cores are occluding
 │                         (alpha = clamp(cl·u_coverage·u_boost,0,1)), thin
 │                         haze is collapsed to clear gaps (bimodal contrast),
@@ -144,18 +159,37 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         fragment stage (discard back faces only
 │                         while the camera is OUTSIDE the shell —
 │                         orbit view unchanged by construction,
-│                         underside renders from inside). KNOWN
-│                         LIMIT (r6, follow-up): the shells carry
-│                         the AC-0235 degenerate-bounds condition
-│                         — drawn only while the planet centre is
-│                         inside the camera frustum (≈ above 2429 m
-│                         on the planet preset), so the from-below
-│                         view is render-blocked below that until
-│                         set_custom_aabb lands in _place_clouds.
-│                         View-dependent alpha is the geometric graze only;
-│                         the weather field itself stays a function of world
+│                         underside renders from inside). CULL BOUNDS
+│                         (AC-0384 r7, the r6 follow-up landed): on this
+│                         engine build the shell instance's cull AABB
+│                         degenerates to the node origin (the planet
+│                         centre), so the shells drew only while the
+│                         centre was inside the frustum (≈ above 2429 m
+│                         on the planet preset) — _place_clouds now
+│                         sets an explicit unit-box custom AABB (the
+│                         AC-0235 star-fix pattern), so the deck draws
+│                         from below at every altitude. View-dependent
+│                         alpha is the geometric graze only; the weather
+│                         field itself stays a function of world
 │                         direction + time-of-day. All r6 terms are
 │                         ≤ the clamped base-band frequency (grain-safe).
+│                         AC-0384 r8: the PATTERN re-placement for the
+│                         descent view — coverage window 0.46-0.54
+│                         (centred on the fbm mean 0.485; was 0.50-0.58,
+│                         which left the mid-latitude belt — the only
+│                         part of the deck visible from inside the
+│                         shells — at 0.19% pattern at
+│                         CLOUD_T0=411200) and the latitude banding
+│                         5 cycles with a 0.75 floor (was 11 cycles /
+│                         0.5 floor); r8b (the one sanctioned tuning
+│                         iteration): u_boost 2.0 → 2.2, window kept at
+│                         0.46/0.54. Low-frequency / threshold changes
+│                         only — the r5 distance-LOD clamp chain is
+│                         byte-identical; the measured 2600 m grain moved
+│                         4.71/1.90 → 7.64/4.56, diagnosed as the
+│                         required content (fog colour + bridge + belt),
+│                         not aliasing (tasks/AC-0384/AC-0384-results.
+│                         html §23.4).
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -193,7 +227,8 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         render_mode is fog_disabled — the engine env fog must NOT be applied: the
 │                         body's own op/haz model IS the fog-wall bridge (existence ramps over [fog_far,
 │                         render_edge], haz_d mixes the rim toward u_air, which is env.fog_light_color
-│                         itself — DayNight sky_display), and with the env fog still on, everything
+│                         itself — AC-0384 r8: the single-source Aero.fog_display sky-model colour),
+│                         and with the env fog still on, everything
 │                         beyond fog_depth_end repaints fog colour: the established disc erases to a
 │                         featureless ball and only the fog_disabled cloud shell keeps detail (the cloud
 │                         shader carries the same flag, its comment naming this exact "erased by it"
@@ -865,7 +900,21 @@ Match these; do not improvise a different approach in a task.
   merged `ArrayMesh` of every visible slab of that tier in that sector, in world
   coordinates (surface 0 = the opaque avg in the shared `_lod_avg_mat()`; surfaces
   1/2 = the WATER EXCEPTION faces in the shared fluid materials — the two-pass
-  camera-side cull is per surface and survives the merge). The per-slab RECORD
+  camera-side cull is per surface and survives the merge). AC-0384 r8: the
+  `_lod_avg_mat()` material (core/lod_avg.gdshader) carries the far tier's HAZE
+  BRIDGE — `render_mode fog_disabled` + a per-fragment haz: inside 336 m the
+  fragment takes the engine depth-fog model (the same factor as band A at the
+  same view distance — at orbit altitude the flat fog wall), and the outer 48 m
+  of the annulus (Manhattan distance 336→384 from the terrain anchor, the
+  exact tier boundary) crossfades into the satellite body's own haz model
+  (same model and same u_air as the dome; the haz mixes the slab colour
+  toward u_air) — so the 100%-fog annulus dissolves
+  into the dome instead of
+  stepping onto it (pre-r8 the plain engine fog left the annulus a flat
+  featureless wall against the body's crisp terrain, the measured seam); the
+  bridge's uniforms (u_air / u_fog_near / u_fog_far / u_render_edge / u_center)
+  are pushed per frame from main.gd `_update_sky` off the live env fog +
+  render radius + `Aero.fog_display`. The per-slab RECORD
   survives on the slot `MeshInstance3D`s that `c.low_instances` holds — the slots
   are OFF-TREE now (pooled exactly as before; their `.visible` flag is the far
   draw state the ring re-derives, and their `.mesh` is the exact emit arrays the

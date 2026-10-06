@@ -1304,7 +1304,17 @@ func _update_sky() -> void:
 	env.background_color = sky
 	env.ambient_light_color = AeroLib.AMBIENT_TINT if aero else Color.WHITE
 	env.ambient_light_energy = DayNight.ambient_energy(t) * (AeroLib.AMBIENT_BOOST if aero else 1.0)
-	env.fog_light_color = sky
+	# AC-0384 r8 (FOG HUNK 1 of 2): single-source air colour — the env fog
+	# derives from the sky model's own horizon output (AeroLib.fog_display,
+	# the sky pass's exact h=0 colour) instead of the separate DayNight
+	# sky_display lerp, so the 100%-fogged terrain and the sky's horizon
+	# are one colour by construction. The satellite body's u_air takes the
+	# same value (satellite_body.gd's per-frame push) — dome haz, fog, and
+	# sky share one source. NOT space-adjusted (the AC-0386 contract: the
+	# space gradient touches the background only — no double darkening;
+	# the first r8 pass mixed to SPACE_SKY by S² and it erased the fog
+	# wall at flight altitude, measured at the 2600 m preset).
+	env.fog_light_color = AeroLib.fog_display(t)
 	# AC-0235: the sky-pass gradient + sun (same AeroLib uniforms as the
 	# old dome; the cloud_* keys belong to the cloud layer now).
 	if sky_mat != null:
@@ -1361,6 +1371,18 @@ func _update_sky() -> void:
 			cl["mat"].set_shader_parameter("u_sun", cloud_sun)
 			cl["mat"].set_shader_parameter("u_day", cloud_day)
 			cl["mat"].set_shader_parameter("u_day_gain", cloud_day_gain)
+	# AC-0384 r8 (FOG HUNK 2 of 2): the far tier's haze bridge
+	# (lod_avg.gdshader) takes its fog window from the live env fog
+	# (the values _update_fog sets the engine on), the render edge from
+	# the live render radius, the planet centre, and the same
+	# single-source air colour env.fog_light_color carries above.
+	# (The material is created lazily by world._lod_avg_mat — null-safe.)
+	if world != null and world._lod_avg_material != null:
+		world._lod_avg_material.set_shader_parameter("u_air", env.fog_light_color)
+		world._lod_avg_material.set_shader_parameter("u_fog_near", env.fog_depth_begin)
+		world._lod_avg_material.set_shader_parameter("u_fog_far", env.fog_depth_end)
+		world._lod_avg_material.set_shader_parameter("u_render_edge", float(world.render_radius + 1) * 16.0)
+		world._lod_avg_material.set_shader_parameter("u_center", Vector3(0.0, -float(Game.planet_R), 0.0))
 
 func _update_fog() -> void:
 	if OS.get_environment("AWECRAFT_NO_FOG") == "1" or not bool(Settings.values.get("fog_enabled", true)):

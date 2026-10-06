@@ -27,6 +27,12 @@ render_mode unshaded, cull_disabled, fog_disabled;
 // octave modulates the alpha (in AC-0235 it was computed into `n` and
 // never used). Day coverage is 67.8% of the globe at alpha > 0.2 (bands
 // 66.6-68.3%; longest clear streak p95 7.2 deg), night 37.3%.
+// AC-0384 r8: the window moves to 0.46-0.54 (centred on the mean) and
+// the latitude banding to 5 cycles with a 0.75 floor, so the mid-
+// latitude belt - the only part of the deck a descending player sees
+// from inside the shells - carries clearly visible cloud (the r6 window
+// left it at 0.19% pattern at CLOUD_T0=411200). Globe coverage is
+// re-measured in the ticket's coverage probe (results §23).
 // AC-0385 lighting: lit by the SAME DayNight.sun_direction convention
 // AC-0382 wired into the satellite body (u_sun = direction TO the sun;
 // u_day = 0.18 + 0.82*day; u_day_gain = 0.82*day - the satellite's exact
@@ -66,7 +72,11 @@ uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 uniform float u_cpxrad : hint_range(50.0, 4000.0) = 476.0;
 // AC-0384 r6: opacity boost - the dense cores clamp to 1.0 (the deck
 // occludes the sky/terrain behind it, the NMS "thick cloud" read).
-uniform float u_boost : hint_range(0.0, 4.0) = 2.0;
+// AC-0384 r8 (one tuning iteration, coordinator-sanctioned): 2.0 -> 2.2 -
+// the r8 window (0.45-0.53) leaves the field's mid values thin, so the
+// cores need a little more boost to read as OCCLUDING cloud from inside
+// the shells (the descent view).
+uniform float u_boost : hint_range(0.0, 4.0) = 2.2;
 // AC-0384 r6: underside darkening - the albedo of an optically thick
 // fragment is multiplied by u_under (the thinner the patch, the closer
 // to 1.0 - the full sun-lit albedo).
@@ -155,15 +165,28 @@ void fragment() {
 	float mid = fbm(q * 2.2 * l22 + vec3(13.7, 7.3, 5.9));
 	float fine = fbm(q * 4.1 * l41 + vec3(71.3, 33.9, 21.7));
 	// AC-0385: coverage window 0.50-0.58 (was 0.62-0.88 - see header).
-	float cl = smoothstep(0.50, 0.58, base);
+	// AC-0384 r8: re-placed to 0.46-0.54 - centred ON the fbm mean
+	// (0.485, std 0.107, AC-0385's offline census), so roughly half the
+	// field passes the mask instead of only its top ~30%. The 0.50/0.58
+	// window left the mid-latitude belt (the whole of the inside-shell
+	// descent view: the planet preset frame at 120 m spans 52.5-127.5
+	// deg from the zenith) at 0.19% pattern at CLOUD_T0=411200 - the
+	// player's reported "clouds below the terrain" (the visible sliver
+	// was a band-phase at the horizon, the dense cap above the frame).
+	float cl = smoothstep(0.46, 0.54, base);
 	cl = smoothstep(0.0, 0.55, cl) * cl;
 	cl *= 0.75 + 0.25 * (0.55 * base + 0.45 * mid);
 	cl *= 0.85 + 0.15 * fine;
 	// AC-0384 r6: broad warped latitude bands - large-scale weather
 	// structure (the NMS deck is banded, not uniform). The band follows
 	// the drift-rotated direction so it scrolls with the weather.
-	float band = 0.5 + 0.5 * sin(dr.y * 11.0 + 2.2 * base);
-	cl *= mix(0.5, 1.0, smoothstep(0.18, 0.82, band));
+	// AC-0384 r8: 11 cycles -> 5 (broad belts: one thick band crosses
+	// the descent frame instead of ~2 in/out phases) and the floor
+	// 0.5 -> 0.75 (even the band troughs carry 75% of the field, so the
+	// belt never reads as a clear stripe). Low-frequency only - the r5
+	// grain gate (4.71/1.90 @ 2600 m) is the guard.
+	float band = 0.5 + 0.5 * sin(dr.y * 5.0 + 2.2 * base);
+	cl *= mix(0.75, 1.0, smoothstep(0.18, 0.82, band));
 	// AC-0384 r6: soft bimodal contrast - the haze reads as a thin veil
 	// and the cores as opaque masses (wide window 0.05/0.80; the first
 	// pass 0.16/0.58 steepened the edges and raised the orbit grain).

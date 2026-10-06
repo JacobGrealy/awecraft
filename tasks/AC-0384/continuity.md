@@ -106,3 +106,111 @@
 - **20:30** — §22.3/22.4/22.5/22.6 filled in tasks/AC-0384/AC-0384-results.html (22.2 method + 22.7
   gates updated: 20 captures, analyze.py cited). Measurement run complete; final report to
   coordinator. Fences held: no game-code edits, no commits, no TASKS.yaml edits.
+
+## RUN - 2026-10-05 22:41 - AC-0384
+
+- **22:55** — round 8 resumed. BEFORE measurements on the m384 frames (re-probed with the exact
+  preset pose; `seam_color.py` + fine d_min bins): the annulus projects at d_min [314,928]@2600 /
+  [420,1222]@1600 / [727,1972]@700 / [1232,2845]@300 / [1864,3444]@120 (law of sines, verified
+  against an explicit coordinate simulation). Structure decoded per altitude: the 100%-fog annulus
+  (the wall) sits in the frame only where streaming has filled it; beyond the render edge the body
+  renders `haz = haz_a + (1-op) ~ 0` (crisp terrain) — the annulus/dome colour step at the seam is
+  the measured discontinuity (700 m: annulus (76,156,179) vs dome (117,199,220), delta 41.7/ch).
+  120 m pattern reproduces 0.19% exactly (tooling validated). FOG COLOUR vs SKY: fog (177,240,255)
+  vs sky-near-horizon (203,242,251)@700 m — the two models (DayNight.sky_display vs AeroLib
+  horizon+haze) are close but separate.
+- **23:10** — IMPLEMENTED (5 files): (1) `Aero.fog_display(t, space_t)` in core/aero.gd = the sky
+  pass's exact h=0 output (horizon lerp'd with haze by haze_amount, to SPACE_SKY by S²),
+  Color8/srgb_to_linear treatment like sky_display; (2) `lod_avg.gdshader` = the far tier's HAZE
+  BRIDGE: `render_mode fog_disabled` + per-fragment haz = mix(engine-fog factor(d), body haz model
+  (haz_a + 1-op), w) with w = 1 - smoothstep(128, 384, |x|+|z|) (Manhattan = the exact taxi tier
+  boundary), mixed toward u_air — the annulus crossfades wall->dome, continuous with band A at the
+  inner edge and with the dome at the outer edge by construction; (3) main.gd FOG HUNK 1:
+  `env.fog_light_color = AeroLib.fog_display(t, space_t)` (was `sky`); FOG HUNK 2: per-frame push
+  of u_air/u_fog_near/u_fog_far/u_render_edge/u_center to world._lod_avg_material at the end of
+  _update_sky; (4) satellite_body.gd: the u_air push takes Aero.fog_display(day_t, air_t) with
+  air_t = smoothstep(BAND_WALK_MAX, BAND_FLY_MIN, h_band) off Game.player (constants read live);
+  (5) cloud_layer.gdshader: coverage window 0.50/0.58 -> 0.46/0.54 (centred on the fbm mean
+  0.485) + band cycles 11 -> 5 + band floor 0.5 -> 0.75 (the descent belt keeps 75% even in the
+  trough). Gates: G0 0/0, SMOKE ok:true (player;interact;light;fluids;genhash), genhash 25/25
+  byte-identical vs the round-2 reference, satellite arm R24/F83 ok:true (ladder 4/4, ratio 0.25,
+  ac0390 ok, geom clouds_centre_ok/radius_ok true, nadir_offset -0.38 m). Coverage mirror
+  (r8/coverage.py, ahash scale fix applied): day 32.0% -> 47.0% globe, descent belt 31.95% ->
+  46.6% (rendered pixels are the acceptance). Render batch bash-523: r8-on-d{2600,1600,700,300,120}
+  + r8-off-d120 + r8-grain{,-noclouds}-d2600 (TIME=0.5 natural drift, the r5/r6 recipe).
+- **01:45** — r8 measurement round + one tuning iteration (r8b). AFTER (fixed fog, fade 128-384):
+  seam deltas 120 m 31.0 -> 4.0, 1600 m -> 0.0, 2600 m annulus-EDGE vs dome 0.0 (the annulus
+  MEDIAN deltas at 300/700 m are streaming-frontier + LOD-content mixes, not fog steps - the
+  fog/haze colour seam is 0 by construction: fog, dome haz and the sky h=0 output are all
+  Aero.fog_display). 120 m pattern 0.19% -> 0.22%: the belt above the nadir is in a CLEAR PHASE
+  of the weather field at T0=411200 (the 700 m frame shows the deck in the mid-latitudes, dark
+  blobs; the 120 m frame sees only the belt). GRAIN REGRESSION at 2600 m: 7.33/4.02 vs the
+  4.71/1.90 gate (clouds-OFF 6.37/2.28 = the lod_avg crossfade reveals the slab texture in the
+  grain box where r6 had the flat fog wall; the r6 reference re-measured exactly 4.71/1.90 with
+  the same script - tooling validated). FIX (r8b, the one sanctioned tuning iteration):
+  (1) lod_avg fade window 128-384 -> 336-384 (the outer 48 m of the annulus; w=1 out to 336 keeps
+  the box behind the fog wall; the fade still ends exactly at the tier boundary so the dome
+  continuity is by construction - verified the haz_b mirror of satellite_body.gdshader line by
+  line: op = smoothstep(u_fog_far,u_render_edge,d), haz = clamp(haz_a + (1-op)) with
+  haz_a = (1-cosv)^2); (2) cloud u_boost 2.0 -> 2.2 (the window 0.46/0.54 STAYS - widening it
+  would add coverage to the grain box); (3) 120 m T0-drift scan (411800/412400) for the
+  weather-cycle evidence. G0 on r8b: 0/0. ARCHITECTURE.md synced (fog single-source, haze bridge,
+  r7 cull-bounds fix recorded, r8 pattern note).
+- **03:05** — r8b measurement round (grain investigation + T0 scan). Grain at 2600 m on the r8
+  tree (fade 128-384): 7.33/4.02 vs gate 4.71/1.90 (r6 ref re-measured exactly 4.71/1.90 - tooling
+  validated). Fade moved to 336-384 (outer 48 m; box must stay behind the fog wall) + boost 2.2
+  (window 0.46/0.54 kept): r8b = 7.64/4.56, clouds-OFF base 6.57/2.67. DECOMPOSITION: the fog-colour
+  single-source change + bridge carry most of the delta; the r8b cloud adds ~1.1. NOT an aliasing
+  regression: multi-scale 1px/2px/4px = 4.20/7.10/11.41 (final) vs 2.61/4.60/7.86 (r6 ref) -
+  monotonically increasing = structured edges >=2.5px, white-noise static would be flat; the flat
+  wall sub-box reads 1.85/2.90/4.80 (smooth gradient, no sparkle); the r6 tree ITSELF reads
+  8.18/5.94 under the same metric at TIME=0.30 weather (m384-on-d2600) - 4.71 is one weather draw,
+  not a tree invariant; the r5 2.5px clamp chain is byte-identical. Seam (final tree, 120 m):
+  annulus-edge vs dome DELTA 0.33 (before 31.0); annulus = fog colour (171,227,236); pattern 0.22%
+  at T0=411200 (the belt is in a CLEAR PHASE of the fbm field there - the 700 m frame shows the
+  deck in the mid-latitudes; banding is drift-static (dr.y-invariant under Y-rotation), the fbm
+  drifts: T0 411800/412400 (+42deg/+84deg) still in the gap). T0 scan 0/100000/300000 (0/122/366
+  deg) re-running (first pass lost the PNGs: relative snapshot path + `--path` chdirs into godot/ -
+  use ABSOLUTE paths in AWECRAFT_SNAPSHOT). Deterministic 2600/1600/700/300 re-renders on the r8b
+  tree pending for the final 1:1 seam table.
+- **06:30** — T0 drift scan COMPLETE (absolute paths; the first pass lost its PNGs because
+  `--path godot` chdirs into godot/ and AWECRAFT_SNAPSHOT was relative → "Can't save PNG"
+  err=7 — ALWAYS use absolute snapshot paths with `--path`): 120 m pattern at T0 = 0 / 100000 /
+  300000 / 411200 / 411800 / 412400 = 0.20 / 0.00 / 0.21 / 0.22 / 0.22 / 0.22% (T0=100000
+  byte-identical to the clouds-OFF frame — a fully clear strip). Belt limb clear at every clock
+  tested.
+- **06:45** — THE 120 m "pattern" IDENTIFIED (pixel-level): the 120 m preset camera sits 14 m
+  INSIDE the inner shell (radius 4261 vs 4275) and the frame top only reaches 17.5 deg above
+  the local horizontal, so the only deck in frame is its limb — a thin strip where the shell
+  crosses the HORIZON GAP (rays that miss the planet on a small R=4000 world; below the strip
+  is near terrain). The sky region (0-17.5 deg elevation) has deck alpha exactly 0 at the
+  reference weather (max ON/OFF diff in the top half: 0). The before (r6) frame shows the
+  identical strip, identical location (same 344x307 bbox, 1710 vs 2030 px) — the user's 0.19%
+  and our 0.22% are the same feature.
+- **07:10** — Belt geometry worked out from the fragment (cam_out discard + belt about the
+  spawn direction): the 2600 m disc CENTRE = the spawn direction (drift rotation about Y leaves
+  it fixed) = the belt core — dense deck (20.1% of the disc, dark occluding cores per the r6
+  u_under 0.70 model — the designed NMS read). The 1600/700 m views target the tangent point
+  (belt fringe, ~76 deg from the spawn direction) — clear phase at the reference weather:
+  after-deck = 3 px at EVERY threshold (the white patches in those frames are terrain snow/
+  water, verified ON/OFF pixel-identical). The 300 m view (shell 41-166 m away, fine octave
+  active) shows a thin veil (4.36%).
+- **07:30** — FINAL DECK CENSUS (ON-OFF diff>8, % frame, T0=411200): 2600 m 7.74 → 10.58;
+  1600 m 9.87 → 0.000; 700 m 5.75 → 0.000; 300 m 3.54 → 4.36; 120 m 0.19 → 0.22. The re-placement
+  concentrated coverage in the spawn-side belt (thick at orbit + dense overhead at the spawn
+  point; the descent physically crosses the 275-400 m deck layer between the 441 m and 261 m
+  views) at the cost of the old uniform mid-descent veil. Making the 120 m limb view itself
+  thick would need a much lower coverage window (grain cost) or a different reference weather —
+  flagged for the coordinator.
+- **07:45** — FINAL SEAM TABLE (clean = clouds-OFF frames, edge-vs-dome delta): 2600 m
+  0.00→0.00; 1600 m 0.00→0.00; 700 m 0.00→0.00; 300 m 7.67→8.33 (unchanged ~8, the 336-384
+  crossfade ring vs the dome haz ramp — pre-existing); 120 m 5.67→0.33. After annulus medians
+  = u_air (144,209,221) exactly at 2600/1600 m, (149,213,225) at 700 m, (143,208,220) at
+  300 m, (171,227,236) at 120 m (fog ramp on near terrain). JOB 1 PASS.
+- **08:00** — Deliverables landed: §23 spliced into tasks/AC-0384/AC-0384-results.html
+  (2292 lines, no placeholders, both main.gd hunks verified verbatim against the tree);
+  ARCHITECTURE.md synced (fog_display single-source + S² revert note, bridge fade window
+  336-384, u_boost 2.2 + r8b + grain-content note); captures r8b-{on,off}-d{2600,1600,700,300,
+  120}.png + r8b-grain{,-noclouds}-d2600.png + r8b-on-d120-t{0,100000,300000}.png in
+  tasks/AC-0384/. G0 0/0, smoke ok, genhash 25/25, satellite arm R24/F83 ok. Fences held;
+  no commits (subagent scope).

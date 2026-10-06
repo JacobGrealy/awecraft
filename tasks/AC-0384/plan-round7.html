@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0384 — plan (round 7: land the cloud-shell AABB fix)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style>
+</head><body>
+<h1>AC-0384 — plan (round 7)</h1>
+
+<h2>Goal</h2>
+<p>Land the proven AC-0235-pattern fix — an explicit <code>set_custom_aabb</code> on the three cloud-shell
+meshes in the placement path (<code>_place_clouds</code>, <code>godot/scenes/main.gd</code>) — so the deck rasterizes at
+and below 2429 m, and prove it with a 2600/2400/1600/700/300/120 m descent ladder at the user's config
+(R24, fog 332 m opaque, seed 44, T=0.5), including the grain re-check at 2600 m against 4.71/1.90 and the
+death-sphere check against the cloud deck.</p>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/scenes/main.gd</code> — <b>one hunk</b>: in <code>_place_clouds()</code> (the cloud placement path,
+currently lines ~1092-1109), set the shell mesh's custom AABB to the unit box
+<code>AABB(Vector3(-1,-1,-1), Vector3(2,2,2))</code> per layer. The world bounds are the node transform
+(<code>position = c = (0,-R,0)</code>, <code>scale = rsh = R + h</code>) applied to that local box — i.e. the bounds are
+<b>derived from the shell radius and centre by construction</b>; the single source is the existing
+<code>rsh</code>/<code>c</code> pair that already drives position, scale and <code>u_center</code> in the same function.
+No padding, no new constants. (This file is fenced for <i>other</i> sessions' in-flight work — the hunk is
+listed verbatim in the report for hunk-level staging.)</li>
+<li><code>tasks/AC-0384/AC-0384-results.html</code> — section 22 (this round): G0, RESULT JSON, deviation log,
+capture paths, death-sphere report, geometry finding.</li>
+<li><code>tasks/AC-0384/continuity.md</code> — append-only journal (started this run).</li>
+<li><code>godot/ARCHITECTURE.md</code> — the CloudLayer "KNOWN LIMIT (r6, follow-up)" line (lines 147-154) is
+completed/replaced with the fix state (same-task architecture sync; the change alters a documented
+culling condition of the shell).</li>
+</ul>
+
+<h2>Harness gates (mode + ok condition)</h2>
+<table>
+<tr><th>Gate</th><th>Mode / call</th><th>ok:true condition</th></tr>
+<tr><td>G0 (pre + post edit)</td><td><code>timeout 300 $S --headless --path godot --quit</code>, then
+<code>python3 tasks/scripts/gate_census.py &lt;log&gt;</code></td>
+<td>zero <code>SCRIPT ERROR</code> AND zero <code>SHADER ERROR</code> lines (rc is not the gate)</td></tr>
+<tr><td>MECHANISM + ACCEPTANCE RENDER (the render IS the acceptance)</td>
+<td>6× <code>xvfb-run -a</code> + <code>VK_ICD_FILENAMES=lvp_icd.json</code> + <code>--rendering-driver vulkan</code>,
+<b>no</b> <code>AWECRAFT_LOGIC</code>, <code>AWECRAFT_SNAPSHOT=&lt;abs&gt;</code>, <code>AWECRAFT_SIZE=1280,720</code> (comma),
+<code>AWECRAFT_SNAP_DRAIN=1200</code> (frames), <code>AWECRAFT_CAM=planet</code> +
+<code>AWECRAFT_SAT_ALT=&lt;2600|2400|1600|700|300|120&gt;</code>, <code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_SEED=44</code>,
+<code>AWECRAFT_TIME=0.5</code>, <code>AWECRAFT_FOG_PCT=83</code> (user: fog fully opaque at 332 m / edge 400), clouds ON,
+<code>SAT_MESH_STEP=64</code> (settled-frame proxy budget). ~4-5 min wall per frame; log must carry the Forward+
+llvmpipe boot line; <b>check each PNG exists</b>.</td>
+<td>log carries <code>Vulkan … Forward+ … llvmpipe</code>; each PNG exists; at 2600/2400/1600/700/300/120 m the deck
+rasterizes (at 2400 m — just below the old 2429 m cull cutoff — the deck must be present where 1600/700/300/120
+were empty in r4-r6); at the low end the deck is visible from underneath (camera inside the shells)</td></tr>
+<tr><td>GRAIN (round-2 fix, no regression)</td>
+<td><code>.scratch/AC-0384-r5/grain.py</code> on the new 2600 m frame (canonical box 440,320-840,720;
+tight 440,520-840,720)</td>
+<td>canonical/tight at 2600 m within run-noise of 4.71/1.90 (regression = failure). Bonus: the 2600 m frame
+should be byte-identical to <code>rd6-d2600.png</code> (deterministic weather; the AABB change cannot alter drawn
+fragments there — the shell already rasterized at 2600 m in r6)</td></tr>
+<tr><td>SMOKE (dependency-mapped)</td>
+<td><code>AWECRAFT_BATTERY=player;interact;light;fluids</code> headless</td><td>combined <code>ok:true</code></td></tr>
+<tr><td>PROBE (the task's own arms stay meaningful)</td>
+<td><code>AWECRAFT_LOGIC=satellite</code> <code>AWECRAFT_RADIUS=24</code> <code>AWECRAFT_FOG_PCT=83</code> (the cloud-coverage
+geometry block reads the shell nodes)</td>
+<td><code>ok:true</code> with <code>geom.clouds_n=3</code>, <code>clouds_centre_ok</code>, <code>clouds_radius_ok</code>
+(4400/4330/4275) — the fix changes the mesh AABB, not the node transform the arm measures</td></tr>
+</table>
+<p>HEAVY boundary/perf/flake/r50/full battery: <b>not run</b> (coordinator's job, <code>awecraft-run-verify</code>
+policy). Exit after the light gates.</p>
+
+<h2>Snapshots / Risks / Fences</h2>
+<ul>
+<li><b>Fences (task):</b> no commits/pushes; no TASKS.yaml edits; do NOT touch <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> (other session). <code>godot/scenes/main.gd</code> IS
+allowed this run — keep it to the single <code>_place_clouds</code> hunk and list every touched line in the report.</li>
+<li><b>Risk A (mechanism):</b> on this engine build <code>Mesh.get_aabb()</code> ignores <code>custom_aabb</code> (probed); the RS
+carries a separate <code>instance_set_custom_aabb</code> path that may be what the culler consumes. If the ladder
+shows the shells STILL cull below 2429 m, the follow-up in this same task is to move/extend the bounds set
+(e.g. set it before <code>add_child</code> in <code>_setup_aero</code>, or build the shell as an ArrayMesh with the explicit
+surface — the proven AC-0235 shape). The ladder is the arbiter; the 120 m frame is checked first (cheapest
+mechanism signal before committing all six frames).</li>
+<li><b>Risk B (geometry finding):</b> the CPU-side SphereMesh in this build is a Y-compressed spheroid and the
+rendered shell in r6's diagnostic does not match it (ray-measured crossover d_y≈0.75 at 2600 m). Recorded and
+carried into the results with the measurement script; it does not change the culling fix (the cull AABB is
+degenerate at the node origin either way) but is reported because "bounds correct by construction" should say
+which geometry the bounds enclose.</li>
+<li><b>Snapshot budget:</b> vision on a few decisive frames only (2600, 2400, 700, 120 — ~4), plus the r6
+diagnostic already on disk. Logs to repo-root <code>.scratch/AC-0384-r7/</code>. One godot at a time
+(<code>pgrep</code> before every call); the ladder runs as one background job, frames sequential, 1200 s budget each.
+Captures land in <code>tasks/AC-0384/rd7-d{2600,2400,1600,700,300,120}.png</code> alongside the rd4/rd5/rd6 ladders.</li>
+</ul>
+</body></html>

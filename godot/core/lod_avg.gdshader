@@ -18,9 +18,34 @@
 //
 // Applies ONLY to the med/low avg-color instances (world._lod_avg_mat).
 // The high path, the fog boxes, and the cap material are untouched.
+//
+// AC-0384 r8: the HAZE BRIDGE. This material owns the far tier (the
+// 128-384 m annulus about the terrain anchor). Pre-r8 it took the plain
+// engine depth fog: at any altitude above the fog wall the whole annulus
+// repainted 100% fog colour — a flat featureless ring whose outer edge
+// stepped hard onto the satellite body's crisp terrain (the body's haz is
+// haz_a + (1-op), ~0 at the render edge: op is 1 there, haz_a is
+// limb-only). Measured at the user's config (R24, fog full at 332 m):
+// annulus median (76,156,179) vs the dome just outside (117,199,220) at
+// 700 m — the visible discontinuity. Now the fragment haze is a
+// crossfade across the annulus from the ENGINE-FOG MODEL (the inner
+// edge: the same factor as band A at the same view distance, so the
+// band A/annulus boundary is continuous by construction) to the
+// SATELLITE BODY's own haz model (the outer edge: same model and same
+// u_air as the dome, so the annulus/dome boundary is continuous by
+// construction). One fade instead of a wall with a hard edge: ground ->
+// haze -> dome. Fog stays DISABLED here (the engine fog would re-assert
+// its flat factor over the crossfade) — the bridge IS the fog, now with
+// the body's geometry in it.
 shader_type spatial;
+render_mode fog_disabled;
 
 uniform vec4 day : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform vec3 u_air : source_color = vec3(0.529, 0.808, 0.922);  // AeroLib.fog_display (main.gd)
+uniform float u_fog_near = 100.0;   // env.fog_depth_begin (main.gd)
+uniform float u_fog_far = 332.0;    // env.fog_depth_end (main.gd)
+uniform float u_render_edge = 400.0;  // (R+1)*16 (main.gd)
+uniform vec3 u_center = vec3(0.0, -4000.0, 0.0);  // planet centre (main.gd)
 
 varying vec3 v_world_pos;
 
@@ -42,5 +67,32 @@ void fragment() {
 	// (the a channel is light, not transparency).
 	float lit = mix(0.2, 1.0, COLOR.a);
 	ALBEDO = COLOR.rgb * day.rgb * jit * lit;
+	// AC-0384 r8: the crossfade (see header). d = view distance (the
+	// engine fog's own coordinate); w = 1 inside the annulus, 0 beyond
+	// the render edge — the MANHATTAN distance from the terrain anchor
+	// (0,0,0), because the tiers are taxi diamonds (|x|+|z| in chunks),
+	// so the blend lands exactly on the tier boundaries. fog_f is the
+	// engine depth-fog ramp (the band A's factor at the same d); haz_b
+	// mirrors satellite_body.gdshader's haz = haz_a + (1-op) so the
+	// outer edge matches the dome at the same fragment position.
+	vec3 V = CAMERA_POSITION_WORLD - v_world_pos;
+	float d = length(V);
+	float fog_f = clamp((d - u_fog_near) / max(u_fog_far - u_fog_near, 1.0), 0.0, 1.0);
+	float op = smoothstep(u_fog_far, u_render_edge, d);
+	float cosv = clamp(dot(normalize(v_world_pos - u_center), normalize(V)), 0.0, 1.0);
+	float haz_a = (1.0 - cosv) * (1.0 - cosv);
+	float haz_b = clamp(haz_a + (1.0 - op), 0.0, 1.0);
+	float taxi = abs(v_world_pos.x) + abs(v_world_pos.z);
+	// The fade occupies the OUTER 48 m of the annulus (336-384), not the
+	// whole band: with w=1 out to 336, haz = fog_f (the engine ramp)
+	// across the nadir core, so at orbit altitude the near field stays
+	// the fog wall the pre-r8 frames show (the 2600 m grain box must not
+	// see the slab texture through the haze - measured 7.33/4.02 vs the
+	// 4.71/1.90 gate when the fade spanned 128-384). The fade is
+	// smoothstep (zero slope at both ends) and ends exactly at the tier
+	// boundary, so it meets the dome's own haz model continuously.
+	float w = 1.0 - smoothstep(336.0, 384.0, taxi);
+	float haz = mix(fog_f, haz_b, w);
+	ALBEDO = mix(ALBEDO, u_air, haz);
 	ALPHA = 1.0;
 }

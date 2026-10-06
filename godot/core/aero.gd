@@ -139,6 +139,28 @@ static func apply_grade(env: Environment) -> void:
 	env.adjustment_contrast = adj_contrast()
 
 
+# AC-0384 r8: the SINGLE-SOURCE air colour. The sky pass at h = 0 paints
+# mix(horizon, haze_color, haze_amount) (the exp(-|h|*9) haze weight is 1
+# at the horizon). env.fog_light_color (main.gd) and the satellite body's
+# u_air (satellite_body.gd) take this same value, so 100%-fogged terrain,
+# the dome's haz, and the sky's horizon are ONE colour by construction —
+# the "ground giving way to the atmosphere" fade (pre-r8 all three took
+# DayNight.sky_display, a separate day/night/dusk lerp that could drift
+# from the sky it was supposed to dissolve into). NOT space-adjusted: the
+# AC-0386 contract is that the space gradient touches the BACKGROUND ONLY
+# (the ground seen from orbit is depth-fog only, no double darkening) —
+# a first r8 pass did mix to SPACE_SKY by S² and it erased the fog wall
+# at flight altitude (measured: the 2600 m nadir wall went (177,240,255)
+# -> (24,25,23) with the player at S=1). The value keeps the same 8-bit
+# sRGB treatment sky_display used (Color8(...).srgb_to_linear()) so the
+# env fog path sees the same pipeline input as before.
+static func fog_display(t: float) -> Color:
+	var u := sky_uniforms(t)
+	var col := (u["horizon_color"] as Color).lerp(u["haze_color"] as Color, float(u["haze_amount"]))
+	return Color8(int(roundf(col.r * 255.0)), int(roundf(col.g * 255.0)),
+			int(roundf(col.b * 255.0))).srgb_to_linear()
+
+
 static func sky_uniforms(t: float) -> Dictionary:
 	var day := DayNight.day(t)
 	var elev := DayNight.elevation(t)

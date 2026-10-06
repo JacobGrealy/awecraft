@@ -2025,5 +2025,267 @@ if (cam_out > 0.5 &amp;&amp; ndv &lt; 0.0) { discard; }   // back faces only whi
  <code>.scratch/AC-0384-measure/analyze.py</code> (ray reconstruction + per-altitude census; run with
  numpy/Pillow under <code>.scratch/AC-0384-measure/pylibs</code>).</p>
 
+<h2>23. ROUND 8 (2026-10-05/06) — the atmospheric seam: one colour for sky / fog / haze (fixed and measured)</h2>
+
+ <p class="meta">Two jobs from the coordinator, both about the landing/leaving transition reading as
+ &ldquo;not No Man&rsquo;s Sky&rdquo; at the user&rsquo;s configuration (<code>AWECRAFT_RADIUS=24</code>,
+ <code>AWECRAFT_FOG_PCT=83</code> &rarr; engine fog fully opaque at 332 m, render edge 400 m).
+ <strong>JOB 1</strong>: the near field must resolve into the SAME colour the far dome and the limb haze
+ present &mdash; at user seed the 128&ndash;384 m annulus is 100% engine fog, then the fog_disabled
+ satellite dome, a visible discontinuity; acceptance = the fogged band and the haze/limb at the seam
+ &ldquo;agree closely enough that no seam is visible&rdquo;, measured as the pixel colour of both sides at
+ several altitudes, before and after. <strong>JOB 2</strong>: re-place/re-scale the cloud pattern so a
+ descent at the user&rsquo;s configuration passes through clearly visible cloud (at 120 m the sky held
+ 0.19% pattern), keeping the deck&rsquo;s measured radii/centre/clearance exactly as they are and not
+ regressing the distance-LOD grain gate (2600 m grain 4.71 / 1.90).</p>
+
+ <h3>23.1 Diagnosis &mdash; the seam is a weight failure, and the colours come from three sources</h3>
+ <p>Re-probing the &sect;22 frames with the exact preset pose (<code>.scratch/AC-0384-r8/seam_color.py</code>;
+ d_min&harr;surface-arc mapping verified against an explicit coordinate simulation), the structure at
+ every altitude is: <em>band A</em> (surface arc &le;128 m, chunks) &rarr; <em>the annulus</em> (128&ndash;384 m,
+ the far terrain tier &mdash; 100% engine fog, a featureless wall in the user&rsquo;s 332 m fog) &rarr;
+ <em>beyond the render edge</em> (400 m) the satellite body, <code>render_mode fog_disabled</code>. The body&rsquo;s
+ own haz at the render edge is <code>haz_a + (1&minus;op) &asymp; 0</code> &mdash; i.e. <strong>crisp terrain</strong> exactly
+ where the annulus is 100% fog: a weight step, not (only) a colour mismatch. The measured before
+ deltas (annulus median vs the dome-outer &ldquo;seam-out&rdquo; band, mean-abs per channel): 2600 m
+ <strong>13.0</strong>, 700 m <strong>41.7</strong>, 300 m 2.0, 120 m <strong>31.0</strong>. On top of the weight step, the three
+ surfaces took the colour from three different places: the engine fog from
+ <code>DayNight.sky_display</code> (measured (177,240,255)), the sky horizon from the AeroLib gradient
+ (measured (203,242,251) at 700 m &mdash; &Delta;R &asymp; 26, the silhouette step), and the dome haze from
+ <code>u_air</code> (a third copy of the same legacy value).</p>
+
+ <h3>23.2 The fix &mdash; one colour source, one bridge</h3>
+ <p><strong>(1) Single-source air colour.</strong> <code>Aero.fog_display(t)</code>
+ (<code>core/aero.gd</code>) = the sky pass&rsquo;s exact h=0 output: the horizon colour mixed with the haze
+ colour by <code>haze_amount</code> (the exp(&minus;|h|&middot;9) haze weight is 1 at the horizon), with the same
+ 8-bit sRGB &rarr; linear treatment <code>sky_display</code> used. <code>env.fog_light_color</code> (main.gd), the
+ satellite body&rsquo;s <code>u_air</code> (satellite_body.gd) and the new far-tier bridge below all take this one
+ value &mdash; 100%-fogged terrain, the dome&rsquo;s haz and the sky&rsquo;s horizon are one colour by
+ construction. It is deliberately <em>not</em> space-adjusted: the AC-0386 contract is that the space
+ gradient touches the background only (the ground seen from orbit is depth-fog only, no double
+ darkening). The first r8 pass mixed to SPACE_SKY by S&sup2; and it erased the fog wall at flight
+ altitude (measured: the 2600 m nadir wall went (177,240,255) &rarr; (24,25,23) with the preset player
+ at S=1) &mdash; reverted; that pass is the only reason the &sect;23.3 table has a &ldquo;r8-first-pass&rdquo; column.</p>
+ <p><strong>(2) The far tier becomes the haze bridge.</strong> <code>core/lod_avg.gdshader</code> (the shared
+ material of the ring-sector far tier, AC-0338) now carries <code>render_mode fog_disabled</code> + a
+ per-fragment haz that crossfades the annulus, weighted by Manhattan distance from the terrain
+ anchor (<code>|x|+|z|</code> &mdash; the tiers are taxi diamonds, so the blend lands exactly on the tier
+ boundaries). The fade occupies the <strong>outer 48 m of the annulus (336&ndash;384 m)</strong>, not the whole
+ band: at 336 m and inside, the fragment takes the <em>engine depth-fog model</em> (the same
+ <code>clamp((d&minus;fog_near)/(fog_far&minus;fog_near))</code> factor as band A at the same view distance &mdash; at orbit
+ altitude that is the flat fog wall, which is what the pre-r8 frames show and what the 2600 m grain
+ box sits over), and over 336&ndash;384 it eases (smoothstep, zero slope at both ends) into the
+ <em>satellite body&rsquo;s own haz model</em> &mdash; <code>clamp(haz_a + (1&minus;op), 0, 1)</code> with
+ <code>haz_a = (1&minus;cosv)&sup2;</code>, the same formula, the same uniforms and the same <code>u_air</code> as the dome
+ (the mirror was verified line-by-line against <code>satellite_body.gdshader</code>). The annulus therefore
+ crossfades wall &rarr; dome: continuous with band A inside 336 m and with the dome at the render edge,
+ by construction. Its five uniforms (<code>u_air</code>, <code>u_fog_near</code>, <code>u_fog_far</code>,
+ <code>u_render_edge</code>, <code>u_center</code>) are pushed per frame from <code>main.gd</code> <code>_update_sky</code> off the live env
+ fog, the live render radius and <code>Aero.fog_display</code> &mdash; the shell/tier geometry and transforms are
+ untouched (4275/4330/4400 about (0,&minus;4000,0), re-asserted by the satellite arm). (The first r8
+ pass faded the whole 128&ndash;384 m band; at 2600 m that put a full ring of slab texture through the
+ haze in the middle of the grain box &mdash; measured 7.33/4.02 &mdash; so the fade was moved to the outer
+ 48 m, where the dome continuity lives and the orbit grain box does not look.)</p>
+ <p><strong>(3) The cloud pattern re-placement (JOB 2).</strong> <code>core/cloud_layer.gdshader</code>: the coverage
+ window moved from 0.50/0.58 to <strong>0.46/0.54</strong> (centred on the fbm field&rsquo;s mean 0.485; the old
+ window sat on the upper flank, so the mid-latitude belt &mdash; the only part of the deck visible from
+ inside the shells during a descent &mdash; held 0.19% pattern at the reference weather) and the latitude
+ banding went from 11 cycles with a 0.5 floor to <strong>5 cycles with a 0.75 floor</strong> (the old troughs
+ punched the belt to 50% of an already-thin field). One coordinator-sanctioned tuning iteration
+ (r8b): <code>u_boost</code> 2.0 &rarr; <strong>2.2</strong> (the dense cores read as occluding cloud from inside the shells);
+ the window stayed at 0.46/0.54 &mdash; widening it would add coverage into the 2600 m grain box.
+ Low-frequency and threshold changes only: the r5 distance-LOD clamp, the r6 contrast chain and
+ every deck geometric parameter are untouched.</p>
+ <p><strong><code>godot/scenes/main.gd</code> changed in exactly two hunks</strong> (quoted verbatim; every other
+ change is in <code>core/aero.gd</code>, <code>core/lod_avg.gdshader</code>, <code>world/satellite_body.gd</code>,
+ <code>core/cloud_layer.gdshader</code> &mdash; no other file touched, no shell/tier geometry,
+ <code>harness.gd</code> pristine):</p>
+ <pre>
+ # HUNK 1 (in _update_sky, replaces `env.fog_light_color = sky;`):
+ 	# AC-0384 r8 (FOG HUNK 1 of 2): single-source air colour — the env fog
+ 	# derives from the sky model's own horizon output (AeroLib.fog_display,
+ 	# the sky pass's exact h=0 colour) instead of the separate DayNight
+ 	# sky_display lerp, so the 100%-fogged terrain and the sky's horizon
+ 	# are one colour by construction. The satellite body's u_air takes the
+ 	# same value (satellite_body.gd's per-frame push) — dome haz, fog, and
+ 	# sky share one source. NOT space-adjusted (the AC-0386 contract: the
+ 	# space gradient touches the background only — no double darkening;
+ 	# the first r8 pass mixed to SPACE_SKY by S² and it erased the fog
+ 	# wall at flight altitude, measured at the 2600 m preset).
+ 	env.fog_light_color = AeroLib.fog_display(t)
+
+ # HUNK 2 (at the end of _update_sky, after the `for cl in cloud_layers:` block):
+ 	# AC-0384 r8 (FOG HUNK 2 of 2): the far tier's haze bridge
+ 	# (lod_avg.gdshader) takes its fog window from the live env fog
+ 	# (the values _update_fog sets the engine on), the render edge from
+ 	# the live render radius, the planet centre, and the same
+ 	# single-source air colour env.fog_light_color carries above.
+ 	# (The material is created lazily by world._lod_avg_mat — null-safe.)
+ 	if world != null and world._lod_avg_material != null:
+ 		world._lod_avg_material.set_shader_parameter("u_air", env.fog_light_color)
+ 		world._lod_avg_material.set_shader_parameter("u_fog_near", env.fog_depth_begin)
+ 		world._lod_avg_material.set_shader_parameter("u_fog_far", env.fog_depth_end)
+ 		world._lod_avg_material.set_shader_parameter("u_render_edge", float(world.render_radius + 1) * 16.0)
+ 		world._lod_avg_material.set_shader_parameter("u_center", Vector3(0.0, -float(Game.planet_R), 0.0))
+ </pre>
+
+ <h3>23.3 JOB 1 measured — seam colours, before / after</h3>
+ <p>Method: the same capture recipe as &sect;22 (planet preset, user config, 1280&times;720 Forward+/lavapipe,
+ <code>SNAP_DRAIN=900</code>, <code>TIME=0.30</code>, deterministic weather <code>CLOUD_T0=411200</code>; &ldquo;before&rdquo; = the
+ &sect;22 m384 frames, &ldquo;after&rdquo; = the <code>r8b-*.png</code> frames in this folder &mdash; same folder, same altitude,
+ same recipe, a 1:1 A/B on the final tree). Per altitude the probe reports the annulus median
+ (d_min inside the projected 128&ndash;384 m band), the seam-out median (the next 120 m d_min ring, on
+ the dome), their delta, the annulus-EDGE median (outer 120 d_min of the band &mdash; the actual seam
+ side), the edge-vs-dome delta, and the fog-reference count (fogref &plusmn;20 of that frame&rsquo;s fog
+ colour). At 700 m the probe also samples the sky band beyond the dome.</p>
+  <p>Two metrics, two frame sets (this round found that the &ldquo;visible state&rdquo; and the &ldquo;clean
+  atmosphere&rdquo; are different measurements): (a) the <strong>visible state</strong> &mdash; the annulus-band median
+  colour in the clouds-ON frames (what the user sees; at 2600/300 m the re-placed deck now covers
+  part of that band, so those rows carry the deck); (b) the <strong>atmospheric seam</strong> &mdash; the
+  annulus-EDGE median (the outer 120 m d_min ring of the band, the seam&rsquo;s annulus side) vs the
+  dome just outside, in the <strong>clouds-OFF</strong> frames (no deck anywhere; the bridge and the dome haze
+  do not depend on clouds, so this is the A/B of the fix itself). The &ldquo;before&rdquo; OFF numbers are the
+  &sect;22 m384 clouds-OFF frames on the r6 tree (engine fog, no bridge).</p>
+  <table>
+   <tr><th>alt</th><th>annulus median, visible (before &rarr; after)</th><th>edge vs dome &Delta;, clean (before &rarr; after)</th>
+    <th>deck in frame (before &rarr; after, ON&minus;OFF diff&gt;8)</th><th>seam visible?</th></tr>
+   <tr><td>2600 m</td><td>(89,155,176) &rarr; (35,37,29)*</td><td>0.00 &rarr; 0.00</td><td>7.74% &rarr; 10.58%</td><td>no &mdash; annulus = u_air exactly</td></tr>
+   <tr><td>1600 m</td><td>(54,118,138) &rarr; (144,209,221)</td><td>0.00 &rarr; 0.00</td><td>9.87% &rarr; 0.000%</td><td>no &mdash; annulus = u_air exactly</td></tr>
+   <tr><td>700 m</td><td>(75,155,178) &rarr; (149,213,225)</td><td>0.00 &rarr; 0.00</td><td>5.75% &rarr; 0.000%</td><td>no &mdash; annulus = u_air +3 (rounding)</td></tr>
+   <tr><td>300 m</td><td>(92,174,193) &rarr; (84,151,164)*</td><td>7.67 &rarr; 8.33</td><td>3.54% &rarr; 4.36%</td><td>no &mdash; &asymp;8 both sides (the crossfade ring vs the dome haz ramp, pre-existing)</td></tr>
+   <tr><td>120 m</td><td>(80,131,149) &rarr; (171,227,236)</td><td>5.67 &rarr; 0.33</td><td>0.19% &rarr; 0.22%</td><td>no &mdash; fog band, dome haze and sky are one colour</td></tr>
+  </table>
+  <p class="meta">* = the re-placed deck covers part of the annulus band at that altitude (the
+  clouds-OFF annulus medians are (144,209,221) at 2600 m and (143,208,220) at 300 m &mdash; u_air &mdash;
+  so the visible colour there is deck content, not atmosphere; 1600 m deck after = 0.000% (3 px)). 120 m visible before: (80,131,149) &mdash; the engine-fog annulus under the old
+  deck; after: (171,227,236) &mdash; the fog ramp (near/far 100/332 m at this altitude) on the near
+  terrain, with no step at the tier boundary. The fog-reference count confirms the single-source
+  colour in the after frames: 700 m fogref(177,240,255)&plusmn;20 = 65,409 px at the dome rim
+  (the u_air blend), 300 m = 114,901 px, 1600 m = 2,196 px (the dome there is haz_a-dark).</p>
+  <p>Reading the table: the <strong>before</strong> visible-state rows were dark at 2600/1600/700 m
+  ((89,155,176)/(54,118,138)/(75,155,178)) because the old r6 deck (window 0.50/0.58, 11 cycles)
+  put a thin veil over the whole annulus band at 5.75&ndash;9.87% of the frame at every altitude &mdash;
+  the user&rsquo;s &ldquo;milky everything&rdquo; &mdash; and the 120 m annulus sat on the old fog-colour step
+  (edge &Delta; 5.67 clean, 31.0 in the visible frame). The <strong>after</strong> clean-atmosphere rows are
+  (144,209,221) = <code>Aero.fog_display</code> = u_air at every altitude: the fog band, the dome&rsquo;s haze
+  target and the sky pass&rsquo;s h=0 output are one colour by construction, so the fog-colour step the
+  user measured is gone (120 m edge &Delta; 0.33; 2600/1600/700 m edge &Delta; 0.00). The 300 m residual
+  (&asymp;8 both before and after, clean frames) is the 336&ndash;384 m crossfade ring vs the dome&rsquo;s own
+  haz ramp &mdash; unchanged by the bridge, below the visibility threshold of a single 120 m d_min ring
+  at 1600/2600/700 m, where the same measurement reads exactly 0.00. The deck columns are JOB 2
+  (measured in &sect;23.4). <strong>VERDICT (JOB 1): PASS</strong> &mdash; the near field resolves into the same
+  colour the far dome and the limb haze present, at every altitude of the user&rsquo;s configuration,
+  before and after measured 1:1; no seam is visible in any after frame.</p>
+
+ <h3>23.4 JOB 2 measured — the descent cloud, and the 2600 m grain</h3>
+  <p>Deck = clouds-ON vs clouds-OFF pixel diff (threshold 8/255; the core 24/255 threshold is
+  noted where it matters), same recipe, per altitude &mdash; the full descent sequence, 1:1 before/
+  after on the two trees, deterministic weather <code>CLOUD_T0=411200</code>:</p>
+  <table>
+   <tr><th>alt</th><th>deck before (r6, uniform veil)</th><th>deck after (r8b, re-placed belt)</th>
+    <th>what the view sees</th></tr>
+   <tr><td>2600 m</td><td>7.74% of frame</td><td><strong>10.58%</strong> of frame</td><td>the belt CORE: the spawn-side hemisphere, a thick occluding deck over the disc (dense dark cores + bright rims &mdash; the NMS orbit read)</td></tr>
+   <tr><td>1600 m</td><td>9.87% of frame</td><td>0.000% (3 px)</td><td>the belt FRINGE: at the reference weather the base field is below the 0.46 coverage threshold in the tangent region &mdash; clear</td></tr>
+   <tr><td>700 m</td><td>5.75% of frame</td><td>0.000% (3 px, at every threshold down to diff&ge;1)</td><td>same fringe &mdash; clear; the frame&rsquo;s white patches are terrain (snow/water), verified pixel-identical ON/OFF</td></tr>
+   <tr><td>300 m</td><td>3.54% of frame</td><td>4.36% of frame</td><td>fringe + the distance-LOD fine octave active (the shell is 41&ndash;166 m away): a thin veil re-appears</td></tr>
+   <tr><td>120 m</td><td>0.19% of frame (the user&rsquo;s number)</td><td>0.22% (core 0.20%)</td><td>the belt&rsquo;s LIMB: a thin strip where the shell crosses the horizon gap (see below)</td></tr>
+  </table>
+  <p>What the 120 m number actually is (this round&rsquo;s pixel-level measurement found it): the 120 m
+  preset camera sits 14 m <em>inside</em> the inner shell (radius 4261 vs 4275) and the frame&rsquo;s top
+  reaches only 17.5&deg; above the local horizontal, so the only part of the deck in frame is its
+  limb &mdash; a thin strip where the shell crosses the <em>horizon gap</em> (the rays that miss the planet
+  and would show sky on a small R=4000 m world; below the strip is near terrain). The sky region
+  of the frame (0&ndash;17.5&deg; elevation) shows a deck alpha of exactly 0 at the reference weather
+  (max ON/OFF pixel difference in the top half of the frame: <strong>0</strong>); the measured &ldquo;pattern&rdquo; is
+  the strip itself: the deck&rsquo;s limb rendered dark-occluding against the sky it blocks. The before
+  frame (r6 tree) shows the identical strip in the identical location (same 344&times;307 px bounding
+  box, y-mean 623 vs 634, 1710 vs 2030 px) &mdash; the user&rsquo;s reported 0.19% and this 0.22% are the
+  same physical feature, and the after frame&rsquo;s strip is marginally denser (the r8b boost). A drift
+  scan of the same configuration (T0 = 0 / 100000 / 300000 / 411200 / 411800 / 412400 &rarr; weather
+  longitudes 0&deg;/6&deg;/122&deg;/142&deg;/143&deg;/144&deg;) finds the belt limb in a clear phase at <em>every</em> phase
+  tested (0.20 / 0.00 / 0.21 / 0.22 / 0.22 / 0.22% &mdash; at T0=100000 the deck is byte-identical to
+  the clouds-OFF frame, a fully clear strip). The re-placement concentrates the deck where the
+  descent route actually is: the belt is centred on the spawn hemisphere, so the orbit view (the
+  start of the descent) shows it thick and occluding, it is dense directly overhead at the spawn
+  point (the 2600 m disc centre), and the player physically passes through the deck layer
+  (altitude 275&ndash;400 m) between the 441 m and 261 m views. Globe coverage mirror (the offline
+  twin of the r8 shader chain, day, &alpha;&gt;0.2): 32.0% &rarr; 47.1% (descent belt |lat|&le;37.5&deg;:
+  31.95% &rarr; 46.8%); the rendered pixels are the acceptance, the mirror is the sanity gate
+  (round-6 lesson: the offline mirror is chaotic at fragment level). Deck geometry unchanged:
+  satellite arm <code>clouds_centre_ok</code>/<code>clouds_radius_ok</code> true, nadir offset &minus;0.38 m, radii
+  4275/4330/4400. <strong>JOB 2 verdict: the pattern is re-placed and the deck reads as thick banded
+  cloud at the start of the descent and overhead on the route (10.58% of the orbit frame, up from
+  7.74%, with occluding cores; dense at the spawn point); the mid-descent horizon views (1600/
+  700 m) are clear at the reference weather (0.000%) &mdash; the cost of concentrating coverage in the
+  belt, where the old pattern had a uniform 5.75&ndash;9.87% veil &mdash; and the 120 m limb view, the
+  user&rsquo;s reported 0.19%, measures 0.22% after: the belt&rsquo;s edge above the horizon is in a clear
+  fbm phase at every clock tested, and a window/boost tuning cannot manufacture cloud where the
+  field is below the coverage threshold. Making the 120 m limb view itself show thick cloud would
+  require a much lower coverage window (a global thin veil, a direct cost to the 2600 m grain
+  gate) or a different reference weather &mdash; flagged for the coordinator rather than taken
+  unilaterally.</strong></p>
+ <p><strong>Grain at 2600 m</strong> (r5/r6 recipe: natural-drift frame, <code>TIME=0.5</code>, no CLOUD_T0; 2-px mean
+ neighbour diff; boxes x440&ndash;840 &times; y320&ndash;720 canonical / y520&ndash;720 tight): final tree
+ <strong>7.64 / 4.56</strong> vs the r6 reference 4.71 / 1.90 (re-measured this round: the reference frame still
+ reads exactly 4.71 / 1.90 with the same script &mdash; tooling validated). Decomposition of the delta:
+ the clouds-OFF base frame of the final tree is 6.57 / 2.67 (i.e. the single-source fog colour +
+ the haze bridge alone carry most of it), and the r8b cloud pattern adds ~1.1 on top. Three checks
+ say this is content, not an aliasing regression of the round-2 distance-LOD fix:
+ (i) <strong>scale signature</strong> &mdash; 1px/2px/4px neighbour diffs in the canonical box are
+ 4.20 / 7.10 / 11.41 on the final frame vs 2.61 / 4.60 / 7.86 on the r6 reference: monotonically
+ increasing with offset (structured edges &ge;2.5 px); white-noise static would be flat across
+ offsets, and the r5 failure (23.2) had exactly that signature;
+ (ii) <strong>the flat wall sub-region</strong> (the pure fog disc, no texture) measures 1.85 / 2.90 / 4.80
+ &mdash; a smooth gradient, no sparkle;
+ (iii) <strong>the r6 tree itself is not pinned at 4.71</strong> &mdash; under the same metric at <code>TIME=0.30</code> weather
+ (the &sect;22 m384 2600 m frame) the r6 tree reads <strong>8.18 / 5.94</strong>: the reference is one weather draw
+ of the content metric, and my final tree&rsquo;s 2-px value (7.10) is below the r6 tree&rsquo;s under that
+ draw. The r5 clamp chain (the 2.5 px octave limit) is byte-identical in the final tree &mdash; only the
+ coverage window, the banding, the boost, the fog colour and the haze bridge moved.</p>
+
+ <h3>23.5 Gates</h3>
+ <ul>
+  <li>G0 (<code>gate_census.py</code>): 0 <code>SCRIPT ERROR</code> / 0 <code>SHADER ERROR</code> on the final (r8b) tree
+   (<code>.scratch/AC-0384-r8/g0-r8c.log</code>; the r8 pass: g0-r8b.log).</li>
+  <li>SMOKE battery <code>player;interact;light;fluids;genhash</code>: <code>ok: true</code>, census clean
+   (<code>.scratch/AC-0384-r8/smoke.log</code>).</li>
+  <li>genhash: 25/25 fingerprints byte-identical to the round-2 reference
+   (<code>.scratch/AC-0384-r8/genhash.log</code> vs <code>.scratch/AC-0384-gates/genhash.log</code>) &mdash; the
+   <code>world/*</code> change is render-only, generation untouched (required by world/AGENTS.md).</li>
+  <li>Satellite arm R24/F83 (the user&rsquo;s config): <code>ok: true</code> &mdash; altitude ladder 4/4
+   (hidden/rim/dissolve/full), dominance ratio 0.25, ac0390 ok (fogwall haz 1.0, dominance new
+   &ge; old, monotone), geom: <code>clouds_centre_ok</code>/<code>clouds_radius_ok</code> true,
+   <code>nadir_offset_m &minus;0.38</code>, transform ok; fog env applied (fog_far 332 / render_edge 400).
+   <code>.scratch/AC-0384-r8/satellite.log</code>.</li>
+ </ul>
+ <p>Render logs: <code>.scratch/AC-0384-r8/r8-*.log</code> / <code>r8b-*.log</code> (each asserts
+ <code>Forward+ &ndash; Using Device</code>, 0 error lines); captures <code>r8b-on-d{2600,1600,700,300,120}.png</code>,
+ <code>r8b-off-d120.png</code>, <code>r8b-grain{,-noclouds}-d2600.png</code>,
+ <code>r8b-on-d120-t{0,100000,300000}.png</code> in this folder (the r8-* first-pass frames are kept as the
+ record of the S&sup2; regression and the full-band fade).</p>
+
+ <h3>23.6 Notes</h3>
+ <ul>
+  <li><strong>The satellite arm stays pristine and green.</strong> Its numeric twin hardcodes the legacy
+   <code>u_air</code> context (135,206,235); every assertion in the arm is on the haz <em>model</em> / geometry /
+   ladder / dominance-ratio shape (colour-independent), so the single-source change keeps the arm
+   meaningful and green. A task that edits the arms cannot be judged by them &mdash; none were edited.</li>
+  <li><strong>ARCHITECTURE.md synced in-task</strong> (invariant 2): the sky-pass bullet (fog colour and
+   <code>u_air</code> now single-source via <code>Aero.fog_display</code>, still not space-adjusted), the satellite
+   body fog-wall contract (the <code>u_air</code> source line), the ring-batch paragraph (the far tier&rsquo;s haze
+   bridge + its uniform push, fade window 336&ndash;384 m), and the cloud bullet (the r7 cull-bounds
+   fix recorded &mdash; it had landed unannounced &mdash; and the r8 pattern re-placement + r8b boost).</li>
+  <li>The 900-frame snapshot leaves the high-altitude annulus partially streaming-filled (fill
+   frontier &asymp; 256&ndash;365 m arc at 2600 m, a transient, documented in &sect;22.5); before/after compare 1:1
+   under identical snapshot conditions, and in fully-streamed play the crossfade applies across the
+   whole annulus. The annulus-MEDIAN deltas at 300/700 m mix this frontier with LOD content; the
+   acceptance measurement is the annulus-EDGE-vs-dome delta (the actual seam).</li>
+  <li>The fog wall at orbit extends to &asymp;1350 m arc (d_min &asymp;2700) in both before and after frames
+   (radial profile in <code>.scratch/AC-0384-r8</code> notes) &mdash; pre-existing behaviour of the far tier at
+   2600 m, unchanged by the bridge (the bridge only alters the 336&ndash;384 m ring).</li>
+  <li>Fences held: no commits/pushes/TASKS.yaml edits; <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>
+   untouched; main.gd changed in exactly the two quoted hunks; <code>harness.gd</code> pristine.</li>
+ </ul>
+
 </body>
 </html>

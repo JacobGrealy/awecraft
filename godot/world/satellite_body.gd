@@ -580,6 +580,14 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 		# negation). The shader re-weights the baked fixed-sun lambert by
 		# the radial ratio - the terminator now tracks the world's sun.
 		var day := DayNight.day(day_t)
+		# AC-0384 r8: the air colour is now the SINGLE-SOURCE sky-model
+		# value (Aero.fog_display - the sky pass's exact horizon output)
+		# instead of DayNight.sky_display, so the dome's haz, the env fog
+		# (main.gd), and the sky's horizon are one colour by
+		# construction. NOT space-adjusted: the AC-0386 contract is that
+		# the space gradient touches the background only (the ground seen
+		# from orbit is depth-fog only, no double darkening).
+		var u_air := Aero.fog_display(day_t)
 		for m in shader_mats:
 			m.set_shader_parameter("u_fog_far", ff)
 			m.set_shader_parameter("u_render_edge", edge)
@@ -587,7 +595,7 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 			# the shader's edge-continuity term is now the complement of
 			# the existence ramp, windowed by (u_fog_far, u_render_edge)
 			# exactly like the world's own fog.
-			m.set_shader_parameter("u_air", DayNight.sky_display(day_t))
+			m.set_shader_parameter("u_air", u_air)
 			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
 			m.set_shader_parameter("u_day_gain", 0.82 * day)
 			m.set_shader_parameter("u_sun", -DayNight.sun_direction(day_t))

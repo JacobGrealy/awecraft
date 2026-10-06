@@ -1,88 +1,116 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AC-0384 — plan (round 7: land the cloud-shell AABB fix)</title>
-<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style>
-</head><body>
-<h1>AC-0384 — plan (round 7)</h1>
+<title>AC-0384 — plan (round 8: the atmospheric fix)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0384 — plan, round 8 (2026-10-05)</h1>
 
-<h2>Goal</h2>
-<p>Land the proven AC-0235-pattern fix — an explicit <code>set_custom_aabb</code> on the three cloud-shell
-meshes in the placement path (<code>_place_clouds</code>, <code>godot/scenes/main.gd</code>) — so the deck rasterizes at
-and below 2429 m, and prove it with a 2600/2400/1600/700/300/120 m descent ladder at the user's config
-(R24, fog 332 m opaque, seed 44, T=0.5), including the grain re-check at 2600 m against 4.71/1.90 and the
-death-sphere check against the cloud deck.</p>
+<p><b>Goal.</b> Kill the fog-wall / dome discontinuity and the near-empty 120 m cloud view: the
+near field must resolve into the SAME colour the far dome and the limb haze present (one source
+for sky/fog/haze colour), and a descent at the user's configuration (radius 24, fog full at
+332 m) must pass through clearly visible cloud — with the deck's measured radii/centre/clearance
+(4275/4330/4400 about (0,&minus;4000,0)) and the r2 distance-LOD grain (4.71/1.90 @ 2600 m)
+untouched.</p>
+
+<h2>Diagnosis (measured, this round)</h2>
+<ul>
+<li><b>JOB 1 — the seam is a WEIGHT failure, not a colour failure.</b> The annulus (far tier,
+128&ndash;384 m) is 100% engine fog above ~138 m: a flat fog-colour ring. The satellite body just
+outside it renders <code>haz = haz_a + (1&minus;op) &asymp; 0</code> there (op &rarr; 1 beyond the render
+edge; haz_a is limb-only) — crisp terrain against the flat wall. Re-probed the round-4 frames
+(<code>m384-on-d*.png</code>, exact preset pose): the annulus projects at d_min &asymp; [143, 860]
+@ 2600 m, [649, 1949] @ 700 m, [1120, 2833] @ 300 m, [2033, 3305] @ 120 m (law of sines); the
+colour step across each seam is the measured discontinuity (reported before/after). Making the
+fog colour equal the haze colour would NOT fix it — the body's haze WEIGHT is ~0 at the seam.
+The consistent fix: the far tier itself bridges, by a crossfade across the annulus, from the
+engine-fog model (inner edge — identical to band A at the same view distance) to the satellite
+body's own haz model (outer edge — identical to the dome). Then the chain is one fade:
+band A (engine fog) &rarr; annulus (crossfade) &rarr; dome (body haz) &rarr; limb haze &rarr; sky
+rim, all toward the same air colour.</li>
+<li><b>JOB 1b — the colour source.</b> The fog colour (<code>DayNight.sky_display</code>, a
+day/night/dusk lerp) and the sky's horizon (AeroLib horizon + haze + space) are TWO models that
+happen to be close (measured: fog (177,240,255) vs sky-near-horizon (197,238,246) @ 700 m).
+Per the brief, one source wins: <code>AeroLib.fog_display(t, S)</code> = the sky pass's exact
+h = 0 output (horizon mixed with the haze by <code>haze_amount</code>, then to <code>SPACE_SKY</code>
+by S&sup2;) feeds <code>env.fog_light_color</code> AND the body's <code>u_air</code>.</li>
+<li><b>JOB 2 — the 120 m frame is sky-only</b> (the planet preset looks at the tangent limb; the
+frame spans 52.5&deg;&ndash;127.5&deg; from the zenith = the mid-latitude belt of the shell) and the
+pattern there is 0.19%: the 11-cycle latitude band sits mostly out of phase in-frame (its dense
+cap is the out-of-frame zenith cap) and the coverage window (0.50/0.58) passes little of the
+&asymp;0.485-mean fbm field. Fix in <code>cloud_layer.gdshader</code> only: band cycles 11&rarr;5,
+band floor 0.5&rarr;0.75, coverage window 0.50/0.58&rarr;0.46/0.54. All low-frequency / threshold
+changes — no new high-frequency term (grain-safe); the r5 distance-LOD clamp (2.5 px octaves) is
+untouched; shell geometry untouched (the satellite arm re-asserts radii/centre).</li>
+</ul>
 
 <h2>Files to touch</h2>
-<ul>
-<li><code>godot/scenes/main.gd</code> — <b>one hunk</b>: in <code>_place_clouds()</code> (the cloud placement path,
-currently lines ~1092-1109), set the shell mesh's custom AABB to the unit box
-<code>AABB(Vector3(-1,-1,-1), Vector3(2,2,2))</code> per layer. The world bounds are the node transform
-(<code>position = c = (0,-R,0)</code>, <code>scale = rsh = R + h</code>) applied to that local box — i.e. the bounds are
-<b>derived from the shell radius and centre by construction</b>; the single source is the existing
-<code>rsh</code>/<code>c</code> pair that already drives position, scale and <code>u_center</code> in the same function.
-No padding, no new constants. (This file is fenced for <i>other</i> sessions' in-flight work — the hunk is
-listed verbatim in the report for hunk-level staging.)</li>
-<li><code>tasks/AC-0384/AC-0384-results.html</code> — section 22 (this round): G0, RESULT JSON, deviation log,
-capture paths, death-sphere report, geometry finding.</li>
-<li><code>tasks/AC-0384/continuity.md</code> — append-only journal (started this run).</li>
-<li><code>godot/ARCHITECTURE.md</code> — the CloudLayer "KNOWN LIMIT (r6, follow-up)" line (lines 147-154) is
-completed/replaced with the fix state (same-task architecture sync; the change alters a documented
-culling condition of the shell).</li>
-</ul>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/lod_avg.gdshader</code></td><td>JOB 1a: <code>render_mode fog_disabled</code> + the haze
+bridge: per-fragment haz = <code>mix(fog_factor(d), body_haz(d, cosv), w)</code> with
+<code>w = 1 &minus; smoothstep(128, 384, |x| + |z|)</code> (Manhattan distance from the terrain
+anchor (0,0,0) — the EXACT tier boundary), <code>fog_factor</code> = the engine depth-fog ramp
+(<code>u_fog_near/u_fog_far</code> = env.fog_depth_begin/end), <code>body_haz</code> = the satellite
+body's own model (<code>haz_a + (1 &minus; op)</code>, op the smoothstep over
+[u_fog_far, u_render_edge]), mixed toward <code>u_air</code>. New uniforms pushed per frame from
+<code>main.gd _update_sky</code>.</td></tr>
+<tr><td><code>godot/core/aero.gd</code></td><td>JOB 1b: <code>AeroLib.fog_display(t, space_t)</code> — the
+single-source air colour (the sky's h=0 output).</td></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>FOG HUNKS ONLY, listed in the results for hunk staging:
+(1) <code>env.fog_light_color = AeroLib.fog_display(t, space_t)</code> (was the
+<code>sky</code> value); (2) a per-frame push of <code>u_air / u_fog_near / u_fog_far /
+u_render_edge / u_center</code> to <code>world._lod_avg_material</code> at the end of
+<code>_update_sky</code>. No other main.gd hunks.</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code></td><td>JOB 1b: the per-frame <code>u_air</code> push takes
+<code>AeroLib.fog_display(day_t, space_t)</code>; <code>space_t</code> computed from
+<code>Game.player</code> + <code>ppos</code> exactly like <code>_update_sky</code> (band constants read
+off the live player — no duplication). The rest of the push is untouched.</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td>JOB 2: band cycles 11&rarr;5.0, band floor
+0.5&rarr;0.75, coverage window 0.50/0.58&rarr;0.46/0.54. Shader defaults only (the r6
+precedent: no main.gd hunk for cloud look); the r5 LOD clamp and the rest of the r6 chain are
+untouched.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Convention sync: the air colour is now single-source
+(fog + u_air derive from the sky model's horizon output, not DayNight.sky_display) and the far
+tier carries the haze bridge (lod_avg fog_disabled + crossfade).</td></tr>
+</table>
 
 <h2>Harness gates (mode + ok condition)</h2>
-<table>
-<tr><th>Gate</th><th>Mode / call</th><th>ok:true condition</th></tr>
-<tr><td>G0 (pre + post edit)</td><td><code>timeout 300 $S --headless --path godot --quit</code>, then
-<code>python3 tasks/scripts/gate_census.py &lt;log&gt;</code></td>
-<td>zero <code>SCRIPT ERROR</code> AND zero <code>SHADER ERROR</code> lines (rc is not the gate)</td></tr>
-<tr><td>MECHANISM + ACCEPTANCE RENDER (the render IS the acceptance)</td>
-<td>6× <code>xvfb-run -a</code> + <code>VK_ICD_FILENAMES=lvp_icd.json</code> + <code>--rendering-driver vulkan</code>,
-<b>no</b> <code>AWECRAFT_LOGIC</code>, <code>AWECRAFT_SNAPSHOT=&lt;abs&gt;</code>, <code>AWECRAFT_SIZE=1280,720</code> (comma),
-<code>AWECRAFT_SNAP_DRAIN=1200</code> (frames), <code>AWECRAFT_CAM=planet</code> +
-<code>AWECRAFT_SAT_ALT=&lt;2600|2400|1600|700|300|120&gt;</code>, <code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_SEED=44</code>,
-<code>AWECRAFT_TIME=0.5</code>, <code>AWECRAFT_FOG_PCT=83</code> (user: fog fully opaque at 332 m / edge 400), clouds ON,
-<code>SAT_MESH_STEP=64</code> (settled-frame proxy budget). ~4-5 min wall per frame; log must carry the Forward+
-llvmpipe boot line; <b>check each PNG exists</b>.</td>
-<td>log carries <code>Vulkan … Forward+ … llvmpipe</code>; each PNG exists; at 2600/2400/1600/700/300/120 m the deck
-rasterizes (at 2400 m — just below the old 2429 m cull cutoff — the deck must be present where 1600/700/300/120
-were empty in r4-r6); at the low end the deck is visible from underneath (camera inside the shells)</td></tr>
-<tr><td>GRAIN (round-2 fix, no regression)</td>
-<td><code>.scratch/AC-0384-r5/grain.py</code> on the new 2600 m frame (canonical box 440,320-840,720;
-tight 440,520-840,720)</td>
-<td>canonical/tight at 2600 m within run-noise of 4.71/1.90 (regression = failure). Bonus: the 2600 m frame
-should be byte-identical to <code>rd6-d2600.png</code> (deterministic weather; the AABB change cannot alter drawn
-fragments there — the shell already rasterized at 2600 m in r6)</td></tr>
-<tr><td>SMOKE (dependency-mapped)</td>
-<td><code>AWECRAFT_BATTERY=player;interact;light;fluids</code> headless</td><td>combined <code>ok:true</code></td></tr>
-<tr><td>PROBE (the task's own arms stay meaningful)</td>
-<td><code>AWECRAFT_LOGIC=satellite</code> <code>AWECRAFT_RADIUS=24</code> <code>AWECRAFT_FOG_PCT=83</code> (the cloud-coverage
-geometry block reads the shell nodes)</td>
-<td><code>ok:true</code> with <code>geom.clouds_n=3</code>, <code>clouds_centre_ok</code>, <code>clouds_radius_ok</code>
-(4400/4330/4275) — the fix changes the mesh AABB, not the node transform the arm measures</td></tr>
-</table>
-<p>HEAVY boundary/perf/flake/r50/full battery: <b>not run</b> (coordinator's job, <code>awecraft-run-verify</code>
-policy). Exit after the light gates.</p>
-
-<h2>Snapshots / Risks / Fences</h2>
 <ul>
-<li><b>Fences (task):</b> no commits/pushes; no TASKS.yaml edits; do NOT touch <code>godot/autoload/game.gd</code>,
-<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> (other session). <code>godot/scenes/main.gd</code> IS
-allowed this run — keep it to the single <code>_place_clouds</code> hunk and list every touched line in the report.</li>
-<li><b>Risk A (mechanism):</b> on this engine build <code>Mesh.get_aabb()</code> ignores <code>custom_aabb</code> (probed); the RS
-carries a separate <code>instance_set_custom_aabb</code> path that may be what the culler consumes. If the ladder
-shows the shells STILL cull below 2429 m, the follow-up in this same task is to move/extend the bounds set
-(e.g. set it before <code>add_child</code> in <code>_setup_aero</code>, or build the shell as an ArrayMesh with the explicit
-surface — the proven AC-0235 shape). The ladder is the arbiter; the 120 m frame is checked first (cheapest
-mechanism signal before committing all six frames).</li>
-<li><b>Risk B (geometry finding):</b> the CPU-side SphereMesh in this build is a Y-compressed spheroid and the
-rendered shell in r6's diagnostic does not match it (ray-measured crossover d_y≈0.75 at 2600 m). Recorded and
-carried into the results with the measurement script; it does not change the culling fix (the cull AABB is
-degenerate at the node origin either way) but is reported because "bounds correct by construction" should say
-which geometry the bounds enclose.</li>
-<li><b>Snapshot budget:</b> vision on a few decisive frames only (2600, 2400, 700, 120 — ~4), plus the r6
-diagnostic already on disk. Logs to repo-root <code>.scratch/AC-0384-r7/</code>. One godot at a time
-(<code>pgrep</code> before every call); the ladder runs as one background job, frames sequential, 1200 s budget each.
-Captures land in <code>tasks/AC-0384/rd7-d{2600,2400,1600,700,300,120}.png</code> alongside the rd4/rd5/rd6 ladders.</li>
+<li><b>G0</b>: one headless load, <code>python3 tasks/scripts/gate_census.py &lt;log&gt;</code> &rarr;
+<b>0 SCRIPT ERROR AND 0 SHADER ERROR lines</b> (rc is not the gate).</li>
+<li><b>SMOKE</b>: <code>AWECRAFT_BATTERY=player;interact;light;fluids</code> &rarr; <b>ok:true</b>.</li>
+<li><b>Probe — satellite arm</b>: <code>AWECRAFT_LOGIC=satellite AWECRAFT_RADIUS=24
+AWECRAFT_FOG_PCT=83</code> &rarr; <b>ok:true</b>, ladder 4/4, ratio 0.25, ac0390, and
+<b>geom.clouds_centre_ok / geom.clouds_radius_ok true</b> (the deck stays meaningful; the arm's
+haz assertions test the BODY model, which is untouched).</li>
+<li><b>Probe — cloud coverage</b>: the offline mirror of the shader alpha
+(<code>.scratch/AC-0384-r8/coverage.py</code>, re-created to mirror the r8 shader) reports sane
+day/night globe numbers (the round-6 baseline: day &asymp;66&ndash;68% at alpha &gt; 0.2).</li>
+<li><b>RENDERS are the acceptance</b> — user config (R24, FOG_PCT=83), seed 44, 1280&times;720,
+Forward+/lavapipe (<code>Forward+ &ndash; Using Device</code> asserted in every log),
+<code>AWECRAFT_CAM=planet</code>, <code>AWECRAFT_SNAP_DRAIN=900</code>, frozen time 0.30 +
+<code>AWECRAFT_CLOUD_T0=411200</code> — identical to the round-4 measurement run so before/after
+compare 1:1. Captures (named <code>r8-*.png</code>): clouds-ON at 2600/1600/700/300/120 m +
+clouds-OFF at 120 m (deck isolation) + a natural-drift 2600 m ON/OFF grain pair (TIME 0.5, the
+r5/r6 recipe). Measured: (a) fog band vs dome/limb colour at the seam per altitude (before:
+m384-*; after: r8-*); (b) 120 m pattern density from the ON/OFF diff (before 0.19%);
+(c) grain (2-px neighbour diff, canonical box) &le; 4.71 / &le; 1.90 vs the r6 reference.</li>
 </ul>
+
+<h2>Risks</h2>
+<ul>
+<li>Colour-space round-trip of the new fog colour (sRGB constants &rarr; pipeline linear &rarr;
+tonemap &rarr; encode): measured, not assumed — fog band and sky horizon sampled from the SAME
+frame after the change; if an offset survives, the srgb_to_linear treatment is adjusted (one
+line) and re-measured.</li>
+<li>The annulus crossfade could read as a visible band if the blend reads as a step; the window
+is the tier band itself (128&ndash;384 m), so it is the LOD handoff zone by construction —
+measured at all five altitudes.</li>
+<li>The cloud coverage change can bring back the r5 aliasing static — the grain gate is the
+guard (measured before/after on the 2600 m pair; a regression = failure, per the round-6
+brief).</li>
+<li><code>main.gd</code> carries another session's in-flight hunks (AC-0038 particles, AC-0088
+controls): my hunks are the two fog blocks only, quoted verbatim in the results for hunk
+staging.</li>
+</ul>
+
 </body></html>
