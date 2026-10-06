@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-06T15:24
+  updated_at: 2026-10-06T19:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0398
 - AC-0397
 - AC-0394
 - AC-0395
@@ -24484,11 +24483,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-06T15:24
-  updated_at: 2026-10-06T15:24
-  completed_at: null
+  updated_at: 2026-10-06T19:09
+  completed_at: 2026-10-06T19:09
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The ground should be lit the way a modern game lights it - smooth gradients across
@@ -24552,5 +24551,25 @@ intake:
     CONTEXT: read tasks/AC-0394/AC-0394-results.html (the banding narrowing and the captures), the AC-0159
     entry in tasks/TASKS.yaml, and gdext/src/mesh.cpp around the `FSH`, `AO_MULT` and `s_corner_tag` definitions.
 
-    '
+
+
+    CLOSED WITH THE HEAVY STAGE RUN BY THE COORDINATOR. The builder''s own gates were green (G0 zero script
+    and zero shader errors, genhash 25/25 byte-identical so H is untouched, meshprobe 1878/1878, lightstate
+    invariants green, boundary r4 with no trade-off at p95 33 on against 35 off, and the off-state render
+    bit-identical to the pre-feature build at zero of 121,600 ground pixels differing against 84 per cent
+    changing with it on). THE HEAVY SET, RUN FROM THE COORDINATOR AFTER THE BUILDER EXITED: genhash, farab,
+    ladder, lightstate, r16 and the battery all completed rc=0 with ZERO SCRIPT ERROR and ZERO SHADER
+    ERROR lines - the shader census matters because a broken shader draws a fallback material while the
+    engine still exits zero. Key fields: farab h_mismatch 0; lightstate leaks 0; r16 ok with far_holes
+    0 in both bands. The coordinator''s first attempt at this stage grabbed a stale single-mode gate script
+    out of .scratch, which exited cleanly having run nothing and produced no RESULT lines at all - caught
+    by checking the output rather than the exit code, and replaced by invoking the modes directly. The
+    genhash field extraction in that same pass was also inconclusive because the grep pattern did not
+    match this log''s layout; the byte-identity claim rests on the builder''s 25/25 comparison and on
+    the mode completing clean, and is recorded that way rather than as an independent re-derivation. ONE
+    ITEM CARRIED FORWARD WITH ATTRIBUTION RATHER THAN SILENCE: lightstate''s vc_diff reads 4 with the
+    feature on against a standing 1 to 2, explained by the continuous field spreading the re-colour across
+    more vertices, with every invariant still green; the standing note in HARNESS.md section 3 should
+    be re-based with that attribution in a future documentation pass, which is a note-keeping task and
+    not a correctness problem.'
   comments: []
