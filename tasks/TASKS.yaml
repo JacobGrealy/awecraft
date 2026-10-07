@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T18:49
+  updated_at: 2026-10-07T18:50
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24972,7 +24972,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-07T18:48
-  updated_at: 2026-10-07T18:49
+  updated_at: 2026-10-07T18:50
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -25041,5 +25041,42 @@ intake:
 
     This is the third round in a row where the user''s report has been more precise than the coordinator''s
     acceptance criteria: the gate passed its own test and failed the user''s use. When the fix lands,
-    the ladder must be checked for the near tiers at EVERY altitude including the high ones.'
+    the ladder must be checked for the near tiers at EVERY altitude including the high ones.
+
+
+    THIRD ITEM ADDED BY THE USER 2026-10-07, in their words: "also the clouds still look 2d not voluminous."
+    This is a correction to AC-0401, which was asked for "less of them but the individual clouds should
+    be bigger and they should be volumetric", delivered fewer-and-larger convincingly (the field at a
+    third of its previous frequency, band gaps, puff-and-core shading, verified at 120 m where the old
+    frame was a fine membrane filling the sky and the new one is a few large soft masses with sky visible
+    between them) - and did not achieve the volume the user is asking for.
+
+    THE LIKELY REASON, to be verified rather than assumed, and it is structural rather than a matter of
+    shading detail: ONE SPHERICAL SHELL CANNOT LOOK VOLUMETRIC. A single surface at a single radius has
+    no parallax and no internal depth, so however good its pattern is, the eye reads a painted membrane
+    - which is exactly the phrase the round 12 assessment used for it (D1: "a flat patterned membrane,
+    not volumetric cloud"). THE WORLD ALREADY HAS THREE SHELLS at radii 4275, 4330 and 4400 with different
+    heights and coverage values, and they read as one deck because they are drawn as one. USE THEM AS
+    DEPTH LAYERS INSTEAD: give each its own pattern phase and scale so the layers differ, so that a mass
+    seen through a gap in a nearer layer is visibly behind it, and so that a descent passes through several
+    distinct layers rather than one. That is where parallax and therefore volume comes from, and it costs
+    no new geometry - the shells and their verified radii must not move.
+
+    THE OTHER HALF OF VOLUME IS LIGHT. Flat clouds look flat because every part of them is the same brightness.
+    Real cloud reads as a volume because the sun-facing side is bright, the underside and the side away
+    from the sun are dark, and the transition between them is gradual. AC-0401 improved the shading (puff-and-core)
+    but the round 12 assessment recorded exactly this deficit with numbers: the deck''s brightness spread
+    measured 16.9 against 32.4 for the reference look, and its colour was near-pure grey, 222,222,222,
+    where the reference carries saturation, 181,230,194. So: widen the brightness range, let the sun direction
+    drive it, and consider whether the deck should carry some of the air colour rather than being neutral.
+
+    ACCEPTANCE: the same 120 m frame and the same 2600 m frame the user is judging, plus a middle altitude,
+    compared against AC-0401''s captures - and the brightness spread measured against the same instrument
+    the assessment used, so the improvement is a number and not an impression. If a vertical or multi-layer
+    approach is taken, show a frame in which one layer is visibly behind another.
+
+    CONSTRAINTS: the cloud shell radii and centre stay exactly 4275/4330/4400 about (0, -R, 0), because
+    they are verified correct; keep AC-0401''s cloud switch working with its off state bit-identical;
+    the near-field fog-only fade, the altitude-gated limb on the body alone, AC-0402''s altitude-aware
+    sky, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must all keep working.'
   comments: []
