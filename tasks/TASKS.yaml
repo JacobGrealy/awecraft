@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-06T19:11
+  updated_at: 2026-10-07T03:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -25,6 +25,7 @@ queue:
 - AC-0328
 - AC-0330
 - AC-0399
+- AC-0400
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24637,6 +24638,63 @@ intake:
     CONTEXT: read tasks/AC-0384/AC-0384-results.html section 22 (the streaming measurements and the method),
     the round 6 findings in the r9 commit message, godot/HARNESS.md section 2 for the render recipe and
     the fwdshot row in tasks/harness_data.yaml.
+
+    '
+  comments: []
+- id: AC-0400
+  title: dark-rim-at-the-limb-seam-fade
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-07T03:49
+  updated_at: 2026-10-07T03:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Seen from orbit the planet should be wrapped in atmosphere all the way to its
+    edge. Instead a thin dark rim can appear at the limb - a hard dark line where the air should be -
+    which reads as a rendering fault rather than a world.
+
+
+    2) Technical Details:
+
+    FOUND BY AC-0399 while measuring what is visible from altitude, in the same code it was already fixing
+    (godot/core/lod_avg.gdshader, the AC-0384 r8 haze bridge). The two defects are related and the second
+    is the residue of the first.
+
+    WHAT WAS ALREADY FIXED IN AC-0399: the bridge''s mix arguments were back to front - `mix(fog_f, haz_b,
+    w)` returned haz_b, which is about zero at the orbital nadir, across the whole of the w=1 core, contradicting
+    the comment in the same file. The consequence was that at 2600 m the BUILT far annulus rendered as
+    a near-black void (the lit-0.2 base colour, 16,8,0) instead of the fog wall, so built terrain looked
+    unbuilt. That is one of the two halves of the user''s long-running complaint and it was introduced
+    by the coordinator''s own r8 commit; the one-line swap is in place and committed in AC-0399, with
+    genhash untouched and the gates re-run green.
+
+    WHAT REMAINS, and is this ticket: the same shader''s 336 to 384 m SEAM FADE still targets haz_b, and
+    haz_b is approximately zero at the orbital nadir. A fade toward zero is a fade toward black, so even
+    with the mix corrected the outer edge of the far annulus tends toward a dark rim at altitude instead
+    of blending into the air behind it. THE FADE SHOULD TARGET THE BACKGROUND COLOUR - the same single-source
+    air colour the rest of the atmosphere now uses - so the annulus dissolves into the sky rather than
+    into darkness. The AC-0399 run documented the residual and deliberately left it, because it is a design
+    question about what the rim should blend INTO rather than a mechanical bug.
+
+    VERIFY: the AC-0399 captures include the frames this was found in (tasks/AC-0399/captures/, set2-after-2600-*.png
+    and the r8-buggy comparison frames); a render at the satellite altitude before and after, plus one
+    at a middle altitude where the 336-384 m band occupies more of the frame, would show the rim present
+    and then gone. Measure it as a pixel value at the annulus edge against the background rather than
+    by eye. Keep the atmosphere''s single-source colour rule intact - the fix is to point the fade at
+    the existing source, not to introduce a fourth colour.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (shader-only change, no generation); G0 zero SCRIPT ERROR
+    and zero SHADER ERROR via tasks/scripts/gate_census.py; the standing set green (farab h_mismatch 0,
+    ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands,
+    boundary r4 in band, shaderforce 12/12); AC-0398''s interpolated lighting and AC-0399''s view-weighting
+    must keep working; the render recipe and its traps are in godot/HARNESS.md section 2 and the fwdshot
+    row in tasks/harness_data.yaml.
 
     '
   comments: []
