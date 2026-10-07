@@ -44,3 +44,19 @@ r16, a battery - whose output cannot be read afterwards has to be done twice. Wr
 `.scratch/<TICKET>-<what>.log` instead, which is where the existing gate jobs already put theirs and
 which survives across commands. Learned 2026-10-03 by losing the only copy of a SCRIPT ERROR line from
 a 620-second Forward+ render.
+
+## NEVER leave `HOME=/tmp/dsh_home` set when you run the Windows build
+
+`build_windows.sh` resolves the engine as `GODOT="$HOME/tools/godot/godot"` (line 31), so a `HOME` that
+points anywhere else makes the export invoke a path that does not exist and fail with **exit 127 —
+command not found**. The trap is that the godot-run rule says to prefix every engine call with
+`HOME=/tmp/dsh_home`, which quietly poisons any build sharing the same shell command:
+
+    export HOME=/tmp/dsh_home; ...battery...; ./build_windows.sh   # FAILS, exit 127
+
+Run the build with the real HOME, in its own command:
+
+    ./build_windows.sh          # HOME=/home/angrygiant -> $GODOT resolves
+
+Cost 2026-10-07: two failed builds and a wrong "port 8080 busy" diagnosis before the log's exit code
+was read properly. **An exit code is evidence; a plausible story about it is not.**
