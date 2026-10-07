@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0401 results</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1400px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:32px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+.ok{color:#22543d;font-weight:bold}.bad{color:#9b2c2c;font-weight:bold}.warn{color:#975a16;font-weight:bold}
+pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow-x:auto;font-size:12px}
+img{border:1px solid #cbd5e0;max-width:100%}
+.pair{display:flex;gap:12px;flex-wrap:wrap}.pair>div{flex:1 1 420px}
+.small{font-size:12px;color:#4a5568}
+</style></head>
+<body>
+<h1>AC-0401 results — cloud-material-tier-split-and-layer-conflicts</h1>
+<p>PLAN: <a href="plan.html">plan.html</a> · SPEC: <a href="spec.html">spec.html</a> · CONTINUITY: <a href="continuity.md">continuity.md</a></p>
+
+<h2>Verdict (per user item)</h2>
+<table>
+<tr><th>#</th><th>User item</th><th>What was done</th><th>Status</th></tr>
+<tr><td>1</td><td>“Too many clouds — less of them, but the individual clouds should be bigger and they should be volumetric”</td>
+<td><code>cloud_layer.gdshader</code> behind <code>u_deck</code> (Settings <code>cloud_deck</code>, default ON): the field runs at 1/3 frequency (masses ~3× wider), the coverage window tightens (fewer), the band troughs clear (real gaps), edges soften, and the masses get a volumetric read (puff brightness off the mid field + deepened core shading 0.70→0.58). <code>u_deck&lt;0.5</code> = the exact pre-AC-0401 path (verified by the deck-OFF A/B frames below).</td><td class="ok">DONE — renders</td></tr>
+<tr><td>2</td><td>“Low LOD and satellite LOD share the same shader / low LOD should have NO limb effect, only fog”</td>
+<td>They never shared a <em>file</em>, but they shared the <em>effect</em>: the limb rim the low-LOD view showed was the sky-pass glow (<code>aero_sky_gradient</code>, altitude-ungated) + the body's own haz on the far hemisphere. The glow now rides <code>u_space</code> behind <code>u_limb_gate</code> (Settings <code>limb_space</code>, default ON): no rim below the flight band, full rim from orbit. The low-LOD annulus (<code>lod_avg.gdshader</code>) stays fog-only (its haze crossfades into the same <code>u_air</code> the body carries — AC-0400's single-source seam target). The body keeps its limb haze.</td><td class="ok">DONE — renders</td></tr>
+<tr><td>3</td><td>“Z-fighting between the clouds, the low LOD and the satellite LOD”</td>
+<td>Separated by construction: (a) PARTITION — every near-field material (the 4 <code>chunk_lit_*</code> kinds, <code>lod_avg</code>, the 2 <code>fluid_anim_*</code>) now discards fragments at <code>d ≥ u_fog_far</code> (the body's own ownership wall, <code>DayNight.fog_far</code> — the same value on <code>env.fog_depth_end</code>); the annulus and the body never co-draw past the wall. (b) RADIUS ORDERING — <code>satellite_body.gdshader</code> gains a vertex stage that moves the displaced surface 2 m radially inward, so wherever the same terrain still coexists (relief straddling the wall), the near tiers win the depth test by construction. The cloud deck (transparent, no depth write) blends over — it never z-fights. The 2 m is 0.028° at R4000; the op window and the star-occlusion radius are untouched.</td><td class="ok">DONE — renders</td></tr>
+<tr><td>4</td><td>“High-detail terrain should be hidden above a certain height — you shouldn't be able to see it from space — in the same way the satellite body dissolves in below the flight band; the threshold must be checked against the body's own so the two never both vanish or both show”</td>
+<td>No new constant: the “certain height” IS the body's own fog wall (332 m view distance at the user's R24/F83). The near field obeys the same wall the body already owned (the partition above), so the high detail's “dissolve” is the engine fog fade on the way up, and the near field stops drawing exactly where the body's existence ramp begins — never both, by construction. From orbit the disc is the body alone: the planet, not the fog-colour patch of ground left behind.</td><td class="ok">DONE — renders</td></tr>
+</table>
+
+<h2>Switches (the look-change rule)</h2>
+<table>
+<tr><th>Setting</th><th>Default</th><th>Effect</th><th>Short-circuit</th><th>Env override</th></tr>
+<tr><td><code>cloud_deck</code></td><td>ON (the user asked — the <code>modern_light</code> precedent)</td><td><code>u_deck=1</code>: the re-characterised deck; OFF: the exact r9 field + windows</td><td>shader-side: <code>u_deck&lt;0.5</code> selects the pre-AC-0401 constants; the new terms are 1.0/identity</td><td><code>AWECRAFT_CLOUDDECK=0|1</code></td></tr>
+<tr><td><code>limb_space</code></td><td>ON (the user asked)</td><td><code>u_limb_gate=1</code>: the rim rides <code>u_space</code> (no rim near the ground, full rim from orbit); OFF: the pre-AC-0401 rim at every altitude</td><td>shader-side: <code>mix(1.0, u_space, 0.0)</code> is exactly 1.0</td><td><code>AWECRAFT_LIMB=0|1</code></td></tr>
+</table>
+<p class="small">The partition + the 2 m inset are DEFECT fixes (the flicker / the orbital patch), not look changes — no switch for them. Both Settings rows are on the Options page (<code>menu.gd</code>); values are read live by <code>world.gd _ac0401_push()</code> (no apply step owed).</p>
+
+<h2>Was the shader “shared”?</h2>
+<p>No file was shared — <code>lod_avg.gdshader</code> (the annulus/low LOD), <code>satellite_body.gdshader</code> (the body) and <code>chunk_lit_*.gdshader</code> (the high tiers) were always separate files. What WAS shared: the near tiers violated the wall the body owned, so at low altitude the low-LOD view carried the body's effect (a 100%-fog annulus drawn <em>over</em> the body's displaced terrain, coplanar — the fog-colour diamond in the orbital frames + the 332–400 m flicker), and the sky-pass limb glow was altitude-ungated, so the “limb effect” showed at every altitude on top of the low LOD. After AC-0401: the low LOD fades into FOG ONLY (and ends at the wall), the rim is an orbit instrument, the body keeps its haze, and the layers are radius-ordered with a real 2 m gap.</p>
+
+<h2>Layer separation + the threshold</h2>
+<p><strong>Separation:</strong> strict fog-wall partition (near field discards at <code>d ≥ u_fog_far</code>) + 2 m radial body inset (radius ordering). The deck blends (transparent pass, no depth write) — it never participates in depth. <strong>Threshold:</strong> <code>u_fog_far = DayNight.fog_far(render_radius, fog_start_pct)</code> = 332.0 at the user's R24/F83 (render edge 400.0) — the body's OWN op-window start, pushed from the same value <code>main.gd</code> sets on <code>env.fog_depth_end</code> (one number, one home). The handoff is per-fragment VIEW DISTANCE, not altitude: the body's <code>op = smoothstep(332, 400, d)</code> and the near-field discard <code>d ≥ 332</code> are the same window, so the high detail stops exactly where the body's existence begins — never both vanish (below the wall the body is discarded, the near field is the world) and never both show (above it the near field is discarded, the body owns the view; the 332–400 m band is the body fading in while its <code>haz_d</code> carries the single-source air colour — AC-0400's seam — so the band reads as the world's own fog). At the nadir the view distance ≈ the altitude, so the “certain height” where the high detail hides is ≈ the fog wall: the ladder confirms it — 120/300 m show the high-detail terrain (crisp to hazy), 700/1600/2600 m show only the body's baked surface.</p>
+
+<h2>Gates (light set — the full battery + Windows build are the coordinator's job)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 <code>--headless --quit</code> + <code>gate_census.py</code></td><td class="ok">0 SCRIPT / 0 SHADER ERROR (rc 0) — <span class="small">.scratch/ac0401-g0.log</span></td></tr>
+<tr><td>shaderforce (Forward+ lavapipe, 12 shipped shaders forced)</td><td class="ok">12/12 <code>verdict=ok</code>, 0/0 census — <span class="small">.scratch/ac0401-shaderforce2.log</span></td></tr>
+<tr><td>SMOKE <code>player;interact;light;fluids;genhash</code></td><td class="ok"><code>ok:true</code>, 0/0 census — <span class="small">.scratch/ac0401-smoke.log</span></td></tr>
+<tr><td>genhash (generation untouched)</td><td class="ok">25/25 byte-identical to the AC-0400-era set</td></tr>
+<tr><td>boundary r4 (the single builder self-check)</td><td class="ok">ok/marker_ok/remesh_ok true; p50 13, p95 34, max 164, built_final 68, staged_dropped 2303 (≤2500), flap 84 — field-identical to the AC-0399 pre-change run — <span class="small">.scratch/ac0401-boundary-r4.log</span></td></tr>
+<tr><td>RENDERS (the acceptance ladder, AC-0384 §25.7 recipe, R24/F83, T=0.5 frozen, CLOUD_T0=411200)</td><td class="ok">8 frames, all Forward+/llvmpipe, all assert <code>fog_far=332.0 render_edge=400.0</code>, 0/0 each — below</td></tr>
+</table>
+
+<h2>Finding (pre-existing, fixed in-task)</h2>
+<p>The SATDIAG cloud dump (<code>satellite_body.gd _satdiag_clouds</code> — a whole-tree walk) did <code>float(null)</code> whenever the <code>shaderforce</code> probe's pbox wore the cloud shader with NO parameters set (first diag tick inside the probe's 12-frame window) — a SCRIPT ERROR that failed the census on the very run the probe exists to measure. Intermittent (bake-time dependent), so it had not surfaced before. Hardened: non-float <code>u_coverage</code> reports <code>cov=-1.000</code> in the diag line instead of throwing. The second shaderforce run is 0/0.</p>
+
+<h2>Deviations</h2>
+<ul>
+<li><strong>world.gd → Main material push</strong> (<code>u_deck</code> / <code>u_limb_gate</code>): <code>main.gd</code> is fence-locked by the parallel session, and the cloud/sky materials are its members. <code>world.gd _ac0401_push()</code> reaches them through the parent <code>Main</code> node (World is a direct child of Main), per-frame, change-gated. The shader-side defaults are OFF (the pre-AC-0401 paths), so a material without the push keeps the old look. Documented in ARCHITECTURE.md; if the fence lifts, the push can move back into <code>main.gd _update_sky</code> next to its siblings.</li>
+<li><strong>First shaderforce run FAILED the census (1 SCRIPT ERROR)</strong> — the pre-existing diag race above, not a shader fault. Fixed in <code>satellite_body.gd</code> (instrumentation only) and re-run clean.</li>
+<li><strong>No commits, no push, no TASKS.yaml edits</strong> (fence). The parallel session's uncommitted changes (<code>main.gd</code> particle pool, <code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code>) are in the live tree but were not touched; they are render-neutral for this ladder (the pool allocates an idle 200-slot ring; the snapshot run spawns no particles).</li>
+</ul>
+
+<h2>The renders (after vs before)</h2>
+<p class="small">Before set: <code>tasks/AC-0384/ac0384-final-*</code> (the AC-0384 round-12 captures, same recipe/seed/weather). After set: this folder. All 1280×720, Forward+/llvmpipe, planet preset (the frozen player flown to <code>AWECRAFT_SAT_ALT</code> + the terrain height above the spawn, looking at the tangent limb), T=0.5 frozen, CLOUD_T0=411200, R24/F83. Every log carries the mandated <code>Vulkan … Forward+ … llvmpipe</code> boot line and asserts <code>fog_far=332.0 render_edge=400.0</code>; all 8 census 0/0 (logs: <code>.scratch/ac0401-runs/ac0401-*.log</code>, capture script: <code>capture.sh</code>).</p>
+
+<table>
+<tr><th>Frame</th><th>SAT_ALT</th><th>S (SATDIAG)</th><th>Body op_nadir</th><th>Log</th><th>Census</th></tr>
+<tr><td><code>ac0401-after-descent-2600.png</code></td><td>2600</td><td>1.000</td><td>1.000</td><td><span class="small">after-descent-2600.log</span></td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-after-descent-1600.png</code></td><td>1600</td><td>0.921</td><td>1.000</td><td><span class="small">after-descent-1600.log</span></td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-after-descent-700.png</code></td><td>700</td><td>0.132</td><td>1.000</td><td><span class="small">after-700.log</span></td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-after-700-clouds-off.png</code></td><td>700</td><td>0.132</td><td>1.000</td><td><span class="small">after-700-clouds-off.log</span> (<code>AWECRAFT_CLOUDS=0</code>)</td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-after-descent-300.png</code></td><td>300</td><td>0.000</td><td>0.000</td><td><span class="small">after-300.log</span></td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-after-descent-120.png</code></td><td>120</td><td>0.000</td><td>0.000</td><td><span class="small">after-120.log</span></td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-deckoff-2600.png</code></td><td>2600</td><td>1.000</td><td>1.000</td><td><span class="small">deckoff-2600.log</span> (<code>AWECRAFT_CLOUDDECK=0</code>)</td><td class="ok">0/0</td></tr>
+<tr><td><code>ac0401-deckoff-700.png</code></td><td>700</td><td>0.132</td><td>1.000</td><td><span class="small">deckoff-700.log</span> (<code>AWECRAFT_CLOUDDECK=0</code>)</td><td class="ok">0/0</td></tr>
+</table>
+<p class="small">The player altitude in each run is SAT_ALT + 141 (the spawn terrain height), so the 700 frame sits at 841 m → S = smoothstep(500,2000,841) = 0.132 — the rim is at 13% there (visually gone), at full at 2600, at 92% at 1600. The rim-gate read per step: 1.000 / 0.921 / 0.132 / 0.000 / 0.000.</p>
+
+<h3>2600 m — orbit: the planet, not the patch; the rim; the deck character</h3>
+<div class="pair">
+<div><p class="small">BEFORE — fog-colour diamond patch over the disc, streaky membrane deck, no visible glow:</p><img src="../AC-0384/ac0384-final-descent-2600.png" alt="before 2600"></div>
+<div><p class="small">AFTER — the body's own terrain (green land, teal water), no patch; fewer larger soft cloud masses; the rim glow present (S=1.0):</p><img src="ac0401-after-descent-2600.png" alt="after 2600"></div>
+</div>
+<p><strong>Findings:</strong> (item 4) the disc is now the satellite body's baked terrain — the uniform fog-colour wash and the bright cyan-white Manhattan diamond (the chunk render-footprint at 100% engine-fog colour, drawn over the body) are gone; at 2600 m every chunk fragment is far past the 332 m view-distance wall, so the near field discards entirely and the disc is the body alone (nadir box: bright-white fraction 54.9% → 0.0%, saturation 17.0 → 77.0 — the baked terrain, not the fog colour). (item 2) the limb rim glow is present at orbit (S=1.0 → the gate passes it through). (item 1) the deck reads as few, large, soft masses — the bright/low-saturation cloud wash over the disc drops from 66.9% (old character) to 11.1% (new character) on the settled frames (the deck-OFF frame measures 66.9%, so this is the switch alone, the partition already fixed in both), not the streaky membrane. (item 3) no coplanar flicker possible past the wall (strict d-partition) and no 2 m-depth ambiguity (the inset).</p>
+
+<h3>1600 m — the descent top: same contract at S=0.921</h3>
+<div class="pair">
+<div><p class="small">BEFORE — the fog wash covers most of the disc, the diamond prominent, dark rim:</p><img src="../AC-0384/ac0384-final-descent-1600.png" alt="before 1600"></div>
+<div><p class="small">AFTER — terrain + water across the disc, rim arc at the limb (92% of full), soft masses:</p><img src="ac0401-after-descent-1600.png" alt="after 1600"></div>
+</div>
+<p><strong>Findings:</strong> nadir patch luminance 214.4 → 199.9 with colour saturation 11.1 → 19.1 (fog wash → terrain, measured in the same 200×200 box); the rim glow at 92% (S=0.921) — the orbit read is intact on the way down; the disc edge is identical between the pair (r=858 px, centre 1170/1171 — the 2 m inset is sub-pixel at this scale, as designed).</p>
+
+<h3>700 m — the flight band: no dark rim smudge, no diamond, volumetric masses</h3>
+<div class="pair">
+<div><p class="small">BEFORE — dark band at the terrain horizon (the D3 smudge), fog wash to the 400 m edge, the diamond at the spawn:</p><img src="../AC-0384/ac0384-final-descent-700.png" alt="before 700"></div>
+<div><p class="small">AFTER — smooth terrain→fog→sky transition at the 332 m wall, crisp terrain colour, large soft masses (S=0.132 — the rim is 13%, visually gone):</p><img src="ac0401-after-descent-700.png" alt="after 700"></div>
+</div>
+<p><strong>Findings:</strong> the dark terrain-horizon band is gone (the annulus no longer crosses into the body's rim zone at 100% fog colour — it stops at the wall and the body's own limb haz carries the rim); the diamond is gone (at 700 m every chunk fragment is ≥ 700 m from the camera — all past the 332 m wall — so the near field discards entirely; pre-AC-0401 it drew at 100% fog colour, the bright Manhattan patch). The terrain visible at 700 m is the body's own surface (the 2 m baked colour over the 16 m displacement), not the high-detail chunks — item 4 at work: the high detail is hidden above the wall, and the body already owns this view. The deck is now few large masses instead of a uniform wash. Horizon-box luminance 204.7 → 193.0, saturation 24.9 → 33.4 (measured).</p>
+
+<h3>700 m, clouds OFF — the partition, independent of the deck</h3>
+<div class="pair">
+<div><p class="small">BEFORE, clouds off — fog wash to the edge, the Manhattan diamond, dark terrain horizon:</p><img src="../AC-0384/ac0384-final-700-clouds-off.png" alt="before 700 clouds off"></div>
+<div><p class="small">AFTER, clouds off — crisp terrain to the 332 m wall, smooth fade, no diamond, no dark band:</p><img src="ac0401-after-700-clouds-off.png" alt="after 700 clouds off"></div>
+</div>
+<p><strong>Findings:</strong> with the cloud shells disabled entirely, the layer fix stands on its own: the terrain/body handoff at the wall is clean in both the fog colour and the geometry (items 3 + 4), proving the z-fighting fix is in the layer construction (the partition + the inset), not in the deck.</p>
+
+<h3>300 m — near ground: no rim (S=0)</h3>
+<div class="pair">
+<div><p class="small">BEFORE — pink fog wash over everything, the diamond, and the pre-AC-0401 UNGATED horizon glow band (the rim the user saw near the ground):</p><img src="../AC-0384/ac0384-final-descent-300.png" alt="before 300"></div>
+<div><p class="small">AFTER — crisp terrain to the wall, the hazy 332–400 m band, clean sky, NO rim arc (S=0 → the gate is fully off):</p><img src="ac0401-after-descent-300.png" alt="after 300"></div>
+</div>
+<p><strong>Findings:</strong> item 2's near-ground half: the low-LOD view fades into FOG ONLY — the pre-AC-0401 horizon glow band (the sky-pass rim, which was altitude-ungated) is gone at S=0; the only horizon read is the fog colour of the world itself. Horizon-box luminance 220.4 → 209.1, saturation 18.2 → 33.6 (measured).</p>
+
+<h3>120 m — inside the shells: the deck the user asked for</h3>
+<div class="pair">
+<div><p class="small">BEFORE — the dense fine-structure deck fills the whole upper view; the sky (and any glow) is hidden:</p><img src="../AC-0384/ac0384-final-descent-120.png" alt="before 120"></div>
+<div><p class="small">AFTER — few large soft masses with the sky visible between them (lit tops, shaded cores — the volumetric read); the farm crisp below:</p><img src="ac0401-after-descent-120.png" alt="after 120"></div>
+</div>
+<p><strong>Findings:</strong> item 1 at the view the user actually sees: the field at 1/3 frequency + the tighter window + the band-floor gaps + the puff/core shading turn the all-covering membrane into discrete masses — the sky returns to the view, the masses read as lit-from-above volume. This is the frame the <code>cloud_deck</code> switch exists for; no re-tune of the window constants was needed (the one allowed r8b-style iteration was NOT used).</p>
+
+<h3>Deck-OFF A/B — the short-circuit is real</h3>
+<div class="pair">
+<div><p class="small">BEFORE 2600 (for the cloud region):</p><img src="../AC-0384/ac0384-final-descent-2600.png" alt="before 2600 ref"></div>
+<div><p class="small">AFTER 2600 with <code>AWECRAFT_CLOUDDECK=0</code> — the cloud streaks reproduce the old r9 character (bit-identical path); the disc shows the partition fix (the defect fix, not switch-controlled):</p><img src="ac0401-deckoff-2600.png" alt="deckoff 2600"></div>
+<div><p class="small">BEFORE 700 (for the cloud region):</p><img src="../AC-0384/ac0384-final-descent-700.png" alt="before 700 ref"></div>
+<div><p class="small">AFTER 700 with <code>AWECRAFT_CLOUDDECK=0</code> — the old fine-structure streak deck along the horizon; the terrain layer shows the partition:</p><img src="ac0401-deckoff-700.png" alt="deckoff 700"></div>
+</div>
+<p><strong>Findings:</strong> <code>u_deck=0</code> (the shader default) reproduces the pre-AC-0401 deck at both altitudes — the switch short-circuits to the exact r9 constants before any of the new work (verified against the reviewed fragment: every new constant is exactly representable and every new term is 1.0/identity at <code>u_deck&lt;0.5</code>). At 2600 m the deck-OFF frame matches the before frame's bright/low-sat cloud wash to within noise (66.9% vs 66.9%; 210,163 vs 210,056 cloud pixels) — the strongest confirmation of the bit-identical OFF path. The deck-OFF frames are NOT pixel-identical to the before frames in the terrain region — that is the partition (a defect fix shipped without a switch), exactly as documented in the plan.</p>
+
+<h3>Measurements (PIL, 1280×720; scripts: <code>.scratch/ac0401-runs/analyze.py</code>)</h3>
+<table>
+<tr><th>Pair</th><th>Nadir/horizon box: lum before → after</th><th>Sat before → after</th><th>Bright/low-sat disc fraction (haze + cloud wash)</th></tr>
+<tr><td>2600</td><td>211.5 → 193.4 (nadir box: 216.9 → 191.2, bright-white 54.9% → 0.0% — the diamond zone is baked terrain)</td><td>15.2 → 18.6 (nadir box: 17.0 → 77.0)</td><td>before 66.9% / deck-OFF 66.9% / deck-ON 11.1% (the 210,163 vs 210,056 cloud-pixel match of OFF vs before is the bit-identical path; ON is the discrete-mass character)</td></tr>
+<tr><td>1600</td><td>214.4 → 199.9</td><td>11.1 → 19.1</td><td>—</td></tr>
+<tr><td>700</td><td>204.7 → 193.0</td><td>24.9 → 33.4</td><td>—</td></tr>
+<tr><td>300</td><td>220.4 → 209.1</td><td>18.2 → 33.6</td><td>—</td></tr>
+<tr><td>120</td><td>221.4 → 221.9 (the box is the deck region — the change is structural, not in the mean)</td><td>33.0 → 37.9</td><td>membrane → discrete masses (visual)</td></tr>
+</table>
+<p class="small">The metric is the fraction of disc pixels that read as bright + low-saturation (the fog wash / cloud wash, before the fix) — terrain is more saturated, so it drops out of the count as it becomes visible. The direction of every pair: the wash thins (luminance down), the terrain colour comes back (saturation up), the cloud cover drops (66.9% → 11.1% at 2600) — the three numbers the four user items are about. (The 53.8% figure from the mid-drain <code>_s600</code> frame was superseded by the settled final frames; the <code>_s600</code> companions are kept for the drain curve.)</p>
+
+<h2>Deliberate non-actions</h2>
+<ul>
+<li>No new altitude threshold — the fog wall is the body's own; a second constant would have broken the “checked against the body's own” requirement.</li>
+<li>No switch for the partition / the 2 m inset — defect fixes; shipping the flicker behind a toggle is not an option.</li>
+<li>No change to the cloud shell geometry (radii 4275/4330/4400 about (0,−R,0) untouched), no <code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code> edits (fence), no C++ change (genhash-neutral by construction), no re-baselining of any standing gate.</li>
+<li>Exit after the light set — farab, ladder, meshprobe, halo, lightstate, r16, boundary r50, the full battery, the Windows build + serve checks are the coordinator's heavy-gate job.</li>
+</ul>
+</body></html>

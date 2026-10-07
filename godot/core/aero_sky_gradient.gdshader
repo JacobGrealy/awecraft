@@ -56,6 +56,15 @@ uniform vec3 space_color : source_color = vec3(0.0078, 0.0118, 0.0392);
 uniform vec3 u_limb_center = vec3(0.0);
 uniform float u_limb_radius : hint_range(0.0, 20000.0) = 0.0;
 uniform float u_limb_amount : hint_range(0.0, 4.0) = 0.55;
+// AC-0401: the altitude gate for the limb glow (Settings "limb_space",
+// default ON; world.gd pushes u_limb_gate = 1.0 when ON). The glow is an
+// ORBIT instrument - the signature rim you see the planet FROM SPACE -
+// so it rides u_space (the flight-band blend, the same uniform that
+// darkens the dome): 0.0 near the ground (no rim below the flight band,
+// where the low LOD's fog fade alone is the horizon read), 1.0 from
+// orbit (the full r4 rim). 0.0 (the shader default - no push) is the
+// pre-AC-0401 behaviour, the glow at every altitude.
+uniform float u_limb_gate : hint_range(0.0, 1.0) = 0.0;
 
 void sky() {
 	vec3 dir = normalize(EYEDIR);
@@ -85,7 +94,9 @@ void sky() {
 		}
 		vec3 limb_col = horizon_color * 0.5 + mid_color * 0.5;
 		float sun_side = 0.55 + 0.45 * pow(clamp(dot(dir, sun_dir), 0.0, 1.0), 2.0);
-		col += limb_col * (limb * u_limb_amount * sun_side);
+		// AC-0401: gate on u_space when u_limb_gate is ON (the mix is
+		// exactly 1.0 with the default u_limb_gate = 0.0 - the old path).
+		col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space, u_limb_gate));
 	}
 	float sd = dot(dir, sun_dir);
 	float up = clamp(sd, 0.0, 1.0);

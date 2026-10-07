@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0401 plan</title></head>
+<body>
+<h1>AC-0401 plan — cloud-material-tier-split-and-layer-conflicts</h1>
+
+<h2>Goal (1 sentence)</h2>
+<p>Make the LOD tiers and shells behave per the user's four reports: a few large
+volumetric clouds, a near field that fades into FOG ONLY (no limb rim near the ground,
+limb glow intact from orbit), layers separated by construction (no z-fighting), and the
+near-detail hidden above the fog-wall altitude so orbit shows the planet, not the patch of
+ground left behind.</p>
+
+<h2>The one mechanism behind three of the four items</h2>
+<p>All three layer-conflict items reduce to the same contract violation: the satellite body
+already owns the rule <em>“the body is only where the world's depth fog has already fully
+faded the world (d ≥ fog_far)”</em>, but the near tiers (band A/B/C) keep drawing <em>past</em>
+that wall — at 100% fog colour over the body's terrain, coplanar with it (the fog-colour
+diamond patch in the 1600/2600 frames, and the flicker in the 332–400 m band where both are
+partially drawn). The fix makes the near field obey the SAME wall it always rendered into:</p>
+<ul>
+<li><code>lod_avg.gdshader</code> (the annulus) and the four <code>chunk_lit_*.gdshader</code>
+materials and the two <code>fluid_anim_*.gdshader</code> (ring water): <code>if (d &gt;= u_fog_far)
+discard;</code> — the strict partition. The body's own haz_d rim at the wall is exactly the
+single-source air colour, so the seam target (AC-0400) is preserved, now carried by the body.</li>
+<li><code>satellite_body.gdshader</code>: new vertex stage — the displaced surface sits
+<strong>2 m radially inside</strong> the near tiers' terrain, so wherever they still coexist
+(terrain relief), the near tiers win the depth test by construction. Radius ordering with a
+real gap; no flicker, no nudging.</li>
+<li><code>world.gd</code> <code>_process</code>: pushes <code>u_fog_far</code>
+(<code>DayNight.fog_far(render_radius, fog_start_pct)</code> — the same value main.gd sets on
+<code>env.fog_depth_end</code>) to the shared chunk/fluid materials, change-gated.</li>
+</ul>
+<p><strong>Consequence for item (4)</strong>: the “threshold” is not a new constant — it IS the
+satellite body's own fog wall (332 m at the user's R24/F83). As the camera climbs, the
+engine fog fades the near field to air (the existing no-pop dissolve), and at the wall the
+near field stops drawing exactly where the body's existence ramp begins — the two never both
+vanish or both show, by construction. From orbit the disc is the body alone: the planet, not
+the patch.</p>
+
+<h2>Files to touch</h2>
+<table border="1" cellpadding="4">
+<tr><th>File</th><th>Change</th></tr>
+<tr><td>godot/core/cloud_layer.gdshader</td><td>Item (1): <code>u_deck</code> switch (0 = the
+pre-AC-0401 path, unchanged; 1 = new character): base field scale ÷3 (bigger masses),
+coverage window 0.42–0.54 → 0.46–0.56 (fewer), banding floor 0.75 → 0.60 (real clear gaps),
+softer edge window, volumetric shading (puff brightness off the mid field + stronger
+thickness darkening).</td></tr>
+<tr><td>godot/core/aero_sky_gradient.gdshader</td><td>Item (2): the limb-glow term multiplied
+by <code>mix(1.0, u_space, u_limb_gate)</code> — new <code>u_limb_gate</code> (0.0 = old
+behaviour; 1.0 = glow rides the flight-band blend: no rim near the ground, full rim from
+orbit). No new per-frame push needed: <code>u_space</code> is already pushed.</td></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>New <code>vertex()</code>: 2 m radial inset
+(radius ordering, see above).</td></tr>
+<tr><td>godot/core/lod_avg.gdshader</td><td><code>if (d &gt;= u_fog_far) discard;</code> (u_fog_far
+already pushed by main.gd).</td></tr>
+<tr><td>godot/world/chunk_lit_{opaque,cutout,flower,fluid}.gdshader</td><td>New
+<code>u_fog_far</code> uniform + the same discard.</td></tr>
+<tr><td>godot/core/fluid_anim{,_bf}.gdshader</td><td>Same discard (ring water surfaces; uses
+the shaders' existing <code>u_cam_pos</code> camera source).</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_process</code>: change-gated <code>u_fog_far</code>
+push to <code>ChunkScript._mat_cache</code> + <code>Data.fluid_anim(_bf)_mats</code> + the
+ring-water fallbacks; per-frame <code>u_deck</code>/<code>u_limb_gate</code> push to the cloud
+and sky materials (via the parent <code>Main</code> node — <strong>deviation</strong>:
+main.gd is fence-locked by a parallel session; documented in results + ARCHITECTURE).
+<code>_ready</code>: <code>AWECRAFT_CLOUDDECK</code>/<code>AWECRAFT_LIMB</code> env preloads
+(the AWECRAFT_RAMPS pattern, no save).</td></tr>
+<tr><td>godot/autoload/settings.gd</td><td>Two new settings, look-change rule:
+<code>cloud_deck</code> (default ON — the user asked) and <code>limb_space</code> (default
+ON), <code>sanitize_bool</code> clamped.</td></tr>
+<tr><td>godot/ui/menu.gd</td><td>Two Options-page toggle rows + handlers.</td></tr>
+<tr><td>godot/ARCHITECTURE.md</td><td>Sync: the fog-wall partition contract, the 2 m body
+offset, the u_deck/u_limb_gate switches + settings, the new per-frame push.</td></tr>
+</table>
+<p>NOT touched (fenced): main.gd, game.gd, drop.gd, debug.gd. If any of them proves to need a
+change: stop and report (see the deviation note on the material push).</p>
+
+<h2>Harness gates (mode + ok condition)</h2>
+<ul>
+<li><strong>G0</strong>: <code>--headless --quit</code> → <code>gate_census.py</code> reports
+ZERO SCRIPT ERROR AND ZERO SHADER ERROR (rc is not the gate).</li>
+<li><strong>shaderforce</strong> (Forward+/lavapipe): 12/12 shipped shaders compile — catches
+every edited shader, including the new body vertex stage.</li>
+<li><strong>SMOKE</strong> battery <code>player;interact;light;fluids;genhash</code>:
+<code>ok:true</code>; genhash 25/25 byte-identical (generation untouched).</li>
+<li><strong>boundary r4</strong> ×1 (the single self-check probe): standing walk/p95 values
+hold (the change is render-path only; headless walk does not execute shaders).</li>
+<li><strong>THE RENDERS</strong> (acceptance): the AC-0384 §25.7 recipe, user config
+(R24/F83 → fog wall 332 m), T=0.5, CLOUD_T0=411200, <code>AWECRAFT_CAM=planet</code> +
+<code>AWECRAFT_SAT_ALT</code>, 1280×720, <code>SNAP_DRAIN=1200</code>,
+<code>SNAP_STEPS=600</code>, at 2600/1600/700/300/120 m + the 700 m clouds-OFF pair + a
+deck-OFF A/B at 2600/700 (u_deck=0 must reproduce the pre-AC-0401 pattern). Before set =
+the AC-0384 ac0384-final-* frames.</li>
+</ul>
+<p>Then EXIT — the full battery, farab, ladder, meshprobe, halo, lightstate, r16, boundary
+r50, shaderforce re-runs and the Windows build are the coordinator's job.</p>
+
+<h2>Risks</h2>
+<ul>
+<li>The re-tuned deck could leave the reference-weather (CLOUD_T0=411200) 120/300 m frames
+sparse (the AC-0384 r8/r9 descent-belt requirement). Watch the renders; ONE window
+re-tune is allowed (the r8b precedent), no more.</li>
+<li>At 332–400 m the nadir handoff goes fog-colour → body haze over the sky (the body's
+opacity ramp starts at 0 at the wall). Verify the 300/700 m frames read as a smooth
+“fog thins into the planet”, not a dark flash.</li>
+<li>Under the discard, the r4 render edge (fog wall 70 m / render edge 80 m) shows the body's
+hazy rim in the outer 10 m instead of fog-colour terrain — an intended, documented shift for
+the coordinator's standing gates.</li>
+<li>The world.gd → Main material push inverts the usual push direction (fence workaround);
+kept change-gated and tiny.</li>
+</ul>
+</body></html>

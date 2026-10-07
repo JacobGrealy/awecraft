@@ -106,6 +106,19 @@ uniform float u_boost : hint_range(0.0, 4.0) = 2.2;
 // fragment is multiplied by u_under (the thinner the patch, the closer
 // to 1.0 - the full sun-lit albedo).
 uniform float u_under : hint_range(0.0, 1.0) = 0.70;
+// AC-0401: the deck character switch (Settings "cloud_deck", default ON;
+// world.gd pushes u_deck = 1.0 when ON). 0.0 (the shader default - no
+// push, e.g. any material built without the world push) is the exact
+// pre-AC-0401 path: the r9 field at full frequency and the r8/r9
+// windows, bit-identical. 1.0 is the character the user asked for -
+// "fewer of them but the individual clouds should be bigger and they
+// should be volumetric": the base field at 1/3 frequency (the masses
+// ~3x wider), a higher coverage window (fewer), a lower band floor
+// (real clear gaps between the belts instead of 75% carry), softer edge
+// windows, and a volumetric read - puff brightness off the mid field
+// plus stronger thickness darkening so the masses read as lit-from-
+// above with deep cores, not as a flat membrane.
+uniform float u_deck : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
@@ -163,7 +176,27 @@ void fragment() {
 	float ca = cos(ang);
 	float sa = sin(ang);
 	vec3 dr = vec3(ca * n.x + sa * n.z, n.y, -sa * n.x + ca * n.z);
-	vec3 q = dr * u_scale3 + u_phase;  // AC-0384 r9: the per-shell pattern offset
+	// AC-0401: the deck character switch - the tunable constants of the
+	// field and its windows, selected by u_deck. With u_deck < 0.5 every
+	// value is exactly the pre-AC-0401 constant (the r9 path, unchanged);
+	// with u_deck > 0.5 the field runs at 1/3 frequency (bigger masses),
+	// the coverage window tightens (fewer clouds), the band troughs clear
+	// (real gaps between the belts), and the edge windows soften.
+	float sc3 = u_scale3;
+	float wlo = 0.42, whi = 0.54;
+	float cehi = 0.55;
+	float bfloor = 0.75, blo = 0.18, bhi = 0.82;
+	float elow = 0.05, ehi = 0.80;
+	float vol = 0.0;
+	if (u_deck > 0.5) {
+		sc3 = u_scale3 * 0.33333;
+		wlo = 0.46; whi = 0.56;
+		cehi = 0.70;
+		bfloor = 0.60; blo = 0.30; bhi = 0.90;
+		elow = 0.00; ehi = 0.90;
+		vol = 1.0;
+	}
+	vec3 q = dr * sc3 + u_phase;  // AC-0384 r9: the per-shell pattern offset
 	// AC-0384 r5: distance LOD for the noise field (the round-4 "near-
 	// disc static"). fbm() is 5 octaves (2.03x), so a band with
 	// multiplier m has its finest octave at argument scale u_scale3*m*
@@ -177,9 +210,9 @@ void fragment() {
 	// 1.0 (the finest octaves there are >= 1.8 px and low-contrast).
 	float d_cam = max(length(CAMERA_POSITION_WORLD - v_wp), 1.0);
 	float R_sh = length(v_wp - u_center);
-	float px13 = R_sh * u_cpxrad / (u_scale3 * 1.3 * 16.974 * d_cam);
-	float px22 = R_sh * u_cpxrad / (u_scale3 * 2.2 * 16.974 * d_cam);
-	float px41 = R_sh * u_cpxrad / (u_scale3 * 4.1 * 16.974 * d_cam);
+	float px13 = R_sh * u_cpxrad / (sc3 * 1.3 * 16.974 * d_cam);
+	float px22 = R_sh * u_cpxrad / (sc3 * 2.2 * 16.974 * d_cam);
+	float px41 = R_sh * u_cpxrad / (sc3 * 4.1 * 16.974 * d_cam);
 	float l13 = min(px13 / 2.5, 1.0);
 	float l22 = min(px22 / 2.5, 1.0);
 	float l41 = min(px41 / 2.5, 1.0);
@@ -210,9 +243,12 @@ void fragment() {
 	// u_phase offsets above keep the three decks' patterns independent.
 	// The 0.05 contrast floor still kills the thin haze below it (no
 	// milk; the cores stay occluding through u_boost).
-	float cl = smoothstep(0.42, 0.54, base);
-	cl = smoothstep(0.0, 0.55, cl) * cl;
-	cl *= 0.75 + 0.25 * (0.55 * base + 0.45 * mid);
+	// AC-0401: the four windows below are the u_deck parameters (wlo/
+	// whi/cehi/bfloor/blo/bhi/elow/ehi) - with u_deck < 0.5 they hold the
+	// exact pre-AC-0401 constants.
+	float cl = smoothstep(wlo, whi, base);
+	cl = smoothstep(0.0, cehi, cl) * cl;
+	cl *= bfloor + (1.0 - bfloor) * (0.55 * base + 0.45 * mid);
 	cl *= 0.85 + 0.15 * fine;
 	// AC-0384 r6: broad warped latitude bands - large-scale weather
 	// structure (the NMS deck is banded, not uniform). The band follows
@@ -223,11 +259,11 @@ void fragment() {
 	// belt never reads as a clear stripe). Low-frequency only - the r5
 	// grain gate (4.71/1.90 @ 2600 m) is the guard.
 	float band = 0.5 + 0.5 * sin(dr.y * 5.0 + 2.2 * base);
-	cl *= mix(0.75, 1.0, smoothstep(0.18, 0.82, band));
+	cl *= mix(bfloor, 1.0, smoothstep(blo, bhi, band));
 	// AC-0384 r6: soft bimodal contrast - the haze reads as a thin veil
 	// and the cores as opaque masses (wide window 0.05/0.80; the first
 	// pass 0.16/0.58 steepened the edges and raised the orbit grain).
-	cl = smoothstep(0.05, 0.80, cl);
+	cl = smoothstep(elow, ehi, cl);
 	// Grazing fade: thin the mass where the shell is seen edge-on, so the
 	// silhouette stays clean where the satellite body's own limb haze is
 	// strongest (no double white rim at the limb from orbit). AC-0384 r6:
@@ -258,6 +294,14 @@ void fragment() {
 	float light = u_day - u_day_gain * (1.0 - sun_l);
 	// AC-0384 r6: darker undersides - the optically thicker the patch
 	// (the final alpha a), the less light leaks through it.
-	ALBEDO = u_cloud_tint * light * mix(1.0, u_under, a);
+	// AC-0401: the volumetric read (vol = 1.0 when u_deck is ON, else 0.0
+	// and both terms are exactly 1.0 / u_under - the pre-AC-0401 ALBEDO):
+	// puff brightness off the mid field lifts the lumps' tops and shadows
+	// their shoulders (lit-from-above mass), and the thickness darkening
+	// deepens (u_under 0.70 -> 0.58 at full opacity) so the cores read as
+	// deep, light-scattering volume instead of a flat membrane.
+	float puff = 1.0 + 0.14 * vol * (smoothstep(0.35, 0.65, mid) - 0.5);
+	float under = mix(u_under, 0.58, vol);
+	ALBEDO = u_cloud_tint * light * mix(1.0, under, a) * puff;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

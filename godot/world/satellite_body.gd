@@ -1342,7 +1342,15 @@ func _satdiag_clouds() -> String:
 		var cov := -1.0
 		var tint := "none"
 		if m != null and m.shader != null:
-			cov = float(m.get_shader_parameter("u_coverage"))
+			# AC-0401: get_shader_parameter returns null for a parameter
+			# that was never set - the shaderforce probe is exactly such
+			# a material (its pbox MeshInstance3D wears the cloud shader
+			# with NO pushes, and this dump walks the WHOLE tree), and a
+			# float(null) is a SCRIPT ERROR that fails the census on the
+			# very run the probe exists to measure. -1.0 marks "no value"
+			# in the line instead of throwing.
+			var cv = m.get_shader_parameter("u_coverage")
+			cov = float(cv) if cv is float else -1.0
 			tint = str(m.get_shader_parameter("u_cloud_tint"))
 		parts.append("c%d{vis=%s r=%.0f h=%.0f cov=%.3f shader=true tint=%s}" % [n, str(mi.visible), rsh, rsh - float(R), cov, tint])
 	return "clouds: n=%d %s" % [found.size(), " ".join(parts)]

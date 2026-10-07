@@ -3841,6 +3841,20 @@ func _ready() -> void:
 	if mde != "":
 		Settings.values["modern_light"] = mde == "1"
 	note_modern()  # AC-0398: the boot derive (after the env preload)
+	# AC-0401: harness env preloads (the AWECRAFT_RAMPS pattern) —
+	# AWECRAFT_CLOUDDECK=<0|1> (the deck character switch, Settings
+	# "cloud_deck", default ON) and AWECRAFT_LIMB=<0|1> (the limb-glow
+	# altitude gate, Settings "limb_space", default ON) override the
+	# STORED settings for this process (written to Settings.values
+	# WITHOUT save, so the arms never clobber the user's cfg) and let the
+	# render A/B both states without a save file. Both are read live by
+	# _ac0401_push every frame, so no boot derive is owed.
+	var cde := OS.get_environment("AWECRAFT_CLOUDDECK")
+	if cde != "":
+		Settings.values["cloud_deck"] = cde == "1"
+	var lbe := OS.get_environment("AWECRAFT_LIMB")
+	if lbe != "":
+		Settings.values["limb_space"] = lbe == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -4888,6 +4902,80 @@ func _wprof_recon_raw_pct() -> float:
 	var avg_frame := float(s_frame) / float(n)
 	return absf(avg_part - avg_frame) / maxf(avg_frame, 1.0) * 100.0
 
+# AC-0401: the fog-wall partition + the two look switches, pushed from
+# the world (not main.gd) because main.gd is fence-locked by the
+# parallel session (the documented deviation; the push path is the
+# parent Main node - the tree main.gd built: World is a direct child
+# of Main, and the cloud/sky materials are Main's members).
+#
+# (1) u_fog_far - the satellite body's own ownership wall (the body's
+# op ramp starts at u_fog_far and its haz_d rim at the wall is exactly
+# the single-source air colour, AC-0400). Every near-field material
+# now discards its fragments at d >= u_fog_far (lod_avg.gdshader, the
+# four chunk_lit_*.gdshader kinds, the two fluid_anim_*.gdshader), so
+# the near tiers never draw past the wall: no coplanar z-fighting with
+# the body (the 2 m body inset, satellite_body.gdshader's vertex stage,
+# is the belt for relief straddling the wall), the engine fog's fade is
+# the whole "dissolve" as the camera climbs (no pop - the fade is the
+# existing window), and from orbit the disc is the body alone - the
+# planet, not the fog-colour patch of ground left behind. The value is
+# the same one main.gd sets on env.fog_depth_end (the
+# DayNight.fog_far(render_radius, fog_start_pct) home) - one number, one
+# home.
+#
+# (2) u_deck / u_limb_gate - the two AC-0401 look switches (Settings
+# "cloud_deck" / "limb_space", both default ON - the user asked). Both
+# shader defaults are OFF (= the pre-AC-0401 path), so a material that
+# never sees the push keeps the old look; world.gd pushes 1.0 when the
+# setting is ON, 0.0 when OFF, and the short-circuit is the shader side
+# (u_deck < 0.5 runs the exact r9 constants; mix(1.0, u_space, 0.0) is
+# exactly 1.0).
+var _ac0401_fog_wall := -1.0
+var _ac0401_deck := -1.0
+var _ac0401_limb := -1.0
+
+
+func _ac0401_push() -> void:
+	# (1) the fog wall - change-gated (the value only moves with the
+	# render radius / fog percentage, not per frame).
+	var ff := DayNight.fog_far(render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
+	if not is_equal_approx(ff, _ac0401_fog_wall):
+		_ac0401_fog_wall = ff
+		for k in ChunkScript._mat_cache:
+			var m = ChunkScript._mat_cache[k]
+			if m is ShaderMaterial:
+				m.set_shader_parameter("u_fog_far", ff)
+		for bid in Data.fluid_anim_mats:
+			var am = Data.fluid_anim_mats[bid]
+			if am is ShaderMaterial:
+				am.set_shader_parameter("u_fog_far", ff)
+		for bid in Data.fluid_anim_bf_mats:
+			var am2 = Data.fluid_anim_bf_mats[bid]
+			if am2 is ShaderMaterial:
+				am2.set_shader_parameter("u_fog_far", ff)
+	# (2) the switches - the cloud layers and the sky material exist
+	# once _setup_aero has run (before this world's first _process);
+	# the first push retries cheaply until they are visible.
+	var mn := get_parent()
+	if mn == null:
+		return
+	var deck_v := 1.0 if bool(Settings.values.get("cloud_deck", true)) else 0.0
+	if deck_v != _ac0401_deck:
+		var cl = mn.get("cloud_layers")
+		if cl != null and cl.size() > 0:
+			for layer in cl:
+				var cm = layer.get("mat")
+				if cm is ShaderMaterial:
+					cm.set_shader_parameter("u_deck", deck_v)
+			_ac0401_deck = deck_v
+	var limb_v := 1.0 if bool(Settings.values.get("limb_space", true)) else 0.0
+	if limb_v != _ac0401_limb:
+		var sm = mn.get("sky_mat")
+		if sm is ShaderMaterial:
+			sm.set_shader_parameter("u_limb_gate", limb_v)
+		_ac0401_limb = limb_v
+
+
 func _process(_delta: float) -> void:
 	var pf0 := Time.get_ticks_usec()
 	_wprof_begin_frame()  # AC-0251: the frame sample commits at _wprof_end_frame(pf0)
@@ -4920,6 +5008,12 @@ func _process(_delta: float) -> void:
 				_ac0383_sat_us_total += _sat_us
 		else:
 			satellite.process_frame(_sp, Game.time_of_day, render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
+	# AC-0401: the fog-wall partition uniform + the deck/limb switches
+	# (before the idle early-return, like the satellite driver: the
+	# pushes are owed even while the world is settled). Change-gated;
+	# a few set_shader_parameter calls at most, on a radius/fog change
+	# or a toggle.
+	_ac0401_push()
 	# AC-0160: keep the worker ctx in sync with the atlas identity. If Data
 	# bakes/loads the atlas after World._ready captured the ctx (or a
 	# texture-pack swap re-bakes it), the stale ctx (has_tex=false,

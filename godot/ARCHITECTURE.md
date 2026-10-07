@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and the `AWECRAFT_MODERN=0|1` harness env; see the AC-0398 bullet in §4) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -109,9 +109,21 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (= R + SEA, the star-occlusion pair — one home),
 │                         `u_limb_amount` (AeroLib.limb_amount(), default 0.55,
 │                         AWECRAFT_LIMB env A/B; the term is off when radius = 0,
-│                         i.e. no player/world yet). NOT gated by S — the rim exists
-│                         at every altitude (at ground level it reads as the horizon
-│                         glow).
+│                         i.e. no player/world yet). Pre-AC-0401 the term was NOT gated by S
+│                         (the rim existed at every altitude, reading as the
+│                         horizon glow at ground level). AC-0401: ALTITUDE-GATED on
+│                         u_space behind
+│                         `u_limb_gate` — the term is multiplied by
+│                         mix(1.0, u_space, u_limb_gate). The rim is an ORBIT
+│                         instrument (Settings "limb_space", default ON — the
+│                         user asked; world.gd _ac0401_push pushes u_limb_gate
+│                         to this material, the fence-locked main.gd
+│                         workaround, see the AC-0401 bullet in §4): gate ON,
+│                         the glow rides the flight-band blend (no rim below
+│                         the flight band, where the low LOD's fog fade alone
+│                         is the horizon read; full rim from orbit); the
+│                         shader default u_limb_gate = 0.0 is the pre-AC-0401
+│                         behaviour (rim at every altitude).
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
 │                         AC-0385): three concentric transparent shells at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
@@ -216,6 +228,18 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         required content (fog colour + bridge + belt),
 │                         not aliasing (tasks/AC-0384/AC-0384-results.
 │                         html §23.4).
+│                         AC-0401: the DECK CHARACTER behind `u_deck`
+│                         (Settings "cloud_deck", default ON — the user asked;
+│                         world.gd _ac0401_push pushes u_deck to the three
+│                         layer materials; the shader default u_deck = 0.0 is the
+│                         exact pre-AC-0401 path, bit-identical): 1.0 runs the field
+│                         at 1/3 frequency (the masses ~3x wider), a tighter
+│                         coverage window (fewer clouds), a 0.60 band floor (the
+│                         belt troughs clear into real gaps), softer edge windows,
+│                         and a volumetric read (puff brightness off the mid field
+│                         + the thickness darkening deepened to 0.58 at full
+│                         opacity). All windows/scale are u_deck-parameterised in
+│                         the fragment; u_deck < 0.5 selects the exact r9 constants.
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -238,6 +262,12 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 ├─ World                  world/world.tscn  →  world/world.gd
 │  │                      chunk manager: streaming bands, LOD tiers, scheduler/drain,
 │  │                      chunk pool, fluid ticking, edit flush, drops + mob spawning
+│  │                      AC-0401: per-frame `_ac0401_push()` — the fog-wall
+│  │                      partition uniform (u_fog_far, change-gated, to the shared
+│  │                      chunk/fluid materials) + the cloud_deck / limb_space switch
+│  │                      pushes (u_deck / u_limb_gate) to the Main-owned cloud and sky
+│  │                      materials via the parent node (the fence-locked main.gd
+│  │                      workaround; see the AC-0401 bullet in §4)
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):
@@ -260,6 +290,28 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         shader carries the same flag, its comment naming this exact "erased by it"
 │                         failure); below the fog wall the body's fragments are discarded by op anyway,
 │                         so no double-fog is possible. The displaced grid step is the
+│                         AC-0401: the fog wall is now a PARTITION, not a
+│                         bridge — every near-field material (the four
+│                         chunk_lit_*.gdshader kinds, lod_avg.gdshader, the two
+│                         fluid_anim_*.gdshader) discards its fragments at
+│                         d >= u_fog_far (the same DayNight.fog_far value main.gd
+│                         puts on env.fog_depth_end; world.gd _ac0401_push pushes
+│                         it to the shared materials, change-gated). The near
+│                         tiers never draw past the wall (pre-AC-0401 they drew
+│                         to the render edge at 100% fog colour — a fog-colour
+│                         patch over the body's own displaced terrain from orbit,
+│                         and the coplanar z-fighting in the 332-400 m band);
+│                         the engine fog fade is the whole "dissolve" as the
+│                         camera climbs, the body's haz_d rim at the wall is the
+│                         seam (single-source air colour), and orbit shows the
+│                         body alone. RADIUS ORDERING: the shader's vertex stage
+│                         moves the displaced surface 2 m radially INWARD (the
+│                         mesh origin is the sphere centre: local == radial), so
+│                         wherever the same terrain still coexists (relief
+│                         straddling the wall) the near tiers win the depth test
+│                         by construction — no flicker; the op window and the
+│                         star-occlusion radius (R + SEA, the star shader) are
+│                         untouched.
 │                         AWECRAFT_SAT_MESH_STEP env override (default 16 = unchanged — software-renderer
 │                         render runs use ~64 so a settled frame carrying the body completes); runtime
 │                         bake cache
@@ -959,7 +1011,49 @@ Match these; do not improvise a different approach in a task.
   (DEFAULT ON, `sanitize_bool` clamped) on the Settings surface +
   `world.note_modern()` + the harness env override `AWECRAFT_MODERN=0|1`
   (written into `Settings.values` without `save()`).
-- **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
+- **AC-0401 — the fog-wall partition + the deck character + the limb gate**:
+  the user's four reports (too many small clouds; the low LOD should have NO limb
+  effect, only fog; z-fighting between the clouds / the low LOD / the satellite
+  LOD; the high-detail terrain should not be visible from space) all reduce to
+  ONE contract violation: the satellite body owns the rule “the body is only
+  where the world's depth fog has already fully faded the world (d >= fog_far)”,
+  but the near tiers kept drawing PAST the wall (at 100% fog colour, coplanar
+  with the body's own displaced terrain — the fog-colour diamond patch in the
+  1600/2600 m orbital frames, the flicker in the 332-400 m band). The fix:
+  (1) PARTITION — every near-field material discards fragments at d >= u_fog_far
+  (the four chunk_lit_*.gdshader kinds, lod_avg.gdshader, fluid_anim{,_bf}.
+  gdshader); u_fog_far is the same DayNight.fog_far(render_radius,
+  fog_start_pct) main.gd puts on env.fog_depth_end (one number, one home), pushed
+  change-gated by world.gd `_ac0401_push()` (main.gd already pushes it to
+  `_lod_avg_mat` from the env). The engine fog fade is the whole dissolve as the
+  camera climbs (no pop); the body's haz_d rim at the wall is the seam (the
+  single-source u_air, AC-0400 preserved); from orbit the disc is the body alone.
+  There is NO new threshold: the “certain height” where the high detail vanishes
+  IS the body's own fog wall, checked against the body's own op ramp by
+  construction (the near field stops exactly where the body's existence begins).
+  (2) RADIUS ORDERING — satellite_body.gdshader gains a vertex stage moving the
+  displaced surface 2 m radially inward (mesh origin = sphere centre: local ==
+  radial), so wherever the same terrain still coexists (relief straddling the
+  wall) the near tiers win the depth test by construction. (3) DECK CHARACTER
+  — cloud_layer.gdshader behind `u_deck` (Settings `cloud_deck`, DEFAULT ON, the
+  user asked; env AWECRAFT_CLOUDDECK): 1.0 = the field at 1/3 frequency (bigger
+  masses), a tighter coverage window (fewer), a 0.60 band floor (clear gaps
+  between the belts), softer edge windows, volumetric shading (puff brightness
+  off the mid field + thickness darkening 0.70 → 0.58); 0.0 (the shader default)
+  selects the exact pre-AC-0401 constants (r9 path, bit-identical) — the
+  short-circuit before the work. (4) LIMB GATE — aero_sky_gradient.gdshader's
+  limb term is multiplied by mix(1.0, u_space, u_limb_gate) (Settings
+  `limb_space`, DEFAULT ON, the user asked; env AWECRAFT_LIMB): the rim is an
+  orbit instrument — no glow below the flight band (u_space 0), full rim from
+  orbit; u_limb_gate 0.0 (the shader default) is the pre-AC-0401 glow at every
+  altitude. PUSH PATH DEVIATION: both switches ride world.gd `_ac0401_push()`
+  reaching the cloud/sky materials through the PARENT Main node (main.gd is
+  fence-locked by the parallel session; the shader-side defaults are OFF, so a
+  material without the push keeps the old look; the push is per-frame,
+  change-gated, and the values are read live from Settings). The switches are
+  render-path only: generation untouched (genhash 25/25), the cloud shells
+  keep their exact radii/centres, and the AC-0398/AC-0399/AC-0400 behaviours
+  (interpolated lighting, view-weighted fill, single-source seam) stand.- **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
   per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is
   still the per-slab C++ avg emit (byte-identical — farab 1080/1080 + h_mismatch 0,
   halo, ladder, meshprobe are the standing proof), but the DRAW is per RING SECTOR:
@@ -982,7 +1076,7 @@ Match these; do not improvise a different approach in a task.
   featureless wall against the body's crisp terrain, the measured seam); the
   bridge's uniforms (u_air / u_fog_near / u_fog_far / u_render_edge / u_center)
   are pushed per frame from main.gd `_update_sky` off the live env fog +
-  render radius + `Aero.fog_display`. The per-slab RECORD
+  render radius + `Aero.fog_display`. AC-0401: the annulus now ENDS at the fog wall — lod_avg.gdshader discards its fragments at d >= u_fog_far (the PARTITION; pre-AC-0401 it drew out to the render edge at 100% fog colour, coplanar with the body's displaced terrain: the orbital fog-colour patch + the 332-400 m z-fighting band). The body's haz_d rim at the wall is the seam (same u_air), so the AC-0400 single-source seam target is preserved — the fade now runs in the body's rim, not in the annulus. See the AC-0401 bullet in §4. The per-slab RECORD
   survives on the slot `MeshInstance3D`s that `c.low_instances` holds — the slots
   are OFF-TREE now (pooled exactly as before; their `.visible` flag is the far
   draw state the ring re-derives, and their `.mesh` is the exact emit arrays the
