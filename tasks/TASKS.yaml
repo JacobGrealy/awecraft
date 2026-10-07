@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T14:38
+  updated_at: 2026-10-07T18:48
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -25,6 +25,9 @@ queue:
 - AC-0328
 - AC-0330
 - AC-0399
+- AC-0402
+- AC-0403
+- AC-0404
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24829,4 +24832,183 @@ intake:
     the parent node rather than from main.gd, which another session holds, documented in ARCHITECTURE.
     The Windows build completed at rc=0 with the coordinator''s HOME set correctly - the trap harvested
     the previous round, applied rather than repeated.'
+  comments: []
+- id: AC-0402
+  title: planet-grey-at-some-times-and-sky-not-altitude-aware
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-07T14:39
+  updated_at: 2026-10-07T14:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The planet should look like a world at every time of day - green land, blue ocean,
+    weather over it - instead of washing out to a pale grey ball for part of the cycle. And the sky should
+    know where the player is: bright air near the ground, thinning to space as you climb, rather than
+    the same gradient everywhere.
+
+
+    2) Technical Details:
+
+    BOTH ITEMS COME FROM THE AC-0384 ROUND 12 ASSESSMENT (its section 25, findings D5 and D4), which looked
+    at the whole landing and takeoff experience after five rounds of fixes and reported what it saw with
+    measurements. The user has since reported four other things from the same subsystem, all delivered
+    in AC-0401; these two were not among them and are now the largest known remaining gaps against the
+    objective.
+
+    D5, THE BIGGER ONE: AT SOME TIMES OF DAY THE PLANET RENDERS AS A PALE GREY BALL. Measured at the 2600
+    m satellite view, the disc centre reads 184,184,184 at T0.5 against 49,99,46 at T0.3. A terrain disc
+    that is grey at one time of day and green at another is not a lighting difference, it is the planet''s
+    material or day-night treatment washing out, and at the grey end it does not read as a world at all.
+    Worth knowing while diagnosing: the coordinator spent days on a "pale planet" complaint that turned
+    out to be a shader which never compiled and then a fog term erasing the body - this may be a THIRD,
+    independent cause of the same symptom, and the fix should say which of the three the pale grey is.
+
+    D4, SECONDARY BUT DIRECTLY ON THE OBJECTIVE''S "leaving a planet" half: the sky-to-space transition
+    is short and does not respond to altitude. Its space term runs 0.13 to 0.92 between 700 and 1600 m,
+    is fully black by 1600 m, and the gradient is inverted - bright at the zenith fading to deep at the
+    horizon - in a way that is state-INDEPENDENT, so the sky reads the same from the ground as from orbit.
+    The assessment measured this per altitude across the ladder, so the before numbers exist and the after
+    ones can be compared directly.
+
+    ACCEPTANCE IS COLOUR MEASURED ACROSS A SWEEP, not one frame: for D5, the disc-centre colour at the
+    2600 m satellite view sampled across several times of day (at least T0 0.0, 0.25, 0.5 and 0.75), showing
+    saturated terrain colour at every one rather than grey, plus the renders. For D4, the space term and
+    the gradient measured at 2600, 1600, 700, 300 and 120 m showing the sky responding to altitude, plus
+    the frames. Round 12''s captures are ac0384-final-descent-*.png in tasks/AC-0384/ and are the before
+    set.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING rather than a re-baseline; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py;
+    the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
+    r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); the cloud
+    shell radii and centre stay exactly 4275/4330/4400 about (0, -R, 0); the near field must keep fading
+    into fog only with no limb rim (AC-0401), the limb glow must stay gated to altitude above it, AC-0399''s
+    view-weighted fill ordering and AC-0398''s interpolated lighting must keep working, and AC-0400''s
+    seam fade must keep targeting the single-source air colour. Any change to how the world LOOKS ships
+    with a switch, default conservative, short-circuiting before the work.
+
+    CONTEXT: read tasks/AC-0384/AC-0384-results.html section 25 for both findings and their method, and
+    tasks/AC-0401/AC-0401-results.html for the layer and shader work that must survive.
+
+    '
+  comments: []
+- id: AC-0403
+  title: intermittent-segfault-in-mob-tick-get-block
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-07T14:39
+  updated_at: 2026-10-07T14:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The game should not crash. This one is intermittent and may be rare, but a crash
+    is a crash - and it was seen while simply leaving the game running through a long camera drain, which
+    is what a player does every time they fly somewhere.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0384 ROUND 12 ASSESSMENT, reported honestly as a deviation rather than hidden: ONE
+    SEGFAULT in `_mob_tick` reaching `get_block` at godot/world/chunk.gd:657, during a long snapshot drain.
+    It was stochastic, no rendered frame was affected, and a clean re-run did not reproduce it. That is
+    exactly why it needs a ticket rather than a shrug: an intermittent crash with no reproducer is the
+    kind of defect that gets attributed to hardware later, and this project''s whole recent history is
+    about defects that were visible in the logs all along and nobody read.
+
+    WHAT TO DO: first, establish reachability - is `_mob_tick` calling `get_block` on a column or chunk
+    that has been streamed out, is it reading across a chunk boundary the mob has just crossed, and can
+    it run while the streamer is mid-rebuild? A null or freed chunk behind that call would explain a stochastic
+    segfault under a long run and would be reproducible with a targeted probe. Look at what the call does
+    when the chunk is absent or unloaded rather than only when it is present.
+
+    SECOND, get a reproducer or bound the risk. A long run with mobs active and streaming churn under
+    the memory cap is the shape to try; if it cannot be reproduced, say so plainly and report what the
+    code path does under each of the three conditions above, so the next report of a crash has somewhere
+    to start.
+
+    THIRD, remember this is native code - a segfault in the engine or the extension is not catchable by
+    GDScript, so a guard belongs where the call is made, with the guard''s cost measured.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py;
+    the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
+    r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); mob behaviour
+    must not change when the guard is not triggered - assert that, because a guard that quietly alters
+    mob ticking is a worse bug than the crash it prevents.
+
+    CONTEXT: the AC-0384 round 12 assessment section 25 records the crash as D6 with its conditions (long
+    drain, `_mob_tick`, chunk.gd:657, stochastic, clean re-run).
+
+    '
+  comments: []
+- id: AC-0404
+  title: hide-medium-and-low-lod-at-height
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-07T18:48
+  updated_at: 2026-10-07T18:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From high in the atmosphere or in space the player should see the planet - its
+    curve, its air, its weather - and not patches of the ground they just left. At the moment the finest
+    detail disappears with altitude but the middle and coarser ground detail does not, so looking down
+    from height still shows terrain that should have given way to the planet view.
+
+
+    2) Technical Details:
+
+    REQUESTED BY THE USER 2026-10-07, in their words: "the medium and low lods should also disappear at
+    height along with the high". This extends AC-0401''s fourth item, which hid only the HIGH detail level
+    above a threshold and was verified only for that tier - its acceptance measured high detail present
+    at 120 and 300 m and absent at 700, 1600 and 2600 m, and said nothing about the middle and coarse
+    tiers because nobody had asked yet.
+
+    WHAT TO BUILD: every near tier - high, medium and low - should give way to the satellite body as altitude
+    rises, on one consistent rule rather than three thresholds that can drift apart. AC-0401''s mechanism
+    is the pattern to extend: it used the body''s own fog wall as the threshold, per fragment, so the
+    body and the near detail could never both vanish or both show. Extend that same single-source rule
+    across all three tiers so there is exactly one altitude at which the world hands over to the planet
+    view, and so the tiers disappear in a sensible order rather than the coarse one outliving the fine
+    one. If the honest answer is that a tier is better hidden by distance than by altitude, say so and
+    explain why rather than forcing the metaphor.
+
+    WATCH FOR THE INTERACTION WITH WHAT JUST SHIPPED: AC-0402 made the sky respond to altitude, gated
+    behind a switch, with the limb glow, stars and sun glow kept on the physics term. The handover from
+    ground to space is now a sequence - near detail, then cloud deck, then atmosphere, then space - and
+    this ticket changes one step of it. Check the whole sequence on the ladder afterwards, not just the
+    tier you changed.
+
+    ACCEPTANCE IS THE LADDER, at the user''s configuration (radius 24, fog fully opaque at 332 m) across
+    2600, 1600, 700, 300 and 120 m, for a descent and ideally a takeoff: at each altitude say which tiers
+    and shells are drawn and which are not, measured from the frames rather than read from the code, and
+    show clearly that above the handover the only thing visible is the planet and its atmosphere. Round
+    12''s captures ac0384-final-descent-*.png in tasks/AC-0384/ and AC-0402''s ladder captures are the
+    before set.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    - AND note that a clean census is not sufficient, because a run can abort with zero errors in the
+    log, so check the exit status too; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); the cloud shell radii and centre stay 4275/4330/4400 about (0, -R, 0); AC-0401''s
+    cloud look, near-field fog-only fade and limb gate must keep working, AC-0402''s altitude-aware sky
+    must keep working, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must keep working,
+    and AC-0400''s seam fade must keep targeting the single-source air colour.
+
+    '
   comments: []
