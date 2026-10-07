@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0400 — dark rim at the limb seam fade — results</title>
+<style>
+body { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 14px; line-height: 1.45; max-width: 1180px; margin: 24px auto; padding: 0 16px; color: #1a2028; }
+h1 { font-size: 20px; border-bottom: 3px solid #2a6; padding-bottom: 6px; }
+h2 { font-size: 16px; margin-top: 30px; border-bottom: 1px solid #9ab; padding-bottom: 3px; }
+table { border-collapse: collapse; margin: 10px 0; }
+th, td { border: 1px solid #bcd; padding: 3px 8px; text-align: left; }
+th { background: #e8f2f5; }
+.num { text-align: right; }
+.good { color: #0a7033; font-weight: bold; }
+.bad { color: #b3261e; font-weight: bold; }
+img { max-width: 640px; border: 1px solid #999; margin: 6px 10px 6px 0; }
+.caption { font-size: 12px; color: #556; }
+pre { background: #f2f6f7; padding: 8px; overflow-x: auto; font-size: 12.5px; }
+.note { background: #fff8e6; border-left: 4px solid #e6b422; padding: 8px 12px; margin: 10px 0; }
+.pass { background: #e8f5e9; border-left: 4px solid #0a7033; padding: 8px 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<h1>AC-0400 — dark rim at the limb seam fade — results</h1>
+<p>Builder: delegated subagent. Tree: dirty with the 4 files of a concurrent session (godot/scenes/main.gd, godot/autoload/game.gd, godot/entities/drop.gd, godot/autoload/debug.gd) — every measurement ran on that tree, and the BEFORE and AFTER renders were taken on the SAME tree back-to-back, so the A/B isolates the one shader line. User config: radius 24, fog full at 332 m (FOG_PCT 83), seed 44, Forward+ via lavapipe @ ~2.1 FPS (measured this session at R24), 1280×720, TIME 0.30 frozen, clouds off, CLOUD_T0 411200.</p>
+
+<h2>1. Verdict</h2>
+<div class="pass"><b>PASS — the dark rim is gone at pixels.</b> The seam band (the 336–384 m fade, the annulus's outer 48 m) carried 1.29% dark pixels at 2600 m and 1.15% at 1600 m BEFORE (the lit-0.2 slab base — the rim, median colour (25,41,30)/(31,48,40)); it carries <b>0.0%</b> AFTER, with the band's built outer edge now sitting on the fog-wall colour (191,240,246) instead of the haze-to-dark gradient. The background just past the tier boundary (the satellite dome's haze, (144,209,221)) is unchanged in both frames — the annulus dissolves into the air behind it instead of into darkness. At 120 m (ground) the frames are <b>byte-identical before/after</b> (md5 7eea3da1…, 0/921600 px differ) — no visible regression. All gates green: G0 zero errors, genhash 25/25 byte-identical to the last verified run, farab h_mismatch 0, ladder band_a_ok 20/20, meshprobe mismatch 0, halo ok, lightstate leaks 0/0, r16 far_holes 0/0 both bands. The change is one shader line plus the deletion of the dead dome-mirror locals: the seam-fade target <code>haz_b</code> → <code>1.0</code>, i.e. full <code>u_air</code> — the existing single-source air colour, not a fourth colour.</div>
+
+<h2>2. The change (one line + dead-code cleanup)</h2>
+<pre>godot/core/lod_avg.gdshader (the far-tier avg-LOD material, AC-0252/AC-0283/AC-0384 r8) — the only code touched:
+
+-	float op    = smoothstep(u_fog_far, u_render_edge, d);
+-	float cosv  = clamp(dot(normalize(v_world_pos - u_center), normalize(V)), 0.0, 1.0);
+-	float haz_a = (1.0 - cosv) * (1.0 - cosv);
+-	float haz_b = clamp(haz_a + (1.0 - op), 0.0, 1.0);
+...
+-	float haz = mix(haz_b, fog_f, w);
++	float haz = mix(1.0, fog_f, w);      // the seam fade (w=0 end) now targets FULL u_air
+
+	float w    = 1.0 - smoothstep(336.0, 384.0, taxi);  // unchanged: the outer 48 m
+	ALBEDO    = mix(ALBEDO, u_air, haz);                  // unchanged: u_air was already the mix colour
+</pre>
+<p><b>Why this targets the existing source.</b> The final colour is <code>mix(ALBEDO, u_air, haz)</code>: the single-source air colour <code>u_air</code> is the only colour in this shader's fade — main.gd pushes it from <code>env.fog_light_color</code> = <code>AeroLib.fog_display(t)</code>, the same value the dome haze and the sky horizon use. r8 drove the fade weight <code>haz</code> toward <code>haz_b</code> (a mirror of the satellite body's haz model, haz_a + (1−op)) at the tier boundary; at the orbital nadir <code>haz_b</code> ≈ 0 (the body's limb haz is limb-only, and <code>op</code> = 1 at the render edge), so "fade toward haz_b" was a fade toward the un-fogged slab base — the AC-0283 lit-0.2 floor, measured (16,8,0) in AC-0399 §4 — i.e. toward black: the dark rim (the residual AC-0399 §7 documented and left, after its own mix-argument swap fixed the core, not the fade target). Pointing the target at full <code>u_air</code> (weight 1.0) dissolves the annulus into the air behind it at every altitude. <b>No fourth colour, no new uniform, no new constant.</b> The dome keeps its own haz model for its own edge (satellite_body.gdshader, untouched). The <code>u_*</code> uniforms stay declared — main.gd (fenced) still pushes them; the GLSL compiler simply ignores the now-unused ones.</p>
+
+<h2>3. Pixel acceptance — annulus edge vs background, before/after</h2>
+<p>Instrument: <code>.scratch/AC-0400-gates/measure.py</code> — the planet-preset camera pose reconstructed exactly from <code>harness.gd</code> (spawn (8.5,141,8.5), C (0,−4000,0), tangent-limb aim, fov 75, 1280×720); per-pixel <code>ext</code> = flat-chart distance from the terrain anchor (the streaming taxi metric); readout in the forward sector (±15° around the view direction — the viewed arc, where the view-weighted fill pushes the frontier, so the arc is frame-clipped to a thin strip near the bottom edge). Regions: fog wall ext 60–300 m; <b>seam band ext 336–384 m</b> (the fade, the annulus edge); edge 372–384 m; background 392–470 m (just past the tier boundary — the dome/air behind the annulus). dark = luminance &lt; 60 (the lit-0.2 slab-base class); fog = within tol 28 of the built fog colour (205,250,255). All values below are the median of the region, with the dark/fog fractions.</p>
+<table>
+<tr><th>frame (state)</th><th class="num">alt</th><th class="num">fog wall 60–300</th><th class="num">seam band 336–384</th><th class="num">band dark</th><th class="num">band fog</th><th class="num">edge 372–384</th><th class="num">background 392–470</th></tr>
+<tr><td>BEFORE b2600 s1800</td><td class="num">2600</td><td class="num">(191,240,246)</td><td class="num">(144,209,221)</td><td class="num bad">1.29% (5 px, med (25,41,30))</td><td class="num">19.3%</td><td class="num">(144,209,221), dark 0.96%</td><td class="num">(144,209,221)</td></tr>
+<tr><td><b>AFTER a2600 s1800</b></td><td class="num">2600</td><td class="num">(191,240,246)</td><td class="num">(144,209,221)</td><td class="num good">0.0% (0 px)</td><td class="num">43.6% (med (191,240,246))</td><td class="num">(144,209,221), dark 0.0%</td><td class="num">(144,209,221)</td></tr>
+<tr><td>BEFORE b1600 s1800 (md5-identical to the AC-0399 capture)</td><td class="num">1600</td><td class="num">(191,240,246)</td><td class="num">(144,209,221)</td><td class="num bad">1.15% (12 px, med (31,48,40))</td><td class="num">32.5%</td><td class="num">(144,209,221), dark 1.14%</td><td class="num">(144,209,221)</td></tr>
+<tr><td><b>AFTER a1600 s1800</b></td><td class="num">1600</td><td class="num">(191,240,246)</td><td class="num">(191,240,246)</td><td class="num good">0.0% (0 px)</td><td class="num">55.6% (med (191,240,246))</td><td class="num">(144,209,221), dark 0.0%</td><td class="num">(144,209,221)</td></tr>
+<tr><td>BEFORE 120 s900 (ground reference)</td><td class="num">120</td><td class="num">(164,206,193)</td><td class="num">(120,172,179)</td><td class="num">0.0%</td><td class="num">0.0%</td><td class="num">(124,178,185)</td><td class="num">(131,188,199)</td></tr>
+<tr><td><b>AFTER 120 s900</b> — no-regression check</td><td class="num">120</td><td class="num">identical (byte-identical frame)</td><td class="num">identical</td><td class="num">0.0%</td><td class="num">0.0%</td><td class="num">identical</td><td class="num">identical</td></tr>
+</table>
+<p class="note"><b>Reading the change in the medians.</b> The band's MEDIAN barely moves ((144,209,221)→(144,209,221) at 2600) because most of the band is still the unbuilt dome haze — but its COMPOSITION changes: the dark slab-base pixels (the rim, med (25,41,30)/(31,48,40) — the (16,8,0) lit-0.2 base with a whisper of haze) are gone, and the built outer edge of the band moves onto the fog-wall colour ((191,240,246) — fog + the residual dome holes; pure built fog is (206,250,255)), so the band's fog fraction more than doubles (2600: 19.3%→43.6%, 1600: 32.5%→55.6%). The fog wall (the w=1 core, ext &lt; 336) and the background dome are pixel-identical before/after — the core and the dome are untouched, only the fade's outer target moved. The 120 m frames are byte-identical: at ground altitude the fade band was already built-out in the haze at s900 and the fix's visible delta there is zero.</p>
+<p class="caption">Frontier state (same for before/after — deterministic frozen-time runs): fwd p90 322 m, max 372 m at 2600 s1800; fwd p90 342 m, max 383 m at 1600 s1800 — the built part of the band is a sliver at the wedge tip, which is exactly where the rim lived (a 5–12 px arc) and where it is now clean.</p>
+
+<h2>4. The rim, visible and then absent</h2>
+<p>Both strips: the seam-band region, 3× zoom, BEFORE on top / AFTER below, identical crop. Captures in <code>tasks/AC-0400/captures/</code>.</p>
+<p><img src="captures/compare-2600-band.png" alt="2600 m band, before (dark staircase rim at the fog-patch edge) over after (clean bright edge)"></p>
+<p class="caption">2600 m: BEFORE — the dark staircase rim along the fog patch's left edge (5 dark band px, med (25,41,30)); AFTER — the patch's edge is bright fog colour, no dark pixels.</p>
+<p><img src="captures/compare-1600-band.png" alt="1600 m band, before over after"></p>
+<p class="caption">1600 m (the band occupies more of the frame): the same dark staircase edge before, gone after (12 dark band px → 0).</p>
+<p>Full frames: <code>captures/before-2600-s1800.png</code> vs <code>captures/after-2600_s1800.png</code>, <code>captures/before-1600-s1800.png</code> vs <code>captures/after-1600_s1800.png</code>, <code>captures/before-120-s900.png</code> vs <code>captures/after-120_s900.png</code> (byte-identical), plus the s900 step files of both altitudes. The ring maps (band pixels only, dark painted red) <code>.scratch/AC-0400-gates/ring_before2600_s1800_ring.png</code> / <code>ring_after2600_s1800_ring.png</code> read dark_frac 1.29% / 0.0% over the whole ring (all azimuths).</p>
+
+<h2>5. Negative test</h2>
+<p>The instrument detects the defect on this box/renderer and clears it after the fix, under the identical recipe: the same radial profiler reads dark_frac 1.29% (2600) / 1.15% (1600) with named dark-pixel medians on the BEFORE frames, and 0.0% with 0 dark px on the AFTER frames; the ring maps paint the before rim red and nothing on the after. The render logs carry zero SHADER ERROR (census on every render log), and the AFTER frames show the fog-coloured annulus — not the engine's white fallback material a failed shader would draw — so the compiled, fixed shader is what ran. The 120 m byte-identical pair proves the instrument's pose reconstruction is stable (zero spurious delta where the shader provably changes nothing in-frame).</p>
+
+<h2>6. Gates (policy awecraft-run-verify; HEAVY = coordinator)</h2>
+<table>
+<tr><th>Gate</th><th>Result (this session, fixed tree)</th><th>Standing</th></tr>
+<tr><td>G0 headless + census</td><td class="good">rc=0, SCRIPT ERROR 0, SHADER ERROR 0</td><td>zero of both</td></tr>
+<tr><td>genhash</td><td class="good">25 lines, byte-identical to the AC-0399 smoke2 reference (the last verified run on this tree)</td><td>25/25 byte-identical</td></tr>
+<tr><td>farab</td><td class="good">ok true, h_mismatch 0, slab_mismatch 0/0, codec ok</td><td>ok true, h_mismatch 0</td></tr>
+<tr><td>ladder</td><td class="good">band_a_ok 20, air_inworld_ok, boundary_flip_ok, clutter_ok, layerrank_ok</td><td>band_a_ok 20/20</td></tr>
+<tr><td>meshprobe</td><td class="good">ok true, match_rate 1.0, mismatch [] — builds the far meshes, so the fixed shader compiled on the live path</td><td>mismatch 0</td></tr>
+<tr><td>halo</td><td class="good">a/b/b1/c ok, mismatches 0</td><td>ok</td></tr>
+<tr><td>lightstate</td><td class="good">leaks 0/0, arr_diff_cells 1 (the standing value on this tree)</td><td>leaks 0/0 (AC-0398 lighting + switch)</td></tr>
+<tr><td>r16 --fixed-fps 600</td><td class="good">ok true, far_holes 0/0 both bands, far_visible [0,256] (same as AC-0399), all sub-flags</td><td>all sub-flags, far_holes 0/0</td></tr>
+</table>
+<p>HEAVY (boundary r4, flake, r50, shaderforce, full battery) was not run — the coordinator's stage. The genhash line that "differs from the on-disk AC-0367 canonical" is expected: that file predates the AC-0292 deliberate generation rebase; the criterion is byte-identity with the LAST verified run (AC-0399), which holds.</p>
+
+<h2>7. No-regression confirmations</h2>
+<ul>
+<li><b>AC-0399 view-weighted fill ordering:</b> no code in world.gd / player.gd / harness.gd touched — the ordering is untouched by construction (the shader only paints; it cannot steer the fill). Determinism controls: b1600 s1800 md5-IDENTICAL to the AC-0399 capture (b88490ee…); b2600 s900/s1800 differ from the AC-0399 captures by a 16-px / 8-px speckle near the spawn house (the concurrent session's tree drift, outside every measured region) — i.e. the fresh before run reproduces AC-0399's frames on the same recipe, and the primary A/B (fresh before vs fresh after, same tree, back-to-back) is confound-free.</li>
+<li><b>AC-0398 interpolated lighting + switch:</b> lightstate green (leaks 0/0, the standing arr_diff_cells 1); the shader change is in the far-tier ALBEDO fade only — the vertex-light model (COLOR.a, the lit-0.2 floor) is untouched.</li>
+<li><b>Single-source air colour:</b> intact — the fade now targets <code>u_air</code> itself; no new colour, uniform or constant anywhere (the dome's and the sky's air source is the same push from <code>AeroLib.fog_display</code>).</li>
+<li><b>genhash 25/25:</b> shader-only change; generation untouched (§6).</li>
+<li><b>Ground (120 m) look:</b> the acceptance-adjacent no-regression case — frames byte-identical before/after (§3, §5).</li>
+</ul>
+
+<h2>8. Files &amp; captures</h2>
+<p><b>Code (only change):</b> <code>godot/core/lod_avg.gdshader</code> — the fade target <code>haz_b</code>→<code>1.0</code> (full u_air), the dead dome-mirror locals deleted, the AC-0400 notes in the header and inline. <b>Ticket folder:</b> <code>tasks/AC-0400/</code> — spec.html, plan.html, this file, continuity.md, captures/ (before-2600/1600/120, after-2600/1600/120 at s900/s1800 states, the compare-2600/1600-band.png strips). <b>Scratch:</b> <code>.scratch/AC-0400-gates/</code> — render_before.sh, render_after.sh, smoke.sh, measure.py, darkmap.py, g0.log, all render/smoke logs, ring maps, zooms.</p>
+<p><b>Deviations from plan.html:</b> (1) The plan's drain-3000 renders (steps 900/1800/3000) did not fit the 1200 s budget — this box runs ~2.1 FPS at R24 (the "5 FPS" estimate does not hold at radius 24), so the first before-2600 attempt timed out at 1200 s with s900/s1800 step files already valid; all A/B renders were re-run at AC-0399's proven drain-1800 recipe (same step states, same frozen-time determinism). (2) The 120 m "before" is the AC-0399 a2_alt120_s900 capture (no fresh before-120 render was needed: the before-120 and after-120 frames are byte-identical, which is the no-regression result itself). No other deviations.</p>
+</body>
+</html>

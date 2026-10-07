@@ -30,13 +30,29 @@
 // 700 m — the visible discontinuity. Now the fragment haze is a
 // crossfade across the annulus from the ENGINE-FOG MODEL (the inner
 // edge: the same factor as band A at the same view distance, so the
-// band A/annulus boundary is continuous by construction) to the
-// SATELLITE BODY's own haz model (the outer edge: same model and same
-// u_air as the dome, so the annulus/dome boundary is continuous by
-// construction). One fade instead of a wall with a hard edge: ground ->
-// haze -> dome. Fog stays DISABLED here (the engine fog would re-assert
-// its flat factor over the crossfade) — the bridge IS the fog, now with
-// the body's geometry in it.
+// band A/annulus boundary is continuous by construction) toward the
+// single-source AIR COLOUR (the outer edge, AC-0400 — see below). One
+// fade instead of a wall with a hard edge: ground -> haze -> air. Fog
+// stays DISABLED here (the engine fog would re-assert its flat factor
+// over the crossfade) — the bridge IS the fog, now with the body's
+// geometry in it.
+//
+// AC-0400: the OUTER-EDGE TARGET of the crossfade changed. r8 faded the
+// outer 48 m toward haz_b — a mirror of satellite_body.gdshader's own
+// haz (haz_a + (1-op)) — so the annulus/dome boundary matched in HAZE
+// WEIGHT. That only works while the dome's haz there is substantial
+// (ground altitude: haz_b ~ 0.6, a hazy dome the annulus dissolves
+// into). At the orbital nadir haz_b ~ 0 (limb haz is limb-only; op = 1
+// at the render edge), so the fade went toward the un-fogged slab base
+// instead of the air — the AC-0283 lit-0.2 floor (measured (16,8,0) in
+// AC-0399 §4) — a thin dark rim at the annulus's outer edge, the residue
+// AC-0399 documented and left (its mix-argument swap had fixed the
+// core, not the fade target). AC-0400 points the fade at u_air: the
+// SAME single source main.gd pushes as env.fog_light_color
+// (AeroLib.fog_display) to this material, to the satellite body and to
+// the sky horizon — one air colour, no fourth. The annulus now
+// dissolves into the air behind it at every altitude; the dome keeps
+// its own haz model for its own edge (satellite_body.gdshader).
 shader_type spatial;
 render_mode fog_disabled;
 
@@ -72,16 +88,10 @@ void fragment() {
 	// the render edge — the MANHATTAN distance from the terrain anchor
 	// (0,0,0), because the tiers are taxi diamonds (|x|+|z| in chunks),
 	// so the blend lands exactly on the tier boundaries. fog_f is the
-	// engine depth-fog ramp (the band A's factor at the same d); haz_b
-	// mirrors satellite_body.gdshader's haz = haz_a + (1-op) so the
-	// outer edge matches the dome at the same fragment position.
+	// engine depth-fog ramp (the band A's factor at the same d).
 	vec3 V = CAMERA_POSITION_WORLD - v_world_pos;
 	float d = length(V);
 	float fog_f = clamp((d - u_fog_near) / max(u_fog_far - u_fog_near, 1.0), 0.0, 1.0);
-	float op = smoothstep(u_fog_far, u_render_edge, d);
-	float cosv = clamp(dot(normalize(v_world_pos - u_center), normalize(V)), 0.0, 1.0);
-	float haz_a = (1.0 - cosv) * (1.0 - cosv);
-	float haz_b = clamp(haz_a + (1.0 - op), 0.0, 1.0);
 	float taxi = abs(v_world_pos.x) + abs(v_world_pos.z);
 	// The fade occupies the OUTER 48 m of the annulus (336-384), not the
 	// whole band: with w=1 out to 336, haz = fog_f (the engine ramp)
@@ -90,19 +100,26 @@ void fragment() {
 	// see the slab texture through the haze - measured 7.33/4.02 vs the
 	// 4.71/1.90 gate when the fade spanned 128-384). The fade is
 	// smoothstep (zero slope at both ends) and ends exactly at the tier
-	// boundary, so it meets the dome's own haz model continuously.
+	// boundary.
 	float w = 1.0 - smoothstep(336.0, 384.0, taxi);
 	// AC-0399 r1: r8 shipped the mix BACKWARDS — mix(fog_f, haz_b, w)
 	// returned haz_b (~0 at the orbital nadir: the body's limb haz with
 	// cosv~1, op=1) across the whole w=1 core, contradicting the block
 	// above ("with w=1 out to 336, haz = fog_f"): at 2600 m the built
 	// annulus rendered the AC-0283 lit-0.2 base (measured (16,8,0), a
-	// dark diamond) instead of the fog wall (the r8-dev run had measured
-	// that wall at (177,240,255); the pre-r8 tree round 4 measured is
-	// what the fog patch instrument assumes). Swapped so w=1 -> fog_f
-	// (the engine ramp, the nadir core) and w=0 -> haz_b (the dome seam),
+	// dark diamond) instead of the fog wall. Swapped so w=1 -> fog_f
+	// (the engine ramp, the nadir core) and w=0 -> the seam target,
 	// exactly as written.
-	float haz = mix(haz_b, fog_f, w);
+	// AC-0400: the seam target (w=0 end of the fade) is the
+	// SINGLE-SOURCE AIR COLOUR — full u_air (the weight below is 1.0),
+	// not the dome-mirror haz_b r8 used. haz_b ~ 0 at the orbital nadir
+	// made the fade go toward the lit-0.2 slab base — the dark rim at
+	// the annulus edge (AC-0399 §7). u_air is the same single source the
+	// fog wall, the dome haze and the sky horizon use (main.gd pushes
+	// env.fog_light_color = AeroLib.fog_display(t) to all three); no
+	// fourth colour is introduced. The dome keeps its own haz model for
+	// its own edge (satellite_body.gdshader).
+	float haz = mix(1.0, fog_f, w);
 	ALBEDO = mix(ALBEDO, u_air, haz);
 	ALPHA = 1.0;
 }

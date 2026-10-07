@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AC-0400 — plan</title>
+<style>body{font:14px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:880px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:20px}h2{font-size:16px;margin-top:18px;border-bottom:1px solid #ddd;padding-bottom:3px}
+code,pre{font:12.5px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:8px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:3px 8px;text-align:left}th{background:#f0f0f0}
+.good{color:#0a7033;font-weight:bold}.bad{color:#b3261e;font-weight:bold}</style>
+</head>
+<body>
+<h1>AC-0400 — plan — point the annulus seam fade at the single-source air colour</h1>
+
+<h2>Goal</h2>
+<p>Make the 336&ndash;384&nbsp;m seam fade of the far-annulus LOD material dissolve into the
+existing single-source air colour (<code>u_air</code>, the same one the fog wall, the dome haze and
+the sky horizon use) instead of fading toward <code>haz_b</code>, which is &asymp;0 at the orbital
+nadir and leaves a thin dark rim (the lit-0.2 slab base) at the annulus edge &mdash; no new colour.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/lod_avg.gdshader</code></td>
+<td>The only code change. The seam-fade mix target goes <code>haz_b</code> &rarr; <code>1.0</code>
+(i.e. full <code>u_air</code>): <code>float haz = mix(1.0, fog_f, w);</code>. The now-dead
+dome-mirror locals (<code>op</code>, <code>cosv</code>, <code>haz_a</code>, <code>haz_b</code>) are deleted;
+the <code>u_air</code>/<code>u_fog_*</code>/<code>u_render_edge</code>/<code>u_center</code> uniforms stay
+declared (main.gd pushes them &mdash; main.gd is fenced and untouched). Header + inline comments
+updated with the AC-0400 note (why the dome-mirror target darkens at altitude, why the air
+colour is the correct target, single-source rule intact).</td></tr>
+<tr><td><code>tasks/AC-0400/</code></td>
+<td>plan.html (this file), AC-0400-results.html, continuity.md, captures/ (the AFTER renders
++ the BEFORE renders of this run). Measurement tool: <code>.scratch/AC-0400-gates/measure.py</code>.</td></tr>
+</table>
+
+<p><b>NOT touched (fences):</b> <code>godot/scenes/main.gd</code>, <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> (concurrent session),
+<code>godot/scenes/harness.gd</code> (no new arm needed &mdash; the existing <code>planet</code> preset
++ <code>AWECRAFT_SAT_ALT</code> + <code>AWECRAFT_SNAP_STEPS</code> are the instrument), <code>world/*</code>
+(genhash must not move), TASKS.yaml (no hand edits), no git commits.</p>
+
+<h2>Harness gates (mode + ok:true condition)</h2>
+<table>
+<tr><th>Gate</th><th>Mode / recipe</th><th>ok condition</th></tr>
+<tr><td><b>G0</b></td><td><code>--headless --path godot --quit</code> + <code>gate_census.py</code></td>
+<td>zero <code>SCRIPT ERROR</code> AND zero <code>SHADER ERROR</code> lines (rc is not the gate).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>genhash</code> (mandatory)</td><td>25/25 <code>GENHASH</code> lines,
+MD5s byte-identical to the standing values (shader-only change &mdash; generation must not move).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>farab</code></td><td><code>ok</code> true, <code>h_mismatch</code> 0
+(AC-0399 standing).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>ladder</code> (satellite ladder, R9)</td><td>20/20 band-A
+<code>band_a_ok</code>, <code>air_inworld_ok</code> true (standing).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>meshprobe</code></td><td>mismatch 1.0&times;0 (builds the far meshes
+&rArr; actually compiles this shader on the live path; the lazy-compile trap check for the smoke stage).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>halo</code></td><td>halo ok (the <code>lit</code> floor this shader
+reads via <code>COLOR.a</code>).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>lightstate</code></td><td>leaks 0/0 (AC-0398 interpolated lighting +
+switch keep working).</td></tr>
+<tr><td><b>SMOKE</b></td><td><code>r16</code> <code>--fixed-fps 600</code></td><td>all sub-flags green,
+<code>far_holes</code> 0/0 both bands (the flight-band far/annulus draw).</td></tr>
+<tr><td><b>RENDER (acceptance)</b></td><td><code>AWECRAFT_CAM=planet</code> (no <code>AWECRAFT_LOGIC</code>
+arm), <code>AWECRAFT_SIZE=1280,720</code>, <code>RADIUS=24 FOG_PCT=83</code>, <code>TIME=0.30
+TIME_FREEZE=1 CLOUD_T0=411200 CLOUDS=0</code>, <code>SNAP_DRAIN=3000 SNAP_STEPS=900,1800,3000</code>,
+lavapipe + xvfb + Forward+; BEFORE at 2600/1600&nbsp;m (current tree, pre-fix) then AFTER at
+2600/1600/120&nbsp;m (fixed tree).</td>
+<td>Same-recipe A/B, deterministic (frozen time + fixed T0 + frozen player; control: the fresh
+BEFORE run&rsquo;s s900/s1800 step files must be md5-identical to the AC-0399 set-2 captures).
+Pixel acceptance (measure.py, forward sector &plusmn;15&deg;): the seam band (336&ndash;384&nbsp;m)
+dark fraction (luminance &lt; 60) &gt; 0 in the BEFORE frame and &asymp;0 in the AFTER frame, with the
+AFTER seam band sitting at the fog wall&rsquo;s colour (<code>u_air</code>, (206,250,255) at TIME 0.30)
+&mdash; the rim present and then absent. HEAVY (boundary r4, flake, r50, shaderforce, full battery)
+= coordinator; this run exits after the gates above.</td></tr>
+</table>
+
+<h2>Risks / fences specific to this change</h2>
+<ul>
+<li><b>Single-source rule:</b> the fade target must be <code>u_air</code> itself (already a uniform in
+this shader, pushed from <code>env.fog_light_color</code> = <code>Aero.fog_display(t)</code> &mdash; the same
+value the dome and the sky use). No new uniform, no new colour constant.</li>
+<li><b>Ground (120&nbsp;m) look:</b> the fade target change also affects low altitude, where
+<code>haz_b</code> was &asymp;0.62 (a hazy dome the annulus matched). At the user config (fog full at
+332&nbsp;m) the engine ramp <code>fog_f</code> is already 1 across the annulus there, so the fixed annulus
+is uniform air out to the edge &mdash; the pre-r8 look &mdash; and the dome beyond stays hazy via its
+own model. The 120&nbsp;m render is a no-regression check, not an acceptance altitude.</li>
+<li><b>Render traps (cost hours here):</b> NO <code>AWECRAFT_LOGIC</code> arm (the menu boot owns the
+snapshot); <code>AWECRAFT_SIZE=1280,720</code> with a COMMA; <code>SNAP_DRAIN</code> counts FRAMES;
+check each file exists &gt; 50&nbsp;kB after the run (<code>Debug.snap</code> prints <code>SNAP FAIL</code> rather
+than falsely reporting success); the log must carry the Forward+ boot line and zero
+SCRIPT/SHADER ERROR.</li>
+<li><b>Concurrent session:</b> 4 dirty files (main.gd, game.gd, drop.gd, debug.gd) belong to another
+session &mdash; never edit them; every render runs on the same tree before/after, so the A/B is fair.</li>
+</ul>
+
+</body>
+</html>
