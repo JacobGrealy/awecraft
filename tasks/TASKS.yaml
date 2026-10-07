@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T18:48
+  updated_at: 2026-10-07T18:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24904,52 +24904,63 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 2
+  priority: 1
   status: open
   labels: []
   created_at: 2026-10-07T14:39
-  updated_at: 2026-10-07T14:39
+  updated_at: 2026-10-07T18:49
   completed_at: null
   waiting_on: null
   parent_id: null
-  notes: '1) User Story: The game should not crash. This one is intermittent and may be rare, but a crash
-    is a crash - and it was seen while simply leaving the game running through a long camera drain, which
-    is what a player does every time they fly somewhere.
-
-
-    2) Technical Details:
-
-    FOUND BY THE AC-0384 ROUND 12 ASSESSMENT, reported honestly as a deviation rather than hidden: ONE
-    SEGFAULT in `_mob_tick` reaching `get_block` at godot/world/chunk.gd:657, during a long snapshot drain.
-    It was stochastic, no rendered frame was affected, and a clean re-run did not reproduce it. That is
-    exactly why it needs a ticket rather than a shrug: an intermittent crash with no reproducer is the
-    kind of defect that gets attributed to hardware later, and this project''s whole recent history is
-    about defects that were visible in the logs all along and nobody read.
-
-    WHAT TO DO: first, establish reachability - is `_mob_tick` calling `get_block` on a column or chunk
-    that has been streamed out, is it reading across a chunk boundary the mob has just crossed, and can
-    it run while the streamer is mid-rebuild? A null or freed chunk behind that call would explain a stochastic
-    segfault under a long run and would be reproducible with a targeted probe. Look at what the call does
-    when the chunk is absent or unloaded rather than only when it is present.
-
-    SECOND, get a reproducer or bound the risk. A long run with mobs active and streaming churn under
-    the memory cap is the shape to try; if it cannot be reproduced, say so plainly and report what the
-    code path does under each of the three conditions above, so the next report of a crash has somewhere
-    to start.
-
-    THIRD, remember this is native code - a segfault in the engine or the extension is not catchable by
-    GDScript, so a guard belongs where the call is made, with the guard''s cost measured.
-
-    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py;
-    the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
-    r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); mob behaviour
-    must not change when the guard is not triggered - assert that, because a guard that quietly alters
-    mob ticking is a worse bug than the crash it prevents.
-
-    CONTEXT: the AC-0384 round 12 assessment section 25 records the crash as D6 with its conditions (long
-    drain, `_mob_tick`, chunk.gd:657, stochastic, clean re-run).
-
-    '
+  notes: "1) User Story: The game should not crash. This one is intermittent and may be rare, but a crash\
+    \ is a crash - and it was seen while simply leaving the game running through a long camera drain,\
+    \ which is what a player does every time they fly somewhere.\n\n2) Technical Details:\nFOUND BY THE\
+    \ AC-0384 ROUND 12 ASSESSMENT, reported honestly as a deviation rather than hidden: ONE SEGFAULT in\
+    \ `_mob_tick` reaching `get_block` at godot/world/chunk.gd:657, during a long snapshot drain. It was\
+    \ stochastic, no rendered frame was affected, and a clean re-run did not reproduce it. That is exactly\
+    \ why it needs a ticket rather than a shrug: an intermittent crash with no reproducer is the kind\
+    \ of defect that gets attributed to hardware later, and this project's whole recent history is about\
+    \ defects that were visible in the logs all along and nobody read.\nWHAT TO DO: first, establish reachability\
+    \ - is `_mob_tick` calling `get_block` on a column or chunk that has been streamed out, is it reading\
+    \ across a chunk boundary the mob has just crossed, and can it run while the streamer is mid-rebuild?\
+    \ A null or freed chunk behind that call would explain a stochastic segfault under a long run and\
+    \ would be reproducible with a targeted probe. Look at what the call does when the chunk is absent\
+    \ or unloaded rather than only when it is present.\nSECOND, get a reproducer or bound the risk. A\
+    \ long run with mobs active and streaming churn under the memory cap is the shape to try; if it cannot\
+    \ be reproduced, say so plainly and report what the code path does under each of the three conditions\
+    \ above, so the next report of a crash has somewhere to start.\nTHIRD, remember this is native code\
+    \ - a segfault in the engine or the extension is not catchable by GDScript, so a guard belongs where\
+    \ the call is made, with the guard's cost measured.\nCONSTRAINTS: genhash 25/25 byte-identical; G0\
+    \ zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py; the standing set green\
+    \ (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with\
+    \ far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); mob behaviour must not change\
+    \ when the guard is not triggered - assert that, because a guard that quietly alters mob ticking is\
+    \ a worse bug than the crash it prevents.\nCONTEXT: the AC-0384 round 12 assessment section 25 records\
+    \ the crash as D6 with its conditions (long drain, `_mob_tick`, chunk.gd:657, stochastic, clean re-run).\n\
+    \n\nESCALATED 2026-10-07 BY THE COORDINATOR WITH A SECOND OCCURRENCE AND A FULL STACK TRACE, which\
+    \ changes this from \"stochastic, no reproducer\" to a located crash on a path the player takes constantly.\n\
+    WHAT HAPPENED: the coordinator's own heavy gate stage ran AWECRAFT_LOGIC=lightstate and the process\
+    \ ABORTED with rc=134 and \"handle_crash: Program crashed with signal 11\" - a SIGSEGV. The GDScript\
+    \ backtrace is unambiguous:\n    [0] get_local        res://world/chunk.gd:657\n    [1] get_block\
+    \        res://world/world.gd:11264\n    [2] _block_at        res://player/player.gd:2976\n    [3]\
+    \ _physics_process_impl  res://player/player.gd:529\n    [4] _physics_process  res://player/player.gd:475\n\
+    THE ROUND 12 ASSESSMENT SAW THE SAME THING FROM THE OTHER SIDE: `_mob_tick` reaching `get_block` at\
+    \ the SAME FILE AND LINE, chunk.gd:657, also stochastic. Two separate callers - the player's physics\
+    \ step and the mob tick - converging on one line is no longer a coincidence and no longer a report\
+    \ without a reproducer. THE PLAYER PATH IS THE ONE THAT MATTERS: `_physics_process` runs every frame\
+    \ while walking, so this can crash the game during ordinary play, not only during a long scripted\
+    \ drain.\nWHAT THE TRACE IMPLIES, to be verified rather than assumed: `get_local` at that line is\
+    \ being called on a chunk that is absent, freed, or being rebuilt - the two callers differ in nothing\
+    \ except which entity is asking, which points at the WORLD's chunk lookup rather than at either caller's\
+    \ logic. Read what `get_local` does when the chunk is missing and what `get_block` at world.gd:11264\
+    \ does before it calls, and find the window in which a column or chunk can be absent without the lookup\
+    \ noticing. A guard at the lookup is the likely shape, and the guard's cost should be measured because\
+    \ the player path runs every frame.\nALSO RECORDED: the crash produced ZERO SCRIPT ERROR and ZERO\
+    \ SHADER ERROR lines before dying, so the project's G0 census - and the shader census built on it\
+    \ - cannot detect this class at all. That is worth a note in tasks/scripts/gate_census.py's documentation\
+    \ or the run-verify skill: these checks must be paired with the process EXIT STATUS, because a process\
+    \ that segfaults leaves a clean-looking log.\nMob and player behaviour must not change when the guard\
+    \ is not triggered, and that is to be asserted rather than assumed."
   comments: []
 - id: AC-0404
   title: hide-medium-and-low-lod-at-height
@@ -24961,7 +24972,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-07T18:48
-  updated_at: 2026-10-07T18:48
+  updated_at: 2026-10-07T18:49
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -25010,5 +25021,25 @@ intake:
     must keep working, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must keep working,
     and AC-0400''s seam fade must keep targeting the single-source air colour.
 
-    '
+
+
+    SECOND ITEM ADDED BY THE USER 2026-10-07, in their words: "the limb effect is still being applied
+    to the low lods, it should not be applied to low, medium, or high lods, only the satellite lod." This
+    is a correction to AC-0401, which gated the glow BY ALTITUDE and verified it that way - measured S
+    = 1.000 at 2600 m falling to 0.000 at 300 and 120 m - and the coordinator reported that as satisfying
+    the request. It did not, and the reason is worth stating precisely because it is the whole diagnosis:
+    THE GATE CONTROLS WHEN THE GLOW IS DRAWN, NOT WHICH MATERIAL CARRIES IT. With the gate open at altitude,
+    the glow is still applied to the near-terrain materials, so the low, medium and high tiers show a
+    limb effect they should never have. THE FIX IS PER-MATERIAL, NOT PER-ALTITUDE: the atmospheric limb
+    treatment belongs to the satellite body''s material alone, and the near tiers must have no limb term
+    in any state - not gated off at some altitudes, absent from the shader path entirely - so that no
+    future change to an altitude gate can bring it back. Verify by measuring the rim on the NEAR TIERS
+    specifically at an altitude where the gate is open, which is the case the previous acceptance never
+    checked: its ladder measured the glow from orbit and found it correct there, and measured the near
+    field at low altitude where the gate was already shut. The missing case is the near field seen from
+    altitude, and that is exactly what the user is looking at.
+
+    This is the third round in a row where the user''s report has been more precise than the coordinator''s
+    acceptance criteria: the gate passed its own test and failed the user''s use. When the fix lands,
+    the ladder must be checked for the near tiers at EVERY altitude including the high ones.'
   comments: []
