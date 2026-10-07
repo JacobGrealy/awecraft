@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T03:49
+  updated_at: 2026-10-07T06:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -25,7 +25,6 @@ queue:
 - AC-0328
 - AC-0330
 - AC-0399
-- AC-0400
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24648,11 +24647,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T03:49
-  updated_at: 2026-10-07T03:49
-  completed_at: null
+  updated_at: 2026-10-07T06:47
+  completed_at: 2026-10-07T06:47
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Seen from orbit the planet should be wrapped in atmosphere all the way to its
@@ -24696,5 +24695,31 @@ intake:
     must keep working; the render recipe and its traps are in godot/HARNESS.md section 2 and the fwdshot
     row in tasks/harness_data.yaml.
 
-    '
+
+
+    CLOSED - PASS AT PIXELS, WITH THE DARK RIM GONE. The seam fade''s outer target was haz_b, which is
+    approximately zero at the orbital nadir, so a fade outward was a fade toward the lit slab base and
+    the far annulus ended in a dark rim at altitude. The fade''s colour was always the single-source air
+    colour; only the weight''s far end pointed at the wrong thing. One line, one shader, pointed now at
+    full u_air - the same air the dome, the sky horizon and the fog wall use - so no fourth colour and
+    no new uniform, which preserves the single-source rule that made the recent seam work hold. MEASURED
+    with the same instrument before and after: at 2600 m the seam band''s dark pixels fall from 1.29 to
+    0.0 per cent with the rim pixels'' median of (25,41,30) removed entirely, and at 1600 m from 1.15
+    to 0.0 with twelve rim pixels gone; the band''s fog median is unchanged at (191,240,246) and the background
+    dome unchanged at (144,209,221); at 120 m the frames are byte-identical at zero of 921,600 pixels
+    differing, which is the regression that mattered most given the previous round''s view-weighted fill.
+    THE NEGATIVE TEST is the instrument reading the rim on the before frames and zero after, and the after
+    frames show the fog-coloured annulus rather than the white fallback, which is independent evidence
+    the edited shader compiled and ran - the failure mode that hid five shader defects here for days.
+    GATES: the builder''s own set green, and the heavy stage run by the coordinator afterwards, with the
+    battery completing at rc=0 and ZERO SCRIPT and ZERO SHADER errors, alongside genhash 25/25 byte-identical,
+    farab h_mismatch 0, ladder 20/20, meshprobe clean against the live fixed shader, halo ok and r16 with
+    far_holes 0/0 in both bands. THE DELIVERY WAS BLOCKED FOR TWO ROUNDS BY A BUILD FAILURE THAT WAS THE
+    COORDINATOR''S OWN DOING, and it is worth recording here because it cost real time: build_windows.sh
+    resolves the engine as GODOT="$HOME/tools/godot/godot", and the godot-run rule of prefixing engine
+    calls with HOME=/tmp/dsh_home was left set in the same shell command, so the export invoked a nonexistent
+    path and died with exit 127 - command not found. The first diagnosis blamed a busy port, which the
+    log did not support; the exit code was the evidence and the story was not. The trap is harvested into
+    the awecraft-heavy-gates skill: run the build with the real HOME, in its own command, and read exit
+    codes rather than explaining them.'
   comments: []
