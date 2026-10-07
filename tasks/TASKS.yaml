@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T06:47
+  updated_at: 2026-10-07T14:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24722,4 +24722,111 @@ intake:
     log did not support; the exit code was the evidence and the story was not. The trap is harvested into
     the awecraft-heavy-gates skill: run the build with the real HOME, in its own command, and read exit
     codes rather than explaining them.'
+  comments: []
+- id: AC-0401
+  title: cloud-material-tier-split-and-layer-conflicts
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-10-07T10:08
+  updated_at: 2026-10-07T14:38
+  completed_at: 2026-10-07T14:38
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Looking up from the ground and down from orbit should show a few big, three-dimensional
+    clouds rather than a dense even speckle, the air near the ground should be hazy without a glowing
+    rim around the world, the layers should stop fighting each other where they overlap, and from high
+    up you should see the planet rather than the patch of ground you just left.
+
+
+    2) Technical Details:
+
+    FOUR ITEMS, reported by the user directly after flying the current build, in their words, and all
+    of them are the same subsystem - the LOD tiers and the shells, how they are shaded and when they are
+    drawn. Two of them independently match what the AC-0384 round 12 assessment found and named, which
+    is recorded here so the evidence is not re-derived.
+
+    (1) CLOUDS: "there are too many clouds, there should be less of them but the individual clouds should
+    be bigger and they should be volumetric". So: fewer, larger, and reading as volumes rather than as
+    a flat patterned membrane. The assessment''s D1 says the same thing with numbers - the deck''s brightness
+    spread measures 16.9 against 32.4 for the reference look, and its colour is close to pure grey (222,222,222)
+    where the reference carries saturation (181,230,194). Treat this as a look change with a switch, per
+    the project''s standing rule.
+
+    (2) THE SHADERS ARE SHARED AND SHOULD NOT BE: "I think that low lod and satellite lod are sharing
+    the same shader, they should not. We do not want low lod to have the limb effect, only fog." So the
+    near/low LOD must fade into FOG ONLY - no atmospheric limb treatment - while the satellite body keeps
+    the limb. This is very likely the same finding as the assessment''s D2 from the other direction: it
+    measured that in cloudy weather the limb the eye actually sees is the CLOUD DECK''s crisp silhouette
+    (sky 145,198,212 to deck 201,201,201 across about 5 pixels) because the deck''s silhouette at 65.35
+    degrees hides the planet''s tangent at 55.72 degrees, so the glow is only visible in clear weather.
+    Separate the shading paths and verify BOTH states: near ground must show haze with no rim; orbit must
+    show the limb glow.
+
+    (3) Z-FIGHTING between the clouds, the low LOD and the satellite LOD. The assessment''s D3 describes
+    a related symptom - a dark deck core smudging the limb, 5507 against 5505 dark pixels, present in
+    weather and not the previously removed rim. Find where the layers'' surfaces coincide and separate
+    them by construction (a radius ordering with a real gap, or depth handling) rather than nudging one
+    until the flicker hides.
+
+    (4) THE HIGH LOD SHOULD BE HIDDEN ABOVE A CERTAIN HEIGHT: "you shouldn''t be able to see it from space
+    / high in the atmosphere." So the near-detail terrain must dissolve out as altitude rises, in the
+    same way the satellite body already dissolves in below the flight band, so that from orbit the player
+    sees the planet and its atmosphere rather than the patch of ground they lifted off from. That existing
+    dissolve is the pattern to follow - it is the AC-0310 no-pop contract - and whatever threshold is
+    chosen should be checked against the satellite body''s own so the two never both vanish or both show.
+
+    ACCEPTANCE IS RENDERS AT THE USER''S CONFIGURATION (radius 24, fog fully opaque at 332 m) across a
+    descent AND a takeoff ladder at 2600, 1600, 700, 300 and 120 m, showing: few large volumetric clouds
+    rather than dense speckle; no limb rim on the near terrain at low altitude with the glow intact from
+    orbit; no z-fighting or flicker where layers overlap; and the high detail terrain absent from the
+    high-altitude frames. Re-use the frames in tasks/AC-0384/ (the round 12 assessment captures ac0384-final-*.png
+    and its section 25) as the before set so the comparison is direct.
+
+    CONSTRAINTS: genhash 25/25 byte-identical if generation is untouched, and if the tier visibility change
+    implies generation must move, that is a FINDING to report rather than a re-baseline; G0 zero SCRIPT
+    ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py; the standing set green (farab h_mismatch
+    0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both
+    bands, boundary r4 in band, shaderforce 12/12); the cloud shell radii and centre stay exactly 4275/4330/4400
+    about (0, -R, 0) because they are verified correct and the user has not asked for them to move; AC-0399''s
+    view-weighted fill ordering and AC-0398''s interpolated lighting must keep working; AC-0400''s seam
+    fade must keep targeting the single-source air colour. Look changes ship with a switch, defaults conservative,
+    short-circuiting before the work.
+
+
+
+    CLOSED - ALL FOUR ITEMS DELIVERED, EACH WITH A RENDER EITHER SIDE. (1) CLOUDS FEWER, LARGER, VOLUMETRIC:
+    the field runs at a third of its previous frequency with a tighter window, gaps between bands and
+    puff-and-core shading that gives the masses volume, behind a switch defaulting on whose off state
+    is proven bit-identical rather than merely similar (a wash measurement of 66.9 per cent both ways,
+    210,163 against 210,056 pixels). At 120 m the before frame was a fine membrane filling the sky and
+    the after frame is a few large soft masses with sky visible between them. (2) THE SHADER ITEM: the
+    user''s instinct was right and the mechanism was not what the words suggested - no shader FILE was
+    shared, the BEHAVIOUR was. The low level of detail carried the body''s own effects (fully fogged near
+    tiers drawn coplanar over the body''s terrain) and the sky pass''s limb glow was not gated by altitude
+    at all. Now the near field fades into fog alone and discards at the wall, the glow rides the space
+    term behind a limb gate, and the body keeps its own limb haze; measured across the ladder the gate
+    reads 1.000 at 2600 m, 0.921 at 1600, 0.132 at 700 and zero at 300 and 120, which is a rim from orbit
+    and none near the ground. (3) LAYER CONFLICT FIXED BY CONSTRUCTION: a strict fog-wall partition where
+    every near-field material discards beyond the fog distance, plus a two metre radial inset for the
+    body - a radius ordering of a fraction of a degree, with the opacity window and the star occlusion
+    radius deliberately untouched; the clouds are transparent and write no depth so they never participated,
+    and a clouds-off pair at 700 m shows the fix holds in the layer construction alone. (4) HIGH DETAIL
+    LEAVES WHEN THE PLAYER DOES, with NO NEW CONSTANT: the threshold is the body''s own fog wall, the
+    same number its opacity ramp starts from, applied per fragment so the two can never both disappear
+    or both show; the ladder has high detail visible at 120 and 300 m and absent at 700, 1600 and 2600,
+    with the orbital fog-coloured diamond gone entirely and bright-white nadir coverage falling from 54.9
+    per cent to zero. GATES: G0 clean; shaderforce 12/12; smoke ok; genhash 25/25 byte-identical; one
+    boundary probe in band and field-identical to the previous round; eight of eight renders at the user''s
+    fog distance with zero errors each; and the coordinator''s heavy stage afterwards - farab, ladder,
+    lightstate and r16 all completing rc=0 with ZERO SCRIPT and ZERO SHADER errors, h_mismatch 0, far_holes
+    0 in both bands and leaks 0. One pre-existing defect surfaced and was hardened in task (a satdiag
+    float(null) race), and one deviation is recorded: the two new uniforms are pushed from the world through
+    the parent node rather than from main.gd, which another session holds, documented in ARCHITECTURE.
+    The Windows build completed at rc=0 with the coordinator''s HOME set correctly - the trap harvested
+    the previous round, applied rather than repeated.'
   comments: []
