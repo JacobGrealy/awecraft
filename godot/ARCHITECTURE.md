@@ -1263,7 +1263,23 @@ Match these; do not improvise a different approach in a task.
   ONE scheduler — `_drain_build_queue`'s steady pass — works the whole world in a single
   **inside-out work order**: the bake score is `(taxi, layer)` — across columns the
   innermost owed column first (a pure function of the live recenter anchor, no timer or
-  mode), within a column the slabs go in Y-distance from the player's slab
+  mode) — **AC-0399 (the flight-band view weight)**: in the flight band the score's
+  taxi is a VIEW-WEIGHTED EFFECTIVE taxi — the column's distance to the anchor is
+  shortened by `max(0, cos(column-dir, view-dir)) x |lead|`, where the lead is the
+  camera's flat xz view direction (the player's `aim_dir()` projected through the
+  recenter-anchor column's sphere basis) weighted by the player's flight band (the
+  AC-0145 P2 blend, `player.flight_band()`) x `vbias_w` (0.7, env
+  `AWECRAFT_VBIAS_W`/`AWECRAFT_VBIAS_FLIP`): a column directly in the view loses up
+  to 70% of its effective distance, a column 90 deg+ behind is untouched — the arc
+  being looked at fills first on takeoff; on the ground the band is 0 and the score
+  is byte-identical to the original `(taxi, layer)`. Tier 4 (data-only, past the
+  render edge — never rendered) is NOT biased, so the invisible outer world keeps
+  its order and the draw band gets the view priority. The lead is QUANTIZED into
+  the pool key (8 compass sectors x band level, `_view_bucket`/`_view_band8`) so a
+  look change rescans only across a sector or band boundary — the AC-0250 removal
+  (the continuous look rescore storm) keeps its debounce. The data (gen) pass runs
+  the same score, so gen and build share the order. — within a column the slabs
+  go in Y-distance from the player's slab
   (`_layer_rank_of`: 0 = player slab, then −1, +1, −2, +2, …), and the column's LOD ring
   (`_lod_tier_of`) decides WHAT gets done for it — the one per-ring switch is
   `_dispatch_column_work`: ring 0/1 (real band + band A) → the high slab build (band A's

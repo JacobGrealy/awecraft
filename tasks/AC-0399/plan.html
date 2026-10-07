@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0399 plan</title></head><body>
+
+<h1>AC-0399 plan — streaming-fill-follows-the-view</h1>
+
+<h2>Goal</h2>
+<p>Make the streaming build order follow the camera's view while the player is in the flight
+band, so the arc being looked at fills first on takeoff — without changing the ground fill order,
+the streaming architecture, or generation (genhash must stay 25/25).</p>
+
+<h2>Current fill ordering (verified in code, not assumed)</h2>
+<ul>
+<li>ONE scheduler: the <code>_drain_build_queue</code> steady pass (<code>world.gd</code>, AC-0335
+unification). The pick is <code>argmin _grid_score(e) = taxi*10000 + layer</code>: taxi =
+<code>|dx|+|dz|</code> chunks from the live recenter anchor (the player's FLAT column — a pure
+function of x/z, altitude-independent; <code>last_pcx/last_pcz</code>), layer = Y-distance rank
+from the player's slab. The score is already a float; ties break by scan order.</li>
+<li>No view dependence at all: AC-0250 removed the old look bias ("the look no longer affects the
+order at all" — the <code>_pool_key</code> comment, world.gd:533). The frontier therefore grows as
+a SYMMETRIC taxi diamond, at the slower of the TG data-landing rate and the dispatch pace
+(3.5 ms/unit wall + 8/frame cap; ~3 frontier columns/s measured in the 5 FPS render path).</li>
+<li>The data (gen) pass uses the same score (<code>_pick_data_cached</code>), so gen and build share
+the order.</li>
+<li>Why it fails at altitude: the planet preset at 2600 m looks at the tangent limb; only the
+~75&ndash;110&deg; azimuth wedge around the view direction of the annulus (flat 128&ndash;384 m) is in
+frame. ~3/4 of the annulus fill work goes to sectors BEHIND the camera → round 4's frontier
+256 m @180 s / ~365 m @360 s, while at 120 m the full annulus completes by 180 s (the annulus is
+the near part of the frame there).</li>
+</ul>
+
+<h2>Change (bounded — no architecture rewrite)</h2>
+<ul>
+<li><code>godot/player/player.gd</code>: cache the EXISTING AC-0145 band
+(<code>smoothstep(500, 2000, radial altitude)</code>, already computed per physics step) in
+<code>last_flight_band</code> + public getter <code>flight_band()</code>. One home for the number:
+the player owns it, the world reads it.</li>
+<li><code>godot/world/world.gd</code>:
+  <ul>
+  <li><code>_view_sample()</code> once per drain frame: the camera's view direction in the FLAT xz
+  plane (the player's <code>aim_dir()</code> projected through the recenter-anchor column's sphere
+  basis — the same transform the player's <code>_flat_ray</code> uses; the basis is cached per
+  anchor column, so the per-frame cost is one basis multiply) &times; band &times; <code>vbias_w</code>
+  (default 0.7) &rarr; <code>_view_lead</code>; quantized (8-sector compass + band level) for the pool
+  key. On the ground (band 0) the lead is exactly ZERO.</li>
+  <li><code>_grid_score</code>: when the lead is active and the column is a DRAW tier (tier &le; 3),
+  effective taxi = <code>taxi &times; (1 - max(0, cos(column dir, view dir)) &times; |lead|)</code> —
+  a column directly in the view loses up to 70% of its effective distance; a column 90&deg;+ behind
+  is untouched. Tier 4 (data-only, past the render edge — invisible) is NOT biased, so the outer
+  world keeps its current order. Lead inactive &rarr; the EXACT pre-AC-0399 score (int-identical
+  floats).</li>
+  <li><code>_pool_key</code>: the two quantized view fields join the key (constant 0/0 on the
+  ground — ground cache behaviour unchanged). A rotation crossing a compass sector or a band level
+  is the only look change that triggers a rescan (the AC-0250 removal was the CONTINUOUS look
+  rescore storm; quantization keeps the debounce).</li>
+  <li>Env knobs (harness preload, the <code>AWECRAFT_DRAIN_MS</code> pattern):
+  <code>AWECRAFT_VBIAS_W</code> (0 disables = the pre-AC-0399 order — the "before" runs),
+  <code>AWECRAFT_VBIAS_FLIP=1</code> (the lead points 180&deg; away — the negative test).</li>
+  </ul></li>
+<li><code>godot/scenes/harness.gd</code> (the <code>planet</code> preset): ADDITIVE, env-gated
+<code>AWECRAFT_SNAP_STEPS=300,900,1800</code> — snapshot at each cumulative drain frame (the 60/180/360 s
+of the acceptance at the ~5 FPS render path), one process instead of three. Default (env unset) is
+the current single-snapshot behaviour, byte-identical. Plus two stand-in-observer fixes the
+bias needs from the preset (both additive to the preset only): the frozen player's physics-step
+band update never runs (set_physics_process(false)) so the preset calls the new
+<code>player.sync_flight_band()</code> after its out-of-band teleport; and the fresh player's identity
+basis would aim down world -Z ~90&deg; off the tangent limb, so the preset orients the stand-in
+where the preset camera looks (<code>player.look_at</code> — in the real game the camera rides the
+player's basis, so aim IS the view).</li>
+<li><code>godot/ARCHITECTURE.md</code>: the &sect;6 build-order bullet updates
+(AC-0313 "(taxi, layer)" &rarr; AC-0399: view-weighted effective taxi in the flight band; the
+ground order and the architecture are otherwise unchanged).</li>
+</ul>
+
+<h2>Expected (estimates — the measurement is the acceptance)</h2>
+<p>2600 m: the in-frame wedge of the annulus (316 of 1056 columns) builds right after the inner
+footing (~145 cols) → visible arc 100% at ~130&ndash;170 s (before: ~376 s). 120 m: band = 0 →
+byte-identical order → the full-annulus-by-180 s ground behaviour is preserved by construction
+(measured as well). 1600 m: band 0.75 → large; 700 m: band 0.05 → small; 300 m: band 0 → equal.
+If the measured gain at 2600 m is small, the honest answer to report is the RATE number
+(~3 cols/s at the frontier on the render path; ~16/s pace-limited on a 60 FPS box) — the scope
+fence says the budget question may be the real limit.</p>
+
+<h2>Files to touch</h2>
+<p><code>godot/world/world.gd</code>, <code>godot/player/player.gd</code>,
+<code>godot/scenes/harness.gd</code> (planet preset only, additive), <code>godot/ARCHITECTURE.md</code>
+(&sect;6 sync), <code>tasks/AC-0399/</code> (deliverables). NOT touched: <code>scenes/main.gd</code>,
+<code>autoload/game.gd</code>, <code>entities/drop.gd</code>, <code>autoload/debug.gd</code>
+(another session's dirty files — the tree is measured dirty, see results), anything under
+<code>world/</code> that touches generation.</p>
+
+<h2>Harness gates</h2>
+<ul>
+<li><b>G0</b>: one headless load, <code>gate_census.py</code> = zero SCRIPT ERROR and zero SHADER
+ERROR. (Before AND after the edit — the dirty tree carries another session's in-flight changes.)</li>
+<li><b>SMOKE</b> (dependency-mapped, fast class): <code>genhash</code> (world/* touched —
+25/25 byte-identical, the hard constraint) + <code>farab</code> (h_mismatch 0) + <code>ladder</code>
+(20/20) + <code>meshprobe</code> (1.0) + <code>halo</code> (ok — promotion lane) + <code>lightstate</code>
+(0/0 — AC-0398 lighting shares the mesh path) + <code>r16</code> (all sub-flags, far_holes 0/0) +
+<b>one-shot</b> <code>boundary r4</code> (walk/p95 in band; if it shows a trade-off: write the
+deviation, name the follow-up, EXIT).</li>
+<li><b>RENDER</b> (acceptance, Forward+ boot line asserted, files checked to exist, 1200 s budget
+each): BEFORE set = 5 altitudes (2600/1600/700/300/120) &times; SNAP_STEPS 300/900/1800 with
+<code>AWECRAFT_VBIAS_W=0</code> (bias off = the pre-AC-0399 order, so the A/B is on ONE tree —
+same machine state, only the order knob differs; doubles as negative test (a)); AFTER set = same 5
+&times; 3 with the default bias; plus <code>AWECRAFT_VBIAS_FLIP=1</code> at 2600 m @900 (negative
+test (b): the visible wedge must fill SLOWER than baseline — proves the instrument reads the
+ORDER, not the throughput); plus one clouds-ON 2600 m @1800 AFTER shot (the "world present"
+capture). Round-4 method: the frozen camera pose reconstructed in the analyzer, the fog-patch
+extent per 72-ray nadir fan (the frontier in flat m), + the view-aligned quadrant asymmetry (the
+order check) + the local-flatness census.</li>
+</ul>
+
+<h2>Frozen refs / snapshot names / risks</h2>
+<ul>
+<li>Frozen refs: none owed (no data/save format touched; generation untouched — genhash is the
+proof, not a freeze).</li>
+<li>Snapshots: <code>.scratch/AC-0399-gates/{b|a|f|c}_alt{H}_s{300,900,1800}.png</code> (b = bias
+off, a = after, f = flip, c = clouds-on) + logs <code>*.log</code>; analysis
+<code>.scratch/AC-0399-gates/analyze.py</code> (round-4 tooling, extended) +
+<code>measured.json</code>.</li>
+<li>Risks: (1) the dirty tree from the other session could move gate baselines — G0 runs before
+AND after; (2) the view-bias pool-key quantization could re-scan too often on fast rotations —
+8 sectors + 8 band levels bounds it (watch the pool hit/miss counters in r16); (3) the R24 render
+is far bigger than the usual R4 render — memory-capped (ulimit), 1200 s budget each, and the
+round-4 runs prove R24 renders complete on this box; (4) if the before runs do NOT reproduce
+round 4's 256/365 m (the tree moved: AC-0398 lighting changed the mesh cost), the A/B is still
+valid on the same tree and the drift is recorded as an instrument note.</li>
+</ul>
+
+</body></html>

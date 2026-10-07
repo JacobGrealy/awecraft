@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0399 — streaming-fill-follows-the-view — results</title>
+<style>
+body { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 14px; line-height: 1.45; max-width: 1180px; margin: 24px auto; padding: 0 16px; color: #1a2028; }
+h1 { font-size: 20px; border-bottom: 3px solid #2a6; padding-bottom: 6px; }
+h2 { font-size: 16px; margin-top: 30px; border-bottom: 1px solid #9ab; padding-bottom: 3px; }
+table { border-collapse: collapse; margin: 10px 0; }
+th, td { border: 1px solid #bcd; padding: 3px 8px; text-align: left; }
+th { background: #e8f2f5; }
+.num { text-align: right; }
+.good { color: #0a7033; font-weight: bold; }
+.bad { color: #b3261e; font-weight: bold; }
+img { max-width: 560px; border: 1px solid #999; margin: 6px 10px 6px 0; }
+.caption { font-size: 12px; color: #556; }
+pre { background: #f2f6f7; padding: 8px; overflow-x: auto; font-size: 12.5px; }
+.note { background: #fff8e6; border-left: 4px solid #e6b422; padding: 8px 12px; margin: 10px 0; }
+.finding { background: #fdecea; border-left: 4px solid #b3261e; padding: 8px 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<h1>AC-0399 — streaming-fill-follows-the-view — results</h1>
+<p>Builder: delegated subagent (opencode). Tree: <b>dirty — 4 files M from a concurrent session</b> (godot/scenes/main.gd, godot/autoload/game.gd, godot/entities/drop.gd, godot/autoload/debug.gd + AC-0067 PNGs). Every measurement in this document ran on that tree; before/after are on the SAME tree, so the A/B is fair. User config: radius 24, fog full at 332 m (FOG_PCT 83), seed 44, Forward+ via lavapipe @ ~5 FPS, 1280×720, TIME 0.30 frozen, clouds off (measurement runs).</p>
+
+<h2>1. Verdict</h2>
+<p><b>It was the ORDER, and the order is now view-following.</b> At the 2600 m satellite view the arc the camera looks at now reaches the render edge in <b>~180 s</b> (before: not reached even at 360 s). Throughput is unchanged — the total built fraction at 360 s is the same to 0.5 % (0.589 → 0.592): the fix reorders the budget toward the viewed arc, it does not add budget. At 1600 m (band 0.82) the visible arc built at 180 s is 6× (0.74 vs 0.18). At 300 m (band 0) before ≡ after <i>to the byte</i> (identical numbers at 60/180/360 s — the ground order is untouched by construction: the flight band is 0 below 500 m). <b>Plus one line of rendering that was NOT part of the ordering problem</b>: the current tree renders the built far annulus at orbital altitude as a near-black void instead of the fog wall (a shipped backwards mix in the AC-0384 r8 haze bridge) — a built world that looks unbuilt. Fixed (the swap the same file's own comment requires); without it the "world present" acceptance could not be evidenced. Details §4.</p>
+
+<h2>2. What the current ordering was (verified, not assumed)</h2>
+<p>Single steady scheduler pass (AC-0335 <code>_drain_build_queue</code>): bake score <code>_grid_score</code> = <code>taxi·10000 + layer</code>, <code>taxi = |dx|+|dz|</code> from the recenter anchor column, <code>layer</code> = slab rank (Y-distance from the player slab). No view dependence (AC-0250 removed the look bias). Pace: LOW_WAVE 3.5 ms + frame cap 8 + drain budget. The fill is a <b>symmetric taxi diamond</b> growing from the player's column — correct on the ground (the player IS the view), wrong in flight: at 2600 m the camera looks 90° off the diamond's growth direction, so the far annulus (the visible arc) sits on the diamond's trailing arc.</p>
+
+<h2>3. The change (files)</h2>
+<ul>
+<li><b>godot/world/world.gd</b> — view-weighted effective taxi in the flight band: per drain frame <code>_view_sample()</code> computes the view direction in the anchor's tangent plane (aim dir through the recenter-anchor sphere basis, cached per anchor column), lead = view-dir × (flight band × W, W = 0.7 default, env <code>AWECRAFT_VBIAS_W</code>, 0 = pre-AC-0399 order). In <code>_grid_score</code>: tier ≤ 3 columns with dot(column-dir, lead) &gt; 0 get <code>taxi ×= (1 − cos·|lead|/|col|)</code> — a column looking at the camera has near-zero effective taxi; behind-the-player columns keep full taxi. Tier 4 (past-edge, data-only) is NOT biased. The pool key gained two quantized view fields (8 compass sectors × band level) so the AC-0250 debounced rescore still fires only on real view changes. The data (gen) pass shares the score — order-only, no content change.</li>
+<li><b>godot/player/player.gd</b> — <code>sync_flight_band()</code> + <code>last_flight_band</code>/<code>last_flight_alt</code> cache + <code>flight_band()</code> getter: band = AC-0145 P2 <code>smoothstep(500, 2000, radial altitude)</code> — 0 at ≤500 m (ground: byte-identical order), ~0.05 at 700 m, ~0.82 at 1600 m, 1.0 at ≥2000 m.</li>
+<li><b>godot/scenes/harness.gd</b> — planet preset: (a) <code>player.sync_flight_band()</code> after the teleport (the preset freezes the player, so the per-step band update never runs); (b) <code>player.look_at(pl_pos + pl_dir, pl_up)</code> after the camera aim (a fresh player's identity basis aims ~90° off the limb — the stand-in observer must look where the camera looks; in the real game the camera rides the player basis so aim IS view); (c) <code>AWECRAFT_SNAP_STEPS=f1,f2,…</code> multi-snapshot (documented in HARNESS.md §2 at closeout) — additive; unset = byte-identical old behaviour.</li>
+<li><b>godot/core/lod_avg.gdshader</b> — <b>the one-line r8 mix swap</b> (§4): <code>haz = mix(haz_b, fog_f, w)</code> (was <code>mix(fog_f, haz_b, w)</code>), restoring the fog wall the file's own comment requires. Not a streaming change; required for the "world present" acceptance (§5.4).</li>
+</ul>
+
+<h2>4. The finding behind the second fix: the r8 haze bridge ships a backwards mix</h2>
+<div class="finding"><p><b>Measured, current tree (HEAD, shader unmodified):</b> at 2600 m the bright fog patch (the lit high-LOD core) is FROZEN at ~148 m while a <b>near-black region (16,8,0) grows 153 → 234 → 313 m</b> over 60/180/360 s — the true frontier (same growth order as round 4's 256/365 m fog-patch values on the pre-r7 tree: ~0.45–0.55 m/s either way). The built far annulus renders as a dark void, not the fog wall. <b>Chain of cause:</b> (1) far-band surface vertex alpha = 0 (origin cell solid, AC-0283 P3 "no block light") → <code>lit = mix(0.2, 1.0, a)</code> = 0.2 floor — by design, hidden as long as haze covers it; (2) the r8 bridge (commit ecc5285, "one air colour for fog, haze and sky") computes <code>w = 1 − smoothstep(336, 384, taxi)</code> and <code>haz = mix(fog_f, haz_b, w)</code> — with w = 1 across the whole nadir core, mix returns <b>haz_b</b>, not fog_f; (3) haz_b = clamp(haz_a + (1−op)) is the body's LIMB haz — ~0 at the orbital nadir (cosv ≈ 1, op = 1) → haz ≈ 0 → the 0.2 base shows through. The comment two lines above the code says the opposite: "with w=1 out to 336, haz = fog_f … the 2600 m nadir wall keeps the fog wall". The r8-dev run had measured that wall at (177,240,255); the AC-0386-era aero.gd header records the broken state (24,25,23). Round 4's 256/365 numbers predate r8 (measurement run 2026-10-05, post-r7 — the engine-fog tree), which is why the fog-patch instrument broke on the current tree. The grain-box gate passed with the dark rendering (a flat dark region has no slab texture — true for the wrong reason). <b>Fix applied:</b> the mix-argument swap (one line + comment note). Residual, flagged as an r8 follow-up: at orbital altitude the 336–384 m seam fade targets haz_b ≈ 0, so the outer 48 m of the annulus fades fog→dark base against the sky — a thin dark rim the r8 design (which assumed the dome abuts the seam) does not anticipate at altitude; the fade there should target the background colour. See §7.</p></div>
+
+<h2>5. Acceptance: time-to-visible at altitude (round-4 method, comparable)</h2>
+<p>Method: camera pose reconstructed exactly from the planet preset (spawn (8.5, 141, 8.5), R = 4000, tangent-limb view, fov 75); extent = (d−R)·tan θ = flat-chart distance from the anchor (= the streaming taxi metric). Built detector: <b>set 1 (pre-fix tree):</b> dark (far-band base &lt; 60) ∪ bright (fog core &gt; 240) masks — the built far band's only signature on that tree; <b>set 2 (post-fix tree):</b> round-4 fog patch (annulus pixels within tol 28 of the fog colour — the mask is restricted to the annulus ext ≤ 384 m because the AC-0386 space-adjusted sky is inside round-4's tol-28 window of the fog colour outside the annulus (limb band (178,231,238) at 2600/1600 m; the low-altitude sky (210,250,255)/(192,251,255) at 700/300 m) — verified: inside the annulus the separation is clean — built fog (205,250,255) vs unbuilt sky (144,209,221) at 2600 m (Δmax 61; the dome does not render inside the in-frame annulus at that altitude — 99.4 % of the non-fog annulus px sit within 15 of the sky colour) and vs the unbuilt hazy dome (94,160,170)+ at low altitude (Δmax &gt; 100) — both far outside tol 28). Cross-check: set-2's fog-patch frontier vs set-1's dark-mask frontier agree within ~3–20 m on the same runs (the 336–384 m seam haze-fade trims the fog patch's outer edge slightly more than the colour masks) — two independent detectors, one geometry, the same order signal: the fwd cut is 322 m at 180 s in both instruments.</p>
+
+<h3>5.1 Primary readout — 2600 m, the visible arc (round-4-comparable instrument, post-fix tree, fog patch)</h3>
+<table>
+<tr><th>set</th><th>t</th><th class="num">frontier p90 (m)</th><th class="num">fwd cut p90 (m)</th><th class="num">side L/R cut p90 (m)</th><th class="num">full annulus built</th></tr>
+<tr><td rowspan="3">BEFORE (W = 0)</td><td>60 s</td><td class="num">127.3</td><td class="num">140</td><td class="num">139 / 139</td><td class="num">0.148</td></tr>
+<tr><td>180 s</td><td class="num">209.4</td><td class="num">226</td><td class="num">226 / 228</td><td class="num">0.342</td></tr>
+<tr><td>360 s</td><td class="num">289.0</td><td class="num">310</td><td class="num">307 / 314</td><td class="num">0.591</td></tr>
+<tr><td rowspan="3">AFTER (W = 0.7)</td><td>60 s</td><td class="num">209.7</td><td class="num good">241</td><td class="num">82 / 82</td><td class="num">0.155</td></tr>
+<tr><td>180 s</td><td class="num">270.2</td><td class="num good">322</td><td class="num">172 / 169</td><td class="num good">0.412</td></tr>
+<tr><td>360 s</td><td class="num">286.8</td><td class="num good">322</td><td class="num">294 / 302</td><td class="num good">0.600</td></tr>
+</table>
+<p>The BEFORE is symmetric (all cuts within 2 m of each other); the AFTER is a wedge pointed at the camera: the fwd cut reaches <b>322 m (84 % of the 384 m render edge) by 180 s</b> while the sides starve to 172 m and catch up later; the full-annulus totals are conserved (0.591 → 0.600 at 360 s) — order, not throughput. (The forward-tip maximum, from set 1's mask: 377.4 m at 180 s = 98 % of the edge; before: 363 m only at 360 s and the arc still incomplete.)</p>
+<div><b>Supporting instrument (set 1, pre-fix tree, dark|bright mask — the built region's only signature there):</b> the same wedge, measured on the same build state:
+<table>
+<tr><th>set</th><th>t</th><th class="num">fwd-arc built frac</th><th class="num">fwd tip (m)</th><th class="num">side L/R built frac</th><th class="num">full annulus built</th></tr>
+<tr><td rowspan="3">BEFORE (W = 0)</td><td>60 s</td><td class="num">0.133</td><td class="num">159.5</td><td class="num">0.146 / 0.145</td><td class="num">0.144</td></tr>
+<tr><td>180 s</td><td class="num">0.325</td><td class="num">260.8</td><td class="num">0.414 / 0.412</td><td class="num">0.335</td></tr>
+<tr><td>360 s</td><td class="num">0.659</td><td class="num">363.1</td><td class="num">0.718 / 0.750</td><td class="num">0.589</td></tr>
+<tr><td rowspan="3">AFTER (W = 0.7)</td><td>60 s</td><td class="num good">0.363</td><td class="num good">278.2</td><td class="num">0.054 / 0.046</td><td class="num">0.139</td></tr>
+<tr><td>180 s</td><td class="num good">0.694</td><td class="num good">377.4</td><td class="num">0.230 / 0.206</td><td class="num good">0.393</td></tr>
+<tr><td>360 s</td><td class="num good">0.695</td><td class="num good">377.4</td><td class="num">0.674 / 0.671</td><td class="num">0.592</td></tr>
+</table>
+</div>
+<p>Time-to-visible-arc (the viewed wedge reaches the render edge, 384 m): <b>BEFORE &gt; 360 s (363 m tip, 66 % — incomplete at the horizon of the measurement); AFTER ≈ 180 s (377.4 m tip = 98 %, the outermost 7 m sliver still in flight at 360 s)</b>. The side quadrants starve early and catch up late — the total is conserved (0.589 → 0.592 at 360 s): <b>order, not throughput</b> (the honest rate numbers: ~0.6 frontier m/s ≈ 0.04 chunks/s frame-cap-limited at the 5 FPS render path — the fill budget itself was never the complaint; the ordering was).</p>
+
+<h3>5.2 Descending ladder</h3>
+<table>
+<tr><th>alt</th><th>band (W × flight band)</th><th class="num">visible annulus (m)</th><th class="num">fwd-arc built 60/180/360 s BEFORE</th><th class="num">fwd-arc built 60/180/360 s AFTER</th></tr>
+<tr><td>2600</td><td class="num">0.70</td><td class="num">0–384 (full ring in frame)</td><td class="num">0.133 / 0.325 / 0.659</td><td class="num good">0.363 / 0.694 / 0.695</td></tr>
+<tr><td>1600</td><td class="num">0.58</td><td class="num">203–384 (thin outer band — the near field is below the frame bottom)</td><td class="num">0 / 0.183 / 0.693</td><td class="num good">0.173 / 0.741 / 0.745</td></tr>
+<tr><td>700</td><td class="num">0.03</td><td class="num">277–384</td><td class="num">0 / 0.022 / 0.452</td><td class="num">0 / 0.054 / 0.478</td></tr>
+<tr><td>300</td><td class="num">0</td><td class="num">229–384</td><td class="num">0.007 / 0.272 / 0.338</td><td class="num">0.007 / 0.272 / 0.338 (identical)</td></tr>
+<tr><td>120</td><td class="num">0</td><td class="num">169–384</td><td class="num">0.218 / 0.585 / 0.611</td><td class="num">0.218 / 0.585 / 0.611 (<b>md5-identical frames</b> — see below)</td></tr>
+</table>
+<p>Ground no-regression proof, stronger than a number: at 120 m the band is exactly 0, so the effective taxi is byte-identical and the <b>PNG frames themselves are byte-identical</b> — md5(a_alt120_s300) = md5(b_alt120_s300) = <code>c96939596ad68d0cf4b1846f9193a949</code>, md5(a_alt120_s900) = md5(b_alt120_s900) = <code>4d230c779359e8e1ab0593dbd8c53dd3</code>. The 120 m case (full annulus built by 180 s: f95 = 374 m at 180 s) is the round-4 ground guarantee, untouched. 300 m (band 0 up to 500 m) likewise: identical numbers at all three steps (0.0068/0.2719/0.3377, f95 235.7/316.7/339.1).</p>
+<p class="caption">Instrument: fwd-quadrant built fraction, set 1 (pre-fix tree, dark|bright mask — the one complete 5-altitude × 3-step matrix; both trees carry the same build state, so the ordering signal is identical). Fixed-tree fog-patch cross-check (set 2, §5.1 instrument): 2600 m frontier p90 BEFORE 127/209/289 m vs AFTER 210/270/287 m (fwd cut 140/226/310 vs 241/322/322); 1600 m BEFORE 252/321 vs AFTER 331/329 m (180/360 s; visible-annulus fraction 0.058/0.344 vs 0.372/0.395 — 6.4× at 180 s); 700 m AFTER 305 m / 0.054 = set-1's 308.7 / 0.054; 300 m AFTER 323 m / 0.310 (set-1: 316.7 / 0.272 — the 336–384 m seam haze on the abutting dome trims the two masks slightly differently at low altitude, frontiers within 7 m).</p>
+<p class="caption">Geometry note: at 1600/700 m the visible annulus is a thin OUTER band because the frame bottom clips the near field (near edge 203/277 m); the fill only enters the visible band late, which is why the early fractions read ~0 — that is the view, not a fill failure. At 1600 m the bias still lifts the 180 s visible-arc fraction 4–6× depending on instrument (fwd-quadrant frac 0.741 vs 0.183; fog-patch annulus frac 0.372 vs 0.058; fwd tip 383 = the edge at 180 s vs 271 before).</p>
+
+<h3>5.3 Negative test (proves order, not throughput)</h3>
+<p>FLIP run: <code>AWECRAFT_VBIAS_FLIP=1</code> — the lead points 180° away from the view. If the fix were "fill faster everywhere", the flip would look like the baseline; it must make the viewed arc fill <b>slower</b> than the unbiased baseline (its budget goes to the invisible backward wedge).</p>
+<p><b>MEASURED — fog patch (f2_alt2600, post-fix tree):</b> 2600 m, fwd cut p90 at 60/180/360 s — BEFORE (symmetric) 140/226/310 m; AFTER 241/322/322 m; FLIP <b>87/155/282 m</b> (frontier p90 78/151/268; full annulus 0.067/0.187/0.509). <b>MEASURED — dark mask (f_alt2600, pre-fix tree, same build state):</b> fwd-arc built frac 0.061/0.143/0.538 (fwd tips 94.8/163.6/326.9 m). In both instruments the flip's viewed arc fills <b>below the unbiased baseline at every step</b>, and its total visible-annulus fraction at 360 s is below the symmetric baseline (0.509 vs 0.591 fog patch; 0.507 vs 0.589 dark mask — the two independent detectors agree to 0.002), because the bias now spends budget on the backward wedge, which at 2600 m lies OUT of frame (frame-clipped at ~52 m): the order follows the (flipped) lead, exactly as an order change predicts and a throughput change cannot produce.</p>
+
+<h3>5.4 Captures</h3>
+<div><b>Ordering A/B (set 1, pre-fix tree — the dark mask makes the built region visible, if as a void):</b> 2600 m at 180 s — BEFORE (symmetric fill, left) vs AFTER (view-weighted, right): the dark built region is a fat wedge pointing at the camera on the right, a round diamond on the left.
+<img src="captures/set1-before-2600-180s.png" alt="before 2600m 180s"><img src="captures/set1-after-2600-180s.png" alt="after 2600m 180s">
+<p class="caption">2600 m, 180 s, 1280×720, Forward+/lavapipe — BEFORE (left): symmetric diamond, the viewed arc (bottom, toward the camera) still bright sky; AFTER (right): the dark built wedge reaches the frame bottom ahead of the camera (fwd p90 322 m vs 229 m). The dark rendering is the r8 defect of §4, NOT the fill state — the two frames were measured with the same mask.</p>
+</div>
+<div><b>1600 m at 180 s</b> (band 0.58 — the thinnest visible annulus): BEFORE (left) is mostly sky with a sliver; AFTER (right) the visible band is the built fog/dark wall out to the edge (fwd tip 383 m = the render edge).
+<img src="captures/set1-before-1600-180s.png" alt="before 1600m 180s"><img src="captures/set1-after-1600-180s.png" alt="after 1600m 180s">
+<p class="caption">1600 m, 180 s — BEFORE (left) vs AFTER (right).</p>
+</div>
+<div><b>FLIP (negative test) at 2600 m, 180 s</b> — lead 180° from the view: the built wedge points AWAY from the camera (top of frame, mostly out of it); the viewed arc is mostly sky (fwd p90 164 m — below the unbiased 229 m).
+<img src="captures/set1-flip-2600-180s.png" alt="flip 2600m 180s">
+<p class="caption">f_alt2600, 180 s — the order follows the lead; the lead points away from the camera, so the view starves.</p>
+</div>
+<p><b>Ground, 120 m at 180 s</b> (band 0 — byte-identical order): the full annulus built (f95 374 m), grid diamond + hazy far band + the green body dome beyond.
+<img src="captures/set1-ground-120-180s.png" alt="ground 120m 180s">
+</p>
+<div><b>The dark diamond itself (the §4 finding)</b> — 2600 m at 60 s on the pre-fix tree: bright fog core (138–148 m, the lit high-LOD band) inside a growing near-black annulus (16,8,0 = the lit-0.2 base), bright sky beyond.
+<img src="captures/dark-diamond-r8-buggy-2600-60s.png" alt="dark diamond 2600m 60s">
+<p class="caption">b_alt2600, 60 s, pre-fix tree. Same build state as the fog-patch instrument would report — rendered as a void by the r8 mix inversion.</p>
+</div>
+<div><b>"World present" (set 2, post-fix tree):</b> 2600 m at 180 s — the dark void of §4 is the bright fog wall again (the pre-r8 look), the viewed arc filled first (the fog wedge reaches toward the camera), and the crisp textured satellite dome beyond — the world present in the view.
+<img src="captures/set2-after-2600-180s.png" alt="after 2600m 180s fixed">
+<p class="caption">a2_alt2600, 180 s, post-fix tree (mix swapped). Bottom centre: the fogged real-band grid + the fog-wall annulus (built, fog colour (205,250,255)); the dome: crisp textured terrain (green/white/blue) with the seam haze; top: space beyond the dome's silhouette. BEFORE counterpart on the same instrument: b2_alt2600 at 180 s (symmetric fog diamond, p90 209 m, the outer arc unbuilt).</p>
+</div>
+<div><b>Clouds-on final (post-fix tree, 2600 m, 360 s):</b> the world present in view — the crisp dome, the cloud shell (dark at TIME 0.30), and the bright fog wedge of the built annulus at the nadir (where the buggy tree showed the dark diamond).
+<img src="captures/set2-clouds-on-2600-final.png" alt="clouds-on 2600m final fixed">
+<p class="caption">c2_alt2600, 360 s, post-fix tree, clouds on. Buggy-tree counterpart: captures/set1-clouds-on-buggy-2600-final.png (dark diamond at the nadir instead of the fog wedge).</p>
+</div>
+<p>Full capture index in <code>captures/</code> (22 files): set 1 (pre-fix tree, dark-mask ordering A/B): before/after 2600 + 1600 at 180 s, flip 2600 at 180 s, ground 120 at 180 s, dark-diamond 60 s, clouds-on final; set 2 (post-fix tree, fog-patch instrument): before/after 2600 at 60/180/360 s, flip 2600 at 180 s, before/after 1600 at 180 s, after 700 + 300 at 180 s, ground 120 before/after at 180 s (md5-identical: <code>7eea3da14d5988040678f739ccfbba65</code>), clouds-on final.</p>
+
+<h2>6. Gates (all on the FINAL tree unless noted)</h2>
+<table>
+<tr><th>gate</th><th>value</th><th>standing / pass</th></tr>
+<tr><td>G0 (gate_census: SCRIPT + SHADER errors)</td><td>0 / 0 pre-fix (g0-after4.log) and <b>0 / 0 post-fix</b> (g0-postfix.log, the mix-swapped tree)</td><td>zero/zero — PASS</td></tr>
+<tr><td>genhash (mandatory)</td><td>25/25 byte-identical to .scratch/AC-0381-gates/genhash_r1.log (tip 46c20b07…) — <b>re-verified on the final tree</b> (smoke2-genhash.log, diff empty)</td><td>25/25 — PASS (the order change touches no generation)</td></tr>
+<tr><td>farab</td><td>h_mismatch 0 — re-verified post-fix (smoke2-farab.log)</td><td>0 — PASS</td></tr>
+<tr><td>ladder</td><td>band_a_ok 20/20 — re-verified post-fix (smoke2-ladder.log; ~310 s arm, 900 s timeout)</td><td>20/20 — PASS</td></tr>
+<tr><td>meshprobe</td><td>match_rate 1.0 — re-verified post-fix (smoke2-meshprobe.log)</td><td>1.0 — PASS</td></tr>
+<tr><td>halo</td><td>ok — re-verified post-fix (smoke2-halo.log)</td><td>ok — PASS</td></tr>
+<tr><td>lightstate</td><td>leaks 0 — re-verified post-fix (smoke2-lightstate.log)</td><td>0/0 — PASS</td></tr>
+<tr><td>r16 (the arm REQUIRES <code>--fixed-fps 600</code> per HARNESS.md)</td><td>post-fix (ff600): inr4 0/0, far_holes 0, uv_mismatch 0, rescore_events <b>197</b> (≈199 baseline), inr_n 418 / far_low_n 1297 / built_all / section_first_ok all identical to pre-fix</td><td>all sub-flags — PASS. NOTE: an intermediate r16 run WITHOUT <code>--fixed-fps 600</code> (a builder script error) drifted (rescore 101, inr4 in-progress holes 19) — a timing artifact of the missing flag, not of the code change; with the convention the values match pre-fix to within run variance</td></tr>
+<tr><td>boundary r4 (one-shot, pre-render)</td><td>crossing_frame_p95 33 ≤ 150, crossing_burst_p50 4.2 ≤ 10, storm_walk_p99 121 ≤ 200, col_deferred_in_footprint 0, footprint.missing 0</td><td>IN BAND — PASS (consumed as the one permitted A/B probe; the post-fix shader change is colour-only — no build-path timing — the pre-fix green stands)</td></tr>
+</table>
+
+<h2>7. Deviations &amp; follow-ups</h2>
+<ul>
+<li><b>Dirty tree (concurrent session):</b> main.gd / game.gd / drop.gd / debug.gd M + AC-0067 PNGs present in every run — not touched, not reverted; before/after measured on the same tree.</li>
+<li><b>No spec.html</b> for AC-0399 — the spec is the ticket notes in tasks/TASKS.yaml.</li>
+<li><b>R24 renders</b> exceed the usual R≤4 render guidance (§2 HARNESS.md) — required to work at the user's config (radius 24); budgeted 1200 s/run, all runs completed in budget (~9 min each at 5 FPS, 1800-frame drain).</li>
+<li><b>Round-4 comparability:</b> the fog-patch instrument needed the annulus restriction (ext ≤ 384 m) on this tree — the AC-0386 space-adjusted sky is INSIDE round-4's tol-28 window of the built fog colour (205,250,255) in two places: (a) the low-altitude frames' sky (700 m frame top (210,250,255), 300 m (192,251,255) — Δmax 5–9) and (b) the bright limb band around the dome silhouette at 2600/1600 m ((178,231,238) — Δmax 27 — 2513 false-positive px at ext 1400–2100 m on the pre-fix frames; the 2600 m frames' deep-space region above the silhouette is pure black (0,0,0)). The pre-r7 tree round-4 measured on had neither, so its unbounded mask was fine there. Inside the annulus the separation is clean (built fog (205,250,255) vs unbuilt sky (144,209,221) at 2600 m, Δmax 61; vs the unbuilt hazy dome (94,160,170)+ at low altitude, Δmax &gt; 100) — the metric is sound; set-2's fog-patch frontier cross-checks set-1's independent dark-mask frontier within ~20 m on the same runs.</li>
+<li><b>The r8 mix swap is a second-ticket-sized defect fixed under AC-0399</b> (it blocks the "world present" acceptance; see §4). Suggested follow-ups: (a) file the r8 mix swap as its own ticket for the coordinator's tracking if desired (the fix is one line, already in place); (b) the residual dark rim at the 336–384 m seam at orbital altitude (haz_b → 0 at the nadir; the fade should target the background colour at altitude) — an r8-design gap, out of scope here.</li>
+<li><b>Boundary r4</b> one-shot consumed pre-render (green, in band) — no second run after the shader fix (colour-only change; the standing-set requirement is met by the pre-fix green on the identical build path).</li>
+</ul>
+
+<h2>8. Files &amp; captures</h2>
+<p><b>Code:</b> godot/world/world.gd (the view-weighted taxi), godot/player/player.gd (flight band cache/sync/getter), godot/scenes/harness.gd (planet preset: sync + look_at + AWECRAFT_SNAP_STEPS), godot/core/lod_avg.gdshader (one-line mix swap + AC-0399 note), godot/ARCHITECTURE.md §6 (synced in-task), godot/HARNESS.md §2 (AWECRAFT_SNAP_STEPS row added — hand-written section; it is NOT in main.gd's HARNESS_ENVS list and main.gd was untouched).</p>
+<p><b>Ticket folder:</b> tasks/AC-0399/plan.html, this file (self-contained), continuity.md, captures/ (22 PNGs — set 1 ordering A/B + flip + ground + dark-diamond + clouds-on; set 2 fog-patch acceptance + world-present). <b>Scratch:</b> .scratch/AC-0399-gates/ (all run logs, gate logs g0-*/smoke*/r16/boundary-r4, analyze.py + measured.json, render_set.sh + render_set2.sh, smoke_postfix*.sh, REPORT-draft.txt).</p>
+</body>
+</html>

@@ -500,6 +500,31 @@ var _pool_b: Array = []    # [key, e, c, s, pe] last build-pass pick
 var _pool_fb: Array = []   # [key, e, c, s, pe] last forward-lead pick
 var _pool_data: Array = [] # [key, e, null, s, pe] last data-pass pick
 
+# AC-0399: the view-biased fill order (the takeoff fix). _view_lead is the
+# camera's flat xz view direction weighted by the player's flight band x
+# the bias weight — _grid_score shortens the effective taxi of the DRAW-
+# tier columns in front of the view by up to its magnitude (a column
+# directly in the view loses up to vbias_w of its taxi; a column 90 deg
+# or behind is untouched). band = 0 at/ below BAND_WALK_MAX (player.gd,
+# the AC-0145 P2 blend the player caches), so on the ground _view_lead
+# is exactly ZERO and the (taxi, layer) order is pre-AC-0399, unchanged.
+# Quantized into the pool key (_view_bucket = 8-sector compass,
+# _view_band8 = band level) so a look change rescans only when it crosses
+# a sector or a band level — the AC-0250 removal was the CONTINUOUS look
+# rescore storm, and this keeps its debounce.
+var _view_lead := Vector3.ZERO
+var _view_bucket := 0
+var _view_band8 := 0
+var _view_basis_col := ""    # the anchor column the cached basis belongs to
+var _view_basis := Basis.IDENTITY
+# AC-0399: the bias weight (the max effective-taxi reduction of a column
+# directly in the view) and the negative-test flip (the lead 180 deg
+# away). Harness env preloads (the AWECRAFT_DRAIN_MS pattern):
+# AWECRAFT_VBIAS_W=<float> — 0 disables the bias (the pre-AC-0399 order,
+# the "before" runs); AWECRAFT_VBIAS_FLIP=<0|1>.
+var vbias_w := 0.7
+var vbias_flip := false
+
 # AC-0369 CUT: the per-COLUMN neighbour-ring cache (the 8 snap_rings calls
 # are per-column inputs, re-run 24x per column before). key -> {rings,
 # stamps (the axis-only nbs_stamps into the entry), key8 (ALL 8 neighbours'
@@ -531,18 +556,27 @@ func _pool_touch() -> void:
 	_pool_ver += 1
 
 func _pool_key(maxb: int) -> String:
-	# AC-0233/AC-0250: the tiered pick is a pure function of (pool state +
-	# drain window + recenter center + sim radius) — the look no longer
-	# affects the order at all (AC-0250 removed the look bias), so moving OR
-	# turning within a column does not change the tier order and px/pz left
-	# the key. A key hit means no rescan: the waiting parts are rewritten
-	# only on a column cross (pcx/pcz), a sim-radius change, or a pool
-	# change. (AC-0293: the spawn-fast term left the key with the burst.)
-	return "%d_%d_%d_%d_%d" % [
+	# AC-0233/AC-0250 (AC-0399 UPDATED): the tiered pick is a pure function
+	# of (pool state + drain window + recenter center + sim radius + the
+	# QUANTIZED view lead). AC-0250 removed the continuous look bias
+	# (moving or turning within a column no longer rescans); AC-0399 adds
+	# the flight-band view weight back IN — quantized to (compass sector,
+	# band level) so a look change rescans only across a sector or band
+	# boundary, keeping the AC-0250 debounce. A key hit means no rescan:
+	# the waiting parts are rewritten only on a column cross (pcx/pcz), a
+	# sim-radius change, a pool change, or a quantized view change.
+	# (AC-0293: the spawn-fast term left the key with the burst.)
+	# AC-0399: the quantized view state joins the key — the pick depends
+	# on the lead direction (a compass sector) and its magnitude (a band
+	# level) now. Constant 0_0 on the ground (the lead is ZERO there), so
+	# the ground cache behaviour is unchanged; in flight a rescan happens
+	# only when a rotation crosses a sector or the band crosses a level.
+	return "%d_%d_%d_%d_%d_%d_%d" % [
 		_pool_ver,
 		maxb,
 		last_pcx, last_pcz,
 		band0_r,  # AC-0239: the sim radius is the tier-1 boundary
+		_view_bucket, _view_band8,  # AC-0399: the quantized view lead
 	]
 
 # AC-0233 3-tier priority of a waiting entry (dx,dz = offset from the
@@ -812,6 +846,50 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 # The live layer is derived from the chunk's pending state per pick (a
 # completed slab moves the best slab outward; there is no stamp to go
 # stale).
+# AC-0399: sample the camera's flat xz view direction once per drain
+# frame. The direction is the player's aim projected into the FLAT frame
+# through the recenter-ANCHOR column's sphere basis (the same transform
+# the player's _flat_ray uses from its side — the basis varies 0.23 deg
+# per column, so the anchor column is the right origin for a fill-order
+# quantity; the basis is cached per anchor column, so the per-frame cost
+# is one transposed-basis multiply). The weight is the player's OWN
+# flight band (player.gd flight_band — the AC-0145 P2 smoothstep 500-2000
+# m) x vbias_w: on the ground the lead is exactly ZERO and the (taxi,
+# layer) order is untouched. Looking straight up/down (horizontal
+# component < 0.05) has no view arc to follow — the lead zeroes.
+func _view_sample() -> void:
+	var p = Game.player
+	if p == null or vbias_w < 0.001:
+		_view_lead = Vector3.ZERO
+		_view_bucket = 0
+		_view_band8 = 0
+		return
+	var band: float = p.flight_band()
+	if band < 0.001:
+		_view_lead = Vector3.ZERO
+		_view_bucket = 0
+		_view_band8 = 0
+		return
+	var ck := _key(last_pcx, last_pcz)
+	if ck != _view_basis_col:
+		_view_basis_col = ck
+		_view_basis = _col_sphere_transform(last_pcx, last_pcz).basis
+	var d: Vector3 = _view_basis.transposed() * p.aim_dir()
+	d.y = 0.0
+	var l := d.length()
+	if l < 0.05:
+		_view_lead = Vector3.ZERO
+		_view_bucket = 0
+		_view_band8 = int(band * 8.0)
+		return
+	d /= l
+	if vbias_flip:
+		d = -d
+	_view_lead = d * (band * vbias_w)
+	var ang: float = fmod(atan2(d.z, d.x) + PI, TAU)
+	_view_bucket = int(ang / (TAU / 8.0))
+	_view_band8 = int(band * 8.0)
+
 func _grid_score(e: Dictionary) -> float:
 	var dx := int(e["cx"]) - last_pcx
 	var dz := int(e["cz"]) - last_pcz
@@ -824,12 +902,29 @@ func _grid_score(e: Dictionary) -> float:
 	# A now gets a real layer rank instead of a constant 0; rings 2/3
 	# (band B/C, the avg emit) probe the low state (the AC-0262
 	# cached probe).
-	var in_high := c != null and _lod_tier_of(dx, dz) <= 1
+	var tierg := _lod_tier_of(dx, dz)
+	var in_high := c != null and tierg <= 1
 	if c != null and not c.data.is_empty():
 		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
 		if si >= 0:
 			layer = _layer_rank_of(si)
-	var s := float(absi(dx) + absi(dz)) * 10000.0 + float(layer)
+	var taxi := float(absi(dx) + absi(dz))
+	# AC-0399: the view-biased bake order (the takeoff fix). The effective
+	# taxi of a DRAW-tier column (tier <= 3 — inside the render region,
+	# where the fill is VISIBLE) is shortened by the lead's projection on
+	# the column's direction: max(0, cos) x |lead| (|lead| = band x
+	# vbias_w, 0 on the ground — the pre-AC-0399 (taxi, layer) order is
+	# exactly preserved there). Tier 4 (data-only, past the render edge —
+	# never rendered) is NOT biased: the invisible outer world keeps its
+	# current order and the draw band gets the view priority.
+	if tierg <= 3 and (dx != 0 or dz != 0) \
+			and (_view_lead.x != 0.0 or _view_lead.z != 0.0):
+		var dotv := float(dx) * _view_lead.x + float(dz) * _view_lead.z
+		if dotv > 0.0:
+			var l := sqrt(float(dx) * float(dx) + float(dz) * float(dz))
+			if l > 0.5:
+				taxi *= (1.0 - dotv / l)
+	var s := taxi * 10000.0 + float(layer)
 	return s
 
 # AC-0257: the AC-0233 _tier_score ((sim-tier, taxi) pick order) is gone —
@@ -3690,6 +3785,14 @@ func _ready() -> void:
 	_tm_debug = OS.get_environment("AWECRAFT_TMDEBUG") == "1"
 	print("THREADMESH on threadmesh=true pool=%d" % threadmesh_max)
 	_recprobe = OS.get_environment("AWECRAFT_RECPROBE") == "1"
+	# AC-0399: harness env preloads for the view-biased fill order —
+	# AWECRAFT_VBIAS_W=<float> (0 disables the bias: the pre-AC-0399
+	# (taxi, layer) order, the "before" runs) and AWECRAFT_VBIAS_FLIP=
+	# <0|1> (the negative test — the lead points 180 deg away).
+	var vbe := OS.get_environment("AWECRAFT_VBIAS_W")
+	if vbe != "":
+		vbias_w = clampf(vbe.to_float(), 0.0, 0.95)
+	vbias_flip = OS.get_environment("AWECRAFT_VBIAS_FLIP") == "1"
 	var dr := OS.get_environment("AWECRAFT_DRAIN_MS")
 	if dr != "" and dr.to_int() > 0:
 		drain_budget_ms = dr.to_int()
@@ -8315,6 +8418,7 @@ func _promo_build_step() -> void:
 
 
 func _drain_build_queue() -> void:
+	_view_sample()  # AC-0399: the quantized view lead (the pick depends on it)
 	_far_promo_owed_step()  # AC-0284b: the promotion's owed full regens
 	_promo_build_step()  # AC-0286: the promotion burst (post-landing)
 	# AC-0293: the burst apply pass (_startup_gen_apply) is gone with the

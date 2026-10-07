@@ -1194,6 +1194,11 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		player.set_physics_process(false)
 		player.hunger = 20.0
 		player.position = pl_pos  # direct scene-space set (the ladder's)
+		# AC-0399: the teleport is out-of-band (physics is frozen), so the
+		# player's derived flight band (the world's view-biased fill weight)
+		# must be re-synced from the new position — the per-step update never
+		# runs on a frozen player.
+		player.sync_flight_band()
 		# the frozen player's HUD (hotbar + hunger) would overprint the
 		# shot; the instrument hides it for the capture (the inventory
 		# manages its children's visibility, never the layer's, so a
@@ -1233,17 +1238,51 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var pl_dir := (pl_tan - camera.position).normalized()
 		camera.look_at(camera.position + pl_dir, pl_up)
 		camera.current = true
+		# AC-0399: the frozen stand-in player is the OBSERVER for the
+		# world's view-biased fill order (world.gd samples
+		# Game.player.aim_dir()), so it must look where the preset camera
+		# looks — in the real game the camera rides the player's basis,
+		# so aim IS the view. Without this the fresh player's identity
+		# basis aims down world -Z, ~90 deg off the tangent limb at this
+		# spawn (the bias would fill the wrong wedge).
+		player.look_at(pl_pos + pl_dir, pl_up)
 		# settle (AWECRAFT_SNAP_DRAIN counts FRAMES; the Forward+ path
-		# runs at ~5 FPS, so the recipe's 600 is ~2 min)
+		# runs at ~5 FPS, so the recipe's 600 is ~2 min).
+		# AC-0399 (additive, env-gated — the time-to-visible ladder
+		# instrument): AWECRAFT_SNAP_STEPS=300,900,1800 snaps at each
+		# CUMULATIVE drain frame (one process instead of three; the run
+		# is deterministic — frozen time + fixed weather T0 + the frozen
+		# player — so a frame-900 state in the continued run IS the
+		# fresh-run frame-900 state). Step files are the snapshot path
+		# with "_s<frame>" before the .png. With the env unset the loop
+		# below is exactly the original single-snapshot behaviour.
 		var pl_denv := OS.get_environment("AWECRAFT_SNAP_DRAIN")
 		var pl_drain := 600 if pl_denv == "" else maxi(1, pl_denv.to_int())
-		for i in pl_drain:
+		var pl_steps: Array = []
+		var pl_stenv := OS.get_environment("AWECRAFT_SNAP_STEPS")
+		if pl_stenv != "":
+			for ps in pl_stenv.split(","):
+				if ps.strip_edges() != "":
+					pl_steps.append(maxi(1, ps.strip_edges().to_int()))
+			pl_steps.sort()
+		var pl_frame := 0
+		var pl_snapped: Array = []
+		while pl_frame < pl_drain:
 			await get_tree().process_frame
+			pl_frame += 1
+			if pl_steps.size() > 0 and pl_frame == int(pl_steps[0]):
+				var psuf := snapshot_path
+				if psuf.ends_with(".png"):
+					psuf = psuf.left(psuf.length() - 4) + "_s%d.png" % pl_frame
+				await Debug.snap(psuf)
+				pl_snapped.append(psuf)
+				pl_steps = pl_steps.slice(1)
 		var pl_phase := -1
 		if world.satellite != null:
 			pl_phase = int(world.satellite.phase)
 		Debug.result({"planet": true, "cam": "planet", "alt": pl_alt, "R": pl_R,
 				"body_phase": pl_phase, "drain": pl_drain,
+				"steps": pl_snapped,
 				"w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
 		await Debug.snap(snapshot_path)
 		get_tree().quit()

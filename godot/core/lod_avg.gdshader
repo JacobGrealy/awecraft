@@ -92,7 +92,17 @@ void fragment() {
 	// smoothstep (zero slope at both ends) and ends exactly at the tier
 	// boundary, so it meets the dome's own haz model continuously.
 	float w = 1.0 - smoothstep(336.0, 384.0, taxi);
-	float haz = mix(fog_f, haz_b, w);
+	// AC-0399 r1: r8 shipped the mix BACKWARDS — mix(fog_f, haz_b, w)
+	// returned haz_b (~0 at the orbital nadir: the body's limb haz with
+	// cosv~1, op=1) across the whole w=1 core, contradicting the block
+	// above ("with w=1 out to 336, haz = fog_f"): at 2600 m the built
+	// annulus rendered the AC-0283 lit-0.2 base (measured (16,8,0), a
+	// dark diamond) instead of the fog wall (the r8-dev run had measured
+	// that wall at (177,240,255); the pre-r8 tree round 4 measured is
+	// what the fog patch instrument assumes). Swapped so w=1 -> fog_f
+	// (the engine ramp, the nadir core) and w=0 -> haz_b (the dome seam),
+	// exactly as written.
+	float haz = mix(haz_b, fog_f, w);
 	ALBEDO = mix(ALBEDO, u_air, haz);
 	ALPHA = 1.0;
 }

@@ -501,12 +501,9 @@ func _physics_process_impl(dt: float) -> void:
 	# step, full up-alignment + gravity), band = 1 at/ above BAND_FLY_MIN
 	# (6-DOF: free basis, no up-alignment / auto-level, no gravity),
 	# smoothstep between. Flat mode (no world / R <= 0): no bands.
-	var R_b: float = Game.planet_R if Game.world != null else 0.0
-	var alt_rad: float = position.y
-	var band: float = 0.0
-	if R_b > 0.0:
-		alt_rad = (position + Vector3(0.0, R_b, 0.0)).length() - R_b
-		band = smoothstep(BAND_WALK_MAX, BAND_FLY_MIN, alt_rad)
+	sync_flight_band()  # AC-0399: the flight band + altitude from the live position
+	var band: float = last_flight_band
+	var alt_rad: float = last_flight_alt
 	# AC-0145 P1: the continuous radial alignment of the basis, BEFORE the
 	# velocity math — the movement frame below IS the accumulated basis.
 	# AC-0145 P2: the alignment scales with (1 - band) — full at the
@@ -869,6 +866,13 @@ func _physics_process_impl(dt: float) -> void:
 # unset = off (zero cost, pristine behavior); "1" = on; "blind" = guard
 # armed, bracket disabled (the negative test — must trip visibly).
 var ac0383_on := false
+# AC-0399: the AC-0145 P2 flight band + radial altitude, cached per
+# physics step (sync_flight_band is the one home of the blend) — the
+# world's view-biased fill order reads the band; the physics speed
+# gates read the altitude.
+var last_flight_band := 0.0
+var last_flight_alt := 0.0
+
 var ac0383_guard := false
 var _ac0383_n := 0
 var _ac0383_play_n := 0
@@ -3190,6 +3194,29 @@ func get_yaw() -> float:
 
 func get_pitch() -> float:
 	return _pitch
+
+
+# AC-0399: recompute last_flight_band from the live position (the ONE
+# home of the AC-0145 P2 blend: 0 at/ below BAND_WALK_MAX, 1 at/ above
+# BAND_FLY_MIN, smoothstep between). _physics_process calls it every
+# step; the harness planet preset (harness.gd) calls it after its
+# out-of-band teleport of the FROZEN player (set_physics_process(false)
+# means the per-step update never runs there) — a position that moved
+# without physics must re-sync the derived band.
+func sync_flight_band() -> void:
+	var R_b: float = Game.planet_R if Game.world != null else 0.0
+	var alt_rad: float = position.y
+	if R_b > 0.0:
+		alt_rad = (position + Vector3(0.0, R_b, 0.0)).length() - R_b
+	last_flight_alt = alt_rad
+	last_flight_band = smoothstep(BAND_WALK_MAX, BAND_FLY_MIN, alt_rad)
+
+
+# AC-0399: the flight band, cached per physics step (sync_flight_band).
+# The world's view-biased fill order is weighted by this: a no-op on the
+# ground (band 0), full in the flight band.
+func flight_band() -> float:
+	return last_flight_band
 
 
 func is_mining() -> bool:
