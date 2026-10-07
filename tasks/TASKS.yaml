@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T18:50
+  updated_at: 2026-10-07T18:52
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,6 +28,7 @@ queue:
 - AC-0402
 - AC-0403
 - AC-0404
+- AC-0405
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25079,4 +25080,92 @@ intake:
     they are verified correct; keep AC-0401''s cloud switch working with its off state bit-identical;
     the near-field fog-only fade, the altitude-gated limb on the body alone, AC-0402''s altitude-aware
     sky, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must all keep working.'
+  comments: []
+- id: AC-0405
+  title: raymarched-volumetric-clouds
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-07T18:52
+  updated_at: 2026-10-07T18:52
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The clouds should look like real clouds - three-dimensional masses with lit tops,
+    shaded undersides, depth you can see into, and a descent that passes through them - rather than a
+    patterned surface wrapped around the planet. The user''s words: "I think you just need to rethink
+    clouds. look at how voluminous clouds are done and implement them, forget how we currently do it."
+
+
+    2) Technical Details:
+
+    A REDIRECT FROM THE USER 2026-10-07, after four rounds of work on the existing approach failed to
+    satisfy them. The history matters because it is the argument for rethinking rather than iterating
+    again: AC-0385 built a spherical shell with a procedural pattern; AC-0401 was asked for "less of them
+    but the individual clouds should be bigger and they should be volumetric" and delivered fewer-and-larger
+    convincingly (a third of the previous frequency, band gaps, puff-and-core shading) while the user
+    still reported "the clouds still look 2d not voluminous". The coordinator''s diagnosis of why is structural
+    and the user has now endorsed rethinking rather than patching: A SINGLE SURFACE AT A SINGLE RADIUS
+    HAS NO PARALLAX AND NO INTERNAL DEPTH, so no pattern detail can make it read as a volume. THE INSTRUCTION
+    IS EXPLICIT: FORGET HOW WE CURRENTLY DO IT.
+
+    THE ESTABLISHED TECHNIQUE, researched 2026-10-07 rather than invented here, and the shape of what
+    to implement: RAYMARCH A DENSITY VOLUME. Render the cloud layer as a slab or shell of finite thickness,
+    step a view ray through it, and sample a 3D density field (FBM noise, ideally from a 3D texture or
+    an analytic 3D noise) at each step. Accumulate transmittance with Beer''s law and, for each sample,
+    march a SHORT RAY TOWARD THE SUN through the same density field to compute self-shadowing - that light
+    march is what produces lit tops and shaded bottoms, and it is the single thing the current approach
+    cannot do. Add a HENYEY-GREENSTEIN phase function for forward scattering and the POWDER term for the
+    dark edges around cloud boundaries, both of which Guerrilla''s work identifies as what separates convincing
+    cloud from grey mush. References to work from, in order of usefulness: the Guerrilla paper "The Real-Time
+    Volumetric Cloudscapes of Horizon Zero Dawn" (the canonical description, including the powder and
+    dark-edge terms); the meteoros project on GitHub for a readable NUBIS-based implementation; a Godot
+    4 shader on godotshaders.com titled "Volumetric Raymarched (animated) Clouds v2" for a working engine-specific
+    starting point; and Maxime Heckel''s article "Real-time dreamy Cloudscapes with Volumetric Raymarching"
+    for the technique explained step by step.
+
+    WHAT TO KEEP AND WHAT TO THROW AWAY: the SHAPE of the layer is a design decision the user has not
+    asked to change - the planet should still have cloud between the surface and space, and a descent
+    should still pass through it - so a shell of finite thickness containing a raymarched density volume
+    is the natural fit and reuses the verified geometry rather than discarding it. What is thrown away
+    is the approach of shading a patterned surface: the pattern becomes a DENSITY FIELD, the surface becomes
+    a VOLUME, and the shading becomes scattering rather than texturing. The existing shell radii (4275/4330/4400
+    about (0, -R, 0)) are verified correct and their centres must not move; whether the raymarched layer
+    spans one shell, the gaps between two, or a slab of its own thickness is the implementer''s call,
+    to be stated and justified.
+
+    COST IS THE REAL CONSTRAINT AND MUST BE MEASURED, not assumed. Raymarching is expensive and this project
+    already runs at about 2 to 5 FPS on the coordinator''s software renderer, so the implementation must
+    be honest about its budget: state the step count, the light-march step count, whether a low-resolution
+    render target or temporal reuse is used, and the measured frame cost on the shipped Forward+ path.
+    A cheap convincing result beats an expensive one here, and if the honest answer is that full raymarching
+    cannot fit the budget at the user''s settings, say so with numbers and propose the cheapest thing
+    that still reads as volume rather than silently shipping a slow one.
+
+    ACCEPTANCE IS THE USER''S OWN TWO COMPLAINTS MEASURED: (a) the cloud must read as a volume, which
+    means visible internal depth and parallax - show a frame where one mass is visibly BEHIND another,
+    and where a descent passes through distinct structure rather than a single layer; (b) the lighting
+    must have range - the round 12 assessment measured the current deck''s brightness spread at 16.9 against
+    32.4 for the reference look and its colour as near-neutral grey 222,222,222 against a saturated reference
+    181,230,194, so measure the same way afterwards and against the same instrument. Use the frames the
+    user is judging: the 120 m view, a middle altitude, and the 2600 m orbital view, compared against
+    AC-0401''s and AC-0384''s captures.
+
+    CONSTRAINTS: genhash 25/25 byte-identical (this is a rendering change, not generation); G0 zero SCRIPT
+    ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND check the process exit status, because
+    a segfault leaves a clean log - there is an open crash ticket, AC-0403, at godot/world/chunk.gd:657;
+    the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
+    r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); the cloud
+    shell radii and centre stay 4275/4330/4400 about (0, -R, 0); the near-field fog-only fade and the
+    limb effect on the satellite body ALONE (AC-0404''s other item) must hold; AC-0402''s altitude-aware
+    sky, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must keep working; AC-0400''s
+    seam fade must keep targeting the single-source air colour. A look change of this size ships with
+    a switch, default conservative, short-circuiting before the work so the off state is provably the
+    old look.
+
+    '
   comments: []
