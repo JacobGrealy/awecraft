@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0402 plan</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1100px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:28px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow-x:auto;font-size:12px}
+.small{font-size:12px;color:#4a5568}
+</style></head>
+<body>
+<h1>AC-0402 plan — planet-grey-at-some-times-and-sky-not-altitude-aware</h1>
+
+<h2>Goal</h2>
+<p>Make the satellite disc show saturated terrain at every time of day (D5) and make the sky
+thinning-to-space respond to altitude over a long climb (D4), each measured across the required
+sweeps with renders, each look change behind a default-ON switch whose OFF state short-circuits
+before the work.</p>
+
+<h2>Diagnosis (from code reading + the existing captures; renders confirm)</h2>
+<p><strong>D5.</strong> The body's day/night re-weight is <code>albedo × (0.18 + 0.82·day(t)·sun_l)</code>
+(satellite_body.gd:599-601 + the shader line 154). At T0.5 the disc-centre factor is exactly
+1.0 (sun_l clamps to 1 at the nadir) — the body is the FULL baked terrain at noon, so the grey is
+NOT the body's material or day-night treatment. It is not cause #1 (the uncompiled shader drew a
+255-white Lambert ball; the disc centre is 184/221 grey, and that defect is fixed) and not cause
+#2 (the fog term repainted the disc with the fog colour (177,240,255)-class cyan, also fixed).
+The grey is a <strong>third, independent cause: the cloud deck's overcast phase</strong> —
+<code>cloud_amount = 0.30 + 0.45·day</code> (aero.gd:193) makes the deck 2.5× denser by day, and the
+pre-AC-0401 deck (u_boost 2.2, u_under 0.70) then covers the disc with an opaque neutral veil
+(measured: disc centre (221,221,221), sat 0, in the r9-character frame
+<code>ac0401-deckoff-2600.png</code> at the same T0.5 weather state, vs (144,209,221) sat 77 with the
+AC-0401 deck default ON). The before sweep (T0 0.0/0.25/0.5/0.75) + the T0.5 clouds-OFF body-only
+render confirm which side owns the grey on the current tree.</p>
+<p><strong>D4.</strong> The sky's space blend uses the physics flight-band S
+(<code>smoothstep(500, 2000, alt_rad)</code>, main.gd:1325), which completes by 1600 m (S=0.92; the
+141 m spawn offset puts the 700/1600 m frames at alt_rad 841/1741) — "space effectively reached
+by 1600 m", no mid-state on the ladder, and the gradient shape reads state-independent. The fix
+gives the background blend its own, stretched window (start = BAND_WALK_MAX, end =
+BAND_FLY_MIN×1.6 = 3200 m alt_rad, read off the live player — no duplicated constants): the blue
+horizon thins gradually over the whole climb (S_sky ≈ 0.04/0.44/0.92 at the 700/1600/2600 m
+frames), while the limb-glow gate, the star opacity and the sun-glow fade keep riding the
+physics-band S untouched (the AC-0386/AC-0401 contracts).</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td><td>Two new uniforms: <code>u_space_sky</code>
+(the stretched-window blend value, default 0.0) and <code>u_sky_alt</code> (the switch, default 0.0).
+The background mix becomes <code>ws = mix(mix(S²,S,u), mix(Ss²,Ss,u), u_sky_alt)</code> — with
+<code>u_sky_alt = 0</code> (or no push) the expression is exactly the pre-change ws. Limb gate,
+gate mix, sun disc/glow untouched.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_ac0401_push</code> gains: per-frame
+<code>u_space_sky</code> push to the Main-owned sky material (alt_rad from the player position,
+<code>smoothstep(player.BAND_WALK_MAX, player.BAND_FLY_MIN*1.6, alt_rad)</code> — the band constants
+read off the live player, one number one home) + change-gated <code>u_sky_alt</code> push (Settings
+<code>sky_altitude</code>, default ON). Boot env preload <code>AWECRAFT_SKYALT=0|1</code> (the
+AWECRAFT_RAMPS pattern). The push path is the documented main.gd-fence deviation (AC-0401).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>New bool key <code>"sky_altitude": true</code> in
+DEFAULTS + sanitize_bool in the clamp chain (the cloud_deck pattern).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Settings-page checkbox row + toggle handler + the
+<code>_syncing</code> read (the AC-0401 pattern, seated after the limb-gate row).</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td><em>Only if the D5 sweep shows the
+default-ON deck still washing the disc to grey at some time of day</em> (a deck-material change
+inside the existing <code>u_deck</code> ON path, e.g. an alpha cap so terrain always bleeds through —
+OFF remains the exact r9 path). If the sweep passes, NO change and D5 is reported as
+already-addressed by AC-0401.</td></tr>
+</table>
+<p class="small">Fence files (main.gd, game.gd, drop.gd, debug.gd) untouched — the sky-material
+push rides the world's parent-node path. The uncommitted AC-0401 leftovers in
+settings.gd/menu.gd/near-field shaders are left as-is (additive edits only).</p>
+
+<h2>Switches</h2>
+<table>
+<tr><th>Switch</th><th>Default</th><th>OFF state</th></tr>
+<tr><td><code>sky_altitude</code> (AWECRAFT_SKYALT) — D4</td><td>ON</td><td><code>u_sky_alt=0</code>:
+ws = the exact pre-AC-0402 expression (mix of the physics-band S), bit-identical sky.</td></tr>
+<tr><td><code>cloud_deck</code> (AWECRAFT_CLOUDDECK) — any D5 deck change</td><td>ON (existing)</td>
+<td><code>u_deck&lt;0.5</code>: the exact r9 pre-AC-0401 field/windows (existing short-circuit).</td></tr>
+</table>
+
+<h2>Verification (light gates only, then exit — the coordinator owns the heavy set)</h2>
+<table>
+<tr><th>Gate</th><th>Mode / invocation</th><th>ok condition</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code></td><td>rc 0 AND zero SCRIPT ERROR AND
+zero SHADER ERROR via <code>gate_census.py</code></td></tr>
+<tr><td>shaderforce</td><td><code>AWECRAFT_LOGIC=shaderforce</code> Forward+</td><td>12/12 forced
+compiles, census clean (the sky shader carries the new uniforms)</td></tr>
+<tr><td>SMOKE (dependency-mapped)</td><td><code>AWECRAFT_BATTERY=satellite;settings;light;genhash</code>
+(satellite = the body/sky-area arm; settings = the new key; light = the standing value; genhash
+owed because world.gd was touched)</td><td>each RESULT ok; genhash 25/25 byte-identical
+(render-only change — any drift is a FINDING, not a re-baseline)</td></tr>
+<tr><td>D5 sweep (the render acceptance)</td><td>2600 m planet preset, user config
+(R24/FOG_PCT=83), weather pin (CLOUD_T0=411200, TIME_FREEZE), T0 = 0.0/0.25/0.5/0.75, before
+(current tree) and after; + one T0.5 CLOUDS=0 before run (body-only isolation)</td><td>disc-centre
+colour saturated terrain (not grey) at every time of day, after; before values recorded</td></tr>
+<tr><td>D4 ladder (the render acceptance)</td><td>2600/1600/700/300/120 m (SAT_ALT) at T0.5, after;
+before = the round-12 <code>ac0384-final-descent-*.png</code> set (same method re-measured)</td>
+<td>space term + gradient at each altitude showing a monotonic altitude response (before: same
+pale sky at 300/120/700, black at 1600/2600; after: distinct state at every step)</td></tr>
+<tr><td>Switch-off A/B</td><td>one T0.5 2600 m render at AWECRAFT_SKYALT=0</td><td>frame matches the
+pre-AC-0402 look (short-circuit proven by render, not by assertion)</td></tr>
+</table>
+<p class="small">Boundary r4 / farab / ladder / lightstate / r16 / the full battery / the Windows
+build are the coordinator's heavy stage — exit after the light set. ONE godot at a time; logs to
+<code>.scratch/ac0402-runs/</code>; every render: Forward+ boot line asserted, file existence checked
+(SNAP FAIL prints instead of failing).</p>
+
+<h2>Risks</h2>
+<ul>
+<li><strong>Render cost</strong>: ~13 R24 snapshot runs × ~4-7 min (the user-config ladder streams a
+24-chunk world at ~5 FPS). Mitigation: sequential resumable scripts, 1400 s cap per run, memory
+cap 12 GB, one godot at a time.</li>
+<li><strong>D5 may already pass</strong> (AC-0401's deck re-characterisation is default ON): then D5
+ships as a finding + measurements, no deck change — the ticket says that is the valuable outcome.</li>
+<li><strong>The stretched window vs AC-0386's "one number, one home"</strong>: the physics band stays
+the home for the gate/stars/glow; the background blend gets a documented sky-specific derivation
+from the same live constants. Recorded as a deliberate deviation in the results.</li>
+<li><strong>Parallel session WIP</strong> (uncommitted main.gd/game.gd/drop.gd/debug.gd hunks + the
+AC-0401 leftovers): the fence files are not touched; the measured tree is HEAD + those uncommitted
+hunks (stated in the results).</li>
+</ul>
+
+</body></html>

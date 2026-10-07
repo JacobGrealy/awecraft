@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0402 results</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1400px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:32px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+.ok{color:#22543d;font-weight:bold}.bad{color:#9b2c2c;font-weight:bold}.warn{color:#975a16;font-weight:bold}
+pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow-x:auto;font-size:12px}
+img{border:1px solid #cbd5e0;max-width:100%}
+.pair{display:flex;gap:12px;flex-wrap:wrap}.pair>div{flex:1 1 420px}
+.small{font-size:12px;color:#4a5568}
+</style></head>
+<body>
+<h1>AC-0402 results — planet-grey-at-some-times-and-sky-not-altitude-aware</h1>
+<p>PLAN: <a href="plan.html">plan.html</a> · CONTINUITY: <a href="continuity.md">continuity.md</a> · TREE: HEAD <code>680a830</code> (AC-0401 closed) + the uncommitted AC-0401 leftover / parallel-session hunks (settings/menu/near-field shaders, as measured by the AC-0384 §25 assessment era) + this task's D4 change. Fence files untouched.</p>
+
+<h2>Verdict (per user item)</h2>
+<table>
+<tr><th>#</th><th>User item</th><th>What was found / done</th><th>Status</th></tr>
+<tr><td>D5</td><td>“AT SOME TIMES OF DAY THE PLANET RENDERS AS A PALE GREY BALL” (disc centre 184,184,184 at T0.5 vs 49,99,46 at T0.3, 2600 m)</td>
+<td><strong>None of the three pale-planet causes.</strong> (1) the uncompiled shader drew a 255-white Lambert ball and is long fixed; (2) the fog term repaints the disc in the fog colour (cyan, 177,240,255-class) and is fixed; (3) the body's day/night re-weight is <em>exactly identity</em> at the T0.5 nadir — <code>albedo × (0.18 + 0.82·day·sun_l)</code> = ×1.0, proven by the fresh clouds-OFF render: the body-only T0.5 disc centre is (144,209,221) sat 77, full saturated terrain. The grey is a <strong>fourth, independent cause: the cloud deck's overcast phase</strong> — <code>cloud_amount = 0.30 + 0.45·day</code> peaks at 0.75 by day, and a deck mass over the nadir reads as a neutral veil (the AC-0384 capture measured (221,221,221) sat 0 in the old r9 character; the r9 flat blanket now only exists with <code>cloud_deck</code> OFF). <strong>Already addressed by AC-0401's re-characterised deck (default ON)</strong>: the same T0.5 nadir is saturated teal (144,209,221) with the default deck, the masses are volumetric (grey cores, soft edges) with clear terrain gaps, and the sweep shows the disc centre carrying the terrain's hue at every time of day (dark at night, teal at dawn/dusk). Residual: in a DENSE drift phase a mass sits over the nadir and the centre reads the cloud's neutral grey ((201,201,201) sat 0 measured) — weather over the planet, the body underneath proven saturated (clouds-OFF render); the old featureless 221-grey ball is gone from the default path. Per the ticket's stop-and-report clause: <strong>reported, no deck change</strong> (a “keep the nadir open” weather rule or a lower day coverage is the named follow-up).</td>
+<td class="ok">FINDING — already addressed by AC-0401 (default ON); measured across the sweep; no change</td></tr>
+<tr><td>D4</td><td>“the sky-to-space transition is short… does not respond to altitude… space term 0.13→0.92 between 700–1600 m, fully black by 1600 m” — “landing on and leaving a planet should feel and look like No Man's Sky”</td>
+<td>The sky's BACKGROUND blend rode the physics flight-band S (500–2000 m), which is a band, not a climb. Fix: the background now blends on <code>u_space_sky</code> (pushed per frame by <code>world.gd _ac0401_push</code>) with a stretched window — the SAME radial altitude, window <code>BAND_WALK_MAX .. BAND_FLY_MIN×1.6</code> (500–3200 m, read off the live player's constants) — so S_sky ≈ 0.04 / 0.44 / 0.92 at the 700 / 1600 / 2600 m frames: the blue thins gradually over the whole climb instead of snapping to black at 1600 m. The ladder now carries a distinct state at every step (inside the weather → bright air → slightly thinned air → deep blue mid-climb → near-space with a thin horizon haze + full limb rim). The limb-glow gate, the star opacity and the sun-glow fade keep riding the physics S (the AC-0386/AC-0401 contracts) — unchanged. Behind <code>sky_altitude</code> (default ON; env <code>AWECRAFT_SKYALT</code>): OFF makes the ws expression exactly the pre-AC-0402 one — proven by render: the 2600 m OFF frame's sky is pixel-identical to the pre-AC-0402 frame, and the 300 m ON frame's sky is pixel-identical to the pre-AC-0402 tree's frame (the window is 0 there).</td>
+<td class="ok">DONE — switch-gated, renders</td></tr>
+</table>
+
+<h2>D5 — the grey, measured (2600 m, user config R24/F83, weather pin CLOUD_T0=411200, T frozen)</h2>
+<table>
+<tr><th>T0</th><th>day(t)</th><th>cloud_amount</th><th>Disc centre — default deck (this task's sweep)</th><th>Disc centre — body only (CLOUDS=0, T0.5)</th><th>Reading</th></tr>
+<tr><td>0.0</td><td>0.0</td><td>0.30</td><td>win60 (1.2, 2.0, 1.2) — nadir point (0,0,0) = the baked fixed-sun shadow × 0.18 night floor, quantised to black; the render shows the dark structured world (green landmasses readable)</td><td rowspan="4">T0.5 only: centre (144,209,221) sat 77 — full saturated terrain (the body's factor is exactly 1.0 at the T0.5 nadir)</td><td class="ok">dark night world, not grey</td></tr>
+<tr><td>0.25</td><td>0.343</td><td>0.454</td><td>win60 (0, 15.0, 26.2) sat 26 — dawn teal terrain</td><td class="ok">saturated (dark) terrain</td></tr>
+<tr><td>0.5</td><td>1.0</td><td>0.75</td><td>phase-dependent: sparse phase (144,209,221) sat 77 (AC-0401 acceptance frame); dense overcast phase (201,201,201) sat 0 (this task's sweep frame — a mass over the nadir; the body underneath is the same (144,209,221), CLOUDS=0)</td><td class="ok">saturated terrain; grey only as weather</td></tr>
+<tr><td>0.75</td><td>0.343</td><td>0.454</td><td>win60 (0, 27.8, 39.1) sat 39 — dusk teal terrain</td><td class="ok">saturated (dark) terrain</td></tr>
+</table>
+<p class="small">The AC-0384 grey ball (184/221,221,221 sat 0, featureless) is the OLD r9 deck character at the same T0.5 overcast phase — <code>ac0384-final-descent-2600.png</code> = <code>ac0401-deckoff-2600.png</code> (the deck-OFF A/B of the current tree, same weather): both (221,221,221) sat 0 at the centre. The r9 blanket now requires <code>cloud_deck</code> OFF; the default (ON) deck is the volumetric character.</p>
+<div class="pair">
+<div><p class="small">AC-0384 grey ball (r9 deck, T0.5 overcast) — the reported defect</p><img src="ac0384-greyball-2600.png" alt="grey ball"></div>
+<div><p class="small">Default deck, T0.5, sparse phase — saturated terrain with volumetric masses</p><img src="ac0401-after-descent-2600.png" alt="saturated disc"></div>
+</div>
+<div class="pair">
+<div><p class="small">Default deck, T0.5, dense overcast phase (this task's sweep) — the residual weather state; grey = the cloud, terrain in the gaps</p><img src="ac0402-after-2600-t05.png" alt="dense phase"></div>
+<div><p class="small">Body only (CLOUDS=0), T0.5 — the body is fully saturated at noon (factor = 1.0)</p><img src="ac0402-before-2600-t05-clouds-off.png" alt="body only"></div>
+</div>
+<p class="small">The AC-0402 (after) tree reproduces the same terrain hue at the dawn/dusk steps (the deck is untouched by AC-0402, so before/after deck states are the same tree): T0.25 disc centre (0,38,54) sat 54, T0.75 (1,60,75) sat 74 — saturated teal, dark, never grey.</p>
+<div class="pair">
+<div><p class="small">T0.25 dawn — BEFORE (current tree)</p><img src="ac0402-before-2600-t25.png" alt="before t25"></div>
+<div><p class="small">T0.25 dawn — AFTER (sky on, S_sky=0.923): terrain hue intact, sky near-space</p><img src="ac0402-after-2600-t25.png" alt="after t25"></div>
+</div>
+<div class="pair">
+<div><p class="small">T0.75 dusk — BEFORE (current tree)</p><img src="ac0402-before-2600-t75.png" alt="before t75"></div>
+<div><p class="small">T0.75 dusk — AFTER: saturated teal world, black-to-space sky</p><img src="ac0402-after-2600-t75.png" alt="after t75"></div>
+</div>
+
+<h2>D4 — the sky's altitude response (2600/1600/700/300/120 m, T0.5, same recipe)</h2>
+<p>S = the physics flight-band value (500–2000 m; the assessment's ladder, <code>alt_rad = 141 + SAT_ALT</code> from the spawn-radial camera). S_sky = the stretched-window value this task pushes (500–3200 m). Sky state = measured sky band (region above the deck edge on the centre column): mean luminance, dark fraction, top-of-frame sample.</p>
+<table>
+<tr><th>SAT_ALT</th><th>S (phys)</th><th>S_sky (new)</th><th>BEFORE sky (AC-0401-era tree)</th><th>AFTER sky (this task)</th></tr>
+<tr><td>120</td><td>0.00</td><td>0.000</td><td>inside the outermost deck shell — no sky region (frame fills with weather)</td><td>same (window 0 below 500 m): inside the deck, sky_top = the cloud (196,196,196) — the low approach is the weather, before and after</td></tr>
+<tr><td>300</td><td>0.00</td><td>0.000</td><td>band lum 242.9, 0% dark, top (139,239,255) <span class="small">(AC-0401-era frame — see the era note below)</span></td><td>band lum 231.8, 0% dark, top (96,217,255) — <strong>pixel-identical to the AC-0401-era frame</strong> (window = 0: bit-identical old sky, diff = 0 px)</td></tr>
+<tr><td>700</td><td>0.13</td><td>0.044</td><td>band lum 226.9, 0% dark, top (209,250,255)</td><td>band lum 223.5, 0% dark, top (209,250,255) — effectively unchanged (4% blend)</td></tr>
+<tr><td>1600</td><td>0.92</td><td>0.440</td><td>band lum 0.0, <strong>100% dark</strong>, top (0,0,0) — fully black</td><td>band lum <strong>148.1</strong>, 0% dark, top (151,201,212), edge (74,125,139) — deep blue mid-climb with a vertical gradient (profile 193→98), stars on a blue field</td></tr>
+<tr><td>2600</td><td>1.00</td><td>0.923</td><td>band lum 0.0, 100% dark, top (0,0,0) — fully black to the rim</td><td>92% space: top (0,0,0), but a <strong>thin deep-blue haze ramp</strong> (lum 0→18, (0,9,18)-class) now descends into the full limb rim across y 309–324 (before: pure black to the rim) — “space with the atmosphere's memory”</td></tr>
+</table>
+<p class="small"><strong>Before reference note:</strong> the ticket's designated before set is the AC-0384 final-descent captures. At 300 m the AC-0384-era sky already differs from the AC-0401-era (pre-AC-0402) sky (mean Δ ~30 sRGB, R-biased — a pre-existing tree-era difference, NOT this task: my 300 m ON frame is pixel-identical to the AC-0401-era frame, and my 2600 m OFF frame is pixel-identical to the pre-AC-0402 sky). The AC-0401-era frames are therefore the correct “before” for the 300/1600/2600 rows; the AC-0384 700 m frame carries over (no sky-affecting tree change measured there: my 700 m ON top sample is identical to it).</p>
+<div class="pair">
+<div><p class="small">BEFORE 1600 m — fully black sky (S=0.92, the band completes at 1600 m)</p><img src="ac0384-1600-before.png" alt="before 1600"></div>
+<div><p class="small">AFTER 1600 m — deep blue mid-climb (S_sky=0.44), limb rim, stars on blue</p><img src="ac0402-after-1600-t05.png" alt="after 1600"></div>
+</div>
+<div class="pair">
+<div><p class="small">BEFORE 2600 m — black to the rim (the skyalt0 control frame, sky pixel-identical)</p><img src="ac0402-after-2600-t05-skyalt0.png" alt="before 2600"></div>
+<div><p class="small">AFTER 2600 m — near-space with the thin horizon haze into the rim (S_sky=0.92)</p><img src="ac0402-after-2600-t05-on.png" alt="after 2600"></div>
+</div>
+<div class="pair">
+<div><p class="small">AFTER 700 m — bright air, effectively unchanged (S_sky=0.044): the ground-level sky is preserved</p><img src="ac0402-after-700-t05.png" alt="after 700"></div>
+<div><p class="small">AFTER 300 m — bright air, pixel-identical sky to the pre-AC-0402 tree (S_sky=0)</p><img src="ac0402-after-300-t05.png" alt="after 300"></div>
+</div>
+
+<h2>Switches (the look-change rule)</h2>
+<table>
+<tr><th>Setting</th><th>Default</th><th>Effect</th><th>Short-circuit (proven by render)</th><th>Env override</th></tr>
+<tr><td><code>sky_altitude</code> (new, D4)</td><td>ON (the user story asked for it — the <code>modern_light</code>/<code>cloud_deck</code>/<code>limb_space</code> precedent)</td><td>background blend on <code>u_space_sky</code> (stretched window 500–3200 m alt_rad, per-frame push from the live player's band constants)</td><td><code>u_sky_alt = 0</code>: <code>ws = mix(x, y, 0)</code> = x = the exact pre-AC-0402 expression; the per-frame push is skipped (short-circuit before the work). Render-proof: 2600 m OFF frame's sky pixel-identical to the pre-AC-0402 frame (diff bbox starts exactly at the deck edge); 300 m ON frame pixel-identical to the pre-AC-0402 tree's sky</td><td><code>AWECRAFT_SKYALT=0|1</code></td></tr>
+<tr><td><code>cloud_deck</code> (existing — D5 rides it)</td><td>ON (AC-0401)</td><td>the re-characterised deck (the grey-ball fix)</td><td><code>u_deck &lt; 0.5</code> = the exact r9 constants (the flat grey blanket is back by choice, not by accident)</td><td><code>AWECRAFT_CLOUDDECK=0|1</code></td></tr>
+</table>
+
+<h2>What changed (files)</h2>
+<ul>
+<li><code>godot/core/aero_sky_gradient.gdshader</code> — +2 uniforms (<code>u_space_sky</code>, <code>u_sky_alt</code>, both default 0.0); the background mix becomes <code>ws = mix(mix(S²,S,u), mix(Ss²,Ss,u), u_sky_alt)</code> (18 declared params — shaderforce 12/12). Limb gate / stars / sun glow untouched.</li>
+<li><code>godot/world/world.gd</code> — <code>_ac0401_push</code> gains: change-gated <code>u_sky_alt</code> + per-frame <code>u_space_sky</code> (<code>smoothstep(player.BAND_WALK_MAX, player.BAND_FLY_MIN*1.6, alt_rad)</code>, the constants read off the live player — one number one home; skipped when OFF) to the Main-owned sky material (the documented main.gd-fence deviation, AC-0401 precedent) + the <code>AWECRAFT_SKYALT</code> env preload (the AWECRAFT_RAMPS pattern). Render-path only: <strong>genhash 25/25 byte-identical</strong>.</li>
+<li><code>godot/autoload/settings.gd</code> — <code>"sky_altitude": true</code> + the <code>sanitize_bool</code> clamp (the cloud_deck pattern).</li>
+<li><code>godot/ui/menu.gd</code> — the Settings-page row (“Sky thins to space as you climb”), toggle handler, sync read.</li>
+</ul>
+
+<h2>Gates (light set — boundary/perf/flake/r50/full battery/Windows build are the coordinator's job)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 <code>--headless --quit</code> + <code>gate_census.py</code></td><td class="ok">0 SCRIPT / 0 SHADER ERROR (rc 0) — one first-pass parse error (<code>:=</code> inference on the dynamic player expression) fixed with explicit float types; the re-run is clean — <span class="small">.scratch/ac0402-runs/g0.log</span></td></tr>
+<tr><td>shaderforce (Forward+ lavapipe, 12 shipped shaders forced)</td><td class="ok">12/12 <code>verdict=ok</code> (sky shader now 18 declared params), 0/0 census — <span class="small">.scratch/ac0402-runs/shaderforce.log</span></td></tr>
+<tr><td>SMOKE <code>settings;light;genhash</code></td><td class="ok"><code>ok:true</code>, 0/0 census — <span class="small">.scratch/ac0402-runs/smoke.log</span></td></tr>
+<tr><td>genhash (world.gd touched)</td><td class="ok">25/25 byte-identical to the AC-0400-era reference (<code>.scratch/AC-0400-gates/smoke-genhash.log</code>) — render-only change, no drift</td></tr>
+<tr><td>satellite arm (the body/sky area, BATTSKIP standalone)</td><td class="ok"><code>ok:true</code> (tier, geometry, cloud shells centred at (0,−R,0) radii 4275/4330/4400, user-config thresholds fog_far 332 / render_edge 400, AC-0390 colour cases), 0/0 census — <span class="small">.scratch/ac0402-runs/satellite.log</span></td></tr>
+<tr><td>RENDERS (the acceptance, R24/F83, T frozen, CLOUD_T0=411200, Forward+ llvmpipe)</td><td class="ok">13 frames: 4 before (the D5 sweep incl. the body-only T0.5) + 9 after (switch-OFF control, the 120–2600 m ladder, the T0 sweep) — all with the mandatory <code>Forward+ - Using Device … llvmpipe</code> boot line, all <code>SNAP</code>-verified files, 0/0 census each — <span class="small">.scratch/ac0402-runs/*.log</span></td></tr>
+</table>
+
+<h2>Deviations / deliberate non-actions</h2>
+<ul>
+<li><strong>D5: no deck change.</strong> The ticket's stop-and-report clause: the grey is already addressed by AC-0401's default-ON deck re-characterisation. The residual dense-phase nadir grey is a weather state (the body underneath is proven saturated) — the named follow-up is a “keep the nadir open” weather rule or a lower <code>CLOUD_AMOUNT_DAY</code>, for a future ticket.</li>
+<li><strong>The sky's stretched window vs AC-0386's “one number, one home”:</strong> the physics band stays the home for the limb gate, the star opacity and the sun-glow fade (all unchanged); the BACKGROUND blend alone gets a documented sky-specific derivation (same live constants, <code>BAND_WALK_MAX .. BAND_FLY_MIN×1.6</code>). The flight band's purpose is the walk/fly split, not the sky — recorded in ARCHITECTURE.md.</li>
+<li><strong>The in-frame gradient direction (bright toward the top of the tangent frame, deep toward the disc):</strong> the sky gradient is keyed to the CAMERA horizon (<code>h = dir.y</code>) with the single-source air colour at <code>h = 0</code> (the AC-0386/AC-0400 contract) — pre-existing, present in the before frames identically, and the ground-level sky the user has is that shape. The ticket's measured D4 requirement is the ALTITUDE RESPONSE, which the ladder now shows; flipping the base gradient would re-shape the whole ground-level sky and is NOT done here.</li>
+<li><strong>The 120/300 m frames:</strong> 120 m is inside the outermost deck shell (4275 &gt; camera radial 4261) — no sky region at all, before or after (the weather fills the frame — correct for a low approach). The 300 m sky is bit-identical to the old sky (window = 0 below 500 m alt_rad).</li>
+</ul>
+
+<h2>Findings (for the coordinator / future tickets)</h2>
+<ul>
+<li><strong>The pre-existing 300 m era difference:</strong> the AC-0384-era final-descent 300 m sky differs from the AC-0401-era (pre-AC-0402) 300 m sky by mean ~30 sRGB (R-biased, top-of-frame (139,239,255)→(96,217,255)) with NO AC-0402 involvement (my ON frame is pixel-identical to the AC-0401-era frame). Something between the AC-0384 final run and the AC-0401 run moved the 300 m sky — probably an uncommitted-hunk state difference; cheap to bisect if it ever matters.</li>
+<li><strong>The deck drift phase is not strictly deterministic across runs</strong> (the per-frame <code>_cloud_time</code> increment is <code>minf(delta, 0.05)</code>, so fast frames accumulate less drift) — two runs with the same <code>CLOUD_T0</code> pin can land on different mass positions over the nadir. This is why the D5 “grey at T0.5” is phase-dependent; any future nadir-weather rule should pin the deck clock too.</li>
+</ul>
+
+</body></html>

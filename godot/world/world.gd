@@ -3855,6 +3855,13 @@ func _ready() -> void:
 	var lbe := OS.get_environment("AWECRAFT_LIMB")
 	if lbe != "":
 		Settings.values["limb_space"] = lbe == "1"
+	# AC-0402: the sky's altitude-aware space blend (Settings
+	# "sky_altitude", default ON) - same pattern: the env overrides the
+	# STORED setting for this process only (no save); _ac0401_push reads
+	# it live, so no boot derive is owed.
+	var ske := OS.get_environment("AWECRAFT_SKYALT")
+	if ske != "":
+		Settings.values["sky_altitude"] = ske == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -4933,6 +4940,8 @@ func _wprof_recon_raw_pct() -> float:
 var _ac0401_fog_wall := -1.0
 var _ac0401_deck := -1.0
 var _ac0401_limb := -1.0
+var _ac0402_skyalt := -1.0
+var _ac0402_skyblend := -1.0
 
 
 func _ac0401_push() -> void:
@@ -4974,6 +4983,36 @@ func _ac0401_push() -> void:
 		if sm is ShaderMaterial:
 			sm.set_shader_parameter("u_limb_gate", limb_v)
 		_ac0401_limb = limb_v
+	# (3) AC-0402: the sky's altitude-aware space blend (Settings
+	# "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env preload). The
+	# background blend of aero_sky_gradient uses u_space_sky with a
+	# stretched window (BAND_WALK_MAX .. BAND_FLY_MIN*1.6 over the radial
+	# altitude - the constants read off the live player, one number one
+	# home) so the blue thins over the whole climb instead of going black
+	# by 1600 m (the AC-0384 s25/D4 finding). The switch push is
+	# change-gated; the blend push is per-frame (the altitude moves) and
+	# SKIPPED when the switch is OFF (short-circuit before the work - the
+	# shader then never reads u_space_sky, mix(..., 0.0) = the pre-AC-0402
+	# ws). The limb gate, the star opacity and the sun-glow fade stay on
+	# main.gd's physics-band S (the AC-0386/AC-0401 contracts).
+	var skyalt_v := 1.0 if bool(Settings.values.get("sky_altitude", true)) else 0.0
+	if skyalt_v != _ac0402_skyalt:
+		var sma = mn.get("sky_mat")
+		if sma is ShaderMaterial:
+			sma.set_shader_parameter("u_sky_alt", skyalt_v)
+		_ac0402_skyalt = skyalt_v
+	if skyalt_v > 0.5:
+		var smb = mn.get("sky_mat")
+		if smb is ShaderMaterial:
+			var pl = Game.player
+			if pl != null:
+				var Rf2 := float(Game.planet_R)
+				if Rf2 > 0.0:
+					var alt_rad2: float = (pl.position + Vector3(0.0, Rf2, 0.0)).length() - Rf2
+					var ss2: float = smoothstep(pl.BAND_WALK_MAX, pl.BAND_FLY_MIN * 1.6, alt_rad2)
+					if absf(ss2 - _ac0402_skyblend) > 0.001:
+						smb.set_shader_parameter("u_space_sky", ss2)
+						_ac0402_skyblend = ss2
 
 
 func _process(_delta: float) -> void:

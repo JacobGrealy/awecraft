@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -123,7 +123,19 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         the flight band, where the low LOD's fog fade alone
 │                         is the horizon read; full rim from orbit); the
 │                         shader default u_limb_gate = 0.0 is the pre-AC-0401
-│                         behaviour (rim at every altitude).
+│                         behaviour (rim at every altitude). AC-0402: the
+│                         BACKGROUND blend alone gets its own stretched space
+│                         window — `ws = mix(mix(S², S, u), mix(Ss², Ss, u),
+│                         u_sky_alt)` where Ss = `u_space_sky` (pushed per frame
+│                         by world.gd _ac0401_push, smoothstep over the SAME
+│                         radial altitude but the window BAND_WALK_MAX ..
+│                         BAND_FLY_MIN×1.6 read off the live player — the blue
+│                         thins over the whole climb instead of going black by
+│                         ~1600 m) and `u_sky_alt` is the switch (Settings
+│                         "sky_altitude", DEFAULT ON, env AWECRAFT_SKYALT): 0.0
+│                         (also the shader default) makes ws exactly the
+│                         pre-AC-0402 expression. The gate/stars/sun-glow keep
+│                         riding the physics S (the AC-0386 contracts).
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
 │                         AC-0385): three concentric transparent shells at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
@@ -268,6 +280,11 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  │                      pushes (u_deck / u_limb_gate) to the Main-owned cloud and sky
 │  │                      materials via the parent node (the fence-locked main.gd
 │  │                      workaround; see the AC-0401 bullet in §4)
+│  │                      AC-0402: the same seam gains the sky_altitude switch push
+│  │                      (u_sky_alt, change-gated) + the per-frame u_space_sky
+│  │                      (smoothstep(BAND_WALK_MAX, BAND_FLY_MIN×1.6, alt_rad) off
+│  │                      the live player; skipped when the switch is OFF — see the
+│  │                      AC-0402 bullet in §4)
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):
@@ -1053,7 +1070,35 @@ Match these; do not improvise a different approach in a task.
   change-gated, and the values are read live from Settings). The switches are
   render-path only: generation untouched (genhash 25/25), the cloud shells
   keep their exact radii/centres, and the AC-0398/AC-0399/AC-0400 behaviours
-  (interpolated lighting, view-weighted fill, single-source seam) stand.- **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
+  (interpolated lighting, view-weighted fill, single-source seam) stand.
+- **AC-0402 — the sky's altitude-aware space blend (the "leaving a planet"
+  half)**: the user's report — the sky-to-space transition completes by ~1600
+  m (space term 0.13→0.92 over 700–1600 m, fully black by 1600 m, the same
+  state at every altitude above it) — is that the sky's BACKGROUND blend rode
+  the physics flight-band S (500–2000 m, main.gd), which is a BAND, not a
+  climb. The fix gives the background its own stretched window:
+  aero_sky_gradient.gdshader blends `ws = mix(mix(S², S, u), mix(Ss², Ss, u),
+  u_sky_alt)`, where Ss = `u_space_sky` is pushed PER FRAME by
+  world.gd `_ac0401_push()` from the SAME radial altitude but the window
+  BAND_WALK_MAX .. BAND_FLY_MIN×1.6 (the constants read off the live player —
+  one number, one home; ~0.04/0.44/0.92 at the 700/1600/2600 m frames — so the
+  blue thins gradually over the whole climb instead of snapping to black).
+  The switch is Settings `sky_altitude` (DEFAULT ON — the user story asked
+  for it; env AWECRAFT_SKYALT=0|1): OFF (u_sky_alt 0.0, also the shader
+  default) makes ws exactly the pre-AC-0402 expression, bit-identical, and
+  the per-frame push is skipped (short-circuit before the work). DELIBERATE
+  DEVIATION from the AC-0386 "one number, one home" contract: the physics
+  band stays the home for the limb gate, the star opacity and the sun-glow
+  fade (all unchanged); the background blend alone gets a documented
+  sky-specific derivation from the same live constants, because the flight
+  band's purpose is the walk/fly split, not the sky. D5 of the same ticket
+  ("the planet as a pale grey ball at some times of day") was found to be
+  NONE of the three pale-planet causes (uncompiled shader, fog erasure, body
+  day/night re-weight — the latter is identity at the T0.5 nadir) but the
+  cloud deck's r9-character overcast phase (cloud_amount 0.75 at noon ×
+  u_boost 2.2 = an opaque neutral veil), already addressed by AC-0401's
+  default-ON deck re-characterisation — reported, no deck change.
+- **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
   per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is
   still the per-slab C++ avg emit (byte-identical — farab 1080/1080 + h_mismatch 0,
   halo, ladder, meshprobe are the standing proof), but the DRAW is per RING SECTOR:

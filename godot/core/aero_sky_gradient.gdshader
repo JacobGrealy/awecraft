@@ -66,6 +66,25 @@ uniform float u_limb_amount : hint_range(0.0, 4.0) = 0.55;
 // pre-AC-0401 behaviour, the glow at every altitude.
 uniform float u_limb_gate : hint_range(0.0, 1.0) = 0.0;
 
+// AC-0402: the sky's OWN space-blend window (the "leaving a planet" half of
+// the objective). u_space (above) is the physics flight-band S (500-2000 m
+// alt_rad, main.gd) and completes by ~1600 m, so the sky went fully black
+// before the climb was half done and the altitude ladder carried no
+// mid-state (AC-0384 s25/D4). The BACKGROUND blend therefore uses
+// u_space_sky, pushed per frame by world.gd (_ac0401_push) from the SAME
+// radial altitude but a stretched window (BAND_WALK_MAX .. BAND_FLY_MIN
+// times 1.6 - the band constants read off the live player, never
+// duplicated), so the blue thins gradually over the whole climb (S_sky
+// about 0.04 / 0.44 / 0.92 at the 700 / 1600 / 2600 m frames). The
+// limb-glow gate (u_limb_gate * u_space), the star opacity and the
+// sun-glow fade all keep riding the physics S (the AC-0386/AC-0401
+// contracts). u_sky_alt is the switch (Settings "sky_altitude", default
+// ON): 0.0 makes the mix below exactly the pre-AC-0402 ws, so OFF is
+// bit-identical to the old sky; 0.0 is also the shader default, so a
+// material that never sees the push keeps the old look.
+uniform float u_space_sky : hint_range(0.0, 1.0) = 0.0;
+uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
+
 void sky() {
 	vec3 dir = normalize(EYEDIR);
 	float h = dir.y;
@@ -81,7 +100,10 @@ void sky() {
 	// darkens first (weight S), the horizon last (weight S^2 - the grazing
 	// column of air keeps its blue longest). S = 0 is bit-identical to the
 	// pre-AC-0386 sky; S = 1 makes the whole dome space.
-	float ws = mix(u_space * u_space, u_space, u);
+	// AC-0402: with u_sky_alt = 0 this is exactly the pre-AC-0402 ws
+	// (mix(x, y, 0.0) = x); with it ON the background rides the stretched
+	// sky window u_space_sky (see the uniform's note).
+	float ws = mix(mix(u_space * u_space, u_space, u), mix(u_space_sky * u_space_sky, u_space_sky, u), u_sky_alt);
 	col = mix(col, space_color, ws);
 	// AC-0384 r4: the atmospheric limb glow (see the uniform block).
 	// u_limb_radius = 0 (no player / no world yet) turns the term off:
