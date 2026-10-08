@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T15:39
+  updated_at: 2026-10-08T17:36
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,7 +28,6 @@ queue:
 - AC-0402
 - AC-0406
 - AC-0407
-- AC-0408
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25426,11 +25425,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-08T15:39
-  updated_at: 2026-10-08T15:39
-  completed_at: null
+  updated_at: 2026-10-08T17:36
+  completed_at: 2026-10-08T17:36
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The world should keep the ground the player is standing on, and the game should
@@ -25492,5 +25491,42 @@ intake:
     boundary r4 in band, shaderforce 12/12); mob and player behaviour must be unchanged, asserted rather
     than assumed.
 
-    '
+
+
+    CLOSED - BOTH QUESTIONS ANSWERED, AND THE ANSWER TO THE FIRST WAS NOT THE ONE THE TICKET HOPED FOR.
+    WHAT staged_dropped COUNTS: staged collision-queue entries that lost validity before the drain served
+    them, and the cause split for the current reading is 2793 of 2795 "unmeshed". The mechanism is that
+    the per-slab build lane stages on every slab that lands while the mesh-built flag stays false until
+    the last one, so an in-progress build stages repeatedly and each drain visit during it drops one.
+    That makes it a CHURN CENSUS THAT SCALES WITH BUILD WORK rather than a measure of lost work, corroborated
+    by the stale-drop count being zero, the final pending count being zero, and the drain having served
+    507 entries. IS 2663 A REGRESSION: no, it is a STALE BOUND, and the reasoning matters more than the
+    number - the ceiling of 2500 was set from a SINGLE reading of 1845 taken on the tree BEFORE the carve
+    work, and the carve changed the far lane''s cost by more than an order of magnitude, moving the idle
+    band to 2431-2795. The standing row is re-based to 3200 with the reasoning recorded and the number
+    still reading above the old ceiling, because re-basing to make a figure green is a failure this project
+    has recorded twice. Permanent tripwires replace the bare threshold: a sustained reading above the
+    new ceiling, a rising stale-drop count, or any non-zero pending count is now a drain finding rather
+    than a number to explain away. THE LIFETIME HYPOTHESIS IS REFUTED, and this is the result worth keeping:
+    the queue holds column key STRINGS rather than references, so a dropped stage frees nothing and keeps
+    nothing alive; the free path erases every key-indexed holder; and a new holder-residue census that
+    inspects eighteen maps at every chunk death reads zero. The use-after-free recorded in AC-0403 lives
+    in slab-buffer lifetime and is unreachable from the staging queue. The two signals share a LANE but
+    not a MECHANISM, and that is reported as the honest result rather than as a link forced to fit. SANITISER:
+    address-sanitiser instrumentation is INFEASIBLE on this box because the engine dlopens the extension
+    with RTLD_DEEPBIND and the sanitiser runtime refuses that, verified in both directions with the instrumented
+    library building fine. Valgrind memcheck substituted: a full pass of the exact recipe that produced
+    the crash ran about thirty-eight minutes and reported rc zero with an error summary of zero, with
+    the arm''s own census matching normal runs exactly. The soak is resumable from a script left in the
+    scratch folder for the coordinator''s lane. GATES, all with exit status and census together because
+    this defect class leaves a clean log: G0, the battery, the mob arm, genhash and the boundary probe
+    all exit zero with clean censuses; genhash is 25/25 against the same-tree reference; the player arm''s
+    jump peak matches the previous round exactly, so behaviour is unchanged; and the boundary fences read
+    zero. The change is additions only - counters and a residue census in the world, six result fields
+    in two arms, and the standing row with its rendered documentation in sync. ONE FOLLOW-UP FLAGGED RATHER
+    THAN FOLDED IN: the unbodied-built-final count reads eight, which is tree state rather than damage
+    since the previous round''s A/B pair reads the same on a pristine library and the immediate-footprint
+    fence is zero - so an older gate''s requirement that it be zero is either stale or a real gap, and
+    it needs its own ticket. THE USE-AFTER-FREE ITSELF REMAINS OPEN with no reproducer; the recommended
+    path is the resumable memcheck soak, and that is a coordinator-lane action rather than a dispatch.'
   comments: []
