@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T23:55
+  updated_at: 2026-10-08T05:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26,7 +26,6 @@ queue:
 - AC-0330
 - AC-0399
 - AC-0402
-- AC-0403
 - AC-0404
 - AC-0406
 intake:
@@ -24906,11 +24905,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T14:39
-  updated_at: 2026-10-07T18:49
-  completed_at: null
+  updated_at: 2026-10-08T05:07
+  completed_at: 2026-10-08T05:07
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The game should not crash. This one is intermittent and may be rare, but a crash\
@@ -24961,7 +24960,36 @@ intake:
     \ - cannot detect this class at all. That is worth a note in tasks/scripts/gate_census.py's documentation\
     \ or the run-verify skill: these checks must be paired with the process EXIT STATUS, because a process\
     \ that segfaults leaves a clean-looking log.\nMob and player behaviour must not change when the guard\
-    \ is not triggered, and that is to be asserted rather than assumed."
+    \ is not triggered, and that is to be asserted rather than assumed.\n\nCLOSED WITH AN HONEST SPLIT\
+    \ BETWEEN WHAT WAS FIXED AND WHAT WAS NOT. WHAT WAS FOUND AND FIXED: following the stack trace into\
+    \ the native lane, get_local reaches slab_cell in the chunk IO, which bounds-checks everything except\
+    \ one read - slab_getbits indexing its bit buffer with no bound. That is the only unguarded read in\
+    \ the lookup, it is now guarded in both copies (thirteen lines each, no signature change), and it\
+    \ is provably a no-op on valid data because the codec builds its index at exactly the ceiling of the\
+    \ bit count over eight and only bits one through four are used; malformed input now reads as palette\
+    \ index zero instead of faulting. WHAT WAS NOT FIXED AND IS NOT CLAIMED TO BE: the crash itself is\
+    \ almost certainly NOT malformed data. The GDScript VM is bounds-safe on live objects, so a segfault\
+    \ originating in GDScript calls means the object has been freed or the engine state corrupted - a\
+    \ use-after-free - and the C++ backtrace being a single signal-handler frame is the signature of a\
+    \ dumper faulting on already-corrupted state rather than of a clean crash site. NO READ-SITE GUARD\
+    \ CAN CATCH THAT, and the run says so rather than implying otherwise. It also could not reproduce\
+    \ the crash at all: fourteen clean runs of the exact recipe that produced it, with the mob, boundary\
+    \ and player callers exercised, all exiting zero with clean censuses. COST AND NON-REGRESSION: the\
+    \ guard is unmeasurable on the player physics path that runs every frame (0.82 to 0.81 milliseconds\
+    \ median) and behaviour is asserted unchanged three ways - the codec invariant, genhash byte-identical\
+    \ to baseline, and every A/B field matching including nine of nine mob sub-gates, an identical player\
+    \ arm down to the jump peak, and identical interact fields. ONE SELF-CATCH WORTH RECORDING: the first\
+    \ guard version added palette-size checks that BROKE the decode (lightstate leaks zero to eighty-one),\
+    \ was caught by the pre-delivery A/B and fully reverted. THE BLIND SPOT IS NOW DOCUMENTED WHERE IT\
+    \ BITES: the census tool records that this class produces a completely clean log alongside a signal\
+    \ eleven exit, so the error census must always be paired with the process exit status - which is how\
+    \ this crash stayed invisible through every gate the project has. CARRIED FORWARD RATHER THAN CLOSED\
+    \ SILENTLY: a genuine use-after-free needs a reproducer or an address-sanitiser soak and is recommended\
+    \ as its own ticket; the mesh worker lane's palette reads are a documented residual that has never\
+    \ crashed and is performance-critical; and the on-disk genhash reference predates recent world drift\
+    \ - it reads zero of twenty-five against an untouched baseline as well, so it needs re-recording at\
+    \ closeout rather than being read as a regression. The Windows build was completed by the coordinator\
+    \ afterwards with both exports reporting ok, so the guard is in the shipped DLL."
   comments: []
 - id: AC-0404
   title: hide-medium-and-low-lod-at-height
