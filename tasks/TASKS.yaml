@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T05:07
+  updated_at: 2026-10-08T15:39
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26,8 +26,9 @@ queue:
 - AC-0330
 - AC-0399
 - AC-0402
-- AC-0404
 - AC-0406
+- AC-0407
+- AC-0408
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24998,11 +24999,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T18:48
-  updated_at: 2026-10-07T18:50
-  completed_at: null
+  updated_at: 2026-10-08T15:39
+  completed_at: 2026-10-08T15:39
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From high in the atmosphere or in space the player should see the planet - its
@@ -25107,7 +25108,34 @@ intake:
     CONSTRAINTS: the cloud shell radii and centre stay exactly 4275/4330/4400 about (0, -R, 0), because
     they are verified correct; keep AC-0401''s cloud switch working with its off state bit-identical;
     the near-field fog-only fade, the altitude-gated limb on the body alone, AC-0402''s altitude-aware
-    sky, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must all keep working.'
+    sky, AC-0399''s view-weighted fill and AC-0398''s interpolated lighting must all keep working.
+
+
+    CLOSED - BOTH ITEMS DELIVERED, AND THE SECOND ONE HAD A CAUSE NOBODY HAD LOOKED FOR. ITEM 1, THE TIER
+    HANDOVER: measured from the frames rather than the code, on a descent - at 2600, 1600 and 700 metres
+    the near tiers draw NOTHING and the frames are byte-identical to before, because all six near shaders
+    discard beyond the fog distance where the body''s opacity ramp begins; at 300 metres they draw but
+    89 to 100 per cent fogged; at 120 metres the near band is crisp with the annulus and the cloud volume
+    over it. Above the handover the only things visible are the planet and its atmosphere, which is what
+    the user asked for, and the rule is one value rather than three thresholds. ITEM 2, THE LIMB ON THE
+    LOW LEVELS OF DETAIL, AND IT WAS THE COORDINATOR''S OWN WORK: the previous round gated the glow by
+    altitude and both the coordinator and the run treated that as satisfying the request, but a gate controls
+    WHEN the glow draws rather than WHICH MATERIAL carries it - so the run went looking in the materials
+    and audited all six near-tier shaders. Exactly one had a limb term: the far tier''s haze bridge, whose
+    weight was `mix(1.0, fog_f, w)`, which forces a fully-air-coloured ring between 336 and 384 metres
+    from the world origin at ANY view distance. That term came from the coordinator''s own seam-fade fix
+    two rounds earlier, chasing a dark rim at the limb. It is now deleted, the tier fades into plain fog,
+    and at the fog wall the fog colour equals the air colour so the seam it was written for is still covered
+    - so there is no gate left for a future change to reopen. THE MISSED CASE IS NOW THE MEASURED CASE:
+    the previous acceptance checked the glow from orbit where the gate is open and the near field at low
+    altitude where it is shut, and never checked the near tiers FROM ALTITUDE, which is exactly what the
+    user was looking at; measured at 700 metres with the gate open, the near tiers draw zero rim pixels
+    before and after, because they draw nothing at all up there. THE THIRD ITEM, the clouds reading two-dimensional,
+    was superseded by rewriting them as a raymarched volumetric layer and is confirmed still holding:
+    the volume is default-on at every rung, the deck proportion byte-identical before and after, and at
+    120 metres the layer is seen from inside. GATES: G0 rc=0 with a clean census both before and after,
+    shaderforce 12/12 with the far shader''s parameter count matching its declarations, smoke ok, and
+    twenty-two renders all exiting zero on the shipped path with the fog distance asserted in every log.'
   comments: []
 - id: AC-0405
   title: raymarched-volumetric-clouds
@@ -25303,6 +25331,166 @@ intake:
     the near-field fog-only fade and the limb effect on the satellite body alone (the open half of AC-0404)
     must hold; AC-0402''s altitude-aware sky, AC-0399''s view-weighted fill, AC-0398''s lighting and AC-0400''s
     seam fade must keep working.
+
+    '
+  comments: []
+- id: AC-0407
+  title: clouds-too-dark-no-height-variance-no-immersion
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-08T12:17
+  updated_at: 2026-10-08T12:17
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Flying into a cloud should feel like flying into a cloud - bright, dense, surrounding,
+    with structure you pass through - rather than a flat grey sheet. Right now the clouds are still too
+    dark, they have no variation in height so they read as a uniform layer at a single altitude, and passing
+    through them does not feel like being inside anything.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER 2026-10-07, three items in one message, after the volumetric rewrite (AC-0405)
+    and its lighting pass (AC-0406) both landed and both measured as improvements. The user is flying
+    the build and is the authority here; where a measurement and the user disagree, the user''s eye is
+    describing something the measurement did not capture, which has now happened repeatedly on this objective.
+
+    (1) STILL TOO DARK. AC-0406 added an ambient sky fill using the project''s single-source air colour,
+    a three-octave multiple-scattering approximation, and a phase blended toward isotropic - and measured
+    the underside mean rising from 140.5 to 179.4 with no black pixel left anywhere in a cloud. The user
+    still sees dark clouds. The likely reason is that AC-0406''s own tuning rejected a stronger ambient
+    term (0.7) because it flattened the brightness spread to 39.1, so brightness was traded away to preserve
+    FORM - and the remaining lever is to raise the light without flattening it. Candidates to consider
+    and choose between: a brighter effective cloud albedo rather than a larger ambient weight; more or
+    brighter scattering octaves; a stronger forward-scattering contribution when the sun is near the view
+    direction; and whether the ambient should be the horizon colour (dimmer) rather than a brighter sky
+    value. Do NOT simply raise the ambient weight, which is the change already measured and rejected.
+
+    (2) NO VARIANCE IN HEIGHT. This is the strongest clue in the message and it points at a structural
+    gap in the volume rather than a shading value. The current layer is an annulus 125 metres thick, from
+    275 to 400 metres above the surface, filled with a three-dimensional density field that has NO VERTICAL
+    PROFILE - so every cloud is the same height and the layer reads as a slab at one altitude. Real cloud
+    has a flat base and lumpy tops, which is what gives a skyline its shape, and passing through it means
+    passing through different depths at different places. The fix is a height-dependent density profile
+    within the layer: denser near the base, thinning toward the top with the noise modulating where the
+    top actually is, so that cloud tops vary in altitude by a visible amount. Consider also whether the
+    layer is simply TOO THIN at 125 metres for the look being asked for - a thicker layer costs more raymarch
+    steps or a coarser step, so state the trade explicitly if you thicken it. THE LAYER MUST STAY ABOVE
+    THE TERRAIN: the ground is at roughly 139 metres above the datum and the cloud base must not intersect
+    it, so thickening should extend upward rather than downward unless you can show the base stays clear.
+
+    (3) GOING THROUGH THEM DOES NOT FEEL LIKE BEING IN A CLOUD. Immersion when inside the layer, which
+    is a different requirement from how it looks from outside. When the camera is within the annulus the
+    view should fill with cloud structure at varying depth, brighten toward the light, and be genuinely
+    occluding close up - the user should not be able to see through a cloud they are inside. AC-0405''s
+    r300-on.png is the current inside-the-annulus frame and is the before capture for this item. Worth
+    measuring: the fraction of the frame the layer covers when the camera is inside it, and the luminance
+    distribution - an inside-a-cloud frame should be bright and low-contrast, not dark and high-contrast.
+
+    ACCEPTANCE IS THE USER''S THREE SENTENCES TURNED INTO THREE MEASUREMENTS, each with frames the user
+    can compare: cloud luminance measured against the sunlit-top reference at the ground view and at altitude,
+    with a target that a cloud reads as bright rather than merely not-black; a measured vertical extent
+    of cloud tops (the spread of the height at which density falls off, in metres) where now there is
+    none; and an inside-the-annulus frame whose coverage and luminance show a surrounding bright volume
+    rather than a thin grey film. The volumetric qualities already achieved must survive: the brightness
+    spread above the 32.4 reference, the parallax between layers visible in the captures, and the saturated
+    tint rather than neutral grey.
+
+    COST: the raymarch currently runs at 776 to 781 seconds against 496 with the feature off at the same
+    resolution, and more samples, octaves or thickness all cost time. State what your change costs and
+    keep it inside the run budget; if something must be traded, trade resolution or step count rather
+    than the properties the user is asking for, and say which you traded.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND check the process exit status, because a crash leaves a clean log (the census tool''s docstring
+    now records this); the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok,
+    lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); the cloud shell radii and centre stay 4275/4330/4400 about (0, -R, 0) unless thickening requires
+    otherwise, in which case state it explicitly; the cloud_volume switch keeps working with its off state
+    unchanged; the near-field fog-only fade and the tier handover from AC-0404 must hold, as must AC-0402''s
+    altitude-aware sky, AC-0399''s view-weighted fill, AC-0398''s lighting and AC-0400''s repaired seam
+    fade.
+
+    '
+  comments: []
+- id: AC-0408
+  title: chunk-staging-drift-and-the-use-after-free
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-08T15:39
+  updated_at: 2026-10-08T15:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The world should keep the ground the player is standing on, and the game should
+    not crash. Two signals say something is wrong with how chunks are staged and released: a counter that
+    tracks dropped staging work has crept past its limit and has been drifting upward for a month, and
+    there is a crash nobody can reproduce in which the game reads a chunk that has already been freed.
+
+
+    2) Technical Details:
+
+    BOTH SIGNALS POINT AT THE SAME LANE, AND THAT IS THE HYPOTHESIS TO TEST - if they share a cause, one
+    investigation closes two tickets.
+
+    SIGNAL ONE: the boundary arm''s `staged_dropped` counter, which measures staging work dropped rather
+    than performed, reads 2663 against a standing ceiling of 2500 - marginally over - and it has been
+    drifting for a month: the same row''s own readings across September were 999, 1845 and 1667, with
+    2441 recorded before a re-base. That is a rising series, not noise, and the last boundary run that
+    produced 2663 was on a change class that does not touch the staging lane at all, which means the drift
+    is not caused by recent work.
+
+    SIGNAL TWO: AC-0403, the stochastic use-after-free. Its stack trace is `get_local` at godot/world/chunk.gd:657
+    reached through `get_block` from both the player''s physics step and the mob tick - two unrelated
+    callers converging on one lookup, which points at the WORLD rather than at either caller. The run
+    that closed that ticket found and fixed the one unguarded read in the native lookup, and stated plainly
+    that the read-site guard CANNOT catch a use-after-free: a segfault originating in GDScript calls means
+    the OBJECT has been freed or the engine state is corrupted, which is a lifetime problem rather than
+    a bounds problem. It could not reproduce the crash in fourteen clean runs and recommended either a
+    reproducer or an address-sanitiser soak.
+
+    WHY THEY BELONG TOGETHER: `staged_dropped` counts staging work that was dropped. If a chunk can be
+    dropped from staging while something still holds a reference to it, that is simultaneously a rising
+    drop counter and a use-after-free waiting to happen - and the crash site being the chunk lookup is
+    consistent with exactly that. The link is a HYPOTHESIS, not a finding; test it and say either way.
+    If they turn out to be unrelated, that is a real result too and should be reported as such rather
+    than forced.
+
+    WHAT TO DO, in order. (a) READ THE COUNTER: find what `staged_dropped` actually counts, what drops
+    it, and what the ceiling of 2500 was intended to bound. A ceiling that no longer matches the world''s
+    size or streaming behaviour is a different problem from one that is being genuinely exceeded, and
+    the answer decides whether this is a regression or a stale threshold. (b) TEST THE LIFETIME LINK:
+    can a staged-and-dropped chunk leave a live reference - in the slab cache, the mesh lane, the collision
+    lane, or the physics body - that outlives it? Follow a dropped stage to its end and check every holder
+    is told. (c) IF A REPRODUCER OR AN ADDRESS-SANITISER SOAK IS FEASIBLE ON THIS BOX, run it; a hit with
+    a stack would end the use-after-free question outright, and the previous run named an ASan soak as
+    the recommended approach. If it is not feasible, say why and what would be needed.
+
+    ACCEPTANCE: the counter explained - what it counts, what the ceiling means, and whether the current
+    value is a regression or a stale bound - with the number either brought back under a justified threshold
+    or the threshold re-based with the reasoning stated; plus an explicit verdict on the lifetime hypothesis
+    with the evidence, and either a crash reproducer or a clear statement of what is still unknown. Do
+    not re-base the threshold to make the number green: that is the failure this project has already recorded
+    twice.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND always
+    check the process exit status, because this defect class leaves a fully clean log with a signal-eleven
+    exit - the census tool''s docstring now records that; the standing set green (farab h_mismatch 0,
+    ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands,
+    boundary r4 in band, shaderforce 12/12); mob and player behaviour must be unchanged, asserted rather
+    than assumed.
 
     '
   comments: []
