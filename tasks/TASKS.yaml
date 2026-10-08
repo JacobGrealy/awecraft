@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T18:06
+  updated_at: 2026-10-08T18:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -24909,7 +24909,7 @@ intake:
   status: done
   labels: []
   created_at: 2026-10-07T14:39
-  updated_at: 2026-10-08T05:07
+  updated_at: 2026-10-08T18:43
   completed_at: 2026-10-08T05:07
   waiting_on: null
   parent_id: null
@@ -24990,7 +24990,24 @@ intake:
     \ crashed and is performance-critical; and the on-disk genhash reference predates recent world drift\
     \ - it reads zero of twenty-five against an untouched baseline as well, so it needs re-recording at\
     \ closeout rather than being read as a regression. The Windows build was completed by the coordinator\
-    \ afterwards with both exports reporting ok, so the guard is in the shipped DLL."
+    \ afterwards with both exports reporting ok, so the guard is in the shipped DLL.\n\nSOAK RESULT, COORDINATOR\
+    \ LANE 2026-10-08: THREE COMPLETE VALGRIND PASSES OF THE EXACT CRASH RECIPE, ALL CLEAN, AND THE SOAK\
+    \ WAS THEN STOPPED DELIBERATELY. Each pass ran AWECRAFT_LOGIC=lightstate LS_RADIUS=16 under valgrind\
+    \ memcheck - the arm and radius that produced the coordinator's own signal-11 abort - and every pass\
+    \ exited zero with \"ERROR SUMMARY: 0 errors from 0 contexts\". No log in the scratch folder contains\
+    \ a single Invalid read or Invalid write. Combined with the fourteen clean runs the AC-0403 run itself\
+    \ performed, that is roughly twenty executions of a recipe that has twice crashed, all clean.\nWHAT\
+    \ THAT DOES AND DOES NOT MEAN, stated plainly: it does NOT mean there is no use-after-free - the crash\
+    \ is stochastic and twice observed with a real GDScript stack through the chunk lookup, and two clean\
+    \ results from a stochastic defect is exactly the outcome a low-probability race produces. It DOES\
+    \ mean the recipe is not a reliable reproducer, so continuing to soak the same arm is spending the\
+    \ box's single godot slot on a hunt that has stopped returning information. The soak was therefore\
+    \ stopped by the coordinator rather than allowed to run its remaining passes, and the slot released\
+    \ for the objective's outstanding work. The honest open item is unchanged: the defect class has a\
+    \ shipped bounds guard on the one unguarded read, no reproducer, and now twenty clean executions including\
+    \ three under memcheck. If it recurs, the address is godot/world/chunk.gd:657 via get_block from either\
+    \ the player's physics step or the mob tick, and the next move should be a DIFFERENT arm or a longer\
+    \ single run rather than another pass of the same one."
   comments: []
 - id: AC-0404
   title: hide-medium-and-low-lod-at-height
