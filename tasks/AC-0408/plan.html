@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0408 plan — chunk-staging drift and the use-after-free</title>
+</head>
+<body>
+<h1>AC-0408 — plan (PLAN + IMPLEMENT in one turn)</h1>
+
+<h2>Goal</h2>
+<ol>
+<li>(a) READ THE COUNTER: state exactly what <code>staged_dropped</code> counts, what drops it, and what the
+≤ 2500 ceiling was intended to bound — then decide, with evidence, whether 2663 is a regression or a
+stale bound.</li>
+<li>(b) TEST THE LIFETIME LINK: determine whether a staged-and-dropped chunk can leave a live reference
+(slab cache, mesh lane, collision lane, physics body) that outlives it — the hypothesis that the rising
+drop counter and AC-0403's use-after-free are one bug.</li>
+<li>(c) IF FEASIBLE: an AddressSanitizer soak of the crash recipe, instrumenting only the native
+extension (the crash site is in the C++ lane); a hit with a stack ends the UAF question.</li>
+</ol>
+
+<h2>Reading of the counter (code, before any change)</h2>
+<ul>
+<li><code>perf_staged_dropped</code> (<code>world.gd:3628</code>) counts entries in the <b>staged collision
+queue</b> (<code>_col_pending</code>) that lost validity before the ≤2-columns/frame drain could serve
+them. The queue holds <b>column key strings, not object references</b> (<code>_col_pending.append(key)</code>,
+world.gd:10064). Staging = a meshed, collision-dirty chunk OUTSIDE the immediate footprint (Chebyshev
+&gt;1) owes a body build that the per-frame budget defers (AC-0077/AC-0340).</li>
+<li>Two drop sites in <code>_col_drain_step</code> (world.gd):
+  <b>site 1 (10101–10106)</b> — <code>chunks.get(key) == null</code>: the chunk was freed while the
+  entry was pending (stale).
+  <b>site 2 (10115–10119)</b> — the chunk is alive but <code>ok</code> is false: not meshed /
+  collision disabled (band excursion, <code>_reband</code> 10068) / no longer dirty (the body was built by
+  the immediate path after the player re-entered) / outside <code>render_radius</code> while still
+  resident (candidacy keeps nodes at r+1).</li>
+<li>The ceiling (HARNESS.md §3 standing row, set at AC-0337, 2026-09-20, from a 1845 reading on the
+<b>pre-AC-0387-carve</b> tree): "a sustained reading above that means the drain is oversubscribed again
+… or the lane has stalled". Health is separately fenced: <code>staged_pending_final</code> (the queue
+fully drains), <code>col_deferred_in_footprint</code> (0 — no body deferred under the player), the
+arm-side <code>footprint</code> scan (0), <code>unbodied_built_final</code> (0). A drop is by design
+"work no longer owed", not lost work — so the counter is a churn census, and the ceiling's meaning is
+a proxy on a moving target (world content + box load both move it; documented 2679/2950 readings under
+box load, AC-0384/AC-0113).</li>
+</ul>
+
+<h2>How the lifetime link is tested</h2>
+<ol>
+<li><b>Static (done):</b> the queue holds keys, not references — a dropped stage frees nothing and
+references nothing. The free path (<code>_free_chunk_key</code> 10293–10343, <code>_enter_candidate</code>
+10238–10262) erases the chunk's entry from every key-indexed holder (star bookkeeping, <code>_eff_cache</code>,
+<code>_face_blk</code>, <code>_bl_want</code>, <code>queued_keys</code>, fluid/tex, <code>_col_pending*</code>);
+the node is reset + pooled (<code>_col_checkin</code> 1405–1426: high MIs to the MI pool,
+<b>StaticBody3D collision bodies <code>queue_free()</code>'d</b>, <code>_pool_reset()</code> drops the
+slab data). So "a dropped stage leaves a live reference" is false <b>at the staging layer by
+construction</b>; the only residual reference class is a raw pointer into slab PBA buffers
+(AC-0214 wrapper semantics) — which is the AC-0403 C6 class, independent of staging.
+Runtime confirmation is owed for both directions (see 2).</li>
+<li><b>Runtime — cause split (permanent counters):</b> split <code>staged_dropped</code> by cause —
+<code>stale</code> (site 1), <code>done</code> / <code>radius</code> / <code>disabled</code> /
+<code>unmeshed</code> (site 2) — in both the <code>boundary</code> and <code>perf</code> arm RESULTS.
+If <code>stale</code> dominates, the drain is losing the race to streaming (drain fix owed); if
+<code>done</code>/<code>radius</code>/<code>disabled</code> dominate, the counter is the churn census the
+row's own note describes, and 2663 is content+load, not a stall.</li>
+<li><b>Runtime — holder-residue census (permanent counter, print env-gated
+<code>AWECRAFT_STGPROBE=1</code>, off by default = zero behaviour change):</b> at the moment a chunk dies
+(<code>_free_chunk_key</code>, after its own erase block) and at the moment a stale entry is dropped
+(drain site 1), scan the key-indexed holder maps the free path is supposed to empty. A non-zero residue
+= a holder that was NOT told = the lifetime bug, caught directly. Must read 0 in every gate.</li>
+<li><b>ASan soak (the decisive instrument, per AC-0403's recommendation):</b> rebuild
+<code>libchunkio.so</code> with <code>-fsanitize=address</code> (manual g++, the SConstruct's exact flags
++ ASan; SCons is not on this box — AC-0403 precedent). The crash read (<code>slab_cell</code> →
+<code>slab_getbits</code> <code>i[bo]</code>) executes inside the instrumented .so, so a freed slab buffer
+re-read there faults with a clean ASan report. Scope stated honestly: only faulting accesses <i>inside</i>
+the extension are caught (godot-cpp static lib + the engine are uninstrumented — an engine-internal
+refcount edge would not be caught). Soak = the exact AC-0402/AC-0403 crash recipe
+(<code>lightstate LS_RADIUS=16</code>, 12 GB cap, ×4) + the <code>player</code> arm (the other crash
+caller) ×1. No <code>ulimit -v</code> on ASan runs (ASan reserves ~20 TB of VA — a virtual-memory cap
+kills it at startup; physical memory on the box is 61 GB, 44 GB free). The production <code>.so</code> is
+backed up before the swap and restored + sha256-verified after.</li>
+</ol>
+
+<h2>Files to touch</h2>
+<table border="1" cellpadding="4">
+<tr><th>File</th><th>Change</th><th>Why it is safe</th></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+    <td>+5 permanent counters (the cause split) + the holder-residue census (counter always on, print
+    env-gated <code>AWECRAFT_STGPROBE</code>, off by default) at the two drop sites and the free path;
+    <code>_stgprobe</code> env read next to the existing <code>_nofree</code>/<code>_cblog</code> reads</td>
+    <td>pure counters on the main thread; no control-flow change on the default path; the same
+    instrumentation class as the standing <code>perf_*</code> census (AC-0337/AC-0340/AC-0348)</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td>
+    <td>+5 RESULT fields (<code>staged_drop_*</code>) to the <code>boundary</code> and <code>perf</code>
+    arm RESULT dicts, next to <code>staged_dropped</code></td>
+    <td>RESULT-only; the arm's branches are untouched (the pristine rule binds temporary
+    measurement arms, not permanent RESULT fields — the established AC-0337/AC-0340 pattern)</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code></td>
+    <td>ONLY IF the evidence shows a stale bound (see Decision below): add the new fields to the
+    boundary/perf <code>result_fields</code>, and re-base the <code>staged_dropped</code> standing row
+    with the reasoning + supersedes chain, then <code>harness_doc.py --render --check</code></td>
+    <td>the rendered doc is GENERATED — edited via the data file + render script, never by hand</td></tr>
+<tr><td><code>gdext/</code> (C++)</td><td><b>none</b> — no code change; only an ASan build of the
+    unmodified source for the soak</td><td>the soak is an experiment, not a change</td></tr>
+</table>
+
+<h2>Decision rule for the threshold (stated up front, per the ticket's warning)</h2>
+<p>The number is NOT re-based to make it green. The re-base happens only if ALL of:
+(1) the health fences read clean (<code>staged_pending_final</code> 0, footprint fences 0/0,
+<code>unbodied_built_final</code> 0) — the drain is not stalled and no work is lost;
+(2) the cause split shows the drops are "no longer owed" (done/radius/disabled), not "freed while
+pending" (stale);
+(3) the rise tracks the post-AC-0387 world (more collision content per chunk; the ceiling was set
+2026-09-20 from a 1845 reading on the pre-carve tree, i.e. the bound predates the content change by ~10
+days). If any fails → the number stays red, it is reported as a regression/finding, and the coordinator
+gets the cause split to act on.</p>
+
+<h2>Harness gates (light set, then exit — heavy is the coordinator's)</h2>
+<table border="1" cellpadding="4">
+<tr><th>Gate</th><th>Recipe</th><th>Pass =</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code>, <code>gate_census.py</code> + <b>exit
+status</b> (paired, per AC-0403's rule for this defect class)</td>
+    <td>rc 0 + 0 SCRIPT ERROR + 0 SHADER ERROR</td></tr>
+<tr><td>SMOKE</td><td>battery <code>player;interact;light;fluids;genhash</code> + <code>mobs</code> arm
+    (both crash callers: player physics step + mob tick)</td>
+    <td>each RESULT ok, census 0/0, rc 0; genhash 25/25 (r1==r2 determinism + parity vs the
+    same-tree reference)</td></tr>
+<tr><td>PROBE</td><td><b>ONE-SHOT</b> <code>boundary r4</code> with <code>AWECRAFT_STGPROBE=1</code> —
+    the arm that reports the counter in question</td>
+    <td>ok/remesh/marker true, p95 in the 35–55 band, max_ms in 357–824, crossing_frame gates, fences
+    0/0, <code>staged_pending_final</code> 0, holder residue 0, the counter + cause split read</td></tr>
+<tr><td>ASan soak</td><td>ASan <code>.so</code>: <code>lightstate R16</code> ×4 (the exact crash recipe)
+    + <code>player</code> ×1; then restore the production <code>.so</code> and re-verify G0</td>
+    <td>no <code>AddressSanitizer</code> report; every rc + census recorded regardless</td></tr>
+</table>
+<p>No HEAVY (flake/r50/full battery), no renders (not a visual change), no Windows build (no C++ code
+change — the .so swap is local-experiment only and restored). Fenced files (main.gd / game.gd / drop.gd /
+debug.gd) untouched; no TASKS.yaml edits; no commits.</p>
+
+</body>
+</html>

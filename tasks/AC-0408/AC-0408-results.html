@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0408 results — the staging drift and the use-after-free are not one bug</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:1020px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:.3rem .5rem;vertical-align:top;text-align:left}
+.ok{color:#166023}.bad{color:#a11}.warn{color:#8a6d00}
+.small{font-size:.85em;color:#555}
+.verdict{background:#eef7ee;border:2px solid #166023;padding:.6rem .9rem;margin:.8rem 0}
+</style>
+</head>
+<body>
+<h1>AC-0408 — <code>staged_dropped</code> drift and the AC-0403 use-after-free</h1>
+<p class="small">Builder: subagent. 2026-10-08. Tree at ed1b234 (AC-0404 close + AC-0408 filing) + one other
+session's in-flight godot/* changes — fenced files (main.gd / game.gd / drop.gd / debug.gd) untouched.
+No TASKS.yaml edits, no commits. Logs: <code>.scratch/AC-0408-gates/</code> + <code>.scratch/AC-0408-asan/</code>.</p>
+
+<div class="verdict"><b>Bottom line.</b> (1) <code>staged_dropped</code> counts entries in the staged-collision
+queue that lost validity before the ≤2-columns/frame drain served them — and the new cause split shows
+<b>2793 of 2795 drops are "unmeshed": the per-slab build lane stages on every slab landing while
+<code>mesh_built</code> is still false</b>, so an in-progress build stages repeatedly and each in-progress
+drain visit drops one entry. The counter is a <b>churn census that scales with build work per walk</b> —
+the drift (1845 pre-carve → 2431–2795 post-carve, ~2950 under box load) tracks the AC-0387 carve era, and
+the ≤ 2500 ceiling was set 2026-09-20 from a single 1845 reading on the <b>pre-carve</b> tree: <b>2663 is a
+stale bound, not a regression</b> — the drain is healthy (<code>staged_pending_final</code> 0, fences 0/0,
+<code>staged_drained</code> 507, stale 0). The threshold is re-based to ≤ 3200 with the reasoning stated
+(this does NOT make the number green — it still reads above 2500). (2) The lifetime hypothesis is
+<b>REFUTED, and "unrelated" was the real result</b>: the queue holds column <b>key strings, not
+references</b> — a dropped stage frees nothing and references nothing; <code>staged_drop_stale</code> read
+<b>0</b> (the free path erases the entry before the drain sees the dead chunk) and the holder-residue census
+read <b>0</b> (no key-indexed holder retains a dead chunk's key). The two signals share the chunk-lifecycle
+lane, not a mechanism — the UAF lives in the slab-buffer lifetime (AC-0403's C6), which the staging queue
+never touches. (3) Sanitizer: <b>ASan is infeasible on this box</b> — Godot dlopens the extension with
+<b>RTLD_DEEPBIND</b>, which the ASan runtime rejects (verified both ways; the instrumented .so itself builds
+fine in 41 s). <b>Valgrind memcheck is the substitute</b>: soak of the exact crash recipe running
+(lightstate R16 ×4 + player ×1) — see §5.</div>
+
+<h2>1. What <code>staged_dropped</code> counts, and what drops it</h2>
+<p>The staged-collision lane (AC-0077): a meshed, collision-dirty chunk OUTSIDE the immediate footprint
+(Chebyshev &gt; 1) owes a body build the per-frame budget defers — its column <b>key</b> goes into
+<code>_col_pending</code> (<code>world.gd:3622</code>, <code>_stage_check</code> ~7192/7291/7340/7393/10812).
+The drain (<code>_col_drain_step</code>) serves ≤ 2 columns/frame nearest-first under the AC-0340 time
+budget. <code>perf_staged_dropped</code> (world.gd:3628) increments on two drop sites:</p>
+<table>
+<tr><th>Site</th><th>Condition</th><th>Meaning</th><th>This run</th></tr>
+<tr><td>1 (world.gd ~10124)</td><td><code>chunks.get(key) == null</code></td><td>the chunk was freed while
+the entry was pending — "stale"</td><td><b>0</b> — the free path (<code>_free_chunk_key</code> 10363–10364,
+<code>_enter_candidate</code> 10300–10301) erases the entry <i>before</i> the drain ever sees the dead chunk</td></tr>
+<tr><td>2 (world.gd ~10139)</td><td>chunk alive, but <code>ok</code> false</td><td>the work is no longer owed</td>
+<td><b>2795</b> — split below</td></tr>
+</table>
+<p><b>The cause split (new permanent counters, this run):</b> <code>unmeshed</code> <b>2793</b> /
+<code>radius</code> 2 / <code>done</code> 0 / <code>disabled</code> 0 / <code>stale</code> 0. The mechanism,
+verified in code: the per-slab high lane (world.gd threadmesh landing) sets <code>mesh_built</code> to true
+only when the <i>last</i> slab lands (7278–7279: <code>_hslab_best_pending(c) &lt; 0</code>), but calls
+<code>_stage_check</code> after <i>every</i> slab landing (7291). Each mesh attach re-dirties the slab
+(<code>chunk.gd:1470</code> — body missing → <code>col_dirty = true</code>), so an in-progress,
+out-of-footprint build is dirty on every landing → staged on every landing → the drain's visit finds
+<code>mesh_built == false</code> → drops it ("unmeshed") → the next landing re-stages. <b>The counter is
+the census of those in-progress staging events</b>; the final landing (mesh complete) stages the valid
+entry the drain actually serves (<code>staged_drained</code> 507). No work is lost: the AC-0340 fence
+(<code>col_deferred_in_footprint</code> 0), the arm-side footprint scan (<code>missing</code> 0) and the
+queue-empty-at-end (<code>staged_pending_final</code> 0) all hold.</p>
+
+<h2>2. Regression or stale bound — 2663/2795 vs the ≤ 2500 ceiling</h2>
+<p>The ceiling (set at AC-0337, 2026-09-20, from one 1845 reading; band 1746–1845 on that tree) was meant
+to bound "drain oversubscription or a stalled lane". Three facts separate a regression from a stale bound:</p>
+<ul>
+<li><b>Health is green.</b> <code>staged_pending_final</code> 0 (the queue fully drains),
+<code>col_deferred_in_footprint</code> 0 + <code>footprint.missing</code> 0 (no body owed under the
+player), <code>unbodied_built_final</code> 8 <span class="warn">— flagged, see §6: outside the immediate
+footprint and reading identically (8/8) on AC-0403's pristine A/B pair, so tree state, not this
+task's regression</span>. A stalled drain would show pending &gt; 0 or a fence trip; it does not.</li>
+<li><b>The cause split is benign.</b> 99.93% "unmeshed" = in-progress builds, by design. Zero "stale"
+= the free path never fails to tell the lane. Nothing is dropped that is owed.</li>
+<li><b>The rise tracks the world's build work, not a lane change.</b> The boundary arm is a lane the recent
+changes do not touch — and the counter still moved: 1845 (09-20, pre-carve) → 999 (09-24, C48 world
+generates 43% cheaper — the counter <i>fell</i> with content) → 1667 (09-25, P4) → 1734 (AC-0361) → 1907
+(AC-0374) → 2048/2054 (AC-0369/0368) → 2158–2179 (AC-0376–0379) → 2431 (AC-0386) → 2441 (AC-0384) →
+2528–2705 (AC-0403, same tree as this run) → 2663/2568 (AC-0407) → 2704 (AC-0038) → <b>2795 (this
+run)</b>. AC-0387's carve era (the far lane went 95 → 3,353 µs/chunk; the full lane now computes the
+carved top; P4 content) is exactly when the readings step up — each column build carries more per-slab
+work → more in-progress staging events → a higher census. Box load amplifies it (AC-0384: 2679 on a
+just-loaded box vs 2441 idle; AC-0113: 2950 as the 7th arm in a long sequence).</li>
+</ul>
+<p><b>Verdict: stale bound.</b> The threshold predates the carve era it now measures by ~10 days.
+<b>Re-base: ≤ 2500 → ≤ 3200</b> (post-carve band 2431–2795 idle, ~2950 the worst documented box-load
+envelope; 3200 sits above it with margin). This is <b>not</b> making the number green — the number still
+reads above the old 2500 after this task. The permanent tripwires that replace the raw number as the
+diagnostics: a sustained &gt; 3200, a rising <code>staged_drop_stale</code>, or
+<code>staged_pending_final</code> &gt; 0 is a drain finding. Recorded in the standing row (supersedes
+chain intact) — <code>tasks/harness_data.yaml</code> + rendered <code>godot/HARNESS.md</code>
+(<code>harness_doc.py --check</code> in sync).</p>
+
+<h2>3. The lifetime hypothesis — tested and refuted</h2>
+<p>Hypothesis (the ticket's): a chunk dropped from staging while something still holds a reference to it
+would be BOTH a rising drop counter AND a use-after-free. Test, in the order the evidence lands:</p>
+<ol>
+<li><b>Static — the queue holds keys, not references.</b> <code>_col_pending</code> holds <code>"cx,cz"</code>
+<b>strings</b> (<code>_stage_check</code>: <code>_col_pending.append(key)</code>). A dropped entry frees
+nothing and dereferences nothing. "A dropped stage leaves a live reference" is false at the staging layer
+<b>by construction</b> — the staging lane cannot be the UAF's reference holder.</li>
+<li><b>Static — the free path tells every holder.</b> <code>_free_chunk_key</code> (world.gd 10333–10383)
+erases the chunk's key from every key-indexed holder in one synchronous pass (queued_keys, fluid_dirty,
+tex_refresh, _eff_cache, _face_blk, _bl_want, star_owed/star_remesh/star_seed_count/star_seed_us,
+promo_* counts, _far_promo_owed, _promo_build, _stream_outside, _real_demote_owed, <b>and the staging
+queue itself</b>), then <code>_col_checkin</code> (1405–1426) detaches the high MIs to the pool and
+<b><code>queue_free()</code>s the StaticBody3D collision bodies</b> before <code>_pool_reset()</code> drops
+the slab data. <code>_enter_candidate</code> (the r+1 candidacy, 10278–10302) does the same for the maps a
+candidate must not keep.</li>
+<li><b>Runtime — the two new censuses, from the one-shot boundary r4 (20 crossings, full walk):</b>
+<code>staged_drop_stale</code> <b>0</b> (the free path never failed to erase before the drain saw the dead
+chunk) and <code>staged_drop_holder_residue</code> <b>0</b> (at every chunk death and every stale drop,
+none of the 18 key-indexed holders retained the dead chunk's key; zero STGPROBE detail lines in the log).
+The "something still holds a reference" case <b>did not occur once</b> in a full r4 walk.</li>
+<li><b>The crash site is not reachable from the queue.</b> The AC-0403 read is a main-thread
+<code>slab_cell → slab_getbits i[bo]</code> on a live chunk's slab PBA buffer (the chunk is in the
+<code>chunks</code> map; a dead chunk node would give a GDScript script error, not a silent SIGSEGV). The
+queue never touches slab data. The UAF's proven class (C6: slab-object memory death / engine-level
+corruption) lives in the slab-buffer lifetime — the PBA-wrapper refcount edge (AC-0214's shallow-handle
+note) or the engine itself — a layer the staging drop cannot reach. <b>Shared lane (chunk lifecycle
+churn), no shared mechanism.</b></li>
+</ol>
+<p><b>Verdict: not one bug.</b> The counter rose because the carve-era world stages more in-progress
+builds (benign, now permanently diagnosable via the cause split); the UAF is a separate defect in the
+slab-buffer lifetime that the read-site guard cannot catch — as AC-0403 already stated.</p>
+
+<h2>4. What was changed</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>+6 permanent counters (<code>perf_staged_drop_stale/done/
+radius/disabled/unmeshed</code> + <code>perf_staged_drop_holder_residue</code>) with the cause split at the
+two drop sites; <code>_col_stg_residue()</code> (18-map holder census at chunk death + stale drops, counter
+always on, detail print env-gated <code>AWECRAFT_STGPROBE=1</code>, off by default = zero behaviour
+change); <code>_stgprobe</code> env read next to the existing <code>_cblog</code>/<code>_nofree</code>.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>+6 RESULT fields (<code>staged_drop_*</code>) to the
+<code>boundary</code> and <code>perf</code> arms' RESULT dicts (RESULT-only; no arm branch touched — the
+pristine rule binds temporary measurement arms).</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code> (rendered)</td><td>the
+<code>staged_dropped</code> standing row: AC-0408 re-measure + mechanism + lifetime verdict + threshold
+re-base ≤ 2500 → ≤ 3200 with the reasoning; the 6 new fields added to the boundary/perf
+<code>result_fields</code>; <code>AWECRAFT_STGPROBE</code> to the boundary envs; boundary one-shot row:
+this run's note. <code>harness_doc.py --render --check</code> in sync.</td></tr>
+<tr><td><code>gdext/</code></td><td><b>no code change.</b> An ASan-instrumented build of the unmodified
+source (<code>-fsanitize=address -fno-omit-frame-pointer -DASAN_ENABLED</code>, 41 s) was produced for the
+soak and is at <code>.scratch/AC-0408-asan/libchunkio-asan.so</code>; it was <b>never</b> installed as the
+gate .so in a way that persisted — production .so restored and sha256-verified (ea4216…).</td></tr>
+</table>
+
+<h2>5. The sanitizer question</h2>
+<ul>
+<li><b>ASan — infeasible on this box, verified both ways</b> (the "only the extension needs
+instrumenting" reading was correct in scope but not in outcome):
+  <pre>$ g++ … -fsanitize=address … libchunkio-asan.so   # builds fine in 41 s (needs -DASAN_ENABLED —
+                                          # godot-cpp defs.hpp #errors without it: first-class support)
+$ godot --headless --quit                     # rc=1: "ASan runtime does not come first in initial
+                                              # library list" (the .so is dlopen'd late)
+$ LD_PRELOAD=$(g++ -print-file-name=libasan.so) godot …
+                                              # rc=1: "trying to dlopen libchunkio.so with RTLD_DEEPBIND
+                                              # flag which is incompatible with sanitizer runtime"
+                                              # (sanitizers issue 611)</pre>
+  Godot loads GDExtensions with <b>RTLD_DEEPBIND</b>; the ASan runtime refuses to back a DEEPBIND library.
+  The only ASan route left is an ASan-built engine (out of scope for this turn; a coordinator-lane
+  decision).</li>
+<li><b>Valgrind memcheck — the substitute (no instrumentation, works on the real binary).</b> Soak script
+  <code>.scratch/AC-0408-asan/vg_soak.sh</code> (resumable, per-run DONE markers, 90-min caps): the exact
+  AC-0402/AC-0403 crash recipe <code>AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16</code> ×4 + the
+  <code>player</code> arm (the other crash caller) ×1,
+  <code>--tool=memcheck --leak-check=no --track-origins=yes --num-callers=50 --error-exitcode=99</code>,
+  production .so. Launched as a managed background job; <b>state at delivery in §7</b> (the soak is the
+  slow part: valgrind runs the 27-s recipe at roughly 15–20× wall).</li>
+</ul>
+
+<h2>6. Gates (light set, then exit — heavy is the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Exit status</th><th>Census</th><th>Reading</th></tr>
+<tr><td>G0 (<code>--headless --quit</code>, 8 GB cap)</td><td class="ok">rc 0</td><td class="ok">0 SCRIPT / 0 SHADER</td>
+<td>production .so + instrumented GDScript</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td class="ok">rc 0</td>
+<td class="ok">0/0</td><td>battery <code>ok:true</code> (280 s). player: jump_peak_y <b>142.42</b>
+(bit-identical to AC-0403's baseline reading), col_deferred_in_footprint 0, sprint_ok, is_on_floor.
+interact: drop_spawned true, place_ok true, mine 36/36 hit frames, inv_grew. light: torch_far 0→9,
+surface_eff 15, cave_eff 0. fluids: sea_stable, sea_surface 1719==1719 (zero-write invariant holds).</td></tr>
+<tr><td>mobs arm (the AC-0384 crash caller)</td><td class="ok">rc 0</td><td class="ok">0/0</td>
+<td><code>ok:true</code>, all 9 sub-gates true (arrow/bunny/chase/fall/rig/ring/spider/tables/wolf incl.
+wolf_tamed), day_passive 2130, night_hostile 2262 — mob behaviour unchanged, asserted</td></tr>
+<tr><td>genhash (the parity gate — world.gd changed)</td><td class="ok">rc 0</td><td class="ok">0/0</td>
+<td><b>25/25 byte-identical</b> to the AC-0403 same-tree reference (<code>final_genhash.log</code>) AND
+identical across the battery vs standalone runs (determinism) — the instrumentation is behaviour-neutral</td></tr>
+<tr><td><b>ONE-SHOT boundary r4</b> (the counter's own arm; <code>AWECRAFT_STGPROBE=1</code>)</td>
+<td class="ok">rc 0</td><td class="ok">0/0, 0 STGPROBE lines</td>
+<td>ok/marker_ok/remesh_ok true, 20/20 crossings, p50 <b>13</b> (flat), p95 <b>34</b> (in band),
+max_ms <b>406</b> (in the 357–824 band), crossing_frame p50/p95/max <b>29/38/38 ms</b> (≤ 75/15 gates),
+resident_final 93, built_final 61, flap 202, staged_drained 507, <b>staged_dropped 2795</b> (split:
+unmeshed 2793 / radius 2 / stale 0 / done 0 / disabled 0), staged_pending_final 0, fences 0/0/0,
+unbodied_built_final 8 (tree state — §2)</td></tr>
+<tr><td>ASan G0 ×2</td><td class="warn">rc 1 (both)</td><td class="ok">0/0</td><td>infeasible — §5 (the
+RTLD_DEEPBIND wall), not a defect; production .so restored + sha256-verified afterwards</td></tr>
+<tr><td>Valgrind soak (background, production .so)</td><td colspan="2">run 1 <b>rc 0</b>,
+<code>ERROR SUMMARY: 0 errors</code>; runs 2–5 in flight</td><td>run 1 = the exact crash recipe, full
+arm, clean; core census exact-match, one arm timing artifact (the A/B settle window) — §7; job killed
+at delivery (frees the godot slot), script resumable</td></tr>
+</table>
+
+<h2>7. Valgrind soak state at delivery + what was deliberately not done</h2>
+<p><b>State at delivery:</b> <b>run 1 of 5 complete — <code>lightstate R16</code> (the exact crash
+recipe) under <code>valgrind memcheck</code> (production .so, full arm, ~38 min wall):
+<code>rc=0</code>, <b><code>ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0)</code></b> — a full
+deep-memory pass of the crashing arm is clean (zero invalid reads/writes anywhere, incl. the
+<code>slab_cell</code>/<code>slab_getbits</code> reads on the player's per-physics-frame
+<code>_block_at</code> path). The arm's core census matches the normal runs <b>exactly</b>
+(<code>vc_common/vc_diff</code> 393/4, <code>leaks</code> 0, <code>demoted</code> 41, grid 20 keys).
+<b>One measurement-timing artifact, stated per the house rule:</b> <code>waited_frames</code> 19 → 240
+(the cap) and <code>arr_diff_cells</code> 1 → 0 — the arm's edit→re-bake settle window (harness.gd: the
+<code>while ab_rw &lt; 240</code> loop breaks on the column's <code>last_eff.arr</code> <i>changing</i>
+after <code>set_block</code>) never saw the re-bake land under valgrind's slowed frame pacing, so the
+"after" snapshot sampled the un-re-baked array. This is a measurement artifact, not damage: the
+identical (0, 240) pair appeared in AC-0403's genuinely-broken build only alongside
+<code>vc_common=0</code> + <code>leaks=81</code>, which this run does NOT show — but the A/B light-settle
+sub-check is INCONCLUSIVE under valgrind for this reason (its other census fields are the reliable
+ones). Runs 2–4 (same recipe) + run 5 (<code>player</code>, the other crash
+caller) were still queued in the managed background job at exit — <b>the job dies with the session,
+but the soak is resumable</b>: <code>bash .scratch/AC-0408-asan/vg_soak.sh</code> skips every run whose
+DONE marker is present and picks up where it stopped (the coordinator's lane,
+<code>awecraft-heavy-gates</code> style). Verdict on the sanitizer question: a sanitizer soak WAS
+feasible (via valgrind) and the first full pass is <b>clean</b>; the UAF remains open at AC-0403's
+residual candidates — a stochastic defect that needs either more soak passes, a single controlled
+reproduction (seed/band bisection), or an ASan-<i>engine</i> build (coordinator lane) to close.</p>
+<ul>
+<li><b>Not done (by policy):</b> no HEAVY (flake/r50/full battery) — coordinator's job; no renders (not a
+visual change); no Windows build (no C++ code change); no TASKS.yaml edit (the re-base lives in the harness
+doc, where standing values are owned); no commit/push (fence); fenced files untouched. If the valgrind soak
+comes back clean, the UAF stays open at AC-0403's residual candidates — the next instrument is an
+ASan-<i>engine</i> build (coordinator lane) or a seed/band bisection once a single reproduction exists.</li>
+<li><b>Flagged for a follow-up ticket (not chased here):</b> <code>unbodied_built_final</code> 8 on this
+tree (built, in-radius, no collision body at walk end) — outside the immediate footprint (the fence reads 0)
+and reading identically on AC-0403's pristine A/B pair, so pre-existing; AC-0077's G5b "must be 0"
+expectation is stale or there is a real residual gap — either way it is its own hunt, and this task's
+counter changes cannot cause it (pure counters; genhash- and A/B-proven behaviour-neutral).</li>
+</ul>
+
+<h2>8. Log inventory</h2>
+<pre>
+.scratch/AC-0408-gates/g0.log            G0 (rc 0, 0/0)
+.scratch/AC-0408-gates/smoke_battery.log battery (rc 0, 0/0, 5 RESULT)
+.scratch/AC-0408-gates/genhash_r1.log    genhash standalone (rc 0; 25/25 vs AC-0403 ref; == battery run)
+.scratch/AC-0408-gates/mobs.log          mobs arm (rc 0, ok:true)
+.scratch/AC-0408-gates/boundary_r4.log   ONE-SHOT boundary (rc 0, 0/0, the counter + split)
+.scratch/AC-0408-gates/boundary_r4.result.json
+.scratch/AC-0408-gates/libchunkio.so.pre-asan   production .so backup (sha256 ea4216127cc6a0ca…)
+.scratch/AC-0408-asan/libchunkio-asan.so        the ASan build (41 s; -DASAN_ENABLED)
+.scratch/AC-0408-asan/g0_asan.log      ASan infeasibility (both errors verbatim)
+.scratch/AC-0408-asan/vg_soak.sh       the resumable valgrind soak script
+.scratch/AC-0408-asan/vg_lightstate_r1..r4.log, vg_player_r1.log   the soak runs
+</pre>
+
+</body>
+</html>

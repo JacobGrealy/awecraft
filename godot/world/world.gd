@@ -3626,6 +3626,27 @@ var perf_collision_n := 0
 var perf_collision_max_ms := 0
 var perf_staged_drained := 0
 var perf_staged_dropped := 0
+# AC-0408: the CAUSE SPLIT of perf_staged_dropped (the oversubscription census
+# of the staged collision drain). The queue holds column KEY strings, not
+# object references (world.gd _stage_check), so a dropped entry frees nothing
+# and references nothing; the split says WHY the entry was no longer owed:
+# stale = the chunk was freed while the entry was pending (site 1 — the free
+# path erases the entry first, so a rising reading here would mean the free
+# path stopped telling the lane); done = the chunk is alive but its bodies
+# were built by the immediate path after the player re-entered; radius =
+# still resident (candidacy) but outside render_radius; disabled = a band
+# excursion turned collision off (_reband); unmeshed = no mesh to collide.
+# Plus the HOLDER-RESIDUE census (perf_staged_drop_holder_residue): at the
+# moment a chunk dies (_free_chunk_key, after its own erase block) or a stale
+# entry is dropped (site 1), a non-zero count = a key-indexed holder the free
+# path did NOT tell — the AC-0403 lifetime-link test. Must read 0 in every
+# gate. Prints only with AWECRAFT_STGPROBE=1 (off = zero behaviour change).
+var perf_staged_drop_stale := 0
+var perf_staged_drop_done := 0
+var perf_staged_drop_radius := 0
+var perf_staged_drop_disabled := 0
+var perf_staged_drop_unmeshed := 0
+var perf_staged_drop_holder_residue := 0
 # AC-0340: the debt census — a column whose slabs outlast the per-frame
 # collision budget (collide_drain_budget_ms) is RE-QUEUED, never dropped:
 # perf_col_deferred counts the deferrals (informational; a healthy walk
@@ -3918,6 +3939,9 @@ func _ready() -> void:
 	_frameprobe = OS.get_environment("AWECRAFT_FRAMEPROBE") == "1"
 	_cblog = OS.get_environment("AWECRAFT_CBLOG") == "1"
 	_nofree = OS.get_environment("AWECRAFT_NOFREE") == "1"
+	# AC-0408: print the holder-residue census details (off by default —
+	# the counters themselves are always on, prints are the only effect).
+	_stgprobe = OS.get_environment("AWECRAFT_STGPROBE") == "1"
 	# AC-0178: loading-screen wiring. Bypass override for the headless A/B
 	# probe (default ON); remember the normal pool caps; build the UI node
 	# (hidden; harmless headless — never awaited).
@@ -4165,6 +4189,7 @@ func _physics_process(_d: float) -> void:
 
 var _cblog := false
 var _nofree := false
+var _stgprobe := false  # AC-0408: holder-residue print (counters are always on)
 var _tg_concur := 0
 var _tg_concur_peak := 0
 var _tm_concur := 0
@@ -10104,6 +10129,8 @@ func _col_drain_step() -> void:
 			_col_pending.remove_at(i)
 			_col_pending_set.erase(key)
 			perf_staged_dropped += 1
+			perf_staged_drop_stale += 1
+			_col_stg_residue(key, "stale-drop")
 			continue
 		var footprint: bool = _col_immediate_for(int(c.cx), int(c.cz))
 		if not footprint and Time.get_ticks_usec() - t0 >= budget_us:
@@ -10117,6 +10144,17 @@ func _col_drain_step() -> void:
 		_col_pending_set.erase(key)
 		if not ok:
 			perf_staged_dropped += 1
+			# AC-0408: the cause split (first failing term wins — a chunk can
+			# fail several at once; the split is a census, not a partition of
+			# a single mechanism).
+			if not c.mesh_built:
+				perf_staged_drop_unmeshed += 1
+			elif not c.collision_enabled:
+				perf_staged_drop_disabled += 1
+			elif maxi(absi(int(c.cx) - last_pcx), absi(int(c.cz) - last_pcz)) > render_radius:
+				perf_staged_drop_radius += 1
+			else:
+				perf_staged_drop_done += 1
 			continue
 		var _ct := Time.get_ticks_usec()  # AC-0337 step 0: the COLLIDE sub-stage (staged side)
 		# -1 = unbounded (the fence) or the remaining budget in usec.
@@ -10154,6 +10192,50 @@ func _count_collision_build(c: Node3D) -> void:
 		perf_collision_n += 1
 		if dt > perf_collision_max_ms:
 			perf_collision_max_ms = dt
+
+# AC-0408: the HOLDER-RESIDUE census (the lifetime-link test). Called (1) at
+# the moment a chunk dies — _free_chunk_key, AFTER its own erase block — and
+# (2) when a STALE staged entry is dropped (the chunk is already gone). Scans
+# the key-indexed holder maps for this column's key. A non-zero count = a
+# holder the free path did NOT tell: the dead chunk's key is still live
+# somewhere = the reference that outlives the chunk (the AC-0403 C6 class, if
+# it ever materialises on the GDScript-visible layer). The counter is always
+# on (18 cheap .has() checks, called only at death/stale-drop — rare); the
+# detail line prints only with AWECRAFT_STGPROBE=1.
+func _col_stg_residue(key: String, why: String) -> void:
+	var res := 0
+	var who := ""
+	var maps: Array = [
+		["queued_keys", queued_keys],
+		["fluid_dirty", fluid_dirty],
+		["tex_refresh", tex_refresh],
+		["_eff_cache", _eff_cache],
+		["_face_blk", _face_blk],
+		["_bl_want", _bl_want],
+		["_col_pending_set", _col_pending_set],
+		["star_owed", star_owed],
+		["star_remesh", star_remesh],
+		["star_seed_count", star_seed_count],
+		["star_seed_us", star_seed_us],
+		["promo_enq_count", promo_enq_count],
+		["promo_land_count", promo_land_count],
+		["promo_land_ms", promo_land_ms],
+		["_far_promo_owed", _far_promo_owed],
+		["_promo_build", _promo_build],
+		["_stream_outside", _stream_outside],
+		["_real_demote_owed", _real_demote_owed],
+	]
+	for e in maps:
+		if e[1] != null and e[1].has(key):
+			res += 1
+			who += str(e[0]) + " "
+	if _col_pending.has(key):
+		res += 1
+		who += "_col_pending "
+	if res > 0:
+		perf_staged_drop_holder_residue += 1
+		if _stgprobe:
+			print("STGPROBE residue=%d why=%s key=%s holders=%s" % [res, why, key, who.strip_edges()])
 
 # AC-0337 step 0: one slab body was derived (chunk.gd _build_slab_collision,
 # usec since its entry). Bins are ms; the histogram is RESULT-ready via
@@ -10322,6 +10404,7 @@ func _free_chunk_key(key: String) -> void:
 	_bl_want.erase(key)
 	_col_pending_set.erase(key)
 	_col_pending.erase(key)
+	_col_stg_residue(key, "free")  # AC-0408: the holder census at death (must read 0)
 	if _cblog:
 		# AC-0247: the scan runs BEFORE the pool checkins (the children
 		# are still attached) — it counts the same nodes as the legacy

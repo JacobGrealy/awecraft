@@ -23140,6 +23140,14 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		# AC-0408: the cause split of staged_dropped + the holder-residue
+		# census (must read 0 — see the boundary arm's note).
+		"staged_drop_stale": int(world.perf_staged_drop_stale),
+		"staged_drop_done": int(world.perf_staged_drop_done),
+		"staged_drop_radius": int(world.perf_staged_drop_radius),
+		"staged_drop_disabled": int(world.perf_staged_drop_disabled),
+		"staged_drop_unmeshed": int(world.perf_staged_drop_unmeshed),
+		"staged_drop_holder_residue": int(world.perf_staged_drop_holder_residue),
 		# AC-0340: the per-frame collision budget census + the FENCE (must
 		# read 0 / 0 — no deferred body inside the immediate footprint).
 		"col_deferred": int(world.perf_col_deferred),
@@ -26657,6 +26665,16 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"reband_rearm_slabs": int(world.perf_reband_rearm_slabs),
 		"staged_drained": int(world.perf_staged_drained),
 		"staged_dropped": int(world.perf_staged_dropped),
+		# AC-0408: the cause split of staged_dropped (stale = chunk freed
+		# while the entry was pending; done/radius/disabled/unmeshed = the
+		# work was no longer owed at drain time) + the holder-residue census
+		# (a dead chunk's key still live in a holder map — must read 0).
+		"staged_drop_stale": int(world.perf_staged_drop_stale),
+		"staged_drop_done": int(world.perf_staged_drop_done),
+		"staged_drop_radius": int(world.perf_staged_drop_radius),
+		"staged_drop_disabled": int(world.perf_staged_drop_disabled),
+		"staged_drop_unmeshed": int(world.perf_staged_drop_unmeshed),
+		"staged_drop_holder_residue": int(world.perf_staged_drop_holder_residue),
 		# AC-0340: the per-frame collision budget census + the FENCE — the
 		# walk crosses the band edge and moves the footprint continuously,
 		# so this is the moving-footprint proof (must read 0 / 0).
