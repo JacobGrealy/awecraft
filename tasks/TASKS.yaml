@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T18:52
+  updated_at: 2026-10-07T23:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,7 +28,6 @@ queue:
 - AC-0402
 - AC-0403
 - AC-0404
-- AC-0405
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25088,11 +25087,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T18:52
-  updated_at: 2026-10-07T18:52
-  completed_at: null
+  updated_at: 2026-10-07T23:10
+  completed_at: 2026-10-07T23:10
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The clouds should look like real clouds - three-dimensional masses with lit tops,
@@ -25167,5 +25166,35 @@ intake:
     a switch, default conservative, short-circuiting before the work so the off state is provably the
     old look.
 
-    '
+
+
+    CLOSED - THE CLOUDS ARE A RAYMARCHED DENSITY VOLUME. The user''s instruction was to rethink rather
+    than iterate, and it was right: four rounds of pattern work on a single surface at a single radius
+    never produced volume, because a surface has no parallax and no internal depth. THE TECHNIQUE, following
+    the Godot 4 raymarched implementation the ticket pointed at with Guerrilla''s Horizon Zero Dawn lighting
+    model behind it: a three-dimensional FBM density field raymarched through the annulus 275 to 400 metres
+    above the surface - the extent the verified shells already occupied, so no geometry moved - stepped
+    at up to twenty-four view samples per segment, accumulated with Beer''s law, lit by a six-tap march
+    toward the sun from each sample for self-shadowing, with a dark-edge term and a Henyey-Greenstein
+    phase for forward scattering. THE USER''S TWO COMPLAINTS BECAME THE ACCEPTANCE AND BOTH PASS on the
+    same instrument the assessment used: the brightness spread runs 16.9 for the old flat deck, 32.4 for
+    the reference, and 68.9 now, so the volume carries more range than the reference it is measured against;
+    and the disc centre reads 181,229,190, the reference''s saturated tint rather than the neutral 222
+    grey. PARALLAX, the property no surface can have, is in the captures: with the camera inside the annulus,
+    near dark clumps sit in front of a brighter far layer with one mass visibly behind another, and from
+    the ground the player looks up at overlapping masses at different depths. COST WAS MEASURED, NOT ASSUMED,
+    because raymarching is expensive and this box is slow: the 700 m drain takes 781 seconds against 496
+    with the feature off, about 57 per cent more, roughly 1.5 to 2 FPS, inside the run budget with no
+    low-resolution fallback required. It ships behind cloud_volume, default ON, and the off state is proven
+    BYTE-IDENTICAL to the previous three-shell path by a textual diff rather than by eye. GATES WITH EXIT
+    STATUSES CHECKED, because a segfault leaves a completely clean log: G0 rc=0 with zero script and zero
+    shader errors; smoke rc=0 ok; genhash 25/25 against the current standing set; five of five renders
+    rc=0 with the Forward+ boot line asserted; boundary r4 ok both ways with no streaming effect; and
+    the coordinator''s heavy modes afterwards, farab rc=0 with h_mismatch 0 and lightstate rc=0 - the
+    run that aborted in the previous round''s stage, so that abort did not recur here. No C++ touched,
+    shell radii and centre unchanged, fence files untouched because main.gd already pushes every uniform
+    the volume reuses. TWO LIMITS RECORDED RATHER THAN LEFT FOR THE USER TO FIND: the interior and underside
+    of the cloud read dark because there is no diffuse-fill term yet, which the run names as the one-line
+    next lever; and there is a faint low-altitude moire on the test box''s software renderer that may
+    not appear on real hardware.'
   comments: []
