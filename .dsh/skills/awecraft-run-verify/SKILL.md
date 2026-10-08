@@ -18,7 +18,7 @@ a parallel agent or a coordinator gate job may hold the slot.
 
 | Tier | What it is | When |
 |---|---|---|
-| **G0** | one headless load: **zero `SCRIPT ERROR` AND zero `SHADER ERROR` lines** (AC-0396) | always, every task, hard |
+| **G0** | one headless load: **zero `SCRIPT ERROR` AND zero `SHADER ERROR` lines, AND the process exits 0** (AC-0396/AC-0403) | always, every task, hard |
 | **SMOKE** | 2–4 dependency-mapped modes (+ `genhash` when `world/*` or `autoload/data.gd` changed) | every code task |
 | **PROBE** | the task's own arm, when the spec defines one | when the spec defines one |
 | **RENDER** | at most **one** shot, `AWECRAFT_RADIUS=1–2`, ~300 s budget, under `xvfb-run -a` | only when the change is visual |
@@ -34,6 +34,14 @@ that never builds a material reports zero shader errors while the shader is brok
 `shaderforce` arm (FORCES every shipped shader to compile, Forward+ only) is the check that keeps a
 clean-looking run honest — run it (and census its log) in the heavy stage, not just G0.
 
+**The blind spot runs the other way too, and this project has a live defect in it** (AC-0403,
+2026-10-08): the slab use-after-free dies with signal 11 (rc 134) while leaving **zero SCRIPT ERROR
+and zero SHADER ERROR lines** — the backtrace is a C++ `handle_crash` dump the census never counts.
+**A CLEAN ERROR CENSUS IS NOT EVIDENCE OF A CLEAN RUN: G0 = census AND the process exit status,
+paired; either alone is a false pass** (the `gate_census.py` docstring carries the record). That is
+the standing rule, not a one-off: the crash is unreproduced on this box, so the paired check is the
+only thing that would catch its next occurrence.
+
 ## Picking the modes
 
 `godot/HARNESS.md` §1 is the reference table (and `tasks/harness_data.yaml` the machine source) —
@@ -48,6 +56,21 @@ file.
 - Compare against the **standing values** in `godot/HARNESS.md` §3. A moved value is a **finding**:
   either the change intended it — then re-establish it and say so explicitly — or it is a regression.
   Never "re-baseline" silently.
+- A value that has drifted OUT of band may be a **STALE BOUND rather than a regression** (AC-0408,
+  2026-10-08). Before calling it a regression, answer three questions: **what does the counter
+  actually count** (its mechanism, not its name — `staged_dropped` is a churn census of in-progress
+  builds being staged repeatedly, not lost work), **what the bound was derived from, and when** (the
+  old ceiling was calibrated from a single reading on the pre-carve tree), and **whether the world
+  changed underneath it** (the carve era added per-slab work per walk; the counter tracked it while
+  the drain's health fields stayed green). If it is a stale bound, re-base it **WITH THE REASONING
+  RECORDED in the standing row** (`HARNESS.md` §3 owns the row, the value and the tripwires — link,
+  don't restate) and **never to make the number green**: the AC-0408 re-base still reads above the
+  old bound, and that is the point. Then **replace the bare threshold with tripwires that catch a
+  RISING value** — the health fields, not the counter itself. Two counters went through this in one
+  round with opposite verdicts: `staged_dropped` was the stale bound (re-based with reasoning) and
+  `unbodied_built_final` (a must-be-zero) could not be resolved stale-or-real on the spot — it was
+  flagged as its own follow-up (AC-0409), not relaxed. A bare "must be 0 / below N" that is quietly
+  allowed to be violated is exactly how a real regression becomes invisible.
 - Documented non-fatal log noise (§3) is not chased; G0 still requires zero `SCRIPT ERROR` from our
   own code paths.
 - A render is evidence about **geometry, layout and UI** only — the recipe is a proxy renderer, not
@@ -58,6 +81,31 @@ file.
 Log to `.scratch/AC-NNNN-gates/` at the **repo root**, and write the self-contained
 `tasks/AC-NNNN/AC-NNNN-results.html` (G0 output, RESULT JSON, deviations, PNG only when visual).
 Report **values**, not prose.
+
+## Acceptance must test the case the user is actually looking at
+
+A gate certifies the case it measures — the case it cannot measure is the case that survives. The
+limb-glow acceptance (AC-0404) was verified by altitude — the gate-open rung, where the near tiers
+draw 0 px — and reported as satisfying the request, but the gate controlled **WHEN** the glow drew,
+not **WHICH MATERIAL** carried it: the annulus haze term painted the rim in the user's actual state
+(gate closed, near tiers drawn, player away from the origin) where no gate was looking, so the
+defect survived the acceptance and took a user report plus a full audit to find. The user's eye has
+now caught several defects that measurements passed, on this project, repeatedly — when eye and
+measurement disagree, the eye is describing something the measurement did not capture, and the user
+is the authority (AC-0407's ticket says it). Acceptance criteria must include the case the user is
+actually looking at — their altitude, their distance from the origin, their settings — not the case
+that is easiest to measure.
+
+## A fix often introduces the next defect
+
+The seam-fade fix (AC-0400) passed its own acceptance — pixel-verified at the reported altitudes,
+byte-identical at ground level — and still CREATED the next defect: pointing the fade at full air
+colour left a haze term that forced the annulus's outer 48 m to 100% air at EVERY view distance —
+an air-coloured ring on a near tier, visible only away from the origin. It took a user report and a
+full audit of every near-tier shader to find it (AC-0404). Treat every fix as a candidate cause of
+the next report: the fix's acceptance covers the reported case, but the fix's BLAST RADIUS — every
+state the changed term touches — is what needs the audit, and for visual work the user's state and
+the gate's state can differ in exactly one variable (here: distance from the world origin).
 
 ## A shot that writes no file is not evidence of anything
 

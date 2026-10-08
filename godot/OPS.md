@@ -102,6 +102,22 @@ machine reason behind them.
   export-true predicate, and (b) record *which* predicate chose the path in the arm's RESULT so a
   silent fall-through is visible (AC-0384 added `src_predicate` to the satellite arm).
 
+- **AddressSanitizer CANNOT instrument the engine on this box — Valgrind memcheck is the substitute**
+  (AC-0408, 2026-10-08, while hunting the slab use-after-free). Godot dlopens GDExtensions with
+  **RTLD_DEEPBIND**, and the ASan runtime refuses to back a DEEPBIND library (upstream sanitizers
+  issue 611). Verified in BOTH directions: a bare instrumented `.so` gives rc=1 "ASan runtime does
+  not come first in initial library list" (the extension dlopens after the non-instrumented
+  libraries), and `LD_PRELOAD=libasan` gives "trying to dlopen libchunkio.so with RTLD_DEEPBIND flag
+  which is incompatible with sanitizer runtime". The instrumented `libchunkio` itself builds fine
+  (~41 s: `g++ … -fsanitize=address -fno-omit-frame-pointer -DASAN_ENABLED` — godot-cpp has
+  first-class ASan support and `#error`s without the define), so the wall is the engine's loader,
+  not the build; the only ASan route left is an ASan-built engine (a coordinator-lane decision).
+  **Valgrind** (3.25.1 on this box) runs memcheck with NO instrumentation against the production
+  `.so`: the exact crash recipe (the 27-s `lightstate R16`) takes **~38 minutes per pass** (15–20×
+  wall), so a crash-hunt soak is managed-background-job scale — AC-0408's resumable soak (per-run
+  DONE markers, 90-min caps) is `.scratch/AC-0408-asan/vg_soak.sh`; its run 1 came back clean
+  (`ERROR SUMMARY: 0 errors from 0 contexts`), runs 2–4 + the player arm remain.
+
 ## 3. Daemons and ports
 
 | Port | Service | Started by | Notes |

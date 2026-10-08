@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T17:37
+  updated_at: 2026-10-08T18:06
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -25591,4 +25591,47 @@ intake:
     rather than closed.
 
     '
+  comments: []
+- id: AC-0410
+  title: harvest-standing-rules-into-their-homes
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-10-08T17:39
+  updated_at: 2026-10-08T18:06
+  completed_at: 2026-10-08T18:06
+  waiting_on: null
+  parent_id: null
+  notes: "# AC-0410 — harvest standing rules into their homes\n\n## 1) User Story\n\nHard-won rules from\
+    \ recent rounds (the crash that leaves a clean error census, the box that cannot run\nAddressSanitizer,\
+    \ drifted gate bounds that are stale rather than regressions, acceptance gates that\nverify the wrong\
+    \ case, and fixes that spawn the next defect) currently live only in ticket notes,\nresults pages\
+    \ and one tool's docstring. This ticket moves each rule into the standing home where the\nnext session\
+    \ will actually find it — the operations doc for machine facts, the run-verify skill for\ngate procedure,\
+    \ the heavy-gates skill for heavy-set/build matters — and brings the continuity\ncheckpoint up to\
+    \ date so nobody has to relearn any of it.\n\n## 2) Technical Details\n\n- Source material: `tasks/AC-0403/AC-0403-results.html`\
+    \ (ASan vs Valgrind),\n  `tasks/AC-0408/AC-0408-results.html` (drifted bounds, the limb-glow acceptance\
+    \ failure, the\n  seam-fade follow-on defect), `tasks/AC-0404/AC-0404-results.html`, and the\n  `tasks/scripts/gate_census.py`\
+    \ docstring (clean census is not a clean run).\n- Rules to harvest, each to exactly one home:\n  -\
+    \ clean error census is not evidence of a clean run (pair every census with the process exit\n   \
+    \ status) → `awecraft-run-verify` gate procedure; keep the docstring as the one home for the\n   \
+    \ tool-specific detail.\n  - AddressSanitizer impossible on this box (RTLD_DEEPBIND dlopen refused\
+    \ by the ASan runtime,\n    verified both directions); Valgrind memcheck is the substitute, ~38 min\
+    \ for the crash recipe →\n    `godot/OPS.md`.\n  - a drifted gate value may be a stale bound, not\
+    \ a regression: check what the counter counts and\n    what the bound was derived from, re-base with\
+    \ the reasoning recorded, never to make the number\n    green, replace bare thresholds with tripwires\
+    \ on a rising value → `awecraft-run-verify`.\n  - a fix can pass its own acceptance and still fail\
+    \ the user's use (limb-glow: gate controlled\n    WHEN the glow drew, not WHICH MATERIAL carried it)\
+    \ → acceptance must test the case the user is\n    looking at → `awecraft-run-verify`.\n  - a fix\
+    \ often introduces the next defect (seam-fade cure created the air-coloured ring) →\n    `awecraft-run-verify`.\n\
+    - Also: bring `godot/CONTINUITY.md`'s top checkpoint current (verified state, open items — the\n \
+    \ use-after-free without a reproducer and the in-flight Valgrind soak, the horizon-scale design lock\n\
+    \  pending the user, AC-0409's stale-or-real counter — and resume steps), following the file's\n \
+    \ existing format.\n- Gates: documentation only — no render, no build. Verified by reading each home\
+    \ file after the edit\n  and checking every fact has exactly one home (link, never restate).\n- No\
+    \ game code, no godot runs, no commits.\n"
   comments: []
