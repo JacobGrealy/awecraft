@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0404 plan</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1100px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:28px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+code{background:#eef2f7;padding:1px 4px;border-radius:3px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+.small{font-size:12px;color:#4a5568}
+</style></head>
+<body>
+<h1>AC-0404 plan — hide-medium-and-low-lod-at-height + per-material limb</h1>
+
+<h2>Goal</h2>
+<ol>
+<li><strong>Item 1 (live) — the tiers leave with one rule.</strong> Every near tier (high = band A
+chunks, medium/low = bands B/C annulus) must give way to the satellite body as altitude rises, on
+<b>one</b> consistent rule (the body's own fog wall — <code>d ≥ u_fog_far</code> per fragment, the
+body's <code>op = smoothstep(u_fog_far, u_render_edge, d)</code> start — not three thresholds).
+The acceptance is the <b>ladder</b> (2600/1600/700/300/120 m, user config R24/F83, fog wall 332 m),
+walked as descent and takeoff: at each rung state which tiers and shells are drawn and which are
+not, <b>measured from the frames</b> (A/B renders: body-off, world-off), and show that above the
+handover the only thing visible is the planet and its atmosphere. If a rung measurement shows a
+near tier drawing past the wall, chase the violating draw path and fix it. If no tier draws past
+the wall, the single-rule contract holds by construction and the ladder evidence says so — report
+that, with the measured tier table, rather than forcing a second metaphor.</li>
+<li><strong>Item 2 (live) — the limb is the body's material alone.</strong> The atmospheric limb
+treatment must not exist in any near-tier shader path in any state — not gated off, absent.
+Code review found exactly one near-tier material carrying a limb term:
+<code>core/lod_avg.gdshader</code>'s haze bridge (<code>haz = mix(1.0, fog_f, w)</code> — the outer
+48 m of the annulus forced to 100% air colour, the body's rim mirrored onto the ground). The
+chunk_lit_* four and the fluid_anim_* two are fog-only (engine depth fog + partition discard).
+Fix: strip the bridge — the annulus fades with the engine-fog model (<code>fog_f</code>) only, up
+to the wall (where <code>fog_f = 1.0</code> = exactly <code>u_air</code>, so AC-0400's single-source
+seam with the body's haz_d rim is preserved by construction; the annulus fog factor then equals
+band A's engine fog at the same view distance — continuous everywhere, not just at the inner edge).
+No gate can bring a term back that is not in the path. The body keeps haz_a/haz_d; the sky pass
+keeps its altitude-gated background glow (the orbit instrument) — both are the satellite-lod /
+atmosphere side of the contract. <b>The missed case</b>: measure the rim on the near tiers at an
+altitude where the gate is open (rung G600, S≈0.013, plus the well-open ladder rungs) — before and
+after — plus the user-state probe (below), because the previous acceptance measured the glow from
+orbit (open) and the near field at low altitude (shut), never the near tiers at open-gate
+altitude.</li>
+<li><strong>Item 3 (SUPERSEDED) — confirm, don't redo.</strong> The clouds were reworked as a
+raymarched volumetric layer (AC-0405, closed) with the lighting model (AC-0406, closed). Do not
+touch them; confirm they still hold after the changes (the ladder frames run with the volume
+default-ON; the 120 m frame shows the volume state; a shell A/B at 1600 proves the deck draws).</li>
+</ol>
+
+<h2>The user-state probe (the case the ladder geometry cannot show)</h2>
+<p>The annulus fade band sits at taxi 336–384 m from the <b>world origin</b> (the pole), not from
+the player. With the player at the spawn (the ladder's geometry) that band always sits at view
+distance ≥ 332 m — exactly at/past the partition wall — so the ladder never paints it. The user's
+game (player walked away from the origin) puts the band inside the view: pre-fix it draws its
+annulus as 100% air colour at any view distance (a glowing rim/patch on the low LOD — the
+"patch of ground with a rim around it"). Probe: <code>AWECRAFT_AIM="400,341,0,0,-1.57"</code>
+(default cam — the player AND the camera move; the streaming anchor relocates, the w-band crosses
+the view), ~200 m above the surface, straight down. Before: the near-field right of the frame is
+painted air colour (ground invisible); after: ground with normal fog. One run each side.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th><th>Why</th></tr>
+<tr><td><code>godot/core/lod_avg.gdshader</code></td>
+<td>Remove the haze bridge: delete <code>taxi</code>/<code>w</code> + the
+<code>haz = mix(1.0, fog_f, w)</code> forcing; <code>ALBEDO = mix(ALBEDO, u_air, fog_f)</code> —
+the engine-fog model only. Keep the <code>d ≥ u_fog_far</code> discard and the
+<code>u_fog_near/far</code> uniforms (the pushed ones).</td>
+<td>Item 2 — the only limb term in a near-tier path. Fog-only annulus, per the user's own words
+("low LOD should have NO limb effect, only fog").</td></tr>
+<tr><td><code>godot/core/satellite_body.gdshader</code></td><td>none expected</td>
+<td>haz_a + haz_d stay — the limb belongs to the satellite lod.</td></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td><td>none expected</td>
+<td>The background glow is the atmosphere's orbit instrument, already gated on <code>u_space</code>
+behind <code>u_limb_gate</code>; it paints only where no geometry covers.</td></tr>
+<tr><td><code>chunk_lit_*.gdshader</code> / <code>fluid_anim*.gdshader</code></td><td>none</td>
+<td>Already fog-only (engine fog + partition discard).</td></tr>
+<tr><td><code>tasks/AC-0404/AC-0404-results.html</code> + captures</td>
+<td>the self-contained evidence page + PNGs</td><td>delivery</td></tr>
+</table>
+<p class="small">No C++ (genhash-neutral by construction — genhash runs anyway, world/* touched).
+No <code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code> (fence).
+No <code>harness.gd</code> (pristine — the AIM/planet/SAT_BODY/NO_WORLD_VIS hooks already exist).
+No new setting: both items are defect fixes (a look the user rejected; the
+AC-0401 "defect fixes ship without a switch" precedent).</p>
+
+<h2>Harness gates (light set, policy <code>awecraft-run-verify</code> — then exit)</h2>
+<table>
+<tr><th>Gate</th><th>Command / how</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot --quit</code> →
+<code>gate_census.py</code> zero SCRIPT + zero SHADER ERROR <b>and the process exit status checked</b>
+(a crash leaves a clean log; the AC-0403 stochastic UAF is known-open — any backtrace goes in the
+results). Before AND after the change.</td></tr>
+<tr><td>shaderforce</td><td>Forward+ lavapipe forced-compile of every shipped shader (I am changing
+a .gdshader; the lazy-compile trap — a run that never builds the material reports a false 0/0).</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> —
+dependency-mapped; genhash because <code>world/*</code> (shaders) touched. Standing: 25/25.</td></tr>
+<tr><td>RENDERS (the acceptance)</td><td>Recipe: <code>xvfb-run -a env VK_ICD_FILENAMES=…/lvp_icd.json
+AWECRAFT_CAM=planet AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83
+AWECRAFT_SNAP_DRAIN=1200 AWECRAFT_TIME=0.5 AWECRAFT_TIME_FREEZE=1 AWECRAFT_CLOUD_T0=411200
+AWECRAFT_SAT_ALT=&lt;rung&gt; AWECRAFT_SNAPSHOT=&lt;abs&gt; $S --path godot --rendering-driver vulkan</code>,
+timeout 1200 s, <code>ulimit -v 8388608</code>, boot line must assert <code>- Forward+ -</code>
+llvmpipe, <code>fog_far=332.0 render_edge=400.0</code> asserted per log, file existence checked.</td></tr>
+</table>
+<p><b>Render set (before = current tree; after = fixed tree):</b> ladder
+L{2600,1600,700,300,120} (descent; takeoff = the same five frames walked in reverse — the
+AC-0384 §25.1 documented direction-independence: a still at a given altitude is direction-agnostic,
+the frozen player, the view-biased fill, the body dissolve, S and the clouds are all altitude
+functions) + <code>AWECRAFT_SAT_BODY=0</code> at 700/1600 (B: what is left when the body is hidden)
++ <code>AWECRAFT_NO_WORLD_VIS=1</code> at 700 (W: clouds+sky only) → the per-rung tier table is
+measured: near tiers at a rung = B−W mask; body = A−B mask + <code>AWECRAFT_CLOUDS=0</code> at 1600
+(shell A/B: the deck draws as a veil over the disc) + G600 (the gate-open rung: S≈0.013 — the
+missed case: rim measured on the near tiers where the gate is open) + the WB200 AIM probe
+(user-state w-band, item 2). Takeoff is walked from the same frames (no extra runs — see the
+§25.1 argument; stated in the results).</p>
+<p><b>Measurements (PIL, .scratch/AC-0404/):</b> per rung — near-tier pixel fraction (B−W), body
+pixel fraction (A−B), cloud-veil fraction (L1600 vs L1600c); the rim on the near tiers at the
+gate-open rung (G600: B−W mask ∩ air-colour rim band, before/after) and at the WB200 probe
+(annulus-region near-pure-air fraction, before/after); the S values per rung from the SATDIAG
+lines.</p>
+<p><b>Deliberate non-actions:</b> no boundary r4 (shader-only change — streaming/scheduling
+untouched; the one-shot boundary allowance is unspent, not needed); no new arm (the spec defines
+none; the A/B envs are pre-existing hooks); HEAVY boundary/perf/flake/r50/full battery + Windows
+build = the coordinator's job — exit after the light set. No commits/pushes/TASKS.yaml edits
+(fence).</p>
+
+</body></html>

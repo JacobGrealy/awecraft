@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0404 — results: near tiers fade at altitude; the limb is the body's alone</title>
+<style>
+body { font: 15px/1.5 "Segoe UI", system-ui, sans-serif; margin: 2em auto; max-width: 1080px; color: #1c2733; padding: 0 1em; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #2b6cb0; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.8em; color: #2b6cb0; }
+table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+th, td { border: 1px solid #b8c4d0; padding: 4px 9px; text-align: left; }
+th { background: #e8eef5; }
+.pass { background: #d8efdc; font-weight: 600; }
+.note { background: #fdf3d7; border-left: 4px solid #d9a400; padding: .6em 1em; margin: 1em 0; }
+img { max-width: 640px; border: 1px solid #999; display: block; margin: .5em 0; }
+.code { font-family: Consolas, monospace; font-size: .88em; background: #f2f5f8; padding: .8em; border: 1px solid #ccd; white-space: pre; overflow-x: auto; }
+small { color: #556; }
+</style>
+</head>
+<body>
+<h1>AC-0404 — results: near tiers fade at altitude · the limb is the body's alone</h1>
+<p><small>Run: R24/F83 user config (u_fog_far = 332.0 m, render edge 400.0 m), seed 44, Forward+ lavapipe, 1280×720, 22 renders (11 before + 11 after; the wb264 before/after pair sits inside the sets), all rc=0 / 0 errors. Acceptance measured from frames, not code. No commits — coordinator.</small></p>
+
+<h2>Verdict</h2>
+<table>
+<tr><th>Item</th><th>Result</th><th>Measured evidence</th></tr>
+<tr><td>1 — medium/low LODs disappear at height with the high</td>
+<td class="pass">HOLDS (no code change owed)</td>
+<td>Every near-tier material (band A ×4 chunk shaders + annulus lod_avg ×1 + fluid ×1) shares ONE rule: discard at view distance ≥ u_fog_far = 332 m, the same value that starts the body's op ramp. Ladder: at 700 m and 1600 m the near tiers draw <b>0 px</b> (body-off vs world-off frames pixel-identical, before AND after); at 2600 m they are geometrically outside the frame (nadir 53.5° off axis &gt; 37.5° half-FOV; the annulus is a ≤5.7° arc about nadir). At 120/300 m every tier that should draw does. Above handover: only the planet (body 42.31% of frame at 700, 31.45% at 1600) and its atmosphere.</td></tr>
+<tr><td>2 — limb effect applied to the low LODs instead of the satellite body alone</td>
+<td class="pass">FIXED, per-material (no gate left to reopen)</td>
+<td>The annulus shader <code>lod_avg.gdshader</code> carried the only limb term in any near-tier path: a "haze bridge" <code>haz = mix(1.0, fog_f, w)</code> that forced the outer 48 m of the annulus (a fixed 336–384 m ring about the <i>world origin</i>) to 100% air colour at <b>any</b> view distance — a rim painted on the low LOD, visible whenever the player is away from the origin. Removed: the fragment is now <code>haz = fog_f</code> (the engine depth-fog model, identical to band A at the same distance). At the wall fog_f = 1.0 = u_air, so the AC-0400 single-source seam with the body's haz_d rim is preserved by construction. The other five near-tier shaders were audited: fog-only, untouched. <b>The missed case, measured:</b> the rim on near tiers at a gate-open altitude (700 m rung, S = 0.132): the near tiers draw 0 px there (partition), so their rim is 0 px before and after — the rim visible at that altitude is the body's (42.31% of frame) plus the gated background glow (S = 13.2%).</td></tr>
+<tr><td>3 — 2D clouds (superseded by AC-0405)</td>
+<td class="pass">STILL HOLDS after the change</td>
+<td>Volumetric cloud is default-ON in every ladder frame (SATDIAG: outer shell r=4400 visible, cov 0.750; inner shells hidden = the AC-0405/0406 volume state). Deck A/B at 1600 m: 4.85% of the frame drawn by the deck, before and after (byte-identical frames). The 120 m frame shows the volume from inside the shells. AC-0402 sky (S-blend 0→13→92→100% up the ladder), AC-0399 fill, AC-0398 lighting all visible in the ladder frames.</td></tr>
+</table>
+
+<h2>Item 1 — the ladder, descent (measured from frames)</h2>
+<table>
+<tr><th>Rung (radial alt)</th><th>S (limb gate 500–2000)</th><th>Body (A−B)</th><th>Near tiers (B−W)</th><th>Cloud deck (A−C)</th><th>Before vs after</th></tr>
+<tr><td>2600 m</td><td>1.000</td><td>mottled disc fills frame</td><td>0 (outside frame: nadir 53.5° off axis)</td><td>—</td><td>byte-identical</td></tr>
+<tr><td>1600 m</td><td>0.921</td><td>31.45% of frame</td><td>0.000% (B−W pixel-identical)</td><td>4.85%</td><td>byte-identical (L and C frames)</td></tr>
+<tr><td>700 m</td><td>0.132 (gate open)</td><td>42.31% of frame</td><td>0.000% (B−W pixel-identical, <b>before and after</b>)</td><td>—</td><td>byte-identical (L and B frames)</td></tr>
+<tr><td>300 m</td><td>0.000</td><td>op ring (op_nadir = 0)</td><td>drawn: band A 0–128 m + annulus 128–142 m (view distance &lt; 332); at this altitude the whole near field is 89–100% fog, so the tier split is <b>0.00% in pixels</b> (MEDIUM_START probe: 13 px) — the tiers are indistinguishable here, by fog, not by partition</td><td>—</td><td>byte-identical</td></tr>
+<tr><td>120 m</td><td>0.000</td><td>op ring (op_nadir = 0)</td><td>drawn: band A 0–128 m (crisp voxels) + annulus 128–310 m (flat quads = <b>27.48% of frame</b>, MEDIUM_START probe) + volume cloud above</td><td>—</td><td>byte-identical</td></tr>
+</table>
+<p><b>Takeoff = the same five frames walked in reverse.</b> A still at altitude h is direction-agnostic: S, the body op ramp, the fog wall, the tier partition and the cloud state are all functions of altitude only (frozen player, view-biased fill, body dissolve, AC-0384 §25.1 caveat 3). No separate takeoff render is owed or run.</p>
+<p><b>Shells at every rung (SATDIAG in every log):</b> cloud outer shell r=4400 visible cov 0.750, inner shells hidden (volume state); satellite body MI visible in tree with per-fragment op (0 below the 500 m handover, ramping through 332–400 m view distance); near-tier streaming untouched (no scheduling change in this ticket).</p>
+<details><summary>ladder frames (before = after at every rung; the pair shown is the captured set)</summary>
+<img src="ac0404-b-l2600.png" alt="2600 m: body disc fills the frame, S=1.0">
+<img src="ac0404-b-l1600.png" alt="1600 m: body disc, glow S=0.921, deck veil 4.85%">
+<img src="ac0404-b-l700.png" alt="700 m: body disc, gate open S=0.132, no near tiers">
+<img src="ac0404-b-l300.png" alt="300 m: near tiers drawn, body off at nadir">
+<img src="ac0404-b-l120.png" alt="120 m: band A core + annulus + volume cloud">
+</details>
+
+<h2>Item 2 — what changed for the limb, and why per-material</h2>
+<p><b>The defect (pre-fix fragment, the only limb term in any near-tier path):</b></p>
+<div class="code">// godot/core/lod_avg.gdshader (PRE-FIX, removed):
+float taxi = abs(v_world_pos.x) + abs(v_world_pos.z);   // Manhattan distance from the WORLD ORIGIN
+float w = 1.0 - smoothstep(336.0, 384.0, taxi);
+float haz = mix(1.0, fog_f, w);                          // outer 48 m of the annulus: FORCED 100% air</div>
+<p><b>The fix (post-fix fragment — fog only, nothing else):</b></p>
+<div class="code">// godot/core/lod_avg.gdshader (POST-FIX):
+float fog_f = clamp((d - u_fog_near) / max(u_fog_far - u_fog_near, 1.0), 0.0, 1.0);
+float haz = fog_f;                                       // the engine depth-fog model, as in band A
+ALBEDO = mix(ALBEDO, u_air, haz);</div>
+<p>Per-material, not gated: the term is <i>gone from the path</i> — there is no uniform, no smoothstep, no condition a later change could flip back. At the fog wall (d = u_fog_far) fog_f = 1.0, so the annulus ends in exactly u_air where the body's haz_d rim begins — the AC-0400 single-source seam (one u_air, <code>AeroLib.fog_display</code>, pushed to body + sky + annulus) holds at every view distance.</p>
+<p><b>What the removed term did in the user's state (player at taxi 400 from the origin, the w=0 side of the annulus) — deterministic evaluation, R24/F83 (fog 100→332 m):</b></p>
+<table>
+<tr><th>view distance</th><th>150 m</th><th>200 m</th><th>250 m</th><th>300 m</th><th>330 m (wall)</th></tr>
+<tr><td>pre-fix air fraction (w=0 region)</td><td>100.0%</td><td>100.0%</td><td>100.0%</td><td>100.0%</td><td>100.0%</td></tr>
+<tr><td>post-fix air fraction (fog_f)</td><td>21.6%</td><td>43.1%</td><td>64.7%</td><td>86.2%</td><td>99.1%</td></tr>
+</table>
+<p>The pre-fix annulus showed a hard 100%-air ring 336–384 m from the origin at <b>any</b> altitude — the "rim around the low LOD" — with fog applied only inside 336 m. The post-fix annulus fogs exactly like the high tier does at the same distance, and the two tiers are indistinguishable at the wall.</p>
+<div class="note"><b>The missed case — measured now.</b> The rim on near terrain seen from a gate-open altitude: the 700 m rung (S = 0.132, gate open) is that altitude. The near tiers draw 0 px there (body-off vs world-off frames: 0 differing pixels, <b>before and after</b>) because the fog wall (332 m view distance) discards them before the gate opens (500 m radial). The rim visible at 700 m is the satellite body's own haz_a rim (42.31% of the frame) plus the gated background glow (S = 13.2%) — the limb is the body's alone, exactly as the ticket demands. In the user's own state (gate closed, near tiers drawn), the w-band is what painted the rim — and it is now gone (deterministic table above + probe frames below).</div>
+<p><b>User-state probe (before/after).</b> Player teleported to (400, 0) — taxi 400 from the origin, straight down, eye 264 m above the exact C++ surface (166 at (400,0) via <code>AweGen.column_heights16</code>). The drawn annulus straddles the w=1/w=0 split (the −X half faces the origin: w=1; the other half: w=0), so one frame carries both sides:</p>
+<table style="width:50%"><tr><th>before (w-band present)</th><th>after (fog only)</th></tr>
+<tr><td><img src="ac0404-b-wb264.png" alt="before: uniform air patch in the w=0 half of the annulus"></td>
+<td><img src="ac0404-a-wb264.png" alt="after: fogged textured ground, no forced-air ring"></td></tr></table>
+<p><small>Diff footprint: 20.78% of the frame, confined to the annulus ring (band A core, the stone outcrop at pixel (940,580), and all geometry byte-identical). Caveat, stated honestly: the 1200-frame drain has a wall-clock window, so the near-field <i>streaming state</i> at this recentered probe differs run-to-run — the frames carry streaming-state noise on top of the colour fix (uniform pale (230,255,255) patches in the after frame are background through not-yet-streamed annulus columns, not u_air). The w-band effect itself is the deterministic table above; the frames are the qualitative user-state view.</small></p>
+
+<h2>Item 3 — clouds, still holding</h2>
+<p>Every ladder log (before and after) carries the AC-0405 volume state: <code>c0{vis=true r=4400 cov=0.750}, c1/c2{vis=false}</code>. Deck A/B at 1600 m: 4.85% of the frame drawn by the deck, before and after (clouds-off frame byte-identical). The 120 m frame shows the volume from inside the shells. The change in this ticket touches no cloud path.</p>
+
+<h2>Gates (light set — heavy battery + Windows are the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Before</th><th>After</th></tr>
+<tr><td>G0 headless + census (SCRIPT/SHADER errors)</td><td class="pass">rc=0, 0/0</td><td class="pass">rc=0, 0/0</td></tr>
+<tr><td>shaderforce (12 shipped shaders forced through Forward+)</td><td>n/a (pre-change baseline)</td><td class="pass">rc=0, 12/12 verdict=ok, lod_avg declared=6 params=6</td></tr>
+<tr><td>smoke battery (player;interact;light;fluids;genhash)</td><td>n/a</td><td class="pass">rc=0, ok:true, 0/0, genhash 25 columns</td></tr>
+<tr><td>renders (Forward+ boot, fog_far=332.0 asserted, 0 errors)</td><td class="pass">11/11 rc=0</td><td class="pass">11/11 rc=0 + 2 probe</td></tr>
+</table>
+
+<h2>Deliberate non-actions</h2>
+<ul>
+<li>No boundary r4 (one-shot allowance unspent): shader-only colour change; the streaming/scheduling lanes (the boundary's territory) are untouched.</li>
+<li>No new arm, no new setting: this is a defect fix, not a feature (the w-band was dead weight — the annulus fogs like band A did already).</li>
+<li>Takeoff not re-rendered: direction-agnostic stills (AC-0384 §25.1 caveat 3), documented above.</li>
+<li>The 1600 m after A/B pair (b1600/w1600) is the before pair re-asserted: the after ladder frames are byte-identical to the before frames, so the before measurement <i>is</i> the after measurement there.</li>
+<li>Boundary/perf/r50/Windows build: coordinator's job — exiting after the light gates.</li>
+</ul>
+
+<h2>Deviations & honest notes</h2>
+<ul>
+<li><code>spec.html</code> was missing at start and was generated via <code>tasks/scripts/spec_template.py AC-0404</code>.</li>
+<li>The first wb264 probe render started after the lod_avg edit and therefore rendered the <b>post-fix</b> shader; it was renamed to the after frame, the pre-fix state was restored via a temporary revert (post-fix file preserved byte-identical, md5 <code>7094d7669b227a5b5cfee6ec5a8bb8a5</code>, verified) and the before frame re-rendered cleanly.</li>
+<li>Probe iterations: 150 m failed (annulus below the frame — ground reach 0.767·h &lt; 128 m) and 250 m failed (suboptimal drop); 264 m eye height is the optimum (drawn annulus 128–201 m meets frame reach ≈202 m). Retired probe frames deleted; exact C++ terrain heights used throughout (<code>Generator.terrain_height</code> in GDScript is an approximation — 124 vs the true 140 at spawn — and was not trusted for placement).</li>
+<li>The 2600 m near-tier absence is geometric (outside the frame); the pixel-identity proofs live at 1600/700 m.</li>
+<li>Fenced files (<code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>) untouched, read-only.</li>
+</ul>
+
+<p><small>Captures (this folder): <code>ac0404-b-l{2600,1600,700,300,120}.png</code>, <code>ac0404-b-b700/w700/b1600/w1600/c1600.png</code>, <code>ac0404-b-wb264.png</code> (before set) · <code>ac0404-a-l{2600,1600,700,300,120}.png</code>, <code>ac0404-a-b700/w700/c1600.png</code>, <code>ac0404-a-wb264.png</code>, <code>ac0404-t120a.png</code>, <code>ac0404-t300a.png</code> (after set + tier probes). Logs: <code>.scratch/ac0404/shot-*.log</code> (git-ignored). Files changed: <code>godot/core/lod_avg.gdshader</code> only.</small></p>
+</body>
+</html>

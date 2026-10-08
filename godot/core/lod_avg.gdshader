@@ -53,6 +53,27 @@
 // the sky horizon — one air colour, no fourth. The annulus now
 // dissolves into the air behind it at every altitude; the dome keeps
 // its own haz model for its own edge (satellite_body.gdshader).
+//
+// AC-0404: the HAZE BRIDGE IS REMOVED (the r8/AC-0399/AC-0400 history
+// above is history — the bridge no longer exists in this material).
+// The bridge forced haz = 1.0 (100% air colour) across the outer 48 m
+// of the annulus at EVERY view distance — a limb treatment on a
+// NEAR-TIER material: it mirrored the satellite body's rim onto the
+// ground, and the user saw it as "the limb effect applied to the low
+// LODs" (visible wherever the player is far enough from the world
+// origin that the bridge's 336-384 m taxi band sits inside the view
+// distance; at the ladder geometry the band sits exactly at the
+// partition wall, so the harness frames never painted it). The
+// atmospheric limb belongs to the satellite lod's material alone
+// (satellite_body.gdshader haz_a/haz_d — kept). This material is now
+// FOG-ONLY: the annulus fades with the engine depth-fog model
+// (fog_f — the same factor band A receives at the same view distance,
+// so the band A/annulus boundary is continuous by construction, as in
+// r8) and ends at the partition wall (d >= u_fog_far, AC-0401), where
+// fog_f = 1.0 = u_air — the body's haz_d rim at the same wall, so the
+// AC-0400 single-source seam is preserved by construction, and now at
+// EVERY view distance, not only at the bridge's inner edge. No gate
+// can bring the term back: it is not in the path.
 shader_type spatial;
 render_mode fog_disabled;
 
@@ -91,35 +112,28 @@ void fragment() {
 	// engine depth-fog ramp (the band A's factor at the same d).
 	vec3 V = CAMERA_POSITION_WORLD - v_world_pos;
 	float d = length(V);
+	// AC-0401: the fog-wall partition. The satellite body owns the rule
+	// "the body is only where the world's depth fog has already fully
+	// faded the world (d >= u_fog_far)"; this material is part of the
+	// world, so it obeys the same wall. Pre-AC-0401 the annulus kept
+	// drawing PAST the wall at 100% fog colour (fog_f = 1 here) - over
+	// the body's own displaced terrain at the same view distance,
+	// coplanar with it: the fog-colour diamond patch in the orbital
+	// frames (the "patch of ground you just left") and the 332-400 m
+	// z-fighting band. The body's haz_d rim at the wall is exactly the
+	// single-source air colour (u_air), so the seam target AC-0400 set
+	// is preserved - the fade now runs in the body's own rim instead of
+	// in this annulus, which ends at the wall.
+	if (d >= u_fog_far) {
+		discard;
+	}
 	float fog_f = clamp((d - u_fog_near) / max(u_fog_far - u_fog_near, 1.0), 0.0, 1.0);
-	float taxi = abs(v_world_pos.x) + abs(v_world_pos.z);
-	// The fade occupies the OUTER 48 m of the annulus (336-384), not the
-	// whole band: with w=1 out to 336, haz = fog_f (the engine ramp)
-	// across the nadir core, so at orbit altitude the near field stays
-	// the fog wall the pre-r8 frames show (the 2600 m grain box must not
-	// see the slab texture through the haze - measured 7.33/4.02 vs the
-	// 4.71/1.90 gate when the fade spanned 128-384). The fade is
-	// smoothstep (zero slope at both ends) and ends exactly at the tier
-	// boundary.
-	float w = 1.0 - smoothstep(336.0, 384.0, taxi);
-	// AC-0399 r1: r8 shipped the mix BACKWARDS — mix(fog_f, haz_b, w)
-	// returned haz_b (~0 at the orbital nadir: the body's limb haz with
-	// cosv~1, op=1) across the whole w=1 core, contradicting the block
-	// above ("with w=1 out to 336, haz = fog_f"): at 2600 m the built
-	// annulus rendered the AC-0283 lit-0.2 base (measured (16,8,0), a
-	// dark diamond) instead of the fog wall. Swapped so w=1 -> fog_f
-	// (the engine ramp, the nadir core) and w=0 -> the seam target,
-	// exactly as written.
-	// AC-0400: the seam target (w=0 end of the fade) is the
-	// SINGLE-SOURCE AIR COLOUR — full u_air (the weight below is 1.0),
-	// not the dome-mirror haz_b r8 used. haz_b ~ 0 at the orbital nadir
-	// made the fade go toward the lit-0.2 slab base — the dark rim at
-	// the annulus edge (AC-0399 §7). u_air is the same single source the
-	// fog wall, the dome haze and the sky horizon use (main.gd pushes
-	// env.fog_light_color = AeroLib.fog_display(t) to all three); no
-	// fourth colour is introduced. The dome keeps its own haz model for
-	// its own edge (satellite_body.gdshader).
-	float haz = mix(1.0, fog_f, w);
+	// AC-0404: FOG ONLY (the haze bridge is gone — see the header). The
+	// annulus fades with the engine depth-fog model, the same factor
+	// band A receives at the same view distance; at the partition wall
+	// fog_f = 1.0 = u_air, the single-source seam with the body's haz_d
+	// rim (AC-0400). This path carries no limb term in any state.
+	float haz = fog_f;
 	ALBEDO = mix(ALBEDO, u_air, haz);
 	ALPHA = 1.0;
 }
