@@ -14,6 +14,19 @@
 namespace awecommon {
 
 int slab_getbits(const uint8_t *i, int isize, int bits, int pos) {
+	// AC-0403: bounds check. The i[bo] read below was the ONLY unguarded
+	// read in the slab decode: bo = (pos*bits) >> 3 had no bound, so a
+	// slab entry whose b disagrees with its i buffer (or an empty/dead
+	// buffer) read out of the heap — the signal-11 crash family at
+	// chunk.gd get_local -> slab_cell (tasks/AC-0403). Valid codec data
+	// never trips this: paletted slabs carry bits in 1..4 and an i buffer
+	// sized exactly ceil(S3*bits/8) by bitpack (palettize_flat / slab_set
+	// / the wire decode), so pos*bits + bits <= isize*8 for every
+	// pos < S3 — the check is a no-op on the happy path. Malformed input
+	// now reads as palette index 0 instead of faulting.
+	if (i == nullptr || isize <= 0 || bits < 1 || bits > 8 || pos < 0
+			|| (int64_t)pos * bits + bits > (int64_t)isize * 8)
+		return 0;
 	int bo = (pos * bits) >> 3;
 	int sh = (pos * bits) & 7;
 	uint32_t w = (uint32_t)i[bo] << 8;

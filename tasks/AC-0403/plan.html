@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0403 plan — the get_local segfault</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:980px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.1rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.6rem}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.25rem .5rem;vertical-align:top}
+.k{color:#a33}.g{color:#366}
+</style>
+</head>
+<body>
+<h1>AC-0403 — segfault in the chunk block read (get_local, chunk.gd:657)</h1>
+
+<h2>Goal</h2>
+<p>Find the window in which a chunk is absent / freed / mid-rebuild when <code>get_local</code>
+reads it, reproduce the signal-11, or guard the lookup with a measured cost. Mob and player
+behaviour must be <em>asserted</em> unchanged when the guard does not trigger.</p>
+
+<h2>Reading of the failure conditions (static audit, before any run)</h2>
+<table>
+<tr><th>#</th><th>Condition</th><th>What the code does today</th><th>Verdict</th></tr>
+<tr><td>C1</td><td>chunk absent (<code>chunks.get</code> null)</td>
+<td><code>get_block</code> returns air, except recorded edits (the AC-0325 record-only read). Safe.</td>
+<td><span class="g">handled</span></td></tr>
+<tr><td>C2</td><td>chunk present, data empty (never generated)</td>
+<td><code>c.data.is_empty()</code> → same edits/air path. Safe.</td>
+<td><span class="g">handled</span></td></tr>
+<tr><td>C3</td><td>chunk present, data cleared (pool reuse, <code>clear_data</code>)</td>
+<td><code>data</code> = 24 <em>nulls</em> (not empty) → <code>get_local</code>: <code>s == null</code> → 0. Safe.</td>
+<td><span class="g">handled</span></td></tr>
+<tr><td>C4</td><td>slab index out of range</td>
+<td><code>get_block</code> bounds y to [0, HEIGHT); x/z masked <code>&amp; 15</code> before <code>get_local</code>;
+C++ <code>slab_cell</code> bounds <code>p_pos</code>. Safe.</td>
+<td><span class="g">handled</span></td></tr>
+<tr><td>C5</td><td>malformed slab dict (<code>b</code> inconsistent with <code>i.size()</code>)</td>
+<td>C++ <code>slab_getbits(i.ptr(), isize, b, pos)</code> reads <code>i[bo]</code> with <b>no bound on <code>bo</code></b>
+(<code>bo = (pos*b) &gt;&gt; 3</code>) → OOB heap read → SIGSEGV. Deterministic per slab: any reader of that slab
+crashes every time. <b>The only unguarded read in the whole lookup.</b></td>
+<td><span class="k">UNGUARDED (C++)</span></td></tr>
+<tr><td>C6</td><td>slab memory dead (UAF / concurrent free)</td>
+<td>A read of freed slab/PBA memory faults inside the libc memory op with <b>zero script and zero
+shader error lines</b>. Stochastic. Fits the symptom exactly: the C++ backtrace in every captured log is
+ONE libc frame at <code>main+45f60</code> (= <code>__sigaction</code> — the backtrace dumper itself faults while
+dumping, a classic corrupted-state signature); the GDScript backtrace (the VM state at first fault) is
+the reliable part.</td>
+<td><span class="k">UNGUARDED (native)</span></td></tr>
+</table>
+
+<p><b>Key dating evidence:</b> the same signature predates the C++ port (AC-0214). The AC-0231-era log
+(<code>.scratch/ac0231-r16-inrpass.log</code>) crashed with the identical shape while the slab read was pure
+GDScript (<code>ChunkIO._slab_cell</code>). The GDScript VM is bounds-safe on live objects — an OOB index or a
+malformed-but-live dict cannot segfault through it. So a pre-port crash at that line can only mean the
+slab object (or its buffers) was <b>dead memory</b>: C6 is the proven mechanism, not a hypothesis.
+Occurrences found in <code>.scratch/</code>: ac0231-r16-inrpass (chunk.gd:367), skymin2 (chunk.gd:441),
+batt192 (chunk.gd:464 — the C++ <code>slab_cell</code> line), AC-0402-gates/lightstate (chunk.gd:657 — current),
+plus the AC-0384 round-12 mob-tick report. <b>This is a weeks-old chronic defect, not a new one.</b></p>
+
+<p><b>Concurrency audit result (current tree):</b> every worker lane (threadgen, threadmesh incl. edit
+pool, IO read/write/compact, satellite bake) receives <b>value copies</b> at dispatch
+(<code>slab_copy</code> / <code>snap_rings</code> / entry-dup), writes only its own slot entry, and every handoff
+(threadgen_poll / threadmesh_poll / io_poll) runs on the main thread inside <code>World._process</code>.
+Shared C++ singletons (<code>AweMesh</code>, <code>AweGen</code>, <code>ChunkIOPalette</code>) are stateless (atomic
+counters only). No worker body touches the <code>chunks</code> dict or live slab objects. The design
+<b>forbids</b> C6 — yet the crash persists, so either an unseen cross-thread reference exists or the
+corruption is at the engine/wrapper level. Static analysis is exhausted; the next step is empirical.</p>
+
+<h2>Approach</h2>
+<ol>
+<li><b>Reproduce.</b> Loop the exact crashing recipe (<code>AWECRAFT_LOGIC=lightstate
+AWECRAFT_LS_RADIUS=16</code>, headless, 12 GB cap, ~1 min/run) until rc=134 or the budget is spent.
+This is the arm that aborted in AC-0402-gates.</li>
+<li><b>If reproduced:</b> bisect the worker lanes on the same recipe (threadgen off → sync gen;
+threadmesh off → sync mesh; COLSTAGE=0) to identify the lane whose presence makes the crash
+possible, then fix at the reference-holding site. <b>If not reproduced:</b> state that plainly and
+ship the C5 hardening (bounds-check <code>slab_getbits</code>, zero happy-path cost) + the G0 blind-spot
+note, with the failure-condition map above as the starting point for the next occurrence.</li>
+<li><b>Guard decision (made up front):</b> a read-site guard cannot catch C6 — freed memory reads as
+plausible garbage, so any structural check either passes (no protection) or reads the same dead
+memory (crash unchanged). The guard that <em>can</em> be proven behaviour-identical and that removes a
+real unguarded read is the C5 C++ bounds check. A per-frame GDScript slab-invariant check is
+rejected: it costs measurable work on the every-frame player path while protecting against a class
+(C5) that a live object cannot exhibit — and it would not stop C6. If reproduction yields a
+reproducible trigger, the fix goes where the reference is dropped, not at the read site.</li>
+</ol>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Why</th></tr>
+<tr><td><code>gdext/src/awe_common.cpp</code> or <code>chunk_io.cpp</code></td>
+<td>C5: bounds-check <code>slab_getbits</code> / the n≥2 path of <code>slab_cell</code> (clamp <code>bo</code>; return the
+defensive -1 the n==0/n==1 paths already return). Rebuild libchunkio (linux; the Windows build is
+the coordinator's lane, flagged in the report).</td></tr>
+<tr><td><code>tasks/scripts/gate_census.py</code> (docstring)</td>
+<td>Record the G0 blind spot: a signal-11 exit leaves a <em>clean</em> log (zero SCRIPT ERROR, zero
+SHADER ERROR) — census must be paired with the process exit status. (Per the escalation note.)</td></tr>
+<tr><td><code>tasks/AC-0403/AC-0403-results.html</code> + <code>continuity.md</code></td>
+<td>Findings, reproduction status, measured costs, gate results.</td></tr>
+</table>
+<p>No game-behaviour file is touched if the C++ hardening is the whole change — the GDScript read
+path (player, mob, fluids) is byte-identical, so behaviour-unchanged is <em>inherited</em> for C5
+(the check only fires on input the invariant says cannot exist in a valid world — and the arms
+that read every slab of 25 hashed columns prove the invariant holds).</p>
+
+<h2>Harness gates (builder tier, per awecraft-run-verify)</h2>
+<ul>
+<li><b>G0</b>: one headless load, zero SCRIPT ERROR + zero SHADER ERROR via gate_census.py —
+<b>and the process exit status checked explicitly</b> (the blind spot this ticket exists to close).</li>
+<li><b>SMOKE</b>: dependency-mapped modes for a world-read-path change — <code>player</code> (the crashing
+caller's arm), <code>boundary</code> is HEAVY (coordinator) so the builder self-check stays
+light: <code>player</code> + <code>interact</code> (get_block read/write parity) + <code>genhash</code> (mandatory,
+world/* touched) + <code>lightstate</code> (the crashing recipe, doubles as PROBE).</li>
+<li><b>PROBE</b>: <code>lightstate R16</code> — the arm whose run aborted with this exact backtrace.</li>
+<li>HEAVY (r50, full battery, r4 walk) and the Windows build: <b>coordinator</b>, out of scope here.</li>
+</ul>
+
+</body>
+</html>

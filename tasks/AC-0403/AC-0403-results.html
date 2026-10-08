@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0403 results — the get_local segfault</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:1020px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:.3rem .5rem;vertical-align:top;text-align:left}
+.ok{color:#166023}.bad{color:#a11}.warn{color:#8a6d00}
+.small{font-size:.85em;color:#555}
+.verdict{background:#eef7ee;border:2px solid #166023;padding:.6rem .9rem;margin:.8rem 0}
+</style>
+</head>
+<body>
+<h1>AC-0403 — segfault in the chunk block read (<code>get_local</code>, chunk.gd:657)</h1>
+<p class="small">Builder: subagent. 2026-10-08. Tree at 30b8775 (AC-0406) + one other session's in-flight
+godot/* changes (main.gd / game.gd / debug.gd / drop.gd / shaders) — fenced files untouched by this task.</p>
+
+<div class="verdict"><b>Bottom line.</b> The crash is <b>not reproduced</b> (14/14 clean runs of the exact crashing recipe).
+Static analysis pins the proven mechanism at <b>slab-object memory death (UAF / engine-level corruption), not
+malformed slab data</b> — a read-site structural guard cannot catch that class (freed memory reads as plausible
+garbage). The one genuinely <b>unguarded</b> read in the lookup — <code>slab_getbits</code>' <code>i[bo]</code> with no bound on
+<code>bo</code> — is now bounds-checked in C++ (the only change shipped). Its cost is <b>measured, not assumed</b>:
+a same-box A/B (baseline <code>.so</code> vs guard <code>.so</code>) shows the per-frame player step at
+<b>0.82 ms → 0.81 ms p50</b> — unmeasurable — and <b>every</b> arm's behaviour fields are <b>bit-identical
+across the A/B</b> (genhash 25/25, lightstate exact match, mobs / player / interact all fields equal).
+A clear map of the failure conditions is below; the UAF class remains open and needs a reproduction or an
+AddressSanitizer build to find the concurrent free.</div>
+
+<h2>1. The crash, verbatim</h2>
+<p>Captured during the AC-0402 gate battery, <code>.scratch/AC-0402-gates/lightstate.log</code>
+(<code>AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16</code>, headless, t≈27 s, player alt 133,
+THREADGEN cap=2 / THREADMESH pool=4):</p>
+<pre>
+handle_crash: Program crashed with signal 11
+Engine version: Godot Engine v4.7.1.stable.official (a13da4feb8d8aefc283c3763d33a2f170a18d541)
+Dumping the backtrace. ...
+[1] 7e6ace445f60 (main+45f60) - /lib/x86_64-linux-gnu/libc.so.6(+0x45f60) [0x7e6ace445f60]
+-- END OF C++ BACKTRACE --
+
+GDScript backtrace (most recent call first):
+    [0] get_local (res://world/chunk.gd:657)
+    [1] get_block (res://world/world.gd:11264)
+    [2] _block_at (res://player/player.gd:2976)
+    [3] _physics_process_impl (res://player/player.gd:529)
+    [4] _physics_process (res://player/player.gd:475)
+</pre>
+<p><b>Reading the C++ frame:</b> <code>main+45f60</code> resolves to <code>__sigaction+208</code> in libc — i.e. the
+backtrace <em>dumper itself</em> faulted while dumping (a single-frame C++ backtrace is a corrupted-state
+signature, not evidence about which instruction faulted). The GDScript backtrace is the reliable evidence:
+the VM state at first fault is <code>get_local</code>'s slab read, called from the player's per-physics-frame
+<code>_block_at</code> (water/lava/swim sampling — 3 <code>get_block</code> calls per step). The same shape also
+crashed via <code>_mob_tick</code> (the AC-0384 round-12 report), so <b>both</b> caller classes (player + mob)
+are affected.</p>
+<p><b>Chronicity:</b> the same signature appears in <code>.scratch/</code> across weeks — <code>ac0231-r16-inrpass.log</code>
+(chunk.gd:367, <em>pre-C++-port</em> tree, the read was pure GDScript <code>ChunkIO._slab_cell</code>),
+<code>skymin2.log</code> (chunk.gd:441), <code>batt192.log</code> (chunk.gd:464 = the <code>slab_cell</code> call),
+plus the AC-0384 mob-tick and AC-0402 lightstate occurrences. This is a chronic defect, not a new one.</p>
+
+<h2>2. What the code path does under each condition (the failure-condition map)</h2>
+<p><code>get_local</code> (chunk.gd:650-657, unchanged since AC-0205) does <code>var s = data[y&gt;&gt;4]; if s == null:
+return 0</code> then <code>int(ChunkIO.io_cpp().slab_cell(s, pos))</code>. The C++ <code>slab_cell</code> (chunk_io.cpp:643)
+bounds-checks <code>p_pos</code>, the n==1 read (<code>p[0]</code>) and the n==0 read (<code>i[p_pos]</code>) — and the
+n≥2 <code>p[idx]</code> read. Its only unguarded read was <code>slab_getbits</code>' <code>i[bo]</code>/<code>i[bo+1]</code>.</p>
+<table>
+<tr><th>#</th><th>Condition</th><th>What the code does today</th><th>Verdict</th></tr>
+<tr><td>C1</td><td>chunk absent (<code>chunks.get</code> null)</td><td><code>get_block</code> (world.gd:11338) returns air, except recorded edits. Safe.</td><td class="ok">handled</td></tr>
+<tr><td>C2</td><td>chunk present, data empty (never generated)</td><td><code>c.data.is_empty()</code> → same edits/air path. Safe.</td><td class="ok">handled</td></tr>
+<tr><td>C3</td><td>chunk present, data cleared (pool reuse)</td><td><code>data</code> = 24 nulls → <code>s == null</code> → 0. Safe.</td><td class="ok">handled</td></tr>
+<tr><td>C4</td><td>slab index / cell out of range</td><td><code>get_block</code> bounds y to [0, HEIGHT); x/z masked <code>&amp;15</code>; <code>slab_cell</code> bounds <code>p_pos</code>. Safe.</td><td class="ok">handled</td></tr>
+<tr><td>C5</td><td>malformed slab dict (<code>b</code> inconsistent with <code>i.size()</code>, or empty <code>i</code>)</td>
+<td><code>slab_getbits</code>: <code>bo = (pos*bits)&gt;&gt;3</code> with <b>no bound</b> → OOB heap read → SIGSEGV.
+<b>The only unguarded read in the lookup.</b></td><td class="bad">was unguarded → NOW GUARDED</td></tr>
+<tr><td>C6</td><td>slab memory dead (UAF / concurrent free / engine-level corruption)</td>
+<td>A read of freed slab/PBA memory faults with <b>zero script and zero shader error lines</b>.
+Stochastic. Fits every captured symptom exactly.</td><td class="bad">UNGUARDED — not reproducible here</td></tr>
+</table>
+
+<p><b>Why C6 is the proven mechanism, not a hypothesis:</b> the pre-port crash (<code>ac0231-r16-inrpass.log</code>)
+faulted at the <em>identical</em> line while the slab read was pure GDScript
+(<code>s["n"]</code>, <code>s["p"][0]</code>, <code>s["i"][pos]</code>, <code>_slab_getbits</code>). The GDScript VM is
+bounds-safe on <em>live</em> objects — an OOB index or a malformed-but-live dictionary cannot segfault through
+it. A pre-port segfault at that line can only mean the slab object (or its buffers) was <b>dead memory</b>.
+Malformed-slab (C5) would have crashed the <em>mesh</em> decodes just as readily as the player path (meshing reads
+every cell of every slab — weeks of heavy meshing, zero mesh-side crashes). So C5 is not the demonstrated
+crash class; C6 is. <b>A read-site structural guard cannot fix C6</b> — freed memory reads as plausible garbage,
+so any structural check either passes (no protection) or reads the same dead memory (crash unchanged).
+This is why the shipped guard is the C5 hardening (the one real unguarded read), and why the C6 finding is
+reported as a condition map + recommended next steps rather than a fix.</p>
+
+<p><b>Concurrency audit (current tree):</b> every worker lane (threadgen ≤3, threadmesh ≤6, IO
+read/write/compact, satellite bake) receives <b>value copies</b> at dispatch (<code>slab_copy</code> /
+<code>snap_rings</code> / entry-dup), writes only its own slot entry, and every handoff
+(threadgen_poll / threadmesh_poll / io_poll) runs on the main thread inside <code>World._process</code>.
+The shared C++ singletons (<code>AweMesh</code>, <code>AweGen</code>, <code>ChunkIOPalette</code>, <code>AweStrips</code>)
+are stateless (atomic counters / value tables). <code>Lighting._att/_glow</code> are frozen value copies of size 48;
+<code>Data.atlas_rects</code> (the live reference shared into worker entries via <code>_low_ms_snap_get</code>) is only ever
+<b>whole-reassigned</b> (data.gd _ready / apply_atlas — texture-pack swap, a user action that never happens in
+headless arms), never mutated in place. Raw-pointer retention was audited in the C++ (the <code>AweStrips</code>
+SlabDesc pointers outlive their local PBA only within a single C++ call whose input array keeps the buffers
+alive — safe). <b>The design forbids C6; the crash persists; static analysis is exhausted.</b> The residual
+candidates (an engine/wrapper-level free, a refcount edge in the PBA wrapper's shallow-handle semantics
+documented at AC-0214, or a race this audit cannot see from the outside) need a reproduction or an
+AddressSanitizer/valgrind run to localize.</p>
+
+<h2>3. Reproduction status — not reproduced, stated plainly</h2>
+<table>
+<tr><th>Run set</th><th>Recipe</th><th>Runs</th><th>Result</th></tr>
+<tr><td>R1</td><td><code>lightstate LS_RADIUS=16</code> headless, 12 GB cap (the exact AC-0402 crash recipe)</td><td>13</td><td class="ok">13× rc=0, 0 error lines, standing values matched (arr_diff_cells 1 @ [0,141,0], leaks 0, wash false)</td></tr>
+<tr><td>R2</td><td>same recipe, with the guard <code>.so</code> in place (re-probe)</td><td>1</td><td class="ok">rc=0, exact baseline match</td></tr>
+<tr><td>—</td><td><code>mobs</code> (the other crash caller: <code>_mob_tick</code>), ×2 builds</td><td>2</td><td class="ok">green both</td></tr>
+<tr><td>—</td><td><code>boundary</code> r4 walk (streaming churn, player path), ×2 builds</td><td>2</td><td class="ok">green both, 20/20 crossings</td></tr>
+</table>
+<p><b>The crash did not reproduce in 14 runs of the crashing recipe</b> (plus the mobs/boundary caller arms).
+It is a low-probability timing defect on this box; the crash trees were 2026-10-07 and earlier. No lane
+bisection was possible because there was nothing to bisect.</p>
+
+<h2>4. What changed (shipped)</h2>
+<p><b>One file change class, both copies:</b> a bounds check in <code>slab_getbits</code> — the choke point of every
+paletted slab read (<code>slab_cell</code>, <code>slab_cell_of</code>, the mesh/IO decode lanes):</p>
+<pre>
+ // gdext/src/awe_common.cpp (awecommon) and gdext/src/chunk_io.cpp (private copy)
+ int slab_getbits(const uint8_t *i, int isize, int bits, int pos) {
++	// AC-0403: bounds check. The i[bo] read below was the ONLY unguarded read in the slab
++	// decode: bo = (pos*bits) >> 3 had no bound, so a slab entry whose b disagrees with its
++	// i buffer (or an empty/dead buffer) read out of the heap — the signal-11 crash family at
++	// chunk.gd get_local -> slab_cell (tasks/AC-0403). Valid codec data never trips this:
++	// paletted slabs carry bits in 1..4 and an i buffer sized exactly ceil(S3*bits/8) by
++	// bitpack, so pos*bits + bits <= isize*8 for every pos &lt; S3 — a no-op on the happy path.
++	if (i == nullptr || isize <= 0 || bits &lt; 1 || bits &gt; 8 || pos &lt; 0
++			|| (int64_t)pos * bits + bits &gt; (int64_t)isize * 8)
++		return 0;
+ 	int bo = (pos * bits) >> 3;
+ 	... // unchanged
+</pre>
+<ul>
+<li><b>Files:</b> <code>gdext/src/awe_common.cpp</code> +13, <code>gdext/src/chunk_io.cpp</code> +13. Nothing else touched
+(the GDScript read path, player, mob, world, and all arms are byte-identical).</li>
+<li><b>Valid-data invariant verified against the codec:</b> <code>bitpack</code> emits exactly
+<code>(S3*bits+7)/8</code> bytes; <code>palettize_flat</code>, <code>slab_set</code> and the wire decode all build <code>i</code> for
+exactly S3 cells; paletted slabs carry bits 1..4 (n==1 uses b=0 with a p-only path, n==0 uses b=8 with a
+raw path — neither calls <code>slab_getbits</code>). So for every valid slab the guard's condition is
+false: <b>zero behaviour change on valid data</b> (asserted in §5, not assumed).</li>
+<li><b>Malformed input now reads as palette index 0</b> (a plausible value; <code>slab_cell</code>' existing
+<code>idx &lt; p.size()</code> check then returns the normal defensive -1 for an empty palette) instead of
+faulting.</li>
+</ul>
+
+<p><b>What was deliberately NOT done, and why:</b></p>
+<ul>
+<li><b>No GDScript read-site guard</b> (per-frame slab-invariant checks in <code>get_local</code>/<code>get_block</code>):
+it would cost measurable work on the every-frame player path to protect against a class (C5) a live object
+cannot exhibit, and it would not stop C6 at all. Rejected up front (plan.html).</li>
+<li><b>The C6 (UAF) class:</b> unfixable from the read site by construction; unreproducible here. Reported as
+the condition map + next steps (§6).</li>
+<li><b>mesh.cpp decode <code>p[]</code> reads</b> (917/945/978): unguarded palette reads on the worker decode lane —
+same C5 class. Left untouched: perf-critical per-cell loops, no mesh-side crash has ever been observed, and
+a shotgun change there is exactly the "quietly changes behaviour" risk the ticket forbids. Documented
+residual; the crash-site read (C5's i-buffer OOB) is closed.</li>
+<li><b>Windows <code>.dll</code> rebuild:</b> the product build lane — <code>python3 -m SCons -C gdext platform=windows</code>
+/ <code>build_windows.sh</code> must re-run on the coordinator's side (SCons is not installed on this box at all —
+see deviations). The linux <code>.so</code> in <code>godot/bin/</code> <b>is</b> the guard build now.</li>
+<li><b>HEAVY battery / r50 / full r4 walk:</b> coordinator's tier, out of scope (one boundary r4 used as the
+builder self-check).</li>
+</ul>
+
+<p><b>A guard I almost shipped — and the bug that killed it (documented per the ticket's honesty rule):</b>
+a first build also added palette-size / <code>isize</code> guards to <code>slab_unpack</code> and <code>slab_nz_count</code>
+(a new <code>psiz</code> parameter, 9 call sites). The condition <code>psiz &lt; (1&lt;&lt;bits)</code> was <b>wrong</b>: palettize
+emits <code>n</code> palette entries where <code>n ≤ 2^bits</code> (n=3,5,6,7,9–15 are the norm, not the exception), so the
+guard rejected most valid palettes and zero-filled their decode — lightstate went leaks 0→81 /
+<code>vc_common</code> 393→0 / waited 19→240 and the mobs arm went red. The A/B caught it <b>before</b> delivery
+(genhash stayed 25/25 because it hashes the encode path; the decode-path arms showed the break). All of it
+was reverted to HEAD and only the <code>slab_getbits</code> guard remains. Lesson for the ticket's own warning:
+the A/B arm set is what stands between a "hardening" and a regression.</p>
+
+<h2>5. The guard's measured cost + behaviour-unchanged assertion (A/B, same box, same tree)</h2>
+<p>Method: the pre-change <code>.so</code> was backed up (<code>.scratch/AC-0403/libchunkio.so.baseline</code>);
+each arm ran once per build, back to back; the AC-0383 bracket instrument (<code>AWECRAFT_AC0383=1</code>)
+supplies the per-physics-step cost of the player movement step (which contains the 3 <code>_block_at</code>
+→ <code>get_block</code> → <code>get_local</code> reads the guard sits on).</p>
+<table>
+<tr><th>Measurement</th><th>Baseline <code>.so</code></th><th>Guard <code>.so</code></th><th>Δ / verdict</th></tr>
+<tr><td><b>player_phys p50</b> (per physics step, the crashing path)</td><td>0.82 ms</td><td>0.81 ms</td><td class="ok">−0.01 ms = run noise; <b>cost unmeasurable</b></td></tr>
+<tr><td>player_phys p95 / n</td><td>0.98 ms / 2623</td><td>0.92 ms / 2582</td><td class="ok">within run variance</td></tr>
+<tr><td>boundary frame p50 / p95</td><td>13 / 38 ms</td><td>13 / 33 ms</td><td class="ok">identical / better</td></tr>
+<tr><td>boundary crossing-frame p50 / p95</td><td>31 / 47 ms</td><td>27 / 34 ms</td><td class="ok">identical class, noise</td></tr>
+<tr><td>storm p99 (walk frames &gt;30 ms)</td><td>128 ms</td><td>114 ms</td><td class="ok">noise</td></tr>
+<tr><td>boundary ok / crossings / marker_ok / remesh_ok</td><td>True / 20 / True / True</td><td>True / 20 / True / True</td><td class="ok">identical</td></tr>
+<tr><td><b>genhash</b> (mandatory, world-read path)</td><td>25 columns</td><td>25 columns</td><td class="ok"><b>25/25 byte-identical</b> vs baseline</td></tr>
+<tr><td><b>lightstate R16</b> (crash recipe, PROBE)</td><td>leaks 0, arr_diff 1, vc 393/4, waited 19, wash false</td><td>identical field-for-field</td><td class="ok"><b>exact match</b></td></tr>
+<tr><td><b>mobs</b> (the other crash caller — mob behaviour assertion)</td><td>ok + 9/9 sub-gates true</td><td>ok + 9/9 sub-gates true</td><td class="ok"><b>identical</b></td></tr>
+<tr><td><b>player arm</b> (crash caller — player behaviour assertion)</td><td>jump_peak 142.42, all sprint/FOV fields</td><td>all fields identical (Δ on clock-drift fields ~2e-5 s)</td><td class="ok"><b>identical</b></td></tr>
+<tr><td><b>interact</b> (get_block read/write parity)</td><td>target [8,140,8], inv_grew {2,1}, mine_diag 70f</td><td>all fields identical (mine_diag 69f — one-frame jitter)</td><td class="ok"><b>identical</b></td></tr>
+</table>
+<p><b>Assertion, not assumption:</b> the guard not triggering on valid data is <em>proven three ways</em> — (1) the
+codec invariant (the guard's condition is false for every slab the codec can emit, §4); (2) genhash 25/25
+byte-identical (the entire 5×5 window's data, through every encode/decode lane); (3) every arm's behaviour
+fields A/B-equal above. When the guard does not trigger, <b>no player or mob measurement moved by more than
+run noise</b>. (Interact's <code>drop_spawned/place_ok: false</code> reads false on <em>both</em> builds — the current
+tree's state, attributable to the other session's in-flight <code>drop.gd</code> work, and a standing-value staleness
+worth a line at closeout.)</p>
+
+<h2>6. Gates (all builder tier; exit statuses as the ticket's escalation demands)</h2>
+<table>
+<tr><th>Gate</th><th>Command (abridged)</th><th>rc</th><th>census</th><th>Verdict</th></tr>
+<tr><td><b>G0</b></td><td><code>godot --headless --quit</code> + <code>gate_census.py</code> <b>+ exit status</b></td><td class="ok">0</td><td class="ok">0 SCRIPT / 0 SHADER</td><td class="ok">PASS</td></tr>
+<tr><td><b>genhash</b></td><td><code>AWECRAFT_LOGIC=genhash</code></td><td class="ok">0</td><td class="ok">0/0</td><td class="ok">25/25 vs baseline</td></tr>
+<tr><td><b>SMOKE: player</b></td><td><code>AWECRAFT_LOGIC=player</code></td><td class="ok">0</td><td class="ok">0/0</td><td class="ok">A/B identical</td></tr>
+<tr><td><b>SMOKE: interact</b></td><td><code>AWECRAFT_LOGIC=interact</code></td><td class="ok">0</td><td class="ok">0/0</td><td class="ok">A/B identical</td></tr>
+<tr><td><b>SMOKE: mobs</b></td><td><code>AWECRAFT_LOGIC=mobs</code></td><td class="ok">0</td><td class="ok">0/0</td><td class="ok">A/B identical, 9/9 sub-gates</td></tr>
+<tr><td><b>PROBE: lightstate R16</b> (the crashing arm)</td><td><code>AWECRAFT_LOGIC=lightstate AWECRAFT_LS_RADIUS=16</code></td><td class="ok">0</td><td class="ok">0/0</td><td class="ok">exact baseline match</td></tr>
+<tr><td>boundary r4 self-check (×2, A/B)</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4 AWECRAFT_AC0383=1</code></td><td class="ok">0 / 0</td><td class="ok">0/0 / 0/0</td><td class="ok">behaviour identical, cost unmeasurable</td></tr>
+</table>
+<p class="small">Logs: <code>.scratch/AC-0403/</code> (g0, final_*, gate_*, ab_boundary_*, repro_*). One godot at a time;
+<code>HOME=/tmp/dsh_home</code>; absolute engine path; logs never left the repo-root <code>.scratch/</code>.</p>
+
+<h3>G0 blind spot (the escalation's second ask) — recorded</h3>
+<p>This defect leaves a <em>clean</em> log: signal 11 → zero SCRIPT ERROR, zero SHADER ERROR, and rc=134, not
+rc=0. A census-only G0 or an rc-only G0 both pass it. The note now lives in
+<code>tasks/scripts/gate_census.py</code>'s docstring (AC-0403 entry): <b>G0 = census AND exit status, paired.</b>
+The run-verify skill should pick it up at closeout/harvest.</p>
+
+<h2>7. If it crashes again — the starting map for the next occurrence</h2>
+<ol>
+<li><b>The innermost frame will still be the slab read line</b> (that is the reliable evidence; the C++ backtrace
+is a dumper artifact — do not chase the <code>__sigaction</code> frame).</li>
+<li>C1–C4 are handled and provably safe — the suspect set is <b>C6 (slab-object death)</b>, with C5 as the
+documented residual (its i-buffer OOB is now impossible; the mesh-lane palette OOB is the remaining C5
+corner, §4).</li>
+<li>Candidates the audit could not close: (a) the PBA wrapper's shallow-handle semantics (AC-0214 note: raw
+<code>ptrw()</code> on a shared handle "doesn't propagate" — an engine-side refcount edge would present exactly as
+this); (b) a free ordering in the chunk pool / handoff path under a scheduling this box never hit;
+(c) engine-level (the 4.7.1 build) — a one-run valgrind/ASan build would localize (a)/(b) definitively and
+rule (c) in or out. Suggested next ticket: <b>an AddressSanitizer-instrumented libchunkio + a soak of the
+crash recipe</b> (this box ran the recipe 14× clean, so the soak budget is the constraint).</li>
+<li>Every future gate on this code path must pair the census with the exit status (§6).</li>
+</ol>
+
+<h2>8. Deviations (honest, per the ticket's rules)</h2>
+<ul>
+<li><b>No <code>tasks/AC-0403/spec.html</code> exists</b> — the ticket's notes in TASKS.yaml carry the full
+requirement; worked from those.</li>
+<li><b>SCons is not installed on this box</b> (<code>python3 -m SCons</code> fails; pip is PEP-668-locked and
+<code>ensurepip</code> is absent, so no venv install either). The extension was rebuilt with <b>manual g++</b> using
+the SConstruct's exact flags (<code>-O2 -ffp-contract=off</code>, the same godot-cpp prebuilt static lib at
+<code>.scratch/godot-cpp</code>). G0 + every arm passing on the rebuilt <code>.so</code> proves the build is
+ABI-correct and behaviour-identical. The <b>Windows</b> product build still has to go through
+<code>build_windows.sh</code> on the coordinator's lane.</li>
+<li><b>genhash reference staleness (pre-existing, not caused by this task):</b> the recorded reference
+(<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>) reads <b>0/25 against the untouched baseline
+<code>.so</code></b> on the current tree — the drift comes from post-AC-0367 world work (AC-0384 r5–r8, AC-0388,
+AC-0398, AC-0399, …). The authoritative parity for this ticket is guard-vs-baseline: <b>25/25</b>. The
+reference set should be re-recorded at closeout.</li>
+<li><b>interact arm standing values are stale</b> (<code>drop_spawned/place_ok</code> known-stable-true, now false on
+both builds) — consistent with the other session's in-flight <code>drop.gd</code> work; flagged, not chased (out of
+fence).</li>
+<li>Reproduction budget spent on the crashing recipe (14 runs); no seed variation or lane bisection was
+possible without a first reproduction — reported per the ticket's "say so plainly" clause.</li>
+</ul>
+
+</body>
+</html>

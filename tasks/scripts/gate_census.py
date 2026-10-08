@@ -10,6 +10,14 @@ is the `SHADER ERROR` line in the run log, and for a week nothing read
 it: the arms printed the error on every run while their gates checked
 only their own RESULT fields.
 
+AC-0403 (2026-10-08) adds the inverse blind spot: a native crash
+(SIGSEGV, rc=134) leaves a log with ZERO `SCRIPT ERROR` and ZERO
+`SHADER ERROR` lines - the backtrace is a C++ `handle_crash` dump the
+census never counts, and the process exit status is 134, not 0. The
+get_local segfault (chunk.gd:657) produced exactly this: a clean
+census on a dead process. G0 must therefore pair this census WITH the
+process exit status (rc == 0) - either alone is a false pass.
+
 Usage:
 
     python3 tasks/scripts/gate_census.py LOG [LOG ...]
