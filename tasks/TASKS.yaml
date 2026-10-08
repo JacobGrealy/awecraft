@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-07T23:10
+  updated_at: 2026-10-07T23:55
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,6 +28,7 @@ queue:
 - AC-0402
 - AC-0403
 - AC-0404
+- AC-0406
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25197,4 +25198,83 @@ intake:
     of the cloud read dark because there is no diffuse-fill term yet, which the run names as the one-line
     next lever; and there is a faint low-altitude moire on the test box''s software renderer that may
     not appear on real hardware.'
+  comments: []
+- id: AC-0406
+  title: cloud-volumes-read-black-add-ambient-and-multiscatter
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-07T23:55
+  updated_at: 2026-10-07T23:55
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Clouds should be bright. Right now every cloud is dark, because they are lit
+    only by direct sunlight and everything the sun does not hit directly goes black - which from underneath,
+    where the player spends most of their time looking at clouds, is all of them.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER 2026-10-07, one line: "why are all the clouds dark?" THE CAUSE IS KNOWN AND WAS
+    REPRODUCED BY THE PREVIOUS RUN, which documented it and named it as the next lever rather than fixing
+    it: the raymarched volume introduced by AC-0405 is lit by SELF-SHADOWING ALONE. Each sample marches
+    toward the sun, and the result is multiplied by a PEAK-NORMALISED Henyey-Greenstein phase. There is
+    NO AMBIENT OR SKY FILL and NO MULTIPLE SCATTERING. The consequence is that scattering is near zero
+    for any sample not directly sunlit AND forward-scattering relative to the eye, so cloud undersides,
+    interiors and shadowed faces - which is to say most of what a player sees from below - render black.
+    AC-0405''s own report records "interior/underside reads dark (no diffuse-fill term - named as the
+    one-line next lever)". The coordinator reported that to the user as a limitation; the user''s question
+    is the correct response to it, and it should have been fixed in the same round.
+
+    WHAT TO ADD, in order of importance, all standard in this technique and all cheap relative to the
+    raymarch that already exists:
+
+    (a) AN AMBIENT OR SKY FILL TERM. A cloud is lit from the whole sky dome, not only from the sun. THIS
+    PROJECT ALREADY HAS THE COLOUR TO USE and it must be reused rather than invented: the single-source
+    air colour that the fog, the dome haze and the sky horizon all share (AeroLib.fog_display, pushed
+    as u_air / the environment fog colour). The standing rule that there is exactly one source for the
+    air colour applies here - do NOT introduce a fourth colour for clouds.
+
+    (b) A MULTIPLE SCATTERING APPROXIMATION. Light that scatters inside a cloud does not stop at the first
+    bounce; the standard cheap treatment is to evaluate the light march two or three times with DECREASING
+    EXTINCTION for each successive octave and sum the contributions, which is what turns a black shadowed
+    mass into a soft grey one. Guerrilla''s Horizon Zero Dawn work - already the reference for this layer''s
+    lighting model - describes exactly this.
+
+    (c) BLEND THE PHASE TOWARD ISOTROPIC. A peak-normalised Henyey-Greenstein term is very directional
+    by construction; mixing it partway toward isotropic (which is to say toward a constant) is what allows
+    a cloud to be lit by the sky as well as by the sun without losing the silver lining when the sun is
+    in front of the eye.
+
+    ACCEPTANCE IS THE USER''S VIEW MEASURED. The frames that matter are the ones looking UP at the clouds
+    from the ground and from inside the annulus - AC-0405''s r120-on.png and r300-on.png are the before
+    set - and the measurement is the luminance of the UNDERSIDE and INTERIOR of a cloud mass against its
+    sunlit top, before and after. A ratio near 1 is a flat cloud; the previous flat deck failed that way;
+    the target is enough range to show form without the shadowed side going black. ALSO DO NOT LOSE WHAT
+    AC-0405 GAINED: the brightness spread of 68.9 against the reference''s 32.4 and the parallax between
+    layers must survive, so measure the spread after the change as well and report both. Also confirm
+    the cloud is no longer grey-neutral in tint but keeps the reference''s saturated cast (181,229,190
+    at the disc centre).
+
+    COST: the raymarch currently runs at 781 s against 496 s for the feature off at the same resolution,
+    about 1.5 to 2 FPS on the test box. Additional light octaves cost real time, so state the added cost
+    and keep it inside the run budget; if two octaves cannot fit, one ambient term with a sensible falloff
+    is better than three octaves that do not run.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND check the process exit status, because a segfault leaves a clean log and there is an open crash
+    ticket (AC-0403) at godot/world/chunk.gd:657; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); the cloud shell radii and centre stay 4275/4330/4400 about (0, -R,
+    0); the cloud_volume switch keeps working with its off state byte-identical to the pre-AC-0405 path;
+    the near-field fog-only fade and the limb effect on the satellite body alone (the open half of AC-0404)
+    must hold; AC-0402''s altitude-aware sky, AC-0399''s view-weighted fill, AC-0398''s lighting and AC-0400''s
+    seam fade must keep working.
+
+    '
   comments: []
