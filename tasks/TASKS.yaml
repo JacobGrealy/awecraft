@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T17:36
+  updated_at: 2026-10-08T17:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,6 +28,7 @@ queue:
 - AC-0402
 - AC-0406
 - AC-0407
+- AC-0409
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25529,4 +25530,65 @@ intake:
     fence is zero - so an older gate''s requirement that it be zero is either stale or a real gap, and
     it needs its own ticket. THE USE-AFTER-FREE ITSELF REMAINS OPEN with no reproducer; the recommended
     path is the resumable memcheck soak, and that is a coordinator-lane action rather than a dispatch.'
+  comments: []
+- id: AC-0409
+  title: unbodied-built-final-reads-eight
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-08T17:37
+  updated_at: 2026-10-08T17:37
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Internal bookkeeping to keep the world''s collision and mesh lanes honest. It
+    is not something a player sees directly, but a count that is supposed to be zero and is not is either
+    a stale gate or a real leak, and this project''s whole recent history is about counts that were quietly
+    wrong.
+
+
+    2) Technical Details:
+
+    FLAGGED BY AC-0408 rather than folded into it, with the evidence for each possibility: the `unbodied_built_final`
+    count reads EIGHT, and the requirement that it be zero comes from an older gate (AC-0077''s G5b).
+    AC-0408 established that the eight is TREE STATE RATHER THAN DAMAGE - the previous round''s A/B pair
+    reads the same eight on a pristine library, and the immediate-footprint fence reads zero - so the
+    count is reproducible and not caused by recent work. What is NOT established is which of the two explanations
+    is true: the gate''s "must be zero" requirement may be STALE, written when the world and its lanes
+    were smaller and before the carve work changed the far lane''s behaviour by an order of magnitude
+    (the same era that made the staging counter''s ceiling stale, see AC-0408), or it may be a REAL GAP
+    where eight objects per build are created without a body being registered and nothing notices because
+    the requirement was never re-examined.
+
+    WHAT TO DO: find what `unbodied_built_final` counts - which lane creates what, and what "unbodied"
+    means for that object - and decide with evidence whether eight is expected for the current world.
+    If it is expected, re-base the requirement WITH THE REASONING STATED and add a tripwire that catches
+    a RISING count rather than any non-zero one, because a bare "must be zero" that is quietly allowed
+    to be eight is exactly how a real leak becomes invisible. If it is not expected, find where the eight
+    come from and fix them. DO NOT simply relax the gate to make the number green: AC-0408 refused to
+    do that for its own counter and recorded the refusal, and this project has twice been burned by a
+    threshold adjusted to fit an observation.
+
+    ACCEPTANCE: a stated answer to what the counter counts, whether eight is expected, and either a fix
+    or a re-base with tripwires - plus evidence that the count is stable across runs of the same recipe
+    rather than drifting, and that whatever you change does not alter world generation (genhash) or player
+    and mob behaviour.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING rather than a re-baseline; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND check the process exit status, because this project has a known use-after-free that leaves a completely
+    clean log with a signal-eleven exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); if a row in tasks/harness_data.yaml changes, re-render with harness_doc.py --render
+    and leave --check clean.
+
+    CONTEXT: read tasks/AC-0408/AC-0408-results.html - the sibling counter, its cause split, the re-base
+    with reasoning, the tripwire pattern it introduced, and the explicit statement that this one is flagged
+    rather than closed.
+
+    '
   comments: []
