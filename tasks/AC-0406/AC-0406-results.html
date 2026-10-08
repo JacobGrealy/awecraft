@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0406 results — cloud volume ambient + multiple scattering</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.15em; margin-top: 1.6em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+img.cap { max-width: 100%; border: 1px solid #888; margin: .8em 0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.ok { color: #14611e; font-weight: 600; }
+.bad { color: #8b1a1a; font-weight: 600; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0406 — the cloud volumes get sky light (ambient + multiple scattering + isotropic-blended phase)</h1>
+<p><b>Status:</b> light gates green (G0 / smoke / genhash / boundary r4 / renders); acceptance
+measured before/after on the user's view (the undersides are no longer black — they read as soft
+grey in the air tint with visible form and parallax). Heavy set is the coordinator's job and was
+deliberately not run. No commits (fence). Date: 2026-10-08. Engine 4.7.1, seed 44, user config
+R24/F83 (fog 332 m), T=0.5 frozen, CLOUD_T0=411200 (the assessment's sustained-deck state),
+1280×720 Forward+ (llvmpipe proxy — the box's measured evidence path, same as AC-0405).</p>
+
+<h2>1. What changed</h2>
+<p>The user's one-liner: <i>“why are all the clouds dark?”</i> The AC-0405 volume was lit by
+<b>self-shadowing alone</b> against a peak-normalised HG phase: every sample not directly sunlit
+<i>and</i> forward-scattering scattered ~0 (measured underside ALBEDO ≈ 0.007 = black) — which
+from underneath, where the player looks at clouds, is every sample. Three standard terms now join
+the sun term, all inside the volume branch (<code>u_vol &gt; 0.5</code>), all cheap against the
+raymarch (two <code>exp</code> + a vector op per sample, one vec3 <code>pow</code> per
+fragment):</p>
+<table>
+<tr><th>term</th><th>what it does</th></tr>
+<tr><td>(a) ambient sky fill</td><td>Per-sample in-scatter of the whole sky dome, accumulated as
+<code>A += T·ds</code> (exit-transmittance-weighted — deep interior is darker than the surface,
+so form survives; <b>not</b> self-shadowed — that attenuation is exactly the multiple
+scattering). Coloured with the <b>single-source air colour</b> <code>u_vol_air</code> —
+<code>Aero.fog_display(Game.time_of_day)</code>, the same value <code>env.fog_light_color</code>
+(main.gd) and the satellite's <code>u_air</code> (satellite_body.gd) take; pushed per frame by
+<code>world.gd _ac0401_push</code> item (5), value-gated at 1/255. The standing one-source rule
+holds — no fourth air colour was invented. The value is LINEAR (fog_display 8-bit-sRGB-rounds
+then <code>srgb_to_linear</code>); the fragment converts it into the ALBEDO expression's sRGB
+domain with <code>pow(u_vol_air, 1/2.2)</code> (the expression gets the <code>pow(2.2)</code>
+pre-decode).</td></tr>
+<tr><td>(b) multiple scattering</td><td>The light-march transmittance toward the sun becomes a
+3-octave sum with <b>decreasing extinction per octave</b>:
+<code>(exp(-τ) + 0.30·exp(-0.45τ) + 0.18·exp(-0.15τ)) / 1.48</code> (the Guerrilla HZD
+reference's standard cheap treatment). Normalised so τ=0 (a fully lit sample) keeps
+<code>sh = 1.0</code> exactly — the 2.5 albedo gain and the lit tops keep their pre-AC-0406
+calibration <i>by construction</i>.</td></tr>
+<tr><td>(c) phase blended toward isotropic</td><td><code>mix(vhg(±cosSun), 1.0, 0.4) / vhg(1)</code>
+— partway toward isotropic. The constant 1.0 integrates to 4π on the same scale as vhg, so the
+blend stays normalised; the forward peak stays 1.0/hp — the silver lining is untouched.</td></tr>
+</table>
+<p><b>Files touched</b> (3 + ticket folder): <code>godot/core/cloud_layer.gdshader</code>
+(the volume branch lighting + 5 shipped-tuning uniforms <code>u_vol_air/ms1/ms2/iso/amb</code>,
+defaults <code>0.30/0.18/0.4/0.45</code> + the air vec3), <code>godot/world/world.gd</code>
+(<code>_ac0401_push</code> item (5) — the air-colour push; render-path only, no generation),
+<code>godot/ARCHITECTURE.md</code> (§3 CloudLayer bullet — the lighting model + the push seam).
+The <code>u_vol &lt; 0.5</code> three-shell path is byte-identical (the short-circuit precedes any
+volume work; the OFF state never reads the new uniforms). No C++ (constraint); no fence files
+(main.gd / game.gd / drop.gd / debug.gd untouched — the air colour rides the world.gd seam, the
+same workaround AC-0401/AC-0405 used). <b>No new Settings toggle</b> (recorded below): this is the
+lighting model of the existing default-ON <code>cloud_volume</code> feature — the 2.5/0.30 gains,
+HG and self-shadow all shipped without switches in AC-0405 — and the user's request is for the
+clouds to be bright, so the default is the new lighting; the <code>cloud_volume</code> OFF state
+remains the byte-identical escape.</p>
+
+<h2>2. Acceptance — the user's view, measured before/after</h2>
+<p>Same instrument for both sets (pure-stdlib PNG decoder, luminance
+0.2126R+0.7152G+0.0722B on 8-bit values — the <code>analyze2.py</code> lineage of
+AC-0384/AC-0405; before set = AC-0405's own captures, after set = this ticket's, same cameras,
+same frozen weather, same user config — the density field is untouched, so the framing is
+identical). Fixed bands: <b>underside</b> = r120 frame y∈[80,290) (looking up from the ground);
+<b>interior</b> = r300 frame y∈[215,360) (inside the annulus); <b>deck</b> = r700 frame, the
+on/off diff-mask (≥8 max-channel, camera above the deck) so the mask marks the cloud band itself;
+<b>spread</b> = the AC-0405 instrument's <code>lower_mid</code> band (y∈[360,540)) of the r700
+frame; <b>tint</b> = the disc-centre pixel (640,360) of the r700 frame.</p>
+<table>
+<tr><th>measurement (8-bit luminance 0–255)</th><th>before (AC-0405)</th><th>after (AC-0406)</th><th>reading</th></tr>
+<tr><td><b>Underside</b> (r120, ground looking up) — mean / p10 / p50 / min</td>
+<td>140.5 / 43.5 / 147.7 / 12.3</td><td><b>179.4 / 146.0 / 171.5 / 23.1</b></td>
+<td>the dark masses lift 3–10× off black; the bright patches hold (p90 225.1→225.2 — the
+calibration is intact); the ceiling now reads as a mottled grey-white cloud layer</td></tr>
+<tr><td><b>Interior</b> (r300, inside the annulus) — mean / p10 / p50 / min</td>
+<td>127.7 / 23.0 / 113.2 / 0.0</td><td><b>184.5 / 140.0 / 172.6 / 126.2</b></td>
+<td>the interior was pure black (min 0.0, p10 23.0) — now a bright readable grey; no black
+pixel remains anywhere in the band</td></tr>
+<tr><td><b>Sunlit-top reference</b> (r700 deck mask) — mean / p10 / p90</td>
+<td>59.3 / 8.0 / 114.0</td><td><b>139.9 / 110.4 / 179.3</b></td>
+<td>the deck face is a soft grey; the lit tops still clamp at 255 (the r700 frame's
+<code>max</code> is 255 before <i>and</i> after — the τ=0/peak calibration points are
+untouched)</td></tr>
+<tr><td>Underside median / lit-top (deck p90)</td><td>147.7 / 114.0</td><td>171.5 / 179.3</td>
+<td>against the true lit top (255): the underside sits at ~0.67 of the top's luminance — soft
+grey, not black (before: the dark side was 0.0–0.13 of it)</td></tr>
+<tr><td><b>Brightness spread</b> (r700 <code>lower_mid</code> lum_std; reference NMS 32.4,
+no-cloud floor 40.2)</td><td><b>68.9</b></td><td><b>44.9</b></td>
+<td>see the note below — the old 68.9 was inflated by the black slab (min 0 against the bright
+terrain, maximum bimodality); 44.9 is still well above the reference <i>and</i> the no-cloud
+floor, so the volume still carries more range than an empty sky</td></tr>
+<tr><td><b>Tint</b> (r700 disc-centre px (640,360); reference 181,229,190)</td>
+<td>[181, 229, 190]</td><td>[181, 229, 190] — <b>identical</b></td>
+<td>the saturated tint is carried (that pixel is terrain seen through the annulus gap; the
+cloud band carries the air tint — deck mean rgb after: [100, 149, 162], the 177,240,255
+family)</td></tr>
+<tr><td>Deck coverage (mask, % frame) — geometry cross-check</td><td>8.84%</td><td>8.15%</td>
+<td>the density field / framing is untouched (the 0.7-point delta is the brighter deck
+reducing the on/off luminance difference at the band's soft edge)</td></tr>
+</table>
+
+<div class="note"><b>The spread, honestly.</b> 68.9 → 44.9. The previous number measured
+<i>black-slab-vs-bright-terrain</i> bimodality — the defect itself was inflating the metric:
+the band's minimum was 0.0 before and 98.4 after, while its mean went 177.6 → 192.4. What the
+ticket actually owed — “enough range to show form without the shadowed side going black, and no
+flattening” — is verified on the within-cloud range and the form, not the black-slab
+bimodality: the deck's own range is 110→255 (p10→max) with visible mottling, the interior's is
+126→255, the underside's is 23→225 with the near dark masses sitting visibly in front of the
+brighter far layer (the parallax AC-0405 gained is in the captures — a near clump in front of
+a brighter far layer, r120/r300). The 44.9 spread stays above the no-cloud floor (40.2) and the
+NMS reference (32.4): a sky with these clouds is measurably more structured than a sky without
+them, and nowhere near the flat-deck failure mode (a ratio toward 1 with no internal range —
+the first pass at <code>u_vol_amb</code> 0.7, which <i>did</i> flatten the deck to a mean of
+184.7 / spread 39.1, was measured, rejected and retuned — §5).</div>
+
+<h2>3. The frames (the renders are the acceptance)</h2>
+<p>All four: <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code>, R24/F83, T=0.5
+frozen, CLOUD_T0=411200, 1280×720 Forward+ (llvmpipe), <code>SNAP_DRAIN=1200</code>, 1200 s
+cap, Forward+ boot line asserted per frame, file existence checked, <code>DSSTATS</code> FPS
+overlay burned in. No <code>AWECRAFT_LOGIC</code> arm (the snapshot-hook rule). rc=0,
+<b>zero</b> <code>SHADER ERROR</code> and <b>zero</b> <code>SCRIPT ERROR</code> lines in every
+frame's log.</p>
+
+<img class="cap" src="r120-on.png" alt="r120-on: looking up at the cloud ceiling from the ground">
+<p><b>r120-on</b> (120 m — looking up from the ground, the underside frame): before, a dark
+stormy ceiling (AC-0405 r120-on.png — the user's complaint, verbatim); now a bright mottled
+grey-white ceiling — near dark masses in front of a brighter far layer (the parallax), no black
+core. Wall 792 s.</p>
+
+<img class="cap" src="r300-on.png" alt="r300-on: inside the annulus, the cloud band above the limb">
+<p><b>r300-on</b> (300 m — inside the annulus, the interior frame): before, a black band over
+the limb; now a soft grey mottled layer with internal structure. Wall 880 s.</p>
+
+<img class="cap" src="r700-on.png" alt="r700-on: the deck band from above the layer">
+<p><b>r700-on</b> (700 m — the instrument frame, camera above the deck): the deck reads as a
+structured grey band with brighter cloud tops; the disc-centre tint holds 181,229,190 exactly.
+Wall 776 s (vs 781 s pre-change — the cost line, §4). <b>r2600-on</b> (orbit, the lit-top
+frame): the deck is now the bright lumpy cloud ring around the planet's limb — the before
+frame's dark band is gone; wall 810 s. (r2600-on.png is in the ticket folder.)</p>
+
+<h2>4. Cost — measured, not assumed</h2>
+<table>
+<tr><th>frame (wall, 1200 s cap, ~1.5 FPS box)</th><th>AC-0405</th><th>AC-0406 (shipped gains)</th></tr>
+<tr><td>r700-on</td><td>781 s</td><td><b>776 s (−0.6 %)</b></td></tr>
+<tr><td>r2600-on</td><td>—</td><td>810 s</td></tr>
+<tr><td>r300-on</td><td>—</td><td>880 s</td></tr>
+<tr><td>r120-on</td><td>—</td><td>792 s</td></tr>
+</table>
+<p>The added terms (2 <code>exp</code> + scalar ops per sample, 1 vec3 <code>pow</code> per
+fragment) are <b>not measurable against the box's frame noise</b> — the r700 pair, measured
+back-to-back against AC-0405's own number, is flat. No step-count reduction was needed or
+applied; all four runs sit inside the 1200 s budget with no low-resolution fallback (the
+FPS-overlay burn-in in the frames shows 1–2 FPS, the box's normal volume-render rate).</p>
+
+<h2>5. Gates (exit statuses checked — a segfault leaves a clean log)</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td><b>G0</b> — one headless load, error census + process exit status</td>
+<td class="ok">PASS — <code>GODOT_EXIT=0</code> (checked explicitly; the AC-0403 crash class at
+chunk.gd:657 did not trigger — no backtrace in the log), <code>gate_census.py</code>:
+<b>SCRIPT ERROR 0 (allow 0), SHADER ERROR 0 (allow 0) — ok</b>. (First pass had one GDScript
+parse error — a bare multi-line <code>if</code> condition needs parens in GDScript; fixed before
+the reported run.) <code>git status --short</code> shows only this task's three files + the new
+ticket folder (the other dirty files predate this session — another agent's in-flight work).</td></tr>
+<tr><td><b>SMOKE</b> — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td class="ok">PASS — exit 0, <code>ok:true</code>; player (jump_peak_y 142.42, on-floor,
+<code>col_deferred_in_footprint</code> 0), interact (place_ok, drop_spawned), light
+(torch 14 / surface 15), fluids (sea 320/320, <code>sea_stable</code> true) — all in-band
+against the standing values.</td></tr>
+<tr><td><b>PROBE/genhash</b> (world.gd touched)</td>
+<td class="ok">PASS — <b>25/25 GENHASH lines byte-identical</b> to the AC-0405 standing set
+(deterministic; the change is render-path only — no generation movement, as owed).</td></tr>
+<tr><td><b>Boundary r4</b> (one-shot self-check — world.gd touched)</td>
+<td class="ok">PASS — exit 0, <code>ok:true</code>: <code>crossings</code> 20=20,
+<code>p50_ms</code> 13=13, <code>p95_ms</code> 34→35 (in the 35–55 drift band),
+<code>max_ms</code> 227→164, <code>storm_walk_p99_ms</code> 124→99, <code>marker_ok</code>/<code>remesh_ok</code>
+true, <code>col_deferred_in_footprint</code> 0, <code>footprint.missing</code> 0.
+<i>Noted:</i> <code>built_final</code> 51 vs AC-0405's 64 — a walk-end census (resident_final
+93=93, all latency fields flat or improved); the arm's gate contract (crossings + marker + the
+fence fields) is green. One-shot rule honoured — no loop.</td></tr>
+<tr><td><b>RENDERS</b> (the acceptance)</td>
+<td class="ok">PASS — 4/4 frames rc=0, file exists, Forward+ boot line asserted, zero
+<code>SHADER ERROR</code> + zero <code>SCRIPT ERROR</code> per log; measured in §2. (The
+shipped Forward+ path compiled the new shader for real — the lazy-compile trap is closed by
+the render, not just G0.)</td></tr>
+<tr><td>HEAVY (farab / ladder / meshprobe / halo / lightstate / r16 / boundary r50 / full
+battery / shaderforce) + Windows build</td>
+<td>NOT RUN — the coordinator's job; exited after the light gates per policy.</td></tr>
+</table>
+
+<h2>6. Deviations (honest record)</h2>
+<ul>
+<li><b>First-pass retune (one measurement loop, as planned).</b> The planned gains
+(<code>u_vol_amb</code> 0.7 / ms 0.35+0.25 / iso 0.5) flooded the deck: r700 spread collapsed
+68.9 → <b>39.1</b> (below the 40.2 no-cloud floor) and the deck-mask mean ran 59.3 → 184.7
+(p10 8 → 130) — the flatten-everything failure. The r700 frame of that pass was measured, kept
+(recorded in
+<code>tasks/AC-0406/continuity.md</code>; its PNG was superseded on relaunch), and the gains retuned from
+the measured data point to the shipped 0.45 / 0.30+0.18 / 0.4 (target: deck valley p10 ~110,
+tops still clamped). One loop, then exit — the shipped frames are all one build.</li>
+<li><b>No new Settings toggle.</b> Recorded deviation from the “look changes ship with a
+setting” pattern: the lighting is the internal model of the existing default-ON
+<code>cloud_volume</code> feature (its gains/phase/shadow shipped unswitched in AC-0405), and
+defaulting the fix OFF would mean defaulting the user's complaint back on. The escape hatch is
+the existing switch: <code>cloud_volume</code> OFF = the byte-identical three-shell path
+(the shader short-circuits on <code>u_vol &lt; 0.5</code> before any volume work; the new
+uniforms are never read on that path).</li>
+<li><b>Boundary <code>built_final</code> 51 vs 64</b> — census-class drift, all latency gates
+flat/green (above).</li>
+<li><b>Deliberately not done:</b> heavy gate set + full battery + shaderforce + Windows build
+(coordinator); no C++ (constraint); no fence files touched; no commits/pushes (fence); no
+density/weather change (the AC-0405 field is the acceptance geometry — only its lighting moved);
+no step-count reduction (the cost is flat, so none was owed).</li>
+</ul>
+
+<p><i>Logs + first-pass data: <code>.scratch/AC-0406/</code> (g0.log, smoke.log,
+genhash_new/ref, boundary_r4_on.log, frames/*.log, before_an.json, after_*_an.json,
+measure.py, run_renders.sh). Before captures: <code>tasks/AC-0405/r120-on.png</code> /
+<code>r300-on.png</code> / <code>r700-on.png</code> / <code>r700-off.png</code>. Continuity:
+<code>tasks/AC-0406/continuity.md</code>.</i></p>
+
+</body>
+</html>

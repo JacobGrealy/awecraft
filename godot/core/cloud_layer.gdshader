@@ -98,6 +98,29 @@ render_mode unshaded, cull_disabled, fog_disabled;
 // dummy parser resolves the fragment builtins and `discard` in the
 // fragment function only (measured - a nested entry failed G0), so the
 // helpers below are builtin-free and return by value.
+// AC-0406: the user's "why are all the clouds dark?" - AC-0405's
+// self-shadow-only lighting scattered ~0 for every sample not directly
+// sunlit AND forward-scattering, which from underneath (where a player
+// looks at clouds) is every sample (measured underside ALBEDO ~0.007 =
+// black). Three standard terms join the sun term, all in the volume
+// branch (u_vol > 0.5), all cheap against the raymarch:
+// (a) an AMBIENT SKY FILL - the in-scatter of the whole sky dome,
+// accumulated per sample as A (exit-transmittance-weighted, NOT
+// self-shadowed - that attenuation IS the multiple scattering) and
+// coloured with the SINGLE-SOURCE air colour u_vol_air (Aero.fog_display,
+// the same value the env fog and the satellite's u_air take - pushed
+// per frame by world.gd _ac0401_push; the standing one-source rule, no
+// fourth air colour for clouds);
+// (b) a MULTIPLE-SCATTERING approximation - the light-march
+// transmittance toward the sun evaluated with decreasing extinction per
+// successive octave and summed (the Guerrilla HZD reference's cheap
+// treatment), normalised so a fully lit sample keeps sh = 1.0 exactly
+// (the 2.5 gain and the lit tops keep their calibration);
+// (c) the HG phase blended PARTWAY TOWARD ISOTROPIC (the constant 1.0
+// on vhg's 4*pi scale, so the blend stays normalised and the forward
+// peak - the silver lining - is untouched).
+// u_vol < 0.5 still short-circuits before any of it: the three-shell
+// path below is byte-identical to AC-0401/AC-0405.
 uniform vec3 u_center = vec3(0.0, -4000.0, 0.0);  // planet centre (main.gd)
 uniform float u_scale3 = 107.92;  // 2*pi*(R+h)/feature, per layer (main.gd)
 uniform float u_drift = 0.00122;  // rad/s about world Y, per layer (main.gd)
@@ -161,6 +184,42 @@ uniform float u_vol_lsteps : hint_range(1.0, 16.0) = 6.0;         // light-march
 uniform float u_vol_sigma : hint_range(0.001, 0.05) = 0.01;       // extinction /m at d=1
 uniform float u_vol_edge : hint_range(0.0, 1.0) = 0.55;           // dark-edge strength
 uniform float u_vol_hg : hint_range(-0.9, 0.9) = 0.65;            // HG anisotropy
+// AC-0406: the lighting model's added terms (the user: "why are all the
+// clouds dark?" - the volume was lit by self-shadowing alone, so every
+// sample not directly sunlit AND forward-scattering scattered ~0, which
+// from underneath is every sample). Shipped tuning (the u_vol_sigma
+// class - no new Settings toggle: this IS the lighting of the existing
+// default-ON cloud_volume feature; u_vol < 0.5 still short-circuits to
+// the byte-identical three-shell path).
+// The ambient sky fill's COLOUR: the single-source air colour
+// (Aero.fog_display - the sky pass's exact h=0 output) that the env
+// fog (main.gd) and the satellite's u_air (satellite_body.gd) take -
+// pushed per frame by world.gd _ac0401_push (the standing one-source
+// rule: NO fourth air colour for clouds). fog_display 8-bit-sRGB-rounds
+// then srgb_to_linear(), so this value is LINEAR; the fragment converts
+// it into this expression's sRGB domain (the pow(2.2) pre-decode below).
+// The default is the noon (177,240,255) value in the linear domain
+// (used only where the push never lands).
+uniform vec3 u_vol_air : source_color = vec3(0.442, 0.870, 1.0);
+// Multiple-scattering octaves: the light-march transmittance toward the
+// sun becomes a 3-term sum with DECREASING extinction per octave
+// (exp(-t) + ms1*exp(-0.45t) + ms2*exp(-0.15t)), normalised by
+// (1+ms1+ms2) so t=0 (a fully lit sample) keeps sh = 1.0 EXACTLY - the
+// 2.5 albedo gain and the lit tops are untouched by construction.
+uniform float u_vol_ms1 : hint_range(0.0, 2.0) = 0.30;
+uniform float u_vol_ms2 : hint_range(0.0, 2.0) = 0.18;
+// Phase isotropy: the Henyey-Greenstein phase (peak-normalised, very
+// directional - 0.012 at the back-scatter lobe) is mixed this far
+// toward ISOTROPIC (the constant 1.0 on vhg's 4-pi scale: both
+// integrate to 4 pi, so the blend stays normalised; the peak stays
+// 1.0, so the silver lining is untouched). 0.0 = the exact pre-AC-0406
+// phase.
+uniform float u_vol_iso : hint_range(0.0, 1.0) = 0.4;
+// Ambient gain: the in-scatter of the whole sky dome (A, the
+// exit-transmittance-weighted sum accumulated by the march) scales the
+// air colour into the ALBEDO. The lit tops are already clamped at 1.25,
+// so this lifts the shadowed side, not the tops.
+uniform float u_vol_amb : hint_range(0.0, 2.0) = 0.45;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
@@ -396,22 +455,25 @@ vec2 vseg2(vec3 w, vec3 rd, float rc) {
 }
 
 // March one segment, carrying the Beer transmittance T in and returning
-// vec4(T, L, Lo, 0): L is the in-scatter (sun -> sample -> camera,
+// vec4(T, L, Lo, A): L is the in-scatter (sun -> sample -> camera,
 // self-shadowed, dark-edged), Lo the out-scatter (the faint rim
-// opposite the sun). The step is length/count: distance-adaptive by
-// construction (a 1700 m limb chord gets ~70 m steps, a 139 m interior
-// path ~6 m), which is also the grain gate - at distance the march
-// over-integrates the fine octaves instead of aliasing them (the r5
-// static cannot happen).
+// opposite the sun), A the AC-0406 ambient in-scatter (the sky dome's
+// exit-transmittance-weighted light, uncoloured - the air colour is
+// applied once in the fragment, since it is march-constant). The step
+// is length/count: distance-adaptive by construction (a 1700 m limb
+// chord gets ~70 m steps, a 139 m interior path ~6 m), which is also
+// the grain gate - at distance the march over-integrates the fine
+// octaves instead of aliasing them (the r5 static cannot happen).
 vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
-		float T_in, float L_in, float Lo_in) {
+		float T_in, float L_in, float Lo_in, float A_in) {
 	float t0 = seg.x;
 	float t1 = seg.y;
 	float T = T_in;
 	float L = L_in;
 	float Lo = Lo_in;
+	float A = A_in;
 	if (t1 - t0 < 1.0) {
-		return vec4(T, L, Lo, 0.0);
+		return vec4(T, L, Lo, A);
 	}
 	float dl = (t1 - t0) / u_vol_steps;
 	const int MAXV = 64;
@@ -445,7 +507,23 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 			// The shadow optical depth uses the SAME extinction as the
 			// view march (no deepening factor - the gate, not a 1.4x
 			// fudge, confines the field the march sees).
-			float sh = exp(-s * dl_l * u_vol_sigma);
+			// AC-0406 (b): MULTIPLE SCATTERING. Light that scatters
+			// inside the cloud does not stop at the first bounce: the
+			// standard cheap treatment (the Guerrilla HZD reference's)
+			// evaluates the light-march transmittance with DECREASING
+			// extinction per successive octave and sums the
+			// contributions - a black shadowed mass becomes a soft
+			// grey one. The density sum s is already marched once
+			// above; only the extinction applied to it differs per
+			// octave, so the added cost is two exp() per sample.
+			// Normalised by (1+ms1+ms2): at t=0 (a fully lit sample)
+			// sh = 1.0 EXACTLY, so the 2.5 albedo gain and the lit
+			// tops keep the pre-AC-0406 calibration by construction.
+			float tau_s = s * dl_l * u_vol_sigma;
+			float sh = exp(-tau_s);
+			sh += u_vol_ms1 * exp(-tau_s * 0.45);
+			sh += u_vol_ms2 * exp(-tau_s * 0.15);
+			sh /= 1.0 + u_vol_ms1 + u_vol_ms2;
 			// cosSun = dot(sun, view direction): < 0 when the sun is on
 			// the CAMERA side (it lights the camera-facing boundary),
 			// > 0 when it is in front (backlit silhouette).
@@ -472,15 +550,39 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 			// core/underside gradient).
 			float ds = d * dl * u_vol_sigma;
 			float hp = vhg(1.0);
-			L += T * (vhg(-cosSun) / hp) * sh * darkEdge * ds;
-			Lo += T * (vhg(cosSun) / hp) * ds;
+			// AC-0406 (c): the phase is blended PARTWAY TOWARD
+			// ISOTROPIC - the peak-normalised HG term is very
+			// directional by construction (0.012 at the back-scatter
+			// lobe), so without this a cloud can only be lit by the
+			// sun. The isotropic component is the constant 1.0 on
+			// vhg's 4*pi scale: vhg integrates to 4*pi over the sphere
+			// and so does 1.0, so the mix stays normalised, and at the
+			// peak vhg(1) mixes toward 1.0 = the same 1.0/hp - the
+			// silver lining (forward peak) is untouched, 0.0 iso
+			// selects the exact pre-AC-0406 phase.
+			float ph_in = mix(vhg(-cosSun), 1.0, u_vol_iso) / hp;
+			float ph_out = mix(vhg(cosSun), 1.0, u_vol_iso) / hp;
+			L += T * ph_in * sh * darkEdge * ds;
+			Lo += T * ph_out * ds;
+			// AC-0406 (a): AMBIENT SKY FILL. A is the in-scatter of
+			// the whole sky dome: the sky's light reaches a sample
+			// from every direction, so it is NOT self-shadowed by the
+			// cloud (that attenuation is exactly the MS octaves
+			// above) and NOT phase-gated (the dome is isotropic). The
+			// only attenuation is T - the exit path from the sample
+			// to the camera through the cloud's own depth - so dense
+			// cores stay darker than thin edges (form, not flat).
+			// Coloured once in the fragment (u_vol_air is march-
+			// constant). No darkEdge: the sky light does not know
+			// about the rim; the powder role stays with the sun term.
+			A += T * ds;
 		}
 		T *= exp(-d * dl * u_vol_sigma);
 		if (T < 0.004) {
 			break;  // fully opaque: no sample behind can contribute
 		}
 	}
-	return vec4(T, L, Lo, 0.0);
+	return vec4(T, L, Lo, A);
 }
 
 void fragment() {
@@ -511,23 +613,34 @@ void fragment() {
 		float ang = u_drift * u_cloud_time;
 		float ca = cos(ang);
 		float sa = sin(ang);
-		vec3 acc = vec3(1.0, 0.0, 0.0);  // (T, L, Lo)
+		vec4 acc = vec4(1.0, 0.0, 0.0, 0.0);  // (T, L, Lo, A)
 		vec2 sg1 = vseg1(w, rd, rc);
-		acc = vmarchseg(ro, rd, sg1, ca, sa, acc.x, acc.y, acc.z).xyz;
+		acc = vmarchseg(ro, rd, sg1, ca, sa, acc.x, acc.y, acc.z, acc.w);
 		if (acc.x > 0.004) {
 			vec2 sg2 = vseg2(w, rd, rc);
-			acc = vmarchseg(ro, rd, sg2, ca, sa, acc.x, acc.y, acc.z).xyz;
+			acc = vmarchseg(ro, rd, sg2, ca, sa, acc.x, acc.y, acc.z, acc.w);
 		}
 		float Av = 1.0 - acc.x;
 		if (Av < 0.004) {
 			discard;  // the annulus carries no density on this ray
 		}
-		// Lit tops -> near white, shaded undersides -> dark (the light
-		// march IS the lambert: sh ~ 1 on sun-facing samples, ~ 0 on
-		// undersides); u_day carries the day/night weight the deck path
-		// uses (0.18 night floor), and the srgb pre-decode is the
-		// unshaded-path convention (u_srgb_pre 1.0 on Forward+).
-		ALBEDO = u_cloud_tint * u_day * clamp(2.5 * acc.y + 0.30 * acc.z, 0.0, 1.25);
+		// Lit tops -> near white, shaded undersides -> soft grey in
+		// the air tint (AC-0406: the MS octaves lift the shadowed sun
+		// term, the ambient dome lifts the rest); u_day carries the
+		// day/night weight the deck path uses (0.18 night floor), and
+		// the srgb pre-decode is the unshaded-path convention
+		// (u_srgb_pre 1.0 on Forward+).
+		// AC-0406 (a): the ambient term's colour is the SINGLE-SOURCE
+		// air colour (u_vol_air, pushed by world.gd - the same value
+		// the env fog and the satellite's u_air take; the standing
+		// one-source rule, no fourth air colour for clouds). It is
+		// LINEAR (fog_display srgb_to_linear's); this expression is
+		// sRGB-domain (the pow(2.2) below), so convert once per
+		// fragment: pow(linear, 1/2.2) ~= the sRGB value.
+		vec3 air_s = pow(max(u_vol_air, vec3(0.0039)), vec3(0.4545));
+		ALBEDO = u_cloud_tint * u_day * clamp(
+			2.5 * acc.y + 0.30 * acc.z + u_vol_amb * air_s * acc.w,
+			0.0, 1.25);
 		ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre);
 		ALPHA = Av;
 	} else {

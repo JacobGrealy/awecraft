@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0406 plan — ambient + multiple-scatter cloud lighting</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 980px; margin: 2em auto; padding: 0 1em; }
+h1 { font-size: 1.4em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.1em; margin-top: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; } th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code { font-family: ui-monospace, monospace; font-size: .92em; }
+</style>
+</head>
+<body>
+<h1>AC-0406 — plan: the cloud volume gets sky light</h1>
+
+<h2>Goal</h2>
+<p>The user: <i>“why are all the clouds dark?”</i> The raymarched volume (AC-0405) is lit by
+self-shadowing alone against a peak-normalised HG phase — any sample not directly sunlit and
+forward-scattering scatters ~0, which from underneath (where the player looks at clouds) is
+<b>every</b> sample (measured before-underside ALBEDO ≈ 0.007, i.e. black). Fix the lighting —
+NOT the density, the radii, or the march — so undersides and interiors read as soft grey with
+the project's air tint while <b>keeping</b> AC-0405's gains: the 68.9 brightness spread (vs the
+reference's 32.4), the inter-layer parallax, and the saturated tint (181,229,190 at disc centre).</p>
+<p>Acceptance (the user's view, measured): luminance of a cloud's <b>underside</b> (120 m ground
+frame) and <b>interior</b> (300 m in-annulus frame) against its <b>sunlit top</b> (700 m deck band),
+before (AC-0405's r120-on / r300-on / r700-on) and after (same cameras, same frozen weather
+T=0.5, CLOUD_T0=411200, R24/F83 user config). A ratio near 1 = flat (the old deck's failure);
+the target is readable form without black shadow. Spread + tint re-measured after, against 68.9
+and 181,229,190. Added frame cost stated (r700 wall vs AC-0405's 781 s).</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td>the lighting model of the volume
+branch only (<code>u_vol &gt; 0.5</code>): (a) ambient in-scatter accumulator <code>A</code>
+(Σ T·ds per sample, carried in the <code>vmarchseg</code> return's .w), added to ALBEDO as
+<code>u_vol_amb · air_srgb · A</code>; (b) the self-shadow factor becomes a 3-octave sum with
+decreasing extinction, normalised so τ=0 is exactly 1.0; (c) the HG phase mixed partway toward
+isotropic (constant 1.0 on the same 4π scale — normalisation stays exact, peak = 1.0 so the
+silver lining is untouched). Five new uniforms (shipped-tuning class, like <code>u_vol_sigma</code>):
+<code>u_vol_air</code> (vec3, LINEAR fog_display value), <code>u_vol_ms1</code> 0.35,
+<code>u_vol_ms2</code> 0.25, <code>u_vol_iso</code> 0.5, <code>u_vol_amb</code> 0.7. The
+<code>u_vol &lt; 0.5</code> three-shell path stays byte-identical (untouched).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_ac0401_push()</code> gains item (5):
+push <code>u_vol_air = Aero.fog_display(Game.time_of_day)</code> to the three cloud-layer
+materials — the SAME single-source air colour <code>env.fog_light_color</code> (main.gd) and the
+satellite's <code>u_air</code> (satellite_body.gd:590) take; per-frame (day/night moves it),
+value-gated at 1/255. Render-path only (no generation, no geometry).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§3 CloudLayer bullet: the AC-0406 note (the
+volume's lighting is now direct + 2 MS octaves + isotropic phase blend + single-source-air
+ambient; the u_vol_air push at the _ac0401_push seam).</td></tr>
+</table>
+<p>No new Settings toggle: this is the lighting model of the existing default-ON
+<code>cloud_volume</code> feature (the 2.5/0.30 gains, HG, self-shadow all shipped without
+switches in AC-0405); the user's request is for the clouds to be bright, so the default is the
+new lighting, and the OFF state (<code>cloud_volume</code> off) stays the byte-identical
+three-shell escape. No C++ (constraint). No fence files (main.gd/game.gd/drop.gd/debug.gd
+untouched — the air colour rides the world.gd seam, the same workaround AC-0401/AC-0405 used).</p>
+
+<h2>The lighting model (and its cost)</h2>
+<p>Per sample (d &gt; 0.015), the existing code already computes the 6-tap self-shadow density
+sum <code>s</code> and <code>τ = s·80·σ</code>. What changes:</p>
+<table>
+<tr><th>term</th><th>before</th><th>after</th><th>added cost</th></tr>
+<tr><td>sun self-shadow</td><td><code>exp(-τ)</code></td><td><code>(exp(-τ) + 0.35·exp(-0.45τ) +
+0.25·exp(-0.15τ)) / 1.6</code> — 2 extra multiple-scatter octaves at decreasing extinction
+(the standard cheap MS treatment; a deep shadow keeps ~10 % of direct instead of ~1 %)</td>
+<td>2 <code>exp</code></td></tr>
+<tr><td>phase</td><td><code>vhg(±cosSun)/vhg(1)</code> (peak-normalised, very directional:
+0.012 at the back-scatter lobe)</td><td><code>mix(vhg(±cosSun), 1.0, 0.5)/vhg(1)</code> — half
+toward isotropic (the constant 1.0 integrates to 4π exactly like vhg, so the blend is
+normalised; the peak stays 1.0)</td><td>2 scalar <code>mix</code></td></tr>
+<tr><td>ambient sky fill</td><td>—</td><td><code>A += T·ds</code> per sample (the exit-
+transmittance-weighted in-scatter of the whole sky dome — <b>not</b> self-shadowed: that
+attenuation IS the MS), final <code>+ u_vol_amb · pow(u_vol_air, 1/2.2) · A</code>; air =
+<code>Aero.fog_display</code> (LINEAR → sRGB domain, matching the expression's pow(2.2)
+pre-decode). Dark undersides become soft grey in the air tint (the 177,240,255 family); the
+lit tops are already clamped at 1.25, so they stay white by construction (τ=0 → sh = 1.0,
+peak phase = 1.0: both calibration points untouched).</td><td>1 vec3 <code>pow</code> per
+fragment + 1 mul-add per sample</td></tr>
+</table>
+<p>The expensive parts (24 view steps × 3-octave density, the 6-tap light march, the dark-edge
+tap) are untouched — the added work is a handful of scalar ops per sample and one vec3 pow per
+fragment. Expect a small (single-digit %) rise over AC-0405's 781 s at r700; measured, not
+assumed (the r700-on wall is the cost evidence). No step-count reduction is planned, so if the
+measure shows the budget is exceeded the one-shot response is to state the deviation, not to
+retune in a loop.</p>
+<p>What must NOT change (the AC-0405 gains): the density field / windows / banding (the
+weather), the annulus radii and centre, the 24-step march, the ALPHA = 1−T silhouette, the
+lit-top calibration (τ=0 anchor), the three-shell OFF path (byte-identical), genhash 25/25,
+and the AC-0402/AC-0398/AC-0399/AC-0400/AC-0401 behaviours (untouched code paths).</p>
+
+<h2>Harness gates (light set, then exit — heavy set is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>what</th></tr>
+<tr><td>G0</td><td>one headless load: zero <code>SCRIPT ERROR</code> AND zero <code>SHADER
+ERROR</code> (<code>gate_census.py</code>) AND the process exit status checked (a segfault
+leaves a clean log; AC-0403 is open at chunk.gd:657 — any backtrace goes in the results).</td></tr>
+<tr><td>SMOKE + PROBE + genhash</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>
+(genhash 25/25 owed — world.gd changed; rendering-only expected); battery <code>ok:true</code>.</td></tr>
+<tr><td>Boundary r4 (one-shot self-check)</td><td>world.gd touched → one boundary r4 run, judged
+against the standing row; on a trade-off: honest deviation + exit, no loop.</td></tr>
+<tr><td>RENDERS (the acceptance)</td><td>4 Forward+ frames, AC-0405's exact recipe (CAM=planet
++ SAT_ALT 2600/700/300/120, R24/F83, T=0.5 frozen, CLOUD_T0=411200, 1280×720, SNAP_DRAIN=1200,
+1200 s cap, boot line asserted, file existence checked): r2600-on (orbit limb — the lit-top
+read), r700-on (the spread/tint/cost instrument frame), r300-on (inside the annulus — interior
++ parallax), r120-on (looking up from the ground — the underside). Measured with the band-
+stats instrument (analyze2.py lineage) before (AC-0405 PNGs) and after.</td></tr>
+</table>
+<p>Exit after: results page (<code>tasks/AC-0406/AC-0406-results.html</code>), captures copied
+to <code>tasks/AC-0406/</code>, continuity journal updated. No commits (fence).</p>
+</body>
+</html>

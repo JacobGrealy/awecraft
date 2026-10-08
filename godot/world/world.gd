@@ -4954,6 +4954,12 @@ var _ac0402_skyblend := -1.0
 # change-gated — the value only moves on a toggle or a planet_R change).
 var _ac0405_vol := -1.0
 var _ac0405_r := -1.0
+# AC-0406: the cloud volume's ambient-fill colour push state (same seam).
+# The colour MOVES with the day/night cycle (Aero.fog_display), so this
+# is per-frame like u_space_sky, value-gated at 1/255 (a frozen time
+# pushes once; a full cycle re-pushes only as the colour moves).
+var _ac0406_air := Color(1.0, 1.0, 1.0, 1.0)
+var _ac0406_air_invalid := true
 
 
 func _ac0401_push() -> void:
@@ -5077,6 +5083,28 @@ func _ac0401_push() -> void:
 					cm6.set_shader_parameter("u_vol_rmin", rvol + hmin)
 					cm6.set_shader_parameter("u_vol_rmax", rvol + hmax)
 			_ac0405_r = rvol
+	# (5) AC-0406: the cloud volume's ambient sky-fill colour. The
+	# SINGLE-SOURCE air colour — Aero.fog_display (the sky pass's exact
+	# h=0 output) — is the same value env.fog_light_color (main.gd) and
+	# the satellite body's u_air (satellite_body.gd) take; the volume's
+	# sky-fill term reuses it (the standing one-source rule: no fourth
+	# air colour for clouds). The volume branch (u_vol > 0.5) multiplies
+	# its in-scatter by this colour; the three-shell OFF path never
+	# reads it (the u_vol < 0.5 short-circuit precedes any volume work),
+	# so the OFF state stays byte-identical regardless of the push.
+	# Per-frame (the day/night cycle moves it), value-gated at 1/255.
+	var air := Aero.fog_display(Game.time_of_day)
+	if (_ac0406_air_invalid or absf(air.r - _ac0406_air.r) > 0.004
+			or absf(air.g - _ac0406_air.g) > 0.004
+			or absf(air.b - _ac0406_air.b) > 0.004):
+		var cl9 = mn.get("cloud_layers")
+		if cl9 != null and cl9.size() > 0:
+			for layer in cl9:
+				var cm9 = layer.get("mat")
+				if cm9 is ShaderMaterial:
+					cm9.set_shader_parameter("u_vol_air", air)
+		_ac0406_air = air
+		_ac0406_air_invalid = false
 
 
 func _process(_delta: float) -> void:

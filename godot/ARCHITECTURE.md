@@ -288,6 +288,33 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         path byte-identical to AC-0401. Env
 │                         AWECRAFT_CLOUDVOL=0|1; composes with
 │                         cloud_deck (re-parameterises the 3-D field).
+│                         AC-0406: the volume's LIGHTING MODEL (the user's
+│                         "why are all the clouds dark?" — self-shadow-
+│                         only scattering is ~0 from underneath, which is
+│                         every sample a player sees). Three terms join the
+│                         sun term in the volume branch: (a) an AMBIENT SKY
+│                         FILL — per-sample in-scatter of the whole sky
+│                         dome (exit-transmittance-weighted Σ T·ds, NOT
+│                         self-shadowed — that attenuation is exactly the
+│                         multiple scattering), coloured with the
+│                         SINGLE-SOURCE air colour u_vol_air —
+│                         Aero.fog_display (the env fog and the satellite's
+│                         u_air take the same value; no fourth air colour
+│                         for clouds) — pushed per frame by
+│                         _ac0401_push (value-gated); (b) the self-shadow
+│                         transmittance becomes a 3-octave sum with
+│                         DECREASING extinction (the standard cheap
+│                         multiple-scattering treatment), normalised so a
+│                         fully lit sample keeps sh = 1.0 exactly (the 2.5
+│                         gain and the lit tops keep their calibration);
+│                         (c) the HG phase blended PARTWAY toward isotropic
+│                         (constant 1.0 on vhg's 4π scale — normalisation
+│                         exact, forward peak untouched). Shipped-tuning
+│                         uniforms u_vol_ms1/ms2/iso/amb (the u_vol_sigma
+│                         class — no new Settings toggle: this IS the
+│                         lighting of the default-ON cloud_volume feature;
+│                         u_vol < 0.5 still short-circuits to the byte-
+│                         identical three-shell path).
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
