@@ -66,6 +66,49 @@ const DEFAULTS := {
 	# (harness.gd is pristine). The live world always writes the key at boot
 	# (note_modern), so the game path is explicit in both states.
 	"modern_light": true,
+	# AC-0401: the cloud deck character switch. DEFAULTS ON — the user
+	# asked for the new look ("less of them but the individual clouds
+	# should be bigger and they should be volumetric"), the modern_light
+	# precedent: default to conservative only when the user has NOT
+	# asked. The switch rides world.gd _ac0401_push (u_deck on the three
+	# cloud-layer materials): 0.0 runs the exact pre-AC-0401 field and
+	# windows inside cloud_layer.gdshader (short-circuit before the work,
+	# byte-identical pattern), 1.0 is the re-characterised deck (1/3
+	# field frequency, tighter coverage window, clearing band troughs,
+	# volumetric shading). Env-overridable (AWECRAFT_CLOUDDECK=0|1 at
+	# boot, world.gd).
+	"cloud_deck": true,
+	# AC-0401: the limb-glow altitude gate. DEFAULTS ON — the user asked
+	# for it ("we do not want low lod to have the limb effect, only fog"):
+	# the atmospheric rim is an ORBIT instrument, so with the gate ON it
+	# rides u_space (the flight-band blend): no rim near the ground, full
+	# rim from orbit. OFF (u_limb_gate 0.0) is the pre-AC-0401 glow at
+	# every altitude. Rides the same _ac0401_push (u_limb_gate on the sky
+	# material); env-overridable (AWECRAFT_LIMB=0|1 at boot, world.gd).
+	"limb_space": true,
+	# AC-0402: the sky's altitude-aware space blend. DEFAULTS ON - the
+	# user story asks for it ("the sky should know where the player is:
+	# bright air near the ground, thinning to space as you climb"). The
+	# sky's background blend rides u_space_sky (world.gd _ac0401_push
+	# pushes it per frame, stretched window BAND_WALK_MAX ..
+	# BAND_FLY_MIN*1.6 read off the live player); the limb gate, stars
+	# and sun glow stay on the physics band's S. OFF (u_sky_alt 0.0)
+	# makes the sky's ws exactly the pre-AC-0402 expression - a
+	# bit-identical sky. Env-overridable (AWECRAFT_SKYALT=0|1 at boot,
+	# world.gd).
+	"sky_altitude": true,
+	# AC-0405: the raymarched-volumetric-clouds switch. DEFAULTS ON —
+	# the user ordered the rework in their own words ("rethink clouds...
+	# forget how we currently do it"), the modern_light/cloud_deck
+	# precedent: default conservative only when the user has NOT asked.
+	# Rides world.gd _ac0401_push (u_vol on the three cloud-layer
+	# materials + the annulus radii u_vol_r/rmin/rmax + the two inner
+	# shells' visibility): 0.0 is the exact AC-0401 three-shell path
+	# (short-circuit before the work, provably the old look), 1.0 is the
+	# raymarched density volume in the annulus [R+275, R+400] about the
+	# centre (verified geometry, the outer shell carries the march).
+	# Env-overridable (AWECRAFT_CLOUDVOL=0|1 at boot, world.gd).
+	"cloud_volume": true,
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
@@ -260,6 +303,18 @@ func _clamp(k: String, v) -> void:
 		# reason as smooth_ramps (a hand-edited string fails to false,
 		# never raises and aborts the load).
 		"modern_light":
+			values[k] = AnalogTune.sanitize_bool(v)
+		# AC-0401: the deck character + the limb-glow gate (both look
+		# changes, both default ON - the user asked; see DEFAULTS).
+		# sanitize_bool, not bool(): a hand-edited string in the cfg must
+		# fail to false, not raise and abort the whole load.
+		"cloud_deck":
+			values[k] = AnalogTune.sanitize_bool(v)
+		"limb_space":
+			values[k] = AnalogTune.sanitize_bool(v)
+		"sky_altitude":  # AC-0402: bool (the sky's altitude-aware space blend).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"cloud_volume":  # AC-0405: bool (the raymarched cloud volume).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"fullscreen":
 			values[k] = bool(v)

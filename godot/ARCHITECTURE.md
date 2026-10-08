@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) and the AC-0405 `cloud_volume` bool (DEFAULT ON — the raymarched-volumetric-clouds rework the user ordered; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_CLOUDVOL=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_vol` + the annulus radii `u_vol_r/rmin/rmax` (change-gated on `planet_R`) to the three cloud-layer materials and toggles the two inner shells' visibility (ON = the outer shell carries the raymarched volume in the [R+275, R+400] annulus, inner shells hidden; OFF = the exact AC-0401 three-shell path — the shader short-circuits on `u_vol < 0.5` before any volume work); see the AC-0405 note in the CloudLayer bullet, §3) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -252,6 +252,42 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         + the thickness darkening deepened to 0.58 at full
 │                         opacity). All windows/scale are u_deck-parameterised in
 │                         the fragment; u_deck < 0.5 selects the exact r9 constants.
+│                         AC-0405: the RAYMARCHED VOLUME behind `u_vol`
+│                         (Settings "cloud_volume", DEFAULT ON — the user
+│                         ordered the rework: "rethink clouds... forget how
+│                         we currently do it"; the AC-0384/AC-0401
+│                         patterned surface could not give parallax or
+│                         internal depth because it is one surface at one
+│                         radius). u_vol > 0.5 runs a volume path IN
+│                         fragment() (the dummy parser resolves the
+│                         fragment builtins + discard + no-return there
+│                         only) that raymarches the annulus [R+275, R+400]
+│                         about (0,-R,0) — the SAME verified shell extent,
+│                         geometry untouched — through a 3-D FBM density
+│                         field (the same ahash/anv noise + the u_deck
+│                         windows/banding, sampled at 3 octaves, radially
+│                         gated to the annulus so the light march can
+│                         EXIT the cloud), up to two annulus segments per
+│                         ray (near + far limb side; the one-hemisphere
+│                         rule keeps each pixel marched exactly once),
+│                         24 count-based view steps/segment (distance-
+│                         adaptive = the grain gate), Beer accumulation
+│                         with T<0.004 early exit, and per-sample
+│                         lighting: a 6-tap 1-octave MARCH TOWARD THE SUN
+│                         (self-shadow — lit tops, dark undersides), a
+│                         Henyey-Greenstein phase (g=0.65, peak-
+│                         normalised) for the in/out-scatter, and a 1-
+│                         tap dark-edge term (the HZD powder role).
+│                         ALPHA = 1-T (soft silhouette). The outer shell
+│                         (max-h layer) carries the march; world.gd
+│                         _ac0401_push (same seam) pushes u_vol + the
+│                         annulus radii u_vol_r/rmin/rmax (change-gated
+│                         on planet_R) and hides the two inner shells
+│                         while ON (node visible; geometry untouched).
+│                         u_vol < 0.5 short-circuits to the three-shell
+│                         path byte-identical to AC-0401. Env
+│                         AWECRAFT_CLOUDVOL=0|1; composes with
+│                         cloud_deck (re-parameterises the 3-D field).
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -285,6 +321,14 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  │                      (smoothstep(BAND_WALK_MAX, BAND_FLY_MIN×1.6, alt_rad) off
 │  │                      the live player; skipped when the switch is OFF — see the
 │  │                      AC-0402 bullet in §4)
+│  │                      AC-0405: the same seam gains the cloud_volume switch push
+│  │                      (u_vol to the three cloud-layer materials, change-gated;
+│  │                      the two inner shells' visible=false while ON — the outer
+│  │                      max-h shell carries the raymarched volume; restored to
+│  │                      visible when OFF) + the annulus radii u_vol_r/rmin/rmax
+│  │                      (change-gated on planet_R; rmin/rmax derived from the live
+│  │                      layer table's min/max h — no duplicated constants; see the
+│  │                      AC-0405 note in the CloudLayer bullet, §3)
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):

@@ -3841,6 +3841,14 @@ func _ready() -> void:
 	if mde != "":
 		Settings.values["modern_light"] = mde == "1"
 	note_modern()  # AC-0398: the boot derive (after the env preload)
+	# AC-0405: harness env preload (the AWECRAFT_RAMPS pattern) —
+	# AWECRAFT_CLOUDVOL=<0|1> (the raymarched-volume switch, Settings
+	# "cloud_volume", default ON) overrides the STORED setting for this
+	# process only (no save); _ac0401_push reads it live, so no boot
+	# derive is owed.
+	var cve := OS.get_environment("AWECRAFT_CLOUDVOL")
+	if cve != "":
+		Settings.values["cloud_volume"] = cve == "1"
 	# AC-0401: harness env preloads (the AWECRAFT_RAMPS pattern) —
 	# AWECRAFT_CLOUDDECK=<0|1> (the deck character switch, Settings
 	# "cloud_deck", default ON) and AWECRAFT_LIMB=<0|1> (the limb-glow
@@ -4942,6 +4950,10 @@ var _ac0401_deck := -1.0
 var _ac0401_limb := -1.0
 var _ac0402_skyalt := -1.0
 var _ac0402_skyblend := -1.0
+# AC-0405: the raymarched-volume push state (same seam: _ac0401_push,
+# change-gated — the value only moves on a toggle or a planet_R change).
+var _ac0405_vol := -1.0
+var _ac0405_r := -1.0
 
 
 func _ac0401_push() -> void:
@@ -5013,6 +5025,58 @@ func _ac0401_push() -> void:
 					if absf(ss2 - _ac0402_skyblend) > 0.001:
 						smb.set_shader_parameter("u_space_sky", ss2)
 						_ac0402_skyblend = ss2
+	# (4) AC-0405: the raymarched-volume switch (Settings "cloud_volume",
+	# default ON — the user ordered the rework: "look at how voluminous
+	# clouds are done and implement them, forget how we currently do it").
+	# Same seam as u_deck: change-gated; the short-circuit is the shader
+	# side (u_vol < 0.5 runs the exact three-shell AC-0401 path). While
+	# ON, the volume lives in the annulus [R+275, R+400] about the
+	# centre — the SAME verified shell extent (radii/centre untouched) —
+	# carried by the outer shell (its fragment raymarches the annulus);
+	# the two inner shells are hidden (node visible, geometry never
+	# moves) so the same volume is not alpha-blended three times.
+	var vol_v := 1.0 if bool(Settings.values.get("cloud_volume", true)) else 0.0
+	if vol_v != _ac0405_vol:
+		var cl5 = mn.get("cloud_layers")
+		if cl5 != null and cl5.size() > 0:
+			# The OUTER shell (the highest altitude — main.gd's own layer
+			# table, no duplicated constants) carries the march; the
+			# inner shells are hidden while the volume is ON.
+			var hmax5 := -1.0e9
+			for layer in cl5:
+				hmax5 = maxf(hmax5, float(layer.get("h", 0.0)))
+			for layer in cl5:
+				var cm5 = layer.get("mat")
+				if cm5 is ShaderMaterial:
+					cm5.set_shader_parameter("u_vol", vol_v)
+				var node5 = layer.get("node")
+				if node5 != null:
+					var is_outer := is_equal_approx(float(layer.get("h", 0.0)), hmax5)
+					node5.visible = is_outer or vol_v <= 0.5
+			# Latch only when the push landed (the layers exist once
+			# _setup_aero has run; the first pushes retry cheaply until
+			# they do - the deck/limb pattern above).
+			_ac0405_vol = vol_v
+	# The annulus radii (change-gated on planet_R): rmin/rmax are the
+	# live layer extent by construction (the lowest/topmost shell
+	# altitude from main.gd's own layer table — no duplicated constants).
+	var rvol := float(Game.planet_R)
+	if rvol > 0.0 and rvol != _ac0405_r:
+		var cl6 = mn.get("cloud_layers")
+		if cl6 != null and cl6.size() > 0:
+			var hmin := 1.0e9
+			var hmax := -1.0e9
+			for layer in cl6:
+				var hh := float(layer.get("h", 0.0))
+				hmin = minf(hmin, hh)
+				hmax = maxf(hmax, hh)
+			for layer in cl6:
+				var cm6 = layer.get("mat")
+				if cm6 is ShaderMaterial:
+					cm6.set_shader_parameter("u_vol_r", rvol)
+					cm6.set_shader_parameter("u_vol_rmin", rvol + hmin)
+					cm6.set_shader_parameter("u_vol_rmax", rvol + hmax)
+			_ac0405_r = rvol
 
 
 func _process(_delta: float) -> void:

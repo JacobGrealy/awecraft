@@ -52,6 +52,18 @@ var ambient_check: CheckBox
 var ramp_check: CheckBox
 # AC-0398: the modern per-vertex lighting toggle (Settings page, default ON).
 var modern_check: CheckBox
+# AC-0401: the cloud deck character toggle (Settings page, default ON -
+# the user asked for the fewer/bigger/volumetric look).
+var cloud_deck_check: CheckBox
+# AC-0401: the limb-glow altitude gate (Settings page, default ON - the
+# user asked for the fog-only near field).
+var limb_gate_check: CheckBox
+# AC-0402: the sky's altitude-aware space blend (Settings page, default
+# ON - the user story asks for the sky to thin with the climb).
+var sky_alt_check: CheckBox
+# AC-0405: the raymarched-volumetric-clouds toggle (Settings page,
+# default ON - the user ordered the rework).
+var cloud_vol_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -285,6 +297,62 @@ func _ready() -> void:
 	opt_vbox.add_child(modern_check)
 	if hi + 8 < opt_vbox.get_child_count():
 		opt_vbox.move_child(modern_check, hi + 9)
+	# AC-0401: the cloud deck character toggle — user-facing visual
+	# setting on the Settings page (next to the modern lighting),
+	# persisted like every other setting (Settings "cloud_deck", default
+	# ON - the user asked for the new look). No apply step is owed:
+	# world.gd _ac0401_push reads the live value every frame and pushes
+	# u_deck to the three cloud-layer materials (0.0 = the pre-AC-0401
+	# field and windows, 1.0 = the re-characterised deck).
+	cloud_deck_check = CheckBox.new()
+	cloud_deck_check.name = "CloudDeckCheck"
+	cloud_deck_check.text = "Clouds: fewer, bigger, volumetric masses"
+	cloud_deck_check.add_theme_font_size_override("font_size", 15)
+	cloud_deck_check.toggled.connect(_on_cloud_deck_toggled)
+	opt_vbox.add_child(cloud_deck_check)
+	if hi + 9 < opt_vbox.get_child_count():
+		opt_vbox.move_child(cloud_deck_check, hi + 10)
+	# AC-0401: the limb-glow altitude gate — the atmospheric rim is an
+	# orbit instrument; ON (default, the user asked) gates it on the
+	# flight-band blend (no rim near the ground, full rim from orbit),
+	# OFF is the pre-AC-0401 glow at every altitude. Same _ac0401_push
+	# seam (u_limb_gate on the sky material).
+	limb_gate_check = CheckBox.new()
+	limb_gate_check.name = "LimbGateCheck"
+	limb_gate_check.text = "Planet limb glow: orbit only"
+	limb_gate_check.add_theme_font_size_override("font_size", 15)
+	limb_gate_check.toggled.connect(_on_limb_gate_toggled)
+	opt_vbox.add_child(limb_gate_check)
+	if hi + 10 < opt_vbox.get_child_count():
+		opt_vbox.move_child(limb_gate_check, hi + 11)
+	# AC-0402: the sky's altitude-aware space blend toggle — "bright air
+	# near the ground, thinning to space as you climb" (default ON, the
+	# user story). Same seam: world.gd _ac0401_push reads the live value
+	# and pushes u_sky_alt + u_space_sky to the sky material (OFF = the
+	# exact pre-AC-0402 sky, the short-circuit is the shader side).
+	sky_alt_check = CheckBox.new()
+	sky_alt_check.name = "SkyAltCheck"
+	sky_alt_check.text = "Sky thins to space as you climb"
+	sky_alt_check.add_theme_font_size_override("font_size", 15)
+	sky_alt_check.toggled.connect(_on_sky_alt_toggled)
+	opt_vbox.add_child(sky_alt_check)
+	if hi + 11 < opt_vbox.get_child_count():
+		opt_vbox.move_child(sky_alt_check, hi + 12)
+	# AC-0405: the raymarched-volumetric-clouds toggle — the user's own
+	# words ("the clouds should look like real clouds... forget how we
+	# currently do it"), default ON (the rework was ordered). Same seam
+	# as cloud_deck: no apply step is owed — world.gd _ac0401_push reads
+	# the live value every frame and pushes u_vol + the annulus radii
+	# (0.0 = the exact AC-0401 three-shell deck, 1.0 = the raymarched
+	# density volume in the verified [R+275, R+400] annulus).
+	cloud_vol_check = CheckBox.new()
+	cloud_vol_check.name = "CloudVolCheck"
+	cloud_vol_check.text = "Clouds: raymarched volume (real depth)"
+	cloud_vol_check.add_theme_font_size_override("font_size", 15)
+	cloud_vol_check.toggled.connect(_on_cloud_vol_toggled)
+	opt_vbox.add_child(cloud_vol_check)
+	if hi + 12 < opt_vbox.get_child_count():
+		opt_vbox.move_child(cloud_vol_check, hi + 13)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -758,6 +826,13 @@ func _sync_controls() -> void:
 	ramp_check.button_pressed = bool(Settings.values.get("smooth_ramps", false))
 	# AC-0398: the modern vertex lighting toggle (default ON).
 	modern_check.button_pressed = bool(Settings.values.get("modern_light", true))
+	# AC-0401: the deck character + the limb gate (both default ON).
+	cloud_deck_check.button_pressed = bool(Settings.values.get("cloud_deck", true))
+	limb_gate_check.button_pressed = bool(Settings.values.get("limb_space", true))
+	# AC-0402: the sky's altitude-aware space blend (default ON).
+	sky_alt_check.button_pressed = bool(Settings.values.get("sky_altitude", true))
+	# AC-0405: the raymarched-volumetric-clouds toggle (default ON).
+	cloud_vol_check.button_pressed = bool(Settings.values.get("cloud_volume", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1111,6 +1186,49 @@ func _on_modern_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("modern_light", on)
+
+
+# AC-0401: the cloud deck character toggle (default ON - the user asked;
+# the modern_light precedent). set_value does the clamp chain + the save;
+# no apply step is owed: world.gd _ac0401_push reads the live value every
+# frame and pushes u_deck to the three cloud-layer materials (0.0 = the
+# exact pre-AC-0401 field and windows, 1.0 = the re-characterised deck).
+func _on_cloud_deck_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("cloud_deck", on)
+
+
+# AC-0401: the limb-glow altitude gate (default ON - the user asked for
+# the fog-only near field). Same seam: _ac0401_push pushes u_limb_gate to
+# the sky material (0.0 = the pre-AC-0401 glow at every altitude, 1.0 =
+# the glow rides u_space, the flight-band blend).
+func _on_limb_gate_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("limb_space", on)
+
+
+# AC-0402: the sky's altitude-aware space blend toggle (default ON - the
+# user story asks for the sky to thin with the climb). set_value does the
+# clamp chain + the save; no apply step is owed: world.gd _ac0401_push
+# reads the live value and pushes u_sky_alt / u_space_sky (OFF = the
+# exact pre-AC-0402 sky).
+func _on_sky_alt_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("sky_altitude", on)
+
+
+# AC-0405: the raymarched-volumetric-clouds toggle (default ON - the
+# user ordered the rework). set_value does the clamp chain + the save;
+# no apply step is owed: world.gd _ac0401_push reads the live value and
+# pushes u_vol + the annulus radii (OFF = the exact AC-0401 three-shell
+# deck - the short-circuit is the shader side).
+func _on_cloud_vol_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("cloud_volume", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

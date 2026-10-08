@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0405 results — raymarched volumetric clouds</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.15em; margin-top: 1.6em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+img.cap { max-width: 100%; border: 1px solid #888; margin: .8em 0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.ok { color: #14611e; font-weight: 600; }
+.bad { color: #8b1a1a; font-weight: 600; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+.kpi { display: inline-block; margin: .2em .8em .2em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0405 — Raymarched volumetric clouds</h1>
+<p><b>Status:</b> light gates green (G0 / smoke / genhash / renders / boundary r4 A/B);
+acceptance measured and met on both user complaints. Heavy set (farab / ladder / meshprobe /
+halo / lightstate / r16 / boundary r50 / full battery / shaderforce) is the coordinator's
+job and was deliberately not run. Date: 2026-10-07. Engine 4.7.1, seed 44, user config
+R24 / F83 (fog 332 m), T=0.5 frozen, CLOUD_T0=411200 (the assessment's sustained-deck state),
+1280×720 Forward+ (llvmpipe proxy — the box's measured evidence path per AC-0391/AC-0384).</p>
+
+<h2>1. Technique + reference followed</h2>
+<p>The user's directive: <i>“I think you just need to rethink clouds. look at how
+voluminous clouds are done and implement them, forget how we currently do it.”</i> The
+structural reason four rounds of patterned-surface work (AC-0385, AC-0384 r6–r10, AC-0401)
+failed: a single surface at a single radius has no parallax and no internal depth — the
+pattern can only sit ON the shell. The rework is structural: <b>the pattern becomes a
+density field and the surface becomes a volume</b>.</p>
+<ul>
+<li><b>Reference read (per the ticket):</b> godotshaders.com
+<i>“Volumetric Raymarched (animated) Clouds v2”</i> — followed for the structure:
+slab/sphere intersection to bound the march, <b>count-based steps</b> (fixed step count,
+step length = chord/count → distance-adaptive), Beer-law transmittance, phase-function
+scattering. (The Wayback copy is a partial fetch; the slab+count-step+phase skeleton is
+what was followed, verified against the Guerrilla model below.)</li>
+<li><b>Guerrilla HZD ARTR talk</b> (the lighting model): light each sample with a short
+march TOWARD THE SUN through the same field (self-shadow — a top sample's march exits the
+cloud → lit, an underside's stays inside → dark), a Henyey–Greenstein phase, and a
+powder/dark-edge term so camera-facing boundaries don't read as grey mush.</li>
+</ul>
+<p><b>Implementation</b> (all in <code>godot/core/cloud_layer.gdshader</code>, behind
+<code>u_vol</code>; the entry sits in <code>fragment()</code> — measured: the dummy parser
+resolves the fragment builtins + <code>discard</code> in <code>fragment()</code> only, and
+<code>return</code> is forbidden there, so if/else):</p>
+<ul>
+<li>The fragment raymarches the annulus <b>[R+275, R+400] about (0,−R,0)</b> — the SAME
+verified shell extent; geometry/radii/centre untouched. View-ray segments from the
+sphere-quadratic roots: up to 2 (near-side + far-side of the limb). One-hemisphere rule
+(camera outside → front face; inside → NEAR face) so each pixel is marched exactly once
+(no double-blend).</li>
+<li><b>24 view steps per segment</b>, count-based (a 1700 m limb chord gets ~70 m steps, a
+139 m interior path ~6 m) — distance-adaptive by construction, which is also the grain
+gate (the r5 near-disc static cannot happen: at distance the march over-integrates the
+fine octaves instead of aliasing them).</li>
+<li>Density = 3-octave FBM (the same <code>ahash</code>/<code>anv</code> noise) in
+planet-frame unit-sphere coords (|q| NOT renormalised → the field genuinely varies
+through the layer thickness), with the exact AC-0401 window chain
+(<code>u_deck</code>-parameterised, byte-identical constants) and the same latitude
+banding — so the 3-D field is the same weather, now volumetric. <b>A radial gate confines
+the field to the annulus</b> (measured defect #1 without it: the FBM filled all space,
+the light march never exited the “cloud”, and the whole deck read as one dark storm
+band).</li>
+<li>Per-sample lighting: a <b>6-tap, 1-octave coarse march toward the sun</b> (80 m steps,
+early exit at optical depth 3) = the self-shadow; a <b>Henyey–Greenstein phase (g=0.65),
+peak-normalised</b> (the raw peak is ~13× — unnormalised it saturates every lit sample to
+flat white, defect #2), in-scatter angle dot(sun, −rd) (defect #3: sign); a <b>1-tap
+dark-edge</b> term (density drop toward the camera; suppressed when the sun lights the
+visible face, kept on backlit silhouettes — the HZD powder role).</li>
+<li>Beer accumulation with T&lt;0.004 early exit; <code>ALPHA = 1−T</code> (soft
+silhouette — also retires the D2 crisp deck edge); <code>ALBEDO = tint·u_day·clamp(2.5·L
++ 0.30·Lo, 0, 1.25)</code>; the same <code>u_srgb_pre</code> pow(2.2) convention as the
+unshaded path.</li>
+</ul>
+<p><b>Switch:</b> <code>cloud_volume</code> (Settings + Options row
+“Clouds: raymarched volume (real depth)”), <b>DEFAULT ON</b> (the rework was ordered;
+modern_light/cloud_deck precedent), env <code>AWECRAFT_CLOUDVOL=0|1</code>. Pushed through
+the existing <code>world._ac0401_push()</code> seam (change-gated; the outer max-h shell
+carries the march, the two inner shells' <code>visible</code> is false while ON — node
+visibility only, geometry untouched; restored when OFF). <b>OFF = the exact AC-0401
+three-shell path</b>: the shader short-circuits on <code>u_vol &lt; 0.5</code> before any
+volume work, and the fall-through body was verified byte-identical to the pre-AC-0405
+shader (difflib over the whole fragment body + vertex/fog/ahash/anv/fbm).</p>
+
+<h2>2. Step / light counts (the cost budget, shipped)</h2>
+<table>
+<tr><th>quantity</th><th>value</th><th>note</th></tr>
+<tr><td>view steps</td><td><b>24 / segment</b>, ≤ 2 segments/ray</td><td>count-based; distance-adaptive step length</td></tr>
+<tr><td>density taps</td><td>3-octave per view step; 1-octave for light/edge taps</td><td>same ahash/anv noise as the 2-D path</td></tr>
+<tr><td>light-march taps</td><td><b>6</b> (only where d &gt; 0.015), 80 m steps, early exit at τ=3</td><td>the self-shadow toward the sun</td></tr>
+<tr><td>dark-edge tap</td><td><b>1</b></td><td>coarse density toward the camera, 0.6·dl behind the sample</td></tr>
+<tr><td>worst-case pixel</td><td>~430 noise taps</td><td>2 seg × 24 × (3 + 6·1 + 1) octaves; typical pixels far less (early exits: T&lt;0.004, τ=3, d≤0.015 skip)</td></tr>
+</table>
+
+<h2>3. Measured frame cost (this box, llvmpipe Forward+, 1280×720, 1200-frame drain runs)</h2>
+<table>
+<tr><th>frame</th><th>alt</th><th>wall (1200 s cap)</th><th>FPS overlay (drain)</th><th>note</th></tr>
+<tr><td>r2600-on</td><td>2600 m</td><td>786 s, rc=0</td><td>2</td><td>longest annulus chords (limb grazing) — worst case</td></tr>
+<tr><td>r700-on</td><td>700 m</td><td><b>781 s, rc=0</b></td><td>2</td><td rowspan="2">same frame, same drain: volume adds <b>+285 s (+57 %)</b>; OFF is the AC-0401-era three-shell cost (all 3 shells shaded, no march)</td></tr>
+<tr><td>r700-off (CLOUDS=0)</td><td>700 m</td><td>496 s, rc=0</td><td>3</td></tr>
+<tr><td>r300-on</td><td>300 m</td><td>867 s, rc=0</td><td>2</td><td>camera INSIDE the annulus (near+far segments on every sky pixel)</td></tr>
+<tr><td>r120-on</td><td>120 m</td><td>814 s, rc=0</td><td>1</td><td>camera below the deck — the whole sky is a full chord</td></tr>
+</table>
+<p>All five runs inside the 1200 s cap (no 640×360 fallback needed). Effective drain rate
+≈ 1.5–2 FPS on this software-render box (the ticket's “2–5 FPS box” expectation — at the
+bottom edge for the full-sky frames, as the step/light counts predict). The per-frame GPU
+work is the march itself; headless (no rasterizer) it costs nothing — proven by the
+boundary A/B below.</p>
+
+<h2>4. Acceptance (a) — parallax + descent through structure</h2>
+<p>The two frames that were impossible before (one surface, one radius, no depth):</p>
+<p><b>Parallax frame — 300 m (camera inside the annulus, <span class="kpi">r300-on.png</span>):</span></p>
+<img class="cap" src="r300-on.png" alt="300 m parallax frame: near dark clumps in front of a brighter far cloud layer, planet disc below">
+<p>The near-side deck (dark clumps — their light march stays inside the gate → shadowed
+undersides) sits visibly <b>in front of</b> a brighter, finer far-side layer seen through
+its gaps: one mass is behind another, at a different distance, with different structure.
+The old single-surface deck cannot produce this: it is one radius, one pattern.</p>
+<p><b>Descent frame — 120 m (camera below the deck, <span class="kpi">r120-on.png</span>):</span></p>
+<img class="cap" src="r120-on.png" alt="120 m descent frame: a thick 3-D cloud layer overhead with overlapping masses at different depths">
+<p>The player is on the ground (farmland pattern at the feet) looking up into a <b>thick
+3-D layer</b>: overlapping masses at different sizes/scales/depths, individual clumps with
+internal shading variation, a far layer behind the near masses. This IS the descent
+passing through distinct structure — the 275–400 m band reads as a weather layer, not a
+sheet. (The band also shows faint horizontal moiré on the proxy renderer — step
+quantisation on near-horizontal rays; see §8 non-actions.)</p>
+<p>Supporting frames: <b>2600 m</b> (the orbit limb — the deck band now carries lit tops
+with dark inter-mass shadow, white-cumulus character) and <b>700 m</b> (middle altitude —
+the structured limb band the assessment instrument measures):</p>
+<img class="cap" src="r2600-on.png" alt="2600 m orbit frame: cloud deck band along the limb with lit tops and dark gaps">
+<img class="cap" src="r700-on.png" alt="700 m frame: structured cloud band along the limb above the planet disc">
+
+<h2>5. Acceptance (b) — brightness spread, the assessment's instrument</h2>
+<p>Instrument: <code>.scratch/AC-0384-final-run/analyze2.py</code> (pure-stdlib PNG band
+stats), 700 m middle-altitude pair, same tree, user config, T=0.5/CLOUD_T0=411200:</p>
+<table>
+<tr><th>band statistic</th><th>old deck ON (AC-0384 baseline)</th><th>volume ON (this)</th><th>clouds OFF</th></tr>
+<tr><td><b>lower_mid lum_std</b> (y∈[h/2,3h/4)) — THE spread measure</td><td><b>16.9</b></td><td><b>68.9</b></td><td>32.4 (AC-0384 baseline) / <b>40.2</b> (same tree)</td></tr>
+<tr><td>horizon band lum_std (y∈[h/2±20) — the deck band itself</td><td>—</td><td><b>75.3</b></td><td>35.6</td></tr>
+<tr><td>upper_mid lum_std</td><td>—</td><td>57.2</td><td>23.6</td></tr>
+<tr><td>px_center (640,360) — the “neutral grey 222,222,222” complaint</td><td>—</td><td colspan="2"><b>[181,229,190]</b> — the reference water tint 181,230,194; not 222 grey (ON and OFF: the centre pixel is body texture seen through/around the volume)</td></tr>
+<tr><td>ON-minus-OFF pixel diff ≥ 8 (deck coverage of the frame)</td><td>—</td><td colspan="2">8.84 % (the deck band occupies ~9–10 % of this frame by geometry — a limb band, not a sky fill)</td></tr>
+</table>
+<p>The user's complaint was that WITH the deck the band was flatter than WITHOUT clouds
+(16.9 vs 32.4 — the grey sheet was erasing the scene's spread). Now the volume's spread
+(68.9) is <b>4.1× the old flat deck and 1.7× the cloudless scene</b>: the clouds add
+structure (lit tops, dark cores, shadowed undersides) instead of flattening it. The
+same-tree OFF reading (40.2, vs the 32.4 baseline) is the expected drift: AC-0401/AC-0402
+changed the body/sky/terrain between the AC-0384 assessment and now; the honest
+comparisons are old-deck→volume (16.9→68.9) and volume→same-tree-off (68.9→40.2).
+Raw JSON: <code>.scratch/AC-0405/an700.json</code>, <code>an300.json</code>.</p>
+
+<h2>6. Gates (light set — all green; exit statuses included)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>evidence</th></tr>
+<tr><td>G0 — headless load</td><td class="ok">rc=0, SCRIPT ERROR 0 / SHADER ERROR 0</td><td><code>.scratch/AC-0405/g0.log</code> (first pass), <code>g0b.log</code> (final shader — re-passed after the vgate forward-declaration catch); no backtrace, no AC-0403 segfault class</td></tr>
+<tr><td>SMOKE — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td><td class="ok">rc=0, battery <code>ok:true</code>, census 0/0</td><td><code>.scratch/AC-0405/smoke.log</code> — player (fence 0, floor true, sprint ok), interact (drop/place true), light (15/0/14, far 0→9), fluids (sea stable 1719/320, reactions 25/9)</td></tr>
+<tr><td>GENHASH</td><td class="ok">25/25 byte-identical</td><td>vs the current standing set (<code>.scratch/AC-0400-gates/smoke-genhash.log</code> = AC-0399 = AC-0398; the AC-0367 ref file is stale vs those) — <code>.scratch/AC-0405/genhash_{ref,new}.txt</code>. Rendering-only, confirmed.</td></tr>
+<tr><td>RENDERS (the acceptance)</td><td class="ok">5/5 frames rc=0, all files exist, Forward+ boot line in every log</td><td><code>.scratch/AC-0405/frames/*.log</code> — boot line “Vulkan 1.4.318 - Forward+ - … llvmpipe (LLVM 20.1.8)”; the volume path live in-tree (SATDIAG: outer shell vis=true carrying the march, inner two hidden); captures copied to <code>tasks/AC-0405/*.png</code></td></tr>
+<tr><td>Boundary r4 A/B (the one-shot self-check)</td><td class="ok">ON rc=0 / OFF rc=0, both <code>ok:true</code>; no streaming effect</td><td><code>.scratch/AC-0405/boundary_r4_{on,off}.log</code> — fence fields 0/0 both, footprint missing 0/0 both, walking 20/20 crossings both; crossing_frame p95 32 (ON) / 44 (OFF), built_final 64/66 — run-to-run machine-timing churn (the documented class), ON ≈ OFF, inside/around the standing drift band → <b>no re-baseline owed</b></td></tr>
+</table>
+<p class="ok">All 10 gate logs (g0, g0b, smoke, 5 frames, 2 boundary) pass
+<code>tasks/scripts/gate_census.py</code> at 0 SCRIPT / 0 SHADER ERROR.</p>
+
+<h2>7. Files changed</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td>rewritten: the volume path (u_vol entry in fragment(): segments, 24-step march, gate-confined 3-D FBM density, 6-tap sun light march, HG phase, dark edge, Beer, ALPHA=1−T) + the exact pre-AC-0405 three-shell path as the <code>u_vol &lt; 0.5</code> fall-through (byte-identical body)</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_ac0401_push()</code> gains the cloud_volume push (u_vol to the 3 materials + inner-shell visible flags, change-gated, retry-until-visible latch; u_vol_r/rmin/rmax change-gated on planet_R, rmin/rmax from the live layer table) + the <code>AWECRAFT_CLOUDVOL</code> env preload + the <code>_ac0405_vol</code>/<code>_ac0405_r</code> state vars</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>DEFAULTS <code>"cloud_volume": true</code> + the <code>sanitize_bool</code> clamp branch</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row <code>CloudVolCheck</code> (“Clouds: raymarched volume (real depth)”, position hi+13), the sync line, <code>_on_cloud_vol_toggled</code></td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§2 Settings row + §3 CloudLayer bullet + the _ac0401_push seam description (the AC-0405 note)</td></tr>
+</table>
+
+<h2>8. Deliberate non-actions (and honest findings)</h2>
+<ul>
+<li><b>Heavy gate set not run</b> (farab / ladder / meshprobe / halo / lightstate / r16 /
+boundary r50 / full battery / shaderforce) — the coordinator's job per the ticket; this
+change is rendering-only (genhash 25/25 proves it), and the Forward+ shader is exercised
+by the 5 render runs (the dummy-parser path by G0). <code>shaderforce</code>
+(force-compiles every shipped shader on Forward+) will double-verify the volume path on
+the coordinator's run.</li>
+<li><b>Shell geometry untouched</b>: radii 4275/4330/4400 about (0,−R,0), centre, node
+transforms — the volume reuses the verified annulus extent; only node <code>visible</code>
+toggles (inner shells hidden while ON).</li>
+<li><b>Fence files untouched</b>: <code>main.gd</code> / <code>game.gd</code> /
+<code>drop.gd</code> / <code>debug.gd</code> needed no changes — main.gd already pushes
+every per-frame uniform the volume reuses (u_sun/u_day/u_cloud_time/u_drift/u_scale3/
+u_center/u_phase/u_coverage/u_cloud_tint/u_srgb_pre); only u_vol + the radii ride
+world.gd.</li>
+<li><b>No C++ changes</b> (ticket constraint).</li>
+<li><b>No re-baselines owed</b>: OFF is byte-identical to AC-0401 (proven), the boundary
+A/B shows no streaming movement, genhash 25/25.</li>
+<li><b>Interior/underside darkness (documented, not tuned away)</b>: a chord that starts
+inside or below the deck reads dark (the 300 m frame's near layer, the 120 m ceiling) —
+the in-scatter L is ~0 there (the light march stays inside the gate) and the single-
+direction out-scatter (gain 0.30) is a faint fill. Real NMS/Minecraft interiors are
+brighter; the obvious next lever (if the user wants it) is a small per-sample diffuse
+fill term (∝ local density × step optical depth) — a bounded one-line addition, not
+shipped here to avoid an un-tunable aesthetic iteration on the proxy renderer.</li>
+<li><b>Faint horizontal moiré in the 120/300 m sky</b> (visible on the llvmpipe proxy):
+step quantisation on near-horizontal rays through the coarse field — cosmetic at this
+altitude class, named for the record.</li>
+</ul>
+
+<h2>9. Durable rules discovered (for closeout harvest)</h2>
+<ul>
+<li><b>Godot 4.7.1 dummy-parser limits (measured by G0, all on a shader that compiles on
+Forward+):</b> (1) fragment builtins (<code>CAMERA_POSITION_WORLD</code>) and
+<code>discard</code> resolve only inside <code>fragment()</code> — a nested entry helper
+fails with “Unknown identifier”; (2) <code>return</code> is forbidden in
+<code>fragment()</code> (“Using 'return' in the 'fragment' processor function is
+incorrect”) — use if/else; (3) no forward declarations — helpers must be defined before
+use (a later-defined function used early = “No matching function found”). Practical
+consequence: any future volume/sky shader entry goes inline in <code>fragment()</code>
+with builtin-free value-returning helpers.</li>
+<li><b>Confine the field you light:</b> a volumetric density that fills all of space
+(self-marches into its own continuation) reads as one dark storm band — the radial gate
+(confine to the slab/annulus) is what lets a light march EXIT the cloud and produce
+lit-top/dark-underside contrast.</li>
+<li><b>Normalise the HG phase by its peak</b> before linear gains (~13× at g=0.65):
+unnormalised, every lit sample saturates to white and the core/underside gradient
+erases.</li>
+<li><b>Battery runs must NOT take <code>--quit</code></b> (the battery self-quits;
+<code>--quit</code> kills the process after frame 1 — zero RESULT lines, silent rc=0.
+The HARNESS.md §4 recipe is as written: no <code>--quit</code>.)</li>
+</ul>
+
+<p><i>Logs: <code>.scratch/AC-0405/</code> (g0.log, g0b.log, smoke.log, frames/,
+boundary_r4_{on,off}.log, an700.json, an300.json, genhash_{ref,new}.txt,
+run_renders.sh, renders_driver2.log). Continuity: <code>tasks/AC-0405/continuity.md</code>.</i></p>
+
+</body>
+</html>
