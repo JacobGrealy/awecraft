@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0407 plan — clouds: brighter, lumpy-top height variance, real interior</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1040px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.15em; margin-top: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0407 — plan: the clouds get brighter, a real skyline, and an interior you can be in</h1>
+<p><b>Spec source:</b> <code>tasks/TASKS.yaml</code> AC-0407 notes (no <code>spec.html</code>
+exists in the ticket folder — the notes are the spec; recorded as a deviation). The user's three
+sentences, verbatim from the ticket: <i>(1) the clouds are still too dark; (2) they have no
+variance in height so they read as a uniform layer at a single altitude; (3) passing through them
+does not feel like being inside anything.</i></p>
+
+<h2>Goal</h2>
+<p>Turn the three sentences into three measured changes on the same tree the user is flying:</p>
+<ol>
+<li><b>Brighter without flattening</b> — lift the cloud's light by levers that are NOT the rejected
+ambient-weight raise (0.7 flattened the spread to 39.1): a brighter effective albedo (a brighter
+sky value for the ambient fill, a lift of the single-source air colour), a brighter
+multiple-scattering octave (deeper MS penetration into the shadowed interior), and a
+forward-scatter glow toward the sun. Target: the underside/interior reads bright against the
+sunlit-top reference, and the brightness spread stays above the no-cloud floor (~40.2).</li>
+<li><b>A real skyline (the structural fix — the strongest clue)</b> — the annulus currently has a
+density field with <b>no vertical profile</b>, so every column fills 275–400 m uniformly: one
+slab at one altitude. Give the layer a <b>flat base and lumpy tops</b>: dense at the base,
+thinning toward a top whose altitude is modulated by the low-frequency weather (the tops vary in
+altitude by a visible amount). Also <b>thicken the layer upward</b> (400 → 450 m, base stays at
+275 m, clear of the ~139 m ground) so the skyline has room. Target: a measured spread of cloud-top
+altitudes in metres where there was none (0).</li>
+<li><b>An interior you can be in</b> — inside the annulus the view fills with structure at varying
+depth, brightens toward the light, and is genuinely occluding. The thickening + denser base adds
+depth/occlusion; the glow is the "brighten toward the light". Target: the inside-the-annulus frame
+shows a surrounding bright volume (coverage + luminance), not a thin grey film.</li>
+</ol>
+
+<h2>The density profile and lighting changes (and their cost)</h2>
+<table>
+<tr><th>change</th><th>where</th><th>what</th><th>cost</th></tr>
+<tr><td><b>Vertical profile</b> (the #2 fix) — <i>updated during implementation, see the results
+page for the finding</i></td><td><code>cloud_layer.gdshader</code> — new
+<code>vprof2(q, topf)</code> replaces <code>vgate(q)</code> (gate + profile, one <code>length()</code>);
+<code>vdens</code> and <code>vdens_coarse</code> each compute <code>topf =
+anv(q·(sc3·0.5) + (5.3, 11.7, 8.1))</code> — 1 octave at <b>half</b> the base frequency, independent
+of the coverage window (the first design drove the top off the windowed field and measured a 13 m
+"skyline" — no variance)</td>
+<td>Density = <code>cl · gate · prof</code>; <code>prof = 1 − smoothstep(top−0.20, top, hn)</code> with
+<code>top = mix(0.45, 0.98, smoothstep(0.35, 0.65, topf))</code> and <code>hn</code> the normalised
+altitude (0 at the base, 1 at the top). Flat dense base, lumpy soft tops (measured 92.7 m
+p10–p90 top spread); the light march takes the <b>same</b> topf so it exits each column at its own
+top (the tops stay lit). <code>u_vol_lsteps</code> 6→5 offsets the added coarse taps.</td><td>+1
+<code>anv</code> per view step and per coarse tap; net 13→19 noise anv per view step — measured in
+the frame walls, not assumed.</td></tr>
+<tr><td><b>Thicken upward</b> (room for the skyline; keeps the base clear of terrain)</td>
+<td><code>world.gd</code> <code>_ac0401_push</code> — the <code>u_vol_rmax</code> push gains
+<code>AC0407_VOL_TOP_EXTEND</code> (50 m); <code>u_vol_rmin</code> unchanged</td>
+<td>The virtual annulus the march + gate use becomes [R+275, R+450]. The shell <b>meshes</b> stay
+275/330/400 (the ticket constraint); the base stays 136 m above the ~139 m ground. The carrier
+(outer shell, R+400) still surrounds any camera below 400 m, so the march renders the full
+thickened layer from the normal flight band.</td><td><b>Cost-neutral</b>: the march is count-based
+(24 steps/segment), so a longer chord is covered by the same step count (coarser per-step, and the
+grain gate makes over-integration safe). Dense base can even trigger the <code>T&lt;0.004</code> early
+exit sooner.</td></tr>
+<tr><td><b>Forward-scatter glow</b> (the #1 brightness + the #3 "brighten toward the light")</td>
+<td><code>cloud_layer.gdshader</code> <code>vmarchseg</code> — a narrow lobe
+<code>L += T·pow(max(cosSun,0), u_vol_glow_pow)·u_vol_glow·ds</code>; new uniforms
+<code>u_vol_glow</code> 0.30, <code>u_vol_glow_pow</code> 6.0</td>
+<td>A bright bloom when the view is near the sun direction, phase-gated so it lifts the
+sun-facing side only. Directional, not a uniform lift — the AC-0406 0.7-ambient flattening is
+avoided by construction.</td><td>one <code>pow</code> per sample with d&gt;0.015 (≤24/ray). Minor.</td></tr>
+<tr><td><b>Brighter multiple-scattering octave</b> (the #1 brightness, shadowed interior)</td>
+<td><code>cloud_layer.gdshader</code> — <code>u_vol_ms2</code> default 0.18 → 0.24</td>
+<td>Deeper MS penetration (the <code>exp(−0.15τ)</code> octave) lifts the shadowed underside/interior;
+the normalisation keeps a fully lit sample at <code>sh = 1.0</code> exactly (lit tops keep their
+calibration — form-preserving).</td><td>none (a constant).</td></tr>
+<tr><td><b>Brighter effective albedo</b> (the #1 brightness — "a brighter sky value", NOT a bigger
+ambient weight)</td><td><code>cloud_layer.gdshader</code> — new uniform <code>u_vol_air_lift</code> 0.10;
+<code>air_s = mix(air_s, vec3(1.0), u_vol_air_lift)</code></td>
+<td>Lifts the single-source air colour 10 % toward white — a <i>brighter sky value</i> (the ticket's
+named candidate) at the <b>same</b> ambient weight (0.45, the un-rejected value). Still the
+one-source colour (a lift, not a fourth colour). Sized so the spread stays above the ~40 floor;
+measured, not assumed.</td><td>one <code>mix</code> per fragment. Negligible.</td></tr>
+</table>
+<div class="note"><b>The trade the ticket allows, stated up front:</b> if the combined lift pushes the
+r700 brightness spread below the no-cloud floor (~40.2), that is the sanctioned trade — the property
+the user is asking for is brightness/height/immersion, and the flat-deck failure mode (39.1) is the
+line not to cross. The numbers are measured on the r700 instrument frame, not assumed. No
+resolution or step-count reduction is planned (the cost is ~flat); if a render blows the 1200 s
+budget the step count is the lever to trade, and it will be named in the results.</div>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td><code>vprof2</code> (flat base / lumpy-top
+profile) replacing <code>vgate</code>; <code>vdens</code>/<code>vdens_coarse</code> pass the weather-driven
+<code>lump</code>; the forward-scatter glow in <code>vmarchseg</code>; <code>u_vol_ms2</code> 0.18→0.24;
+new uniforms <code>u_vol_glow</code>/<code>u_vol_glow_pow</code>/<code>u_vol_air_lift</code>. The
+<code>u_vol &lt; 0.5</code> three-shell path is untouched (the OFF state stays byte-identical).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_ac0401_push</code> — the <code>u_vol_rmax</code>
+push gains the 50 m upward extension (named const); render-path only, no generation movement.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>CloudLayer bullet + the <code>_ac0401_push</code> seam
+note: the vertical profile, the glow, the ms2/air-lift tuning, and the thickened virtual annulus
+top (450) with the shell meshes unchanged.</td></tr>
+</table>
+<p><b>No new Settings toggle</b> (the AC-0406 precedent): this is the shape + lighting of the
+existing default-ON <code>cloud_volume</code> feature; the escape hatch is the existing switch
+(<code>cloud_volume</code> OFF = the byte-identical three-shell path). No C++. No fence files
+(<code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code> untouched).</p>
+
+<h2>Harness gates (light set, then exit — <code>awecraft-run-verify</code> policy)</h2>
+<ul>
+<li><b>G0</b> — one headless load, <code>gate_census.py</code> zero SCRIPT ERROR + zero SHADER ERROR,
+<b>and the process exit status checked</b> (the AC-0403 stochastic use-after-free leaves a clean
+log on a crash; any backtrace goes in the results).</li>
+<li><b>SMOKE</b> — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>, <code>ok:true</code>,
+census 0/0.</li>
+<li><b>PROBE/GENHASH</b> — world.gd touched → genhash 25/25 byte-identical (the change is
+render-path only; drift is a finding).</li>
+<li><b>RENDERS (the acceptance)</b> — 4 ON frames (r120 underside / r300 interior / r700 instrument
+/ r2600 orbit) + 2 clouds-OFF frames (r300 / r700) for the coverage mask, same recipe as
+AC-0405/AC-0406 (user config R24/F83, T=0.5 frozen, CLOUD_T0=411200, 1280×720 Forward+ lavapipe,
+<code>SNAP_DRAIN=1200</code>, 1200 s cap, Forward+ boot line asserted, file existence checked).
+Measured: underside + interior luminance vs the sunlit-top reference, the cloud-top altitude spread
+(m), the inside-the-annulus coverage + luminance, the r700 brightness spread + tint vs
+68.9→44.9 and (181,229,190), and the added frame cost.</li>
+<li><b>Boundary r4 A/B</b> — the one-shot self-check (world.gd touched): ON vs OFF, judged on the
+crossing-frame gate fields + the fence fields.</li>
+</ul>
+<p><b>Not run (the coordinator's job):</b> the heavy boundary/perf/flake/r50 + full battery +
+shaderforce + Windows build. Exit after the light gates.</p>
+
+</body>
+</html>

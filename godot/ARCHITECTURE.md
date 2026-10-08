@@ -315,6 +315,58 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         lighting of the default-ON cloud_volume feature;
 │                         u_vol < 0.5 still short-circuits to the byte-
 │                         identical three-shell path).
+│                         AC-0407: the user's three reports (still too
+│                         dark / no height variance / not immersive
+│                         inside) — a structural + lighting change in
+│                         the volume branch (u_vol > 0.5; the
+│                         byte-identical three-shell OFF path is
+│                         untouched): (a) a VERTICAL PROFILE — the
+│                         density had NO vertical profile before (every
+│                         column filled the annulus uniformly: one slab
+│                         at one altitude); vprof2 (replacing vgate)
+│                         gives a flat dense base and lumpy tops —
+│                         thinning to 0 over the last 0.20 of each
+│                         column's top, whose altitude is
+│                         mix(0.45, 0.98, smoothstep(0.35, 0.65,
+│                         topf)) with topf a 1-octave field at HALF
+│                         the base frequency (+ offset 5.3, 11.7, 8.1)
+│                         — it MUST be independent of the coverage
+│                         window (which sits on base's octaves):
+│                         driving the top off the windowed field pins
+│                         every cloudy column's top to ~400 m
+│                         (measured: a 13 m "skyline", no variance);
+│                         the coarse light-march density takes the
+│                         SAME topf so the self-shadow exits at each
+│                         column's own top (the tops stay lit —
+│                         without it the light march over-shadows tops
+│                         shorter than the flat gate); u_vol_lsteps
+│                         6→5 offsets the added topf tap (400 m reach
+│                         still clears the 175 m layer); (b) a
+│                         THICKENED virtual annulus — the march+gate
+│                         top moves R+400 → R+450 (world.gd pushes
+│                         u_vol_rmax = R + hmax + AC0407_VOL_TOP_EXTEND
+│                         (50 m); the shell MESHES stay 275/330/400,
+│                         the base stays R+275 — clear of the ~139 m
+│                         ground; the extension is upward only);
+│                         (c) brightness WITHOUT the rejected
+│                         ambient-weight raise (0.7 flattened the
+│                         spread to 39.1): u_vol_ms2 0.18→0.24
+│                         (brighter multiple-scattering penetration of
+│                         the shadowed interior; the normalisation
+│                         keeps sh = 1.0 at τ = 0), a FORWARD-SCATTER
+│                         GLOW (a narrow sun-side lobe
+│                         pow(max(cosSun,0), u_vol_glow_pow)·u_vol_glow
+│                         added to the in-scatter — the "brighten
+│                         toward the light" inside-the-cloud read), and
+│                         u_vol_air_lift 0.10 (the single-source air
+│                         colour lifted 10 % toward a brighter sky
+│                         value — a brighter effective albedo, NOT a
+│                         bigger ambient weight; 0.0 = the pre-AC-0407
+│                         colour). Shipped-tuning uniforms u_vol_glow /
+│                         u_vol_glow_pow / u_vol_air_lift (the
+│                         u_vol_sigma class — no new Settings toggle;
+│                         u_vol < 0.5 still short-circuits to the
+│                         byte-identical three-shell path).
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -356,6 +408,12 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  │                      (change-gated on planet_R; rmin/rmax derived from the live
 │  │                      layer table's min/max h — no duplicated constants; see the
 │  │                      AC-0405 note in the CloudLayer bullet, §3)
+│  │                      AC-0407: the same push thickens the volume's
+│  │                      virtual top — u_vol_rmax = R + hmax +
+│  │                      AC0407_VOL_TOP_EXTEND (50 m upward; u_vol_rmin
+│  │                      stays R + hmin and the shell meshes are
+│  │                      unchanged — see the AC-0407 note in the
+│  │                      CloudLayer bullet, §3)
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):

@@ -4954,6 +4954,14 @@ var _ac0402_skyblend := -1.0
 # change-gated — the value only moves on a toggle or a planet_R change).
 var _ac0405_vol := -1.0
 var _ac0405_r := -1.0
+# AC-0407: the volume's VIRTUAL top bound extends this far ABOVE the
+# topmost shell (hmax) so the vertical profile (flat base / lumpy tops
+# — the "no variance in height" fix) has room for a real skyline. The
+# shell MESHES stay at 275/330/400 about the centre (the ticket
+# constraint); only the annulus bound the march + gate use moves up.
+# The base stays at hmin (136 m clear of the ~139 m ground) — the
+# extension is upward, never downward.
+const AC0407_VOL_TOP_EXTEND := 50.0
 # AC-0406: the cloud volume's ambient-fill colour push state (same seam).
 # The colour MOVES with the day/night cycle (Aero.fog_display), so this
 # is per-frame like u_space_sky, value-gated at 1/255 (a frozen time
@@ -5081,7 +5089,10 @@ func _ac0401_push() -> void:
 				if cm6 is ShaderMaterial:
 					cm6.set_shader_parameter("u_vol_r", rvol)
 					cm6.set_shader_parameter("u_vol_rmin", rvol + hmin)
-					cm6.set_shader_parameter("u_vol_rmax", rvol + hmax)
+					# AC-0407: the thickened virtual top (the shell meshes
+					# stay at hmax; the base stays at hmin, clear of the
+					# ~139 m ground — the extension is upward only).
+					cm6.set_shader_parameter("u_vol_rmax", rvol + hmax + AC0407_VOL_TOP_EXTEND)
 			_ac0405_r = rvol
 	# (5) AC-0406: the cloud volume's ambient sky-fill colour. The
 	# SINGLE-SOURCE air colour — Aero.fog_display (the sky pass's exact

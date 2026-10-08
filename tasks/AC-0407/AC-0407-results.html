@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0407 results — brighter clouds, a real skyline, an interior you can be in</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1060px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.15em; margin-top: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+.good { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: .6em 1em; margin: 1em 0; }
+img.cap { max-width: 100%; border: 1px solid #999; margin: .8em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0407 — results: the clouds get brighter, a real skyline, and an interior you can be in</h1>
+<p><b>Spec source:</b> the <code>tasks/TASKS.yaml</code> AC-0407 notes (no <code>spec.html</code> in the
+ticket folder — the notes are the spec; recorded as a deviation in
+<a href="continuity.md">continuity.md</a>). The user's three sentences, verbatim: <i>(1) the clouds
+are still too dark; (2) they have no variance in height so they read as a uniform layer at a
+single altitude; (3) passing through them does not feel like being inside anything.</i>
+Plan: <a href="plan.html">plan.html</a> (kept honest — the profile row was updated when the
+implementation found the window-correlation trap). All frames are the ticket's acceptance set,
+same recipe as AC-0405/AC-0406 (user config R24/F83, T = 0.5 frozen, CLOUD_T0 = 411200, 1280×720
+Forward+ lavapipe, 1200 s cap, Forward+ boot line asserted per frame, SNAP file existence checked;
+<code>DSSTATS</code> FPS burn-in shows the box's normal 1–2 FPS volume rate). Before frames:
+<code>tasks/AC-0406/*.png</code> (the pre-change tree, same recipe).</p>
+
+<h2>1. What changed (all in the volume branch; the three-shell OFF path is byte-identical)</h2>
+<table>
+<tr><th>change</th><th>where</th><th>why it fixes the complaint</th></tr>
+<tr><td><b>Vertical profile</b> — flat base, lumpy tops (complaint 2, structural)</td>
+<td><code>cloud_layer.gdshader</code> — <code>vprof2(q, topf)</code> replaces <code>vgate(q)</code>;
+<code>top = mix(0.45, 0.98, smoothstep(0.35, 0.65, topf))</code> with
+<code>topf = anv(q·(sc3·0.5) + (5.3, 11.7, 8.1))</code> (1 octave, HALF the base frequency —
+independent of the coverage window); <code>prof = 1 − smoothstep(top−0.20, top, hn)</code>; the
+coarse light-march density takes the SAME topf</td>
+<td>Before: every column filled the annulus uniformly — one slab at one altitude, top spread 0 m.
+After: each column thins to 0 at its own top, driven by a ~512 m-scale weather field. The light
+march exits each column at its own top, so the tops stay lit (without this, the light march would
+exit at the flat gate and over-shadow every top shorter than the gate — phantom cloud above a
+short column's top).</td></tr>
+<tr><td><b>Thickened virtual annulus</b> — room for the skyline</td>
+<td><code>world.gd</code> <code>_ac0401_push</code>: <code>u_vol_rmax</code> = R + hmax +
+<code>AC0407_VOL_TOP_EXTEND</code> (50 m) → [R+275, R+450]; shell meshes stay 275/330/400; the
+base stays clear of the ~139 m ground; upward only</td>
+<td>The tops can now tower 354–446 m instead of all ending at 400 m. Cost-neutral: the march is
+count-based (24 steps/segment), a longer chord just coarsens the step (the grain gate keeps
+over-integration safe).</td></tr>
+<tr><td><b>Forward-scatter glow</b> (complaints 1 + 3)</td>
+<td><code>vmarchseg</code>: <code>L += T·pow(max(cosSun,0), u_vol_glow_pow)·u_vol_glow·ds</code>;
+new uniforms <code>u_vol_glow</code> 0.30 / <code>u_vol_glow_pow</code> 6.0</td>
+<td>A narrow sun-side bloom, phase-gated: the cloud brightens <i>toward the light</i> — the
+inside-the-cloud read. Directional, not a uniform lift (the rejected 0.7-ambient flattening is
+avoided by construction).</td></tr>
+<tr><td><b>Brighter MS octave</b> (complaint 1, shadowed interior)</td>
+<td><code>u_vol_ms2</code> 0.18 → 0.24</td>
+<td>Deeper multiple-scattering penetration into the shadowed interior. The normalisation keeps
+<code>sh = 1.0</code> at τ = 0, so lit tops keep their calibration (form-preserving).</td></tr>
+<tr><td><b>Brighter effective albedo</b> (complaint 1 — NOT the ambient-weight raise)</td>
+<td>new uniform <code>u_vol_air_lift</code> 0.10: <code>air_s = mix(air_s, vec3(1.0), 0.10)</code></td>
+<td>The single-source air colour lifted 10 % toward a brighter sky value — the ticket's named
+candidate — at the SAME ambient weight (0.45, the un-rejected value). A brighter effective
+albedo, explicitly not the 0.7 weight that flattened the spread to 39.1.</td></tr>
+<tr><td><b>Light-march tap trim</b> (the stated cost trade)</td>
+<td><code>u_vol_lsteps</code> 6 → 5 (400 m reach still clears the 175 m layer)</td>
+<td>The light march now taps the topf field too (+1 coarse tap per step); trimming one tap
+offsets it. The self-shadow reach is unchanged (a base sample needs 175 m to exit the tops); the
+deepest shadow is a hair brighter — aligned with the complaint, not against it.</td></tr>
+</table>
+<div class="note"><b>The top-driver finding (the plan's profile row changed during
+implementation).</b> The first design drove the top off the windowed weather field
+(<code>0.55·base + 0.45·mid</code>, linear remap). Field-sampling over 64,440 column directions
+showed that pins every cloudy column's top to ~400 m — a 13 m "skyline", i.e. the complaint
+survives: the coverage window sits on base's octaves, so a cloudy column's weather is by
+construction mid-range. The fix: a top driver at HALF the base frequency, at an offset,
+independent of the window. Measured skyline: <b>92.7 m</b> (§3).</div>
+
+<h2>2. Complaint 1 — "still too dark": luminance before → after, vs the sunlit-top reference</h2>
+<p>Sunlit-top reference = the r700 deck mask (ON vs clouds-OFF, max-channel diff ≥ 8; the
+<code>DSSTATS</code> overlay region x&lt;400, y&lt;80 excluded from the mask counts). Luminance =
+0.2126R+0.7152G+0.0722B on the 8-bit frames.</p>
+<table>
+<tr><th>measure</th><th>before (AC-0406 tree)</th><th>after (AC-0407)</th><th>read</th></tr>
+<tr><td><b>Sunlit-top reference</b> — r700 deck mask: lum mean / p10 / p50 / p90 / max</td>
+<td>139.5 / 110.6 / 132.0 / 178.4 / 241.6</td>
+<td><b>142.3 / 113.2 / 133.4 / 183.6 / 241.6</b></td>
+<td>the deck face is brighter, hardest at p90 (+5.2); the lit tops still clamp (max unchanged).
+Mask mean RGB (100,149,163) → (106,151,164): brighter, same saturated tint.</td></tr>
+<tr><td><b>Underside at the ground view</b> — r120 band (y 80–290): lum mean / p10 / p50 / p90</td>
+<td>185.7 / 149.5 / 180.3 / 228.1</td>
+<td><b>187.3 / 155.3 / 181.6 / 227.9</b></td>
+<td>the underside's dark cores lift (p10 +5.8), the bright side holds (p90 flat) — raised without
+flattening. Underside p50 / deck p90: 1.01 → 0.99 — the underside reads at the lit-top luminance
+(bright, not merely not-black).</td></tr>
+<tr><td><b>Altitude view, inside the annulus</b> — r300 interior band (y 215–360): lum mean /
+p10 / p50 / p90</td>
+<td>184.7 / 142.2 / 175.8 / 235.4</td>
+<td><b>190.3 / 150.7 / 182.6 / 235.4</b></td>
+<td>the whole distribution lifts (p10 +8.5, the biggest single move of the ticket), the lit side
+clamps (p90 flat). Band std 34.4 → 32.3, band min 126.2 → 129.9: brighter AND lower-contrast —
+the ticket's "bright and low-contrast, not dark and high-contrast".</td></tr>
+</table>
+<p><b>Brightness spread</b> (the AC-0405 instrument: r700 <code>lower_mid</code> lum_std,
+y∈[360,540)): before 44.9 → after <b>44.0</b>. Above the 32.4 reference the ticket requires to
+survive, above the no-cloud floor (40.2), and above the rejected 0.7-ambient line (39.1).
+<b>Tint</b> (r700 disc centre 640,360): before (181, 229, 190) → after
+<b>(181, 229, 190)</b> — preserved exactly (the saturated tint survives).</p>
+
+<h2>3. Complaint 2 — "no variance in height": the measured top-altitude spread</h2>
+<p>Method: a faithful reimplementation of the shipped field (<code>ahash</code>/<code>anv</code>/
+<code>vfbm3</code> + the exact window chain + <code>vprof2</code>, same constants as
+<code>cloud_layer.gdshader</code>) sampled over 64,440 column directions (1° grid, mid-annulus
+radius; the CPU float64 vs the GPU float32 differs per sample, not in distribution); 18,031
+cloudy columns (cl &gt; 0.05). The wind rotation is a bijection of the direction sphere, so the
+whole-sphere spread is rotation-invariant (the per-frame pattern rotates with the wind; the
+spread does not). The top altitude of a column is where <code>prof</code> falls off:
+<code>h = (rmin_q + top·(rmax_q − rmin_q) − 1)·R</code>.</p>
+<table>
+<tr><th>cloudy-column top altitude (m)</th><th>before AC-0407</th><th>after (measured)</th></tr>
+<tr><td>min / p10 / p50 / p90 / max</td><td>400 / 400 / 400 / 400 / 400</td>
+<td><b>353.8 / 353.8 / 400.5 / 446.5 / 446.5</b></td></tr>
+<tr><td><b>spread p10–p90 (the ticket's "vertical extent")</b></td><td><b>0 m</b></td>
+<td><b>92.7 m</b></td></tr>
+<tr><td>spread max–min</td><td>0 m</td><td>92.7 m</td></tr>
+</table>
+<p>The tops now span 354–446 m: a real skyline where there was none. The frames agree: in
+r300-on the deck's top edge is no longer a straight line — individual towers at different
+altitudes, lit against the sky; in r2600-on the orbit ring is a bright lumpy cloud band instead
+of a flat one (before/after pair in §8).</p>
+
+<h2>4. Complaint 3 — "doesn't feel like being in a cloud": inside-the-annulus coverage + luminance</h2>
+<p>The r300 frame (camera at 300 m, inside the annulus) against its clouds-OFF twin: the mask is
+the cloud material filling the view. Before: a thin grey film (low luminance, see-through).
+After: a surrounding bright volume.</p>
+<table>
+<tr><th>measure (r300 frame mask, the cloud material)</th><th>before</th><th>after</th><th>read</th></tr>
+<tr><td>coverage (diff ≥ 8) / core (diff ≥ 24)</td>
+<td>18.1 % / 17.0 %</td><td>17.2 % / 15.0 %</td>
+<td>the measured mask is the diff against sky: the profile thins the lumpy tops toward the sky
+(so the thinnest tops drop under the diff-8 threshold — the coverage the instrument sees falls
+slightly) while the mass that remains is denser and brighter; the frame itself is the stronger
+evidence — the view is now filled by an opaque bright mass in the upper half, not a film.</td></tr>
+<tr><td>mask luminance mean / p10 / p50 / p90 / max</td>
+<td>165.6 / 137.3 / 165.7 / 193.4 / 225.0</td>
+<td><b>170.5 / 143.1 / 170.6 / 197.7 / 225.7</b></td>
+<td>the material lifts at every percentile (mean +4.9, p10 +5.8); mask std 21.1 → 20.3 (less
+contrast). Mask mean RGB (124,175,189) → (132,180,192): brighter, same saturated tint.</td></tr>
+</table>
+<p>Parallax between layers survives (the r300 frame: the near mass, the mid gaps, the far tops at
+different depths). The glow is the "brighten toward the light" — visible in r120-on as the
+sun-side brightening of the underside.</p>
+
+<h2>5. Cost — measured, not assumed</h2>
+<table>
+<tr><th>frame (wall, 1200 s cap, ~1.5 FPS box)</th><th>AC-0406 (pre-change)</th><th>AC-0407</th><th>delta</th></tr>
+<tr><td>r700-on</td><td>776 s</td><td><b>829 s</b></td><td>+6.8 %</td></tr>
+<tr><td>r2600-on</td><td>810 s</td><td><b>823 s</b></td><td>+1.6 %</td></tr>
+<tr><td>r300-on</td><td>880 s</td><td><b>976 s</b></td><td>+11.0 %</td></tr>
+<tr><td>r120-on</td><td>792 s</td><td><b>831 s</b></td><td>+4.9 %</td></tr>
+</table>
+<p>All four sit well inside the 1200 s budget (the thinnest margin: r300-on at 976 s, 18 % of
+headroom). The skyline costs +1 <code>anv</code> per view step and per coarse tap (13 → 19 noise
+anv per view step); the r300 frame pays the most because the in-annulus chord is the longest
+(most view steps). <b>What was traded (stated per the ticket): one light-march tap</b> —
+<code>u_vol_lsteps</code> 6 → 5 (the self-shadow march covers 400 m instead of 480 m; the worst
+case is a base sample needing 175 m to clear the tops, so the shadow reach is unchanged, and the
+deepest shadow is a hair brighter — a step count in the shadow march, traded instead of the
+properties the user asked for). <code>u_vol_steps</code> (the view-march count) was NOT reduced —
+it did not need to be.</p>
+
+<h2>6. Gates (exit statuses checked — a segfault leaves a clean log)</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td><b>G0</b> — one headless load on the final tree, census + process exit status</td>
+<td><code>GODOT_EXIT=0</code>, <code>gate_census.py</code>: SCRIPT ERROR 0 / SHADER ERROR 0 —
+<b>ok</b>. (The six render runs — the stronger check, since they build the volume material and
+defuse the lazy-compile trap — also read SHADER ERROR 0 / SCRIPT ERROR 0 each, rc 0.)</td></tr>
+<tr><td><b>SMOKE</b> — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td><code>ok:true</code>, census 0/0 (player jump_peak_y 142.42, col_deferred_in_footprint 0;
+interact/light/fluids consistent). Run headless — the arms never build the volume material — and
+no GDScript changed after it, so it holds for the final tree.</td></tr>
+<tr><td><b>PROBE</b></td><td>N/A — the spec defines no probe arm; the renders are the acceptance.</td></tr>
+<tr><td><b>GENHASH</b> (world.gd touched)</td><td>25/25 values identical to the AC-0406 reference
+set (the <code>_ac0401_push</code> change is render-path only; the normalised (cz, hash) diff is
+clean) — generation is byte-identical.</td></tr>
+<tr><td><b>RENDERS (the acceptance)</b> — six frames, same recipe as AC-0405/AC-0406</td>
+<td>r700-on / r2600-on / r300-on / r120-on / r700-off / r300-off: all rc 0, Forward+ boot line
+present, SHADER ERROR 0 + SCRIPT ERROR 0 each, SNAP file existence checked. Measurements: §§2–4
+and §8 (before pair from <code>tasks/AC-0406/</code>, same recipe).</td></tr>
+<tr><td><b>Boundary r4 A/B</b> (the one-shot self-check — world.gd touched; two consecutive
+runs)</td>
+<td>Both runs: <code>ok</code>/<code>remesh_ok</code>/<code>marker_ok</code> true; walk p50 13/14
+(flat vs the ~13 standing), p95 34/32 (inside/better than the 35–55 band); <code>max_ms</code>
+205/185 (single-sample, below the documented noisy band 357–824); crossing-frame p50 31/23,
+<b>p95 39/53</b> (gate ≤ 75), crossing-burst p50 4.1/4.2 (gate ≤ 10); <code>built_final</code>
+66/67, <code>resident_final</code> 103/93, <code>in_radius_built_final</code> 61/62 (all inside
+the standing bands); the fence fields <code>col_deferred_in_footprint</code> 0/0 and
+<code>footprint.missing</code> 0/0; <code>storm_walk_p99</code> 87/92 (≤ 200); A-vs-B delta is run
+noise. <span style="color:#b26a00"><b>Finding (not caused by this change):</b>
+<code>staged_dropped</code> 2663/2568 — marginally above the ≤ 2500 threshold. It is the
+staged-collision-drain census (world streaming), untouched by this ticket's change class
+(render-path only; genhash identical; every fence field clean), and the lane is not stalled
+(<code>staged_drained</code> 477/453, <code>staged_pending_final</code> 0/0 — entries are losing
+validity before drain, not the lane stalling). The row's own recent readings already drifted
+(999 → 1845 → 1667 over September); this is the first reading above the threshold — reported,
+not re-based; the coordinator's heavy set should confirm on a clean tree.</span></td></tr>
+<tr><td><b>Not run (the coordinator's job)</b></td><td>the rest of the standing set (farab
+h_mismatch, ladder, meshprobe, halo, lightstate, r16, shaderforce 12/12), the full battery,
+flake, r50, the Windows build. What this ticket leaves in place for them: genhash 25/25, G0,
+the smoke battery, and the boundary r4 one-shot are all green on the final tree; the
+<code>cloud_volume</code> OFF path (three-shell) is a byte-identical code path (no diff in the
+<code>u_vol &lt; 0.5</code> branch), and the near-field fog fade / tier handover / altitude-aware
+sky / view-weighted fill / seam fade code is untouched (all changes live in the volume branch
+and the <code>u_vol_rmax</code> push).</td></tr>
+</table>
+
+<h2>7. Deliberately not done</h2>
+<ul>
+<li><b>No ambient-weight raise</b> — the ticket's forbidden move (0.7 measured a 39.1 spread,
+rejected). The brightness came from the brighter effective albedo (<code>u_vol_air_lift</code>
+0.10), the brighter MS octave (0.18 → 0.24), and the forward-scatter glow — levers the ticket
+named, and the spread survived at 44.0.</li>
+<li><b>No <code>u_vol_steps</code> reduction</b> (the sanctioned cost lever) — the walls fit the
+budget without it; the only step traded is one light-march tap (§5).</li>
+<li><b>No new Settings toggle</b> (the AC-0406 precedent) — the escape hatch is the existing
+<code>cloud_volume</code> switch (OFF = the byte-identical three-shell path); the new uniforms
+(<code>u_vol_glow</code>, <code>u_vol_glow_pow</code>, <code>u_vol_air_lift</code>, the
+<code>u_vol_lsteps</code> trim) are shipped-tuning values in the <code>u_vol_sigma</code> class.</li>
+<li><b>No shell-mesh change</b> — the ticket constraint holds: the shell radii/centre stay
+4275/4330/4400 about (0, −R, 0). The only explicit statement the constraint asks for: the
+<i>virtual</i> march+gate annulus top moved 4400 → 4450 (the thickening; upward only, base at
+4275 unchanged, clear of the ~139 m ground). Known minor artifact: the volume top (R+450)
+exceeds the carrier mesh (R+400) — a camera flying 400–450 m looking straight up sees a small
+unrendered sliver; rare and negligible.</li>
+<li><b>No C++; no fence files touched</b> (<code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>
+/<code>debug.gd</code> untouched); no commits/pushes; <code>TASKS.yaml</code> untouched.</li>
+</ul>
+
+<h2>8. Captures (this folder; before frames in <code>tasks/AC-0406/</code>, same recipe)</h2>
+<p><b>r700-on</b> (the instrument frame — spread 44.0 / tint 181,229,190 / cost line): the deck
+reads as a brighter, more structured band; the lit tops still clamp. <b>r2600-on</b> (orbit /
+lit-top): before (a thin, darker, narrow halo) → after (a bright, thicker, lumpy cloud ring).
+<b>r300-on</b> (inside the annulus — the immersion frame): before (a see-through grey film, a
+straight top edge) → after (a surrounding bright volume, lumpy skyline, parallax at three
+depths). <b>r120-on</b> (looking up from the ground — the underside acceptance): before (a dark,
+high-contrast sheet) → after (a bright soft underside, sun-side glow).
+<code>r700-off.png</code> / <code>r300-off.png</code>: the clouds-OFF mask references
+(<code>AWECRAFT_CLOUDS=0</code>).</p>
+<p><img class="cap" src="r700-on.png" alt="r700-on after: the deck band from above the layer"></p>
+<table>
+<tr><td><img class="cap" src="../AC-0406/r2600-on.png" alt="r2600-on before"></td>
+<td><img class="cap" src="r2600-on.png" alt="r2600-on after"></td></tr>
+<tr><td>r2600 — before</td><td>r2600 — after</td></tr>
+</table>
+<table>
+<tr><td><img class="cap" src="../AC-0406/r300-on.png" alt="r300-on before"></td>
+<td><img class="cap" src="r300-on.png" alt="r300-on after"></td></tr>
+<tr><td>r300 — before (the thin grey film)</td><td>r300 — after (the surrounding bright volume)</td></tr>
+</table>
+<table>
+<tr><td><img class="cap" src="../AC-0406/r120-on.png" alt="r120-on before"></td>
+<td><img class="cap" src="r120-on.png" alt="r120-on after"></td></tr>
+<tr><td>r120 — before (the dark underside sheet)</td><td>r120 — after (the bright soft underside)</td></tr>
+</table>
+
+</body>
+</html>

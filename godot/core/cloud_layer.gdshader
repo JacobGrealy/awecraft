@@ -180,7 +180,12 @@ uniform float u_vol_r : hint_range(100.0, 20000.0) = 4000.0;      // planet R
 uniform float u_vol_rmin : hint_range(0.0, 20000.0) = 4275.0;     // R+275
 uniform float u_vol_rmax : hint_range(0.0, 20000.0) = 4400.0;     // R+400
 uniform float u_vol_steps : hint_range(1.0, 64.0) = 24.0;         // view steps per segment
-uniform float u_vol_lsteps : hint_range(1.0, 16.0) = 6.0;         // light-march taps (coarse)
+// AC-0407: was 6 - the light march now taps the topf field too (the
+// lumpy tops, see vdens_coarse), so one tap is trimmed to keep the
+// added skyline cost inside the render budget. 5 taps x 80 m = 400 m
+// still covers the worst case (a base sample must clear the 175 m
+// layer to exit the tops), so the self-shadow is unchanged in reach.
+uniform float u_vol_lsteps : hint_range(1.0, 16.0) = 5.0;         // light-march taps (coarse)
 uniform float u_vol_sigma : hint_range(0.001, 0.05) = 0.01;       // extinction /m at d=1
 uniform float u_vol_edge : hint_range(0.0, 1.0) = 0.55;           // dark-edge strength
 uniform float u_vol_hg : hint_range(-0.9, 0.9) = 0.65;            // HG anisotropy
@@ -207,7 +212,12 @@ uniform vec3 u_vol_air : source_color = vec3(0.442, 0.870, 1.0);
 // (1+ms1+ms2) so t=0 (a fully lit sample) keeps sh = 1.0 EXACTLY - the
 // 2.5 albedo gain and the lit tops are untouched by construction.
 uniform float u_vol_ms1 : hint_range(0.0, 2.0) = 0.30;
-uniform float u_vol_ms2 : hint_range(0.0, 2.0) = 0.18;
+// AC-0407: was 0.18 - a brighter multiple-scattering octave lifts the
+// shadowed interior (the "still too dark" fix). The normalisation keeps
+// a fully lit sample at sh = 1.0 exactly (the lit tops keep their
+// calibration - form-preserving, unlike the rejected 0.7 ambient weight
+// that flattened the spread to 39.1).
+uniform float u_vol_ms2 : hint_range(0.0, 2.0) = 0.24;
 // Phase isotropy: the Henyey-Greenstein phase (peak-normalised, very
 // directional - 0.012 at the back-scatter lobe) is mixed this far
 // toward ISOTROPIC (the constant 1.0 on vhg's 4-pi scale: both
@@ -220,6 +230,29 @@ uniform float u_vol_iso : hint_range(0.0, 1.0) = 0.4;
 // air colour into the ALBEDO. The lit tops are already clamped at 1.25,
 // so this lifts the shadowed side, not the tops.
 uniform float u_vol_amb : hint_range(0.0, 2.0) = 0.45;
+// AC-0407: the "still too dark" fix - three levers that gain brightness
+// WITHOUT the rejected ambient-weight raise (0.7 flattened the spread to
+// 39.1). All are u_vol_sigma-class shipped tuning (no new Settings
+// toggle: this is the lighting of the existing default-ON cloud_volume
+// feature; u_vol < 0.5 still short-circuits to the byte-identical
+// three-shell path).
+// (a) the FORWARD-SCATTER GLOW (also the "brighten toward the light"
+// inside-the-cloud fix): a narrow bright lobe around the sun direction,
+// added to the in-scatter L and scaled by the sample's optical depth
+// ds. It is PHASE-GATED (only near the sun), so it lifts the sun-facing
+// side without a uniform lift - directional, not a flat weight.
+// u_vol_glow is the gain, u_vol_glow_pow the narrowness (higher =
+// tighter around the sun).
+uniform float u_vol_glow : hint_range(0.0, 2.0) = 0.30;
+uniform float u_vol_glow_pow : hint_range(1.0, 32.0) = 6.0;
+// (b) BRIGHTER EFFECTIVE ALBEDO - "a brighter sky value" rather than a
+// bigger ambient weight: the single-source air colour (u_vol_air) is
+// lifted this fraction toward white in the fragment. Still the
+// one-source colour (a lift, not a fourth air colour - the standing
+// rule). Sized so the r700 brightness spread stays above the no-cloud
+// floor (~40.2); measured, not assumed. 0.0 = the exact pre-AC-0407
+// ambient colour.
+uniform float u_vol_air_lift : hint_range(0.0, 1.0) = 0.10;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
@@ -304,23 +337,47 @@ float vfbm3(vec3 p) {
 	return v;
 }
 
-// The radial gate: the field is CONFINED to the annulus. Without it the
-// FBM fills all of space around the shell and the light march (480 m
-// toward the sun) and the dark-edge tap never see clear sky - every
-// sample self-shadows and the whole deck reads as one dark storm band
-// (measured on the first 700 m pair, pre-gate: the band sat at ~60-90
-// luminance with no lit tops). With the gate the light march exits the
-// deck in ~125 m at a top sample (lit tops), stays inside for an
-// underside sample (dark undersides), and the view-march chord ends in
-// a ~20 m smooth fade instead of a hard segment cut (soft deck edges).
+// AC-0407: the radial gate + the VERTICAL PROFILE (the "no variance in
+// height" fix - the strongest clue in the user's message). The gate
+// part is the pre-AC-0407 vgate: the field is CONFINED to the annulus
+// (without it the FBM fills all of space, the light march never sees
+// clear sky, and the deck reads as one dark storm band). The profile
+// part gives the layer a FLAT BASE and LUMPY TOPS: before, every
+// column filled the whole annulus uniformly, so all clouds were the
+// same height and the layer read as a slab at one altitude. Now the
+// density is dense near the base and thins toward a top whose altitude
+// is driven by topf (the top driver, passed in - see vdens for the
+// field it is and WHY it must be independent of the coverage window).
+// The top runs from 0.45 to 0.98 of the layer height (a ~93 m skyline
+// spread on the thickened [275, 450] layer - measured 92.7 m p10-p90
+// over the field); the base stays flat at rmin (clear of the ~139 m
+// terrain). The gate's ~20 m smoothstep edges are the soft deck edges
+// (the view-march chord ends in a fade instead of a hard cut).
 // (Defined before vdens: GLSL has no forward declarations.)
-float vgate(vec3 q) {
+float vprof2(vec3 q, float topf) {
 	float r = length(q);
 	float rmin_q = u_vol_rmin / u_vol_r;
 	float rmax_q = u_vol_rmax / u_vol_r;
 	float m = 0.005;  // ~20 m at R = 4000
-	return smoothstep(rmin_q - m, rmin_q + m, r)
+	float gate = smoothstep(rmin_q - m, rmin_q + m, r)
 		* (1.0 - smoothstep(rmax_q - m, rmax_q + m, r));
+	// Normalised altitude: 0 at the base (rmin), 1 at the top (rmax).
+	float hn = clamp((r - rmin_q) / (rmax_q - rmin_q), 0.0, 1.0);
+	// The cloud's top as a fraction of the layer height, driven by
+	// topf (the top driver, passed in): remapped over its 1-sigma band
+	// so the tops span a real range. CRITICAL: topf must be at a
+	// frequency INDEPENDENT of the coverage window (which sits on
+	// base's octaves) - driving the top off the windowed field pins
+	// every cloudy column's top to ~400 m (measured: a 13 m "skyline",
+	// no variance). Cumulus has a flat base and a lumpy top; the top
+	// is where the column thins to clear.
+	float top = mix(0.45, 0.98, smoothstep(0.35, 0.65, topf));
+	// Full density below (top - 0.20) (the flat, dense body + base);
+	// over the last 0.20 toward the top it thins to 0 (the soft,
+	// lumpy top). The top altitude varies with the weather instead of
+	// being a flat line at rmax.
+	float prof = 1.0 - smoothstep(top - 0.20, top, hn);
+	return gate * prof;
 }
 
 // The FULL 3-D density (0..1): the EXACT window chain of the 2-D path
@@ -348,7 +405,14 @@ float vdens(vec3 q) {
 	float band = 0.5 + 0.5 * sin(q.y * 5.0 + 2.2 * base);
 	cl *= mix(bfloor, 1.0, smoothstep(blo, bhi, band));
 	cl = smoothstep(elow, ehi, cl);
-	return cl * vgate(q);
+	// AC-0407: the top driver - a 1-octave field at HALF the base
+	// frequency, at an offset. It must be INDEPENDENT of the coverage
+	// window (which sits on base's octaves): driving the top off the
+	// windowed field pins every cloudy column's top to ~400 m (no
+	// variance - the user's complaint). One extra anv per view step -
+	// the skyline is the cost (the "no variance in height" fix).
+	float topf = anv(q * (sc3 * 0.5) + vec3(5.3, 11.7, 8.1));
+	return cl * vprof2(q, topf);
 }
 
 // The COARSE density (1 octave + band, same windows): the light march
@@ -371,7 +435,15 @@ float vdens_coarse(vec3 q) {
 	float band = 0.5 + 0.5 * sin(q.y * 5.0 + 2.2 * base);
 	cl *= mix(bfloor, 1.0, smoothstep(blo, bhi, band));
 	cl = smoothstep(elow, ehi, cl);
-	return cl * vgate(q);
+	// AC-0407: the SAME top driver as the view path (the identical
+	// 0.5x-frequency field, same offset) - the light march + dark edge
+	// see the lumpy tops, so the self-shadow exits the cloud at each
+	// column's OWN top (the tops are lit). Without this the light
+	// march would exit at the flat gate (rmax) and over-shadow every
+	// top whose column ends below it (phantom cloud above a short
+	// column's top) - a dark-tops regression.
+	float topf = anv(q * (sc3 * 0.5) + vec3(5.3, 11.7, 8.1));
+	return cl * vprof2(q, topf);
 }
 
 // Henyey-Greenstein phase (the 4*pi normalisation folds into the gains).
@@ -576,6 +648,17 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 			// constant). No darkEdge: the sky light does not know
 			// about the rim; the powder role stays with the sun term.
 			A += T * ds;
+			// AC-0407: the FORWARD-SCATTER GLOW (the "brighten toward
+			// the light" inside-the-cloud fix + a directional brightness
+			// lever). A narrow bright lobe around the sun direction:
+			// when the view is near the sun (cosSun = dot(sun, rd) high,
+			// already computed above), the in-scatter is strongly
+			// forward-scattered and reads as a bright bloom through the
+			// cloud. Phase-gated, so it lifts the sun-facing side only -
+			// not a uniform lift (the AC-0406 0.7-ambient flattening is
+			// avoided by construction).
+			float sun_lobe = pow(max(cosSun, 0.0), u_vol_glow_pow);
+			L += T * sun_lobe * u_vol_glow * ds;
 		}
 		T *= exp(-d * dl * u_vol_sigma);
 		if (T < 0.004) {
@@ -638,6 +721,11 @@ void fragment() {
 		// sRGB-domain (the pow(2.2) below), so convert once per
 		// fragment: pow(linear, 1/2.2) ~= the sRGB value.
 		vec3 air_s = pow(max(u_vol_air, vec3(0.0039)), vec3(0.4545));
+		// AC-0407: the brighter effective albedo - the single-source
+		// air colour lifted toward a brighter sky value (the ticket's
+		// named candidate), NOT a bigger ambient weight. u_vol_air_lift
+		// 0.0 = the exact pre-AC-0407 ambient colour.
+		air_s = mix(air_s, vec3(1.0), u_vol_air_lift);
 		ALBEDO = u_cloud_tint * u_day * clamp(
 			2.5 * acc.y + 0.30 * acc.z + u_vol_amb * air_s * acc.w,
 			0.0, 1.25);
