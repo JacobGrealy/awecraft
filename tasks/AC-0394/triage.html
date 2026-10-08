@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0394 triage — floating slabs + oversized held quad</title>
+<style>
+body { font: 14px/1.45 system-ui, sans-serif; max-width: 100em; margin: 1.5em auto; padding: 0 1em; }
+h1 { font-size: 1.5em; } h2 { font-size: 1.2em; border-bottom: 2px solid #888; margin-top: 1.8em; }
+code { background: #f2f2f2; padding: 0 3px; }
+table { border-collapse: collapse; margin: .8em 0; } td, th { border: 1px solid #bbb; padding: 4px 8px; vertical-align: top; }
+th { background: #eee; }
+.gone { color: #1a6b1a; font-weight: bold; } .live { color: #a33; font-weight: bold; } .low { color: #666; }
+.k { font-weight: bold; }
+</style></head><body>
+
+<h1>AC-0394 triage — Thu Oct 8 18:37 EDT 2026 (read-only run, no godot)</h1>
+<p>Triage of the two still-open symptoms of the 2026-10-03 user report. Symptom (a) the banding
+and symptom (c) the pale sphere were resolved earlier (AC-0398 interpolated lighting, a4fc6c4;
+AC-0392/0393 shader compile). This page covers <span class="k">(b) floating slabs</span> and
+<span class="k">(d) the oversized tan held-item quad</span> only.</p>
+
+<h2>0. State of the world since the report</h2>
+<p>Since the user's frame (2026-10-03, build a493dbd), the far-field changed substantially and
+most of it is <em>committed</em>: AC-0387 carved-top far H (genhash-pinned), AC-0399
+(71115ad, 2026-10-07) view-weighted streaming fill <em>and</em> the backwards-mix fix in the
+far-tier haze bridge, AC-0400 (63e298c) fade re-targeted to the single-source air colour,
+AC-0401 (ff54861) fog-wall partition + limb gate + deck, AC-0404 (bce6053, 2026-10-08)
+<i>deletion of the haze bridge</i>, AC-0405/06/07 cloud rework (30b8775, 1761f4e).</p>
+<p><span class="k">Tree caveat the fix run must respect:</span> the working tree is dirty with
+ANOTHER SESSION'S in-flight hunks — the AC-0401 fog-wall partition in
+<code>chunk_lit_*.gdshader</code> + <code>fluid_anim_*.gdshader</code> and the 2 m body inset in
+<code>satellite_body.gdshader</code> are <b>uncommitted</b> (ff54861 committed the world.gd push
+side and the sky/cloud shaders, but not these shader files; HEAD 1abbc2d does not discard
+near-tier fragments at the fog wall). Fence files (main.gd, game.gd, drop.gd, debug.gd) plus
+<code>chunk_lit_cutout/flower/fluid/opaque</code>, <code>fluid_anim(_bf)</code>,
+<code>satellite_body.gdshader</code> are all dirty — leave them. Renders should be taken at a
+clean commit (1abbc2d) and say so; the ground-level look is not confounded by the missing
+near-tier discard (it only matters beyond 332 m, where committed <code>lod_avg.gdshader</code>
+already discards).</p>
+
+<h2>1. Floating slabs — candidate causes</h2>
+<table>
+<tr><th>Cand.</th><th>What</th><th>Where (file:line)</th><th>Status</th><th>Distinguishing evidence</th></tr>
+<tr>
+<td class="live"><b>C1</b> Haze-bridge air ring</td>
+<td>The far-tier (annulus 336–384 m from the world origin) carried a limb treatment on a
+NEAR-tier material: forced haz = 1.0 (100 % air colour) at <b>every view distance</b>; earlier
+forms of the same term: r8 backwards mix → the built far annulus rendered a near-black void at
+altitude ("built terrain looked unbuilt"). Far LOD chunks hazy/detached at the edge of view read
+exactly as "chunk-shaped slabs hanging with sky between".</td>
+<td><code>godot/core/lod_avg.gdshader:57-76</code> (removal note); the r8/AC-0399/AC-0400 term
+lives in commits 63e298c→bce6053 (git history); AC-0399 commit text: "half of what the user has
+been reporting since the beginning". Present in the user's build (a493dbd, 2026-10-03) as the
+r8 form; at their fog 332/edge 400 the 336–384 m band sits exactly at the edge of view.</td>
+<td class="gone">GONE (committed bce6053, 2026-10-08). <code>lod_avg.gdshader:127-137</code> is
+now fog-only (<code>haz = fog_f</code>) and discards at <code>d &gt;= u_fog_far</code>; no gate or
+uniform can bring the term back.</td>
+<td>AC-0404's own descent frames (2600/1600/700/300/120 m) show the tier handover from the
+frames: above the wall the near tiers draw nothing; 300 m is 89–100 % fogged; 120 m crisp. What
+is NOT yet covered: the <b>ground-level</b> view at the user's short fog (332/400) — the owed
+repro the ticket itself names.</td>
+</tr>
+<tr>
+<td class="live"><b>C2</b> Band-A un-carved plateau (LIVE)</td>
+<td>Band A materializes a far column with <code>generate_resl(skip=1)</code>; on the skip path
+<code>he = H</code> — the UN-CARVED heightmap top — and the fill is <code>solid = y &lt;= he</code>.
+So a carved column (the carver dropped its real surface) draws at band A (80–128 m at the
+user's sim 4/medium 8) with its <b>un-carved top</b> — a full-LOD textured 16×16 m plateau up to
+~29 blocks above the carved ground, carved void (sky) beneath. Chunk-shaped, with gaps. This is
+the one live wrong-HEIGHT path in the tier stack.</td>
+<td><code>gdext/src/gen.cpp:3490-3491</code> (<code>he = H</code>), <code>:~3606</code>
+(<code>bool solid = skip ? (y &lt;= he)</code>); dispatch: <code>godot/world/world.gd</code>
+<code>_mesh_dispatch_hslab</code> band-A branch; documented as a known seam:
+<code>godot/world/AGENTS.md:27-28</code> ("the skip=1 band-A fill stays un-carved (solid
+0..surface_h) — a pre-existing, documented demote/promote seam, out of AC-0387's scope").
+Exposure: AC-0290 measured ~600 opened columns in a 31×31 window (≈0.24 % of columns, max drop
+29 blocks) — rare, so a SINGLE frame with several slabs is C1's shape, not C2's; C2 is the
+occasional one-plateau residual.</td>
+<td class="live">LIVE, un-fixed. Note the far payload's H IS the carved top (AC-0387, farab
+gate), so the fix is available: band A could fill to the resident payload's carved H instead of
+the heightmap H (the payload bytes already ride the column, AC-0387b/AC-0388).</td>
+<td>CHEAPEST: a headless <b>census, no render</b> — over the band-A ring (taxi 5..8 at a few
+anchors) compare the skip=1 fill top (H) against <code>AweGen.carved_tops</code>
+(<code>gen.cpp:4647</code>, existing binding): count columns with H &gt; carved top + max delta.
+A non-zero census with a visible-magnitude delta (≥ a few blocks) confirms; zero kills it.</td>
+</tr>
+<tr>
+<td class="low"><b>C3</b> Ring-batched far draw placement / stale tier</td>
+<td>AC-0338 ring sectors merge far slabs in world coords at flat offset <code>(cx*16, si*16,
+cz*16)</code>; slabs draw at their STORED tier stamp (AC-0257 stale-tier window).</td>
+<td><code>godot/world/world.gd:1780-1808</code></td>
+<td class="low">PINNED, low. Flat-vs-sphere placement residual is ≤ ~1 m by the sphere arm
+(AC-0307, the pre-warp contract); far H is bit-exact with the full path (farab); a wrong-<i>tier</i>
+slab still sits at the correct height (LOD look, not floating). The geometry-placement family is
+not a floating-slab mechanism in the current tree.</td>
+<td>Standing gates (farab h_mismatch 0, sphere arm, ladder 20/20) already pin it; no new probe owed.</td>
+</tr>
+<tr>
+<td class="low"><b>C4</b> Promotion retain-swap hole</td>
+<td>far→full promotion could show a gap between the low LOD and the landing slab.</td>
+<td>ARCHITECTURE §6 (AC-0286 contract)</td>
+<td class="low">CONTRACTED. "The column never holes (a slab is owed only once it has first shown
+a visible mesh), never shows unlit." Counters <code>star_late_landings_promo</code> (expect 0).</td>
+<td>Already instrumented; read the counter in the arm output, no render.</td>
+</tr>
+</table>
+<p><span class="k">Verdict:</span> the multi-slab frame the user photographed is most plausibly
+<b>C1, which is removed</b> — it was a real, measured, documented defect of exactly this shape
+(air-coloured / void far annulus at every view distance), and it was in their build. The only
+live geometric wrong-height path left is <b>C2</b> (rare, single-plateau). "Still plausible"
+therefore holds only in the weak, cheap-to-kill form C2.</p>
+
+<h2>2. Oversized tan held-item quad — candidate causes</h2>
+<table>
+<tr><th>Cand.</th><th>What</th><th>Where (file:line)</th><th>Status</th><th>Distinguishing evidence</th></tr>
+<tr>
+<td class="live"><b>H1</b> Viewmodel scale</td>
+<td>Held block = 1×1×1 <code>BoxMesh</code> × 0.33 at z −0.18, hand at (0.45, −0.62, −0.7) →
+~1.17 m from the eye, camera FOV 90. That is a normal viewmodel extent. 0.33 is the scale the
+USER asked for (AC-0097, 3816ad1, 2026-09-11: "HELD_ITEM_SCALE 0.70→0.33 per user"); AC-0113
+(6fbcd04, 2026-10-02) tabled the poses with 0.0 m drift. <b>The viewmodel code has not changed
+since 2026-10-02 — before the 2026-10-03 report.</b></td>
+<td><code>godot/player/player.gd:142</code> (HAND_BASE_POS), <code>:155-164</code> (HELD_POSE:
+block scale 0.33 / pos z −0.18), <code>:1028-1041</code> (_build_held), <code>:1091-1094,
+1127</code> (_update_held); <code>godot/core/held_mesh.gd:32</code> (box_mesh);
+<code>godot/player/player.tscn</code> (fov 90.0)</td>
+<td class="low">NOT oversized in the current code — it renders at exactly the user-requested
+scale, unchanged across the report window. If the user's build pre-dates AC-0097 (before
+2026-09-11) it was at 0.70 (2.1× bigger) — the screenshot is not in the repo, so build vintage
+is unknown; that is the stale-report path.</td>
+<td>CHEAPEST: re-run the ticket's own menu-boot snapshot recipe (no AWECRAFT_LOGIC,
+<code>AWECRAFT_CAM=sky</code>, <code>AWECRAFT_SNAPSHOT=&lt;abs&gt;</code>,
+<code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>) and measure the held
+block's pixel extent against <code>tasks/AC-0394/fwd_ground_first_look.png</code> (same camera,
+same viewmodel code → extents should match). The standing <code>wallshot</code> arm
+(<code>harness.gd:22829</code>, ~83 s, writes region pixel counts) is the objective alternative:
+the held block against a 0.4 m wall, counted in the viewmodel region.</td>
+</tr>
+<tr>
+<td class="live"><b>H2</b> no_depth_test float (perception class, LIVE)</td>
+<td>All viewmodel materials skip the depth test, so the hand ALWAYS draws on top of terrain —
+the AC-0067/AC-0097 scenario (a wall 0.4 m ahead, the hand 0.3 m BEHIND the wall face). A tan
+block floating in front of a wall/ground reads as a "quad too big for its context" even at
+correct scale. The "tan" matches a held dirt/sand block (or the fist,
+<code>Color(0.87,0.73,0.57)</code>, player.gd:1055); the ticket's own frames hold a grey stone
+block — the user's frame held a different item or light.</td>
+<td><code>godot/player/player.gd:1031-1036</code> (hbmat), <code>:1046, :1057, :1112-1120</code>
+(sprite material)</td>
+<td class="live">LIVE behaviour, intentional (AC-0097). It changes how the item is <i>read</i>,
+not its size.</td>
+<td>Same render as H1, but judge whether the quad overlaps/occludes terrain it should not (the
+wallshot arm is built for exactly this). If extent matches H1's baseline and the user still
+calls it oversized on a fresh build, this is the residual explanation — fix = nothing owed, or a
+viewmodel-occlusion setting per the look-change-ships-with-a-setting rule.</td>
+</tr>
+<tr>
+<td class="low"><b>H3</b> FOV / camera path</td>
+<td>Projection scale via FOV: sprint kick +10 % (player.gd:776-783); base 90.</td>
+<td><code>godot/player/player.gd:776-783</code>, <code>player.tscn</code></td>
+<td class="low">LOW. A wider FOV makes the viewmodel <i>smaller</i>; nothing scales the hand at
+runtime (sway/swing are position+rotation only, player.gd:2468-2509). Not an oversizing
+mechanism.</td>
+<td>Nothing owed; the H1 render already shows the item at whatever FOV is live.</td>
+</tr>
+</table>
+<p><span class="k">Verdict:</span> <b>probably a stale report</b> — the current code renders the
+held item at the scale the user themselves ordered, unchanged since before the report; the
+recorded frames show a plausibly-sized held block. The live residual is the no_depth_test read
+(H2), not a size defect.</p>
+
+<h2>3. Is the ticket's recorded evidence still meaningful?</h2>
+<ul>
+<li><code>tasks/AC-0394/fwd_ground_first_look.png</code> + <code>fwd_sky_first_look.png</code>
+(captured 2026-10-04, menu-boot recipe, tree pre-AC-0399/0401/0404, <b>default render distance —
+not the user's fog 332/edge 400</b>; the ticket itself lists the user-settings repro as
+STILL-TO-DO). Still meaningful for: the banding (now fixed by AC-0398), the sky gradient, and —
+directly comparable, because the viewmodel code is unchanged — the <b>held-block size baseline</b>.
+Not meaningful for the floating-slabs question: the far field, tiers, streaming and atmosphere
+all changed after capture, and today's working tree additionally carries the uncommitted
+near-tier partition.</li>
+<li>The user's actual screenshot (the primary evidence) was pasted into the conversation and
+<b>never saved to the repo</b> — the ticket says "ask for a copy if the reproduction is not
+obvious". It is not recoverable from this repo.</li>
+</ul>
+
+<h2>4. Recommendation for the fix run (in order)</h2>
+<ol>
+<li><b>Ask the user first</b> (cheap, decides the shape of the rest): a copy of the screenshot,
+the build hash they were running, and a retest on the current build (the AC-0406/0407 cloud
+retest is pending with them anyway). A build pre-AC-0097 answers the held-quad question by
+itself (0.70 scale).</li>
+<li><b>Band-A plateau census (headless, no godot render needed):</b> over the user's band-A ring
+(taxi 5..8 at a few anchors, user settings sim 4/medium 8/low 16/render 24), count columns where
+the skip=1 fill top (heightmap H) &gt; <code>AweGen.carved_tops</code>; report count + max delta.
+Kills or quantifies C2 in seconds. Probe only — in and out of the tree in the same task.</li>
+<li><b>One ground-level Forward+ render at the user's settings</b> (fog 332/edge 400), at clean
+HEAD (1abbc2d), menu-boot snapshot recipe, <code>AWECRAFT_CAM=sky</code>. Judge: (i) far field
+fades to plain fog by 332 m — no air-coloured ring, no dark ring (C1 gone — the owed
+ground-level companion to AC-0404's descent frames); (ii) held-block pixel extent vs
+<code>fwd_ground_first_look.png</code> (H1); (iii) any single plateau with sky beneath (C2).
+Budget ~1200 s (the ticket's own timeout lesson) and check for the file, not the exit code.</li>
+<li><b>Decide:</b> census zero + clean render → close AC-0394 as a stale report of the removed
+haze-bridge artefact (C1), attaching the frames. Census non-zero (or user reconfirms slabs on
+the new build) → file the C2 fix: band-A skip=1 fill to the resident far payload's carved top H
+instead of the heightmap H (the payload already rides the column, AC-0387b/AC-0388); H2 gets a
+setting only if the user still objects after retest.</li>
+</ol>
+<p>Standing reminders: reproduce at the user's settings (fog 332/edge 400) and state the render
+distance for every finding; one render per visual ticket on this box; the valgrind soak owns
+the godot slot — no render while it runs (check <code>pgrep -af '[g]odot'</code>).</p>
+
+</body></html>
