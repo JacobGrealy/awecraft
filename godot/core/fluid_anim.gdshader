@@ -32,6 +32,9 @@ uniform float alpha_scale : hint_range(0.0, 1.0) = 0.62;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 uniform float u_underwater : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 u_cam_pos = vec3(0.0);
+// AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
+// world.gd _process - the same value main.gd sets on the env fog).
+uniform float u_fog_far = 332.0;
 varying vec3 v_world_pos;
 
 const float TILE_F = 1.0 / 32.0;
@@ -42,6 +45,12 @@ void vertex() {
 }
 
 void fragment() {
+	// AC-0401: the fog-wall partition (chunk_lit_opaque.gdshader owns the
+	// contract) - the animated water/lava surface stays inside the
+	// world's fog window; the satellite body owns the view beyond it.
+	if (distance(v_world_pos, u_cam_pos) >= u_fog_far) {
+		discard;
+	}
 	// AC-0036 (+AC-0245): same underwater near-cull as chunk_lit_fluid
 	// (~1.2 blocks - only the face inside the head; the surface above
 	// stays visible when you are deeper, so the boundary is readable

@@ -88,6 +88,22 @@ uniform vec3 u_sun;
 
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
+void vertex() {
+	// AC-0401: radius ordering with a real gap. The displaced surface is the
+	// SAME terrain the near tiers (band A + the annulus) draw at full
+	// resolution, so wherever they coexist (terrain relief straddling the
+	// fog wall) coplanar surfaces z-fought - the user's flicker between
+	// the clouds, the low LOD and the satellite LOD. The body now sits 2 m
+	// radially INSIDE the displaced surface (VERTEX is radial by
+	// construction: the mesh origin is the sphere centre, the node is the
+	// planet centre), so the near tiers always win the depth test where
+	// they overlap and the body never flickers over them. The 2 m is
+	// sub-degree at every render altitude (0.028 deg at R4000) and does
+	// not move the fog-wall contract (the op window is untouched); the
+	// star-occlusion radius (R + SEA, the star shader) is a separate home.
+	VERTEX -= normalize(VERTEX) * 2.0;
+}
+
 void fragment() {
 	// World-space geometry (AC-0384 - the builtin spaces, verified in
 	// the 4.7.1 engine source): VERTEX here is the fragment's VIEW-space
