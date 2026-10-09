@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0394 results — the two live residuals, settled with evidence</title>
+<style>
+body { font: 14px/1.45 system-ui, sans-serif; max-width: 100em; margin: 1.5em auto; padding: 0 1em; }
+h1 { font-size: 1.5em; } h2 { font-size: 1.2em; border-bottom: 2px solid #888; margin-top: 1.8em; }
+code { background: #f2f2f2; padding: 0 3px; }
+table { border-collapse: collapse; margin: .8em 0; } td, th { border: 1px solid #bbb; padding: 4px 8px; vertical-align: top; }
+th { background: #eee; }
+.ok { color: #1a6b1a; font-weight: bold; } .find { color: #a33; font-weight: bold; } .num { font-family: ui-monospace, monospace; }
+img { max-width: 100%; border: 1px solid #999; margin: .5em 0; }
+</style></head><body>
+
+<h1>AC-0394 results — Thu Oct 8 2026 (residuals run)</h1>
+<p>Two live residuals from <a href="triage.html">triage.html</a>, settled with evidence per
+<a href="plan.html">plan.html</a>. No commits (the fence). The working tree's other-session
+shader hunks were never touched and never rendered.</p>
+
+<h2>Residual one — the band-A census (measured, NOT fixed)</h2>
+<p>The band-A materialization (user settings sim 4 / medium 8 → the triage's ring taxi 5..8,
+80–128 m) fills each column SOLID to the <b>un-carved heightmap H</b> (<code>gen_flat</code>
+skip=1, <code>he = H</code> — no cave scan), while the full path's ground is the <b>carved
+top heff</b>. Where H &gt; heff the band-A mesh is a full-resolution plateau floating
+H − heff blocks above the carved ground. Measured per column over the ring at three anchors
+(spawn chunk (0,0) + two reachable offsets), seed 44, face 0, R 4000 —
+<code>column_heights16</code> (the skip=1 fill top) vs <code>AweGen.carved_tops</code> (the
+full path's own per-column heff, the independent C++ reference the <code>farab</code> gate
+itself re-pointed at). <b>This number is recorded here for BOTH tickets to use</b> — the
+generation-side ticket at the head of the queue tracks the same defect and owns any fix;
+no generation code was changed.</p>
+<table>
+<tr><th>Measure</th><th>Value</th></tr>
+<tr><td>columns sampled (3 anchors × 208-chunk ring × 256)</td><td class="num">159,744</td></tr>
+<tr><td><b>columns with the fill above the carved top</b></td><td class="num"><b>2,597 — 1.63 %</b></td></tr>
+<tr><td>per-anchor rate</td><td class="num">(0,0): 273/53,248 = <b>0.51 %</b> · (6,−9): 1,221/53,248 = <b>2.29 %</b> · (−11,4): 1,103/53,248 = <b>2.07 %</b></td></tr>
+<tr><td>per-taxi rate (all anchors)</td><td class="num">taxi 5: 151/30,720 = 0.49 % · taxi 6: 383/36,864 = 1.04 % · taxi 7: 890/43,008 = 2.07 % · taxi 8: 1,173/49,152 = 2.39 %</td></tr>
+<tr><td><b>max fill-top − carved-top delta</b></td><td class="num"><b>91 blocks</b> at world (−91, 147, −48) — the fill tops the column at y 147, the carved ground is at y 56</td></tr>
+</table>
+<p>Raw probe output (the probe is a temporary SceneTree script, run via <code>--script</code>
+from <code>.scratch/AC-0394/census_bandA.gd</code> — no tree pollution; code embedded below):</p>
+<pre>BAND_A_CENSUS { "seed": 44, "anchors": [[0, 0], [6, -9], [-11, 4]], "cols": 159744,
+  "un_carved_above_carved_top": 2597, "rate_pct": 1.63, "max_delta": 91,
+  "max_col": [-91, 147, -48],
+  "per_taxi": { 8: { "cols": 49152, "bad": 1173, "max_delta": 68 },
+                7: { "cols": 43008, "bad": 890, "max_delta": 91 },
+                6: { "cols": 36864, "bad": 383, "max_delta": 91 },
+                5: { "cols": 30720, "bad": 151, "max_delta": 57 } } }
+CENSUS_ANCHOR anchor=[0,0]    cols=53248 bad=273  rate=0.5127%
+CENSUS_ANCHOR anchor=[6,-9]   cols=53248 bad=1221 rate=2.2930%
+CENSUS_ANCHOR anchor=[-11,4]  cols=53248 bad=1103 rate=2.0714%</pre>
+<p><b>Is it visible from the ground at the user's settings? YES — and it is bigger than the
+triage estimated.</b> The band-A ring (80–128 m) sits far inside the user's fog 332 / edge
+400 — the fog barely tints it at that range. A full-resolution plateau that is un-carved
+where the ground below is carved shows as exactly "terrain floating in the air": 1.63 % of
+columns on average (0.51–2.29 % by location — the carver's strength varies, so a spawn
+neighbourhood can read clean while a walk of a few chunks lands in a 2 %+ pocket), and the
+worst column carries a <b>91-block-thick</b> slab (the triage's local window had estimated
+~29 max on ~0.25 % — both numbers were window-limited; this ring census supersedes them).
+The rate <i>grows</i> with distance (taxi 5 → 8: 0.49 % → 2.39 %). At 100 m, a 10-block
+feature subtends ~6° on a ~47° vertical FOV — plainly visible. This is a live cause of the
+user's symptom (b) independent of the deleted haze bridge (C1, gone in bce6053): <b>the
+user will still see floating slabs on the new build.</b> The fix (for the coordinator to
+assign — the generation-side ticket already tracks this defect and owns the code):
+materialize band-A columns to the full path's CARVED top instead of the heightmap H — the
+same per-column carved value AC-0387's far lane already computes (<code>carved_tops</code>
+/ <code>gen_flat</code> skip=0 heff), sourced either by running the carve in the band-A lane
+or by carrying the payload on the band-A landing (the AC-0388 comment at
+<code>gen.cpp:4608</code> notes the skip paths currently carry nothing). I did not touch it.</p>
+
+<h2>Residual two — the viewmodel depth test (fixed behind a switch)</h2>
+<p>Every viewmodel material set <code>no_depth_test = true</code>, so the held item drew OVER
+terrain — the hand read as floating at the correct (user-ordered, AC-0097) 0.33 scale.
+<b>Fix: a new look switch <code>viewmodel_occlude</code>, DEFAULT OFF (conservative).</b>
+The user reported the item's SIZE, not the occlusion, so the un-asked look change defaults
+to the pre-change always-on-top behaviour — the AC-0205/AC-0398 default rule. ON re-enables
+the depth <b>TEST</b> on every viewmodel material (fist / box / cross / sprite material / the
+tool child materials — the whole <code>_vm_mats</code> registry, plus the
+<code>held_sprite</code> node flag kept coherent for the toolpose arm's read); the depth
+<b>WRITE</b> stays <code>DEPTH_DRAW_DISABLED</code> in both states (the hand still never blocks
+the depth of anything behind it — the AC-0067/AC-0097 write-side intent is untouched).</p>
+<table>
+<tr><th>Change</th><th>Where</th></tr>
+<tr><td>DEFAULTS <code>"viewmodel_occlude": false</code> + <code>_clamp</code>
+<code>AnalogTune.sanitize_bool</code> branch (no apply step — live read, the
+cloud_deck/limb_space pattern)</td><td><code>godot/autoload/settings.gd</code></td></tr>
+<tr><td>Settings-page CheckBox "Held item: occluded by terrain" (after the cloud_volume
+row), the sync line, the <code>_on_vm_occ_toggled</code> handler</td>
+<td><code>godot/ui/menu.gd</code></td></tr>
+<tr><td>(a) <code>_ready</code>: <code>AWECRAFT_VMOCC=&lt;0|1&gt;</code> env preload — written
+to <code>Settings.values</code> WITHOUT save (the AWECRAFT_RAMPS pattern; the viewmodel is
+the player's, so the preload rides <code>player.gd</code>, not world.gd). (b)
+<code>_process</code>: one per-frame <code>_vm_occ_sync()</code> — reads the live value and
+re-applies <code>no_depth_test</code> on a setting change <b>or registry growth</b> (a
+material created after an apply — the per-item / tool materials — must receive the flag;
+this second condition was caught by the first ON render, see deviations). (c)
+<code>_build_held</code>: one apply at construction so the first frame is right.</td>
+<td><code>godot/player/player.gd</code></td></tr>
+<tr><td>One clause in the §2 Settings line (the look-switch convention, new key noted).</td>
+<td><code>godot/ARCHITECTURE.md</code></td></tr>
+</table>
+<p>Diff: 4 files, +100/−1. <code>held_mesh.gd</code> untouched (its <code>_base_mat</code>
+stays the always-on-top source; the live flag is the switch's job). Conservative default
+proven at gate level: <code>toolpose</code> asserts the shipped depth state and stays green
+unmodified (<code>depth_ok: true</code>, <code>scale_ok: true</code>).</p>
+
+<h2>Render evidence (all frames: commit <b>a39c6e9</b> + the AC-0394 viewmodel hunks)</h2>
+<p><b>Every frame came from a separate git worktree at the current commit
+<code>a39c6e9</code> ("AC-0403: three clean valgrind passes…"), with ONLY this ticket's three
+hunks copied in (<code>player.gd</code>, <code>settings.gd</code>, <code>menu.gd</code>) +
+the main tree's <code>godot/bin/libchunkio.so</code> (the AC-0403 guard build — this ticket
+owes no C++ change). The other session's dirty shader files (fluid_anim, satellite_body,
+chunk_lit_*) are ABSENT from the frames by construction — i.e. every frame is exactly the
+diff that will ship, and does not describe the dirty tree.</b> All runs:
+<code>xvfb-run</code> + <code>VK_ICD_FILENAMES=…/lvp_icd.json</code> +
+<code>--rendering-driver vulkan</code>, 1280,720, and every log carries the Forward+ boot
+line <code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8,
+256 bits)</code>. Proxy renderer — evidence of geometry/occlusion/layout, not the shipped
+Windows look (AC-0391).</p>
+
+<p><b>The fix, A/B on the arm's own 0.4 m wall fixture</b> (<code>AWECRAFT_LOGIC=wallshot</code>,
+<code>AWECRAFT_WALL_SHOTS=block</code> — a stone wall 0.4 m in front of the eye, the held
+block 0.3 m BEHIND the wall face, the user's exact AC-0067 scenario):</p>
+<table>
+<tr><th></th><th>Switch OFF (the default — conservative)</th><th>Switch ON (<code>AWECRAFT_VMOCC=1</code>)</th></tr>
+<tr><td>RESULT (material state)</td><td class="num"><code>block_depth_on: false</code> (the depth TEST disabled — today's behaviour)</td><td class="num"><code>block_depth_on: true</code> (the depth TEST enabled — the fix)</td></tr>
+<tr><td>Frame</td><td><img src="captures/ac0394-wall-switch-off-default.png" alt="held block drawn ON TOP of the wall"></td><td><img src="captures/ac0394-wall-switch-on-occluded.png" alt="held block occluded by the wall — gone from the frame"></td></tr>
+<tr><td>Reading</td><td>the held block draws <b>over</b> the wall (the defect, preserved as the default look)</td><td>the held block is <b>occluded by the terrain</b> — the frame is wall-only where the block was</td></tr>
+</table>
+<p><b>The item is still visible against the sky (switch ON).</b> Menu-boot snapshot path
+(no <code>AWECRAFT_LOGIC</code>), dirt held (the user's tan item), camera pitched ~31° up:</p>
+<p><img src="captures/ac0394-sky-held-dirt-aimed-switch-on.png" alt="held stone block fully visible, its upper part against open sky, switch ON"></p>
+<p>The held block renders complete — nothing closer than it — with its upper part <b>against
+open sky</b> (the depth test kills closer terrain, never sky). Companion frame, same switch
+state, dirt held at the arm's auto aim spot (item visible against terrain, unoccluded):
+<code>captures/ac0394-sky-held-item-switch-on.png</code>. (The aimed run's
+<code>_placed.png</code> byproduct is the <code>AWECRAFT_AIM</code> branch's documented
+<code>player.place()</code> second shot — not evidence, kept for provenance.)</p>
+<p>Stated limitation: the user's fog 332 / edge 400 was <b>not</b> reproduced in a render —
+R25 cannot settle in budget on this software-Vulkan box (the AC-0391 class; R4 was used).
+The occlusion behaviour is fog-independent (depth buffer, not fog), and the C1 haze-ring
+question stays answered by AC-0404's committed descent frames (the ring is gone in
+bce6053) + the census above. The wallshot region census
+(<code>block_vm_nonstone</code> 29,664 → 29,913) is insensitive here — the wall renders
+darker than the arm's <code>_is_stone</code> predicate under software Forward+, so nearly the
+whole region counts as non-stone in BOTH states; the pixel census is the arm's, the FRAMES
+are the evidence, and the arm was not modified (pristine).</p>
+
+<h2>Gates (light set — HEAVY is the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Process exit</th><th>Census (gate_census.py)</th><th>Reading</th></tr>
+<tr><td>G0 headless load (final tree)</td><td class="num"><b>rc 0</b> (paired check — the AC-0403 UAF exits 139 on a clean log)</td><td class="num">0 SCRIPT / 0 SHADER</td><td class="ok">PASS</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids</code></td><td class="num">rc 0</td><td class="num">0 / 0</td><td class="ok">battery <code>ok: true</code></td></tr>
+<tr><td>PROBE <code>toolpose</code> (default state, before AND after the sentinel fix)</td><td class="num">rc 0 / rc 0</td><td class="num">0 / 0</td><td class="ok"><code>ok: true</code>, <code>depth_ok: true</code> (the conservative default keeps all four depth flags), <code>scale_ok: true</code> (0.33/0.33), all four tools green</td></tr>
+<tr><td>PROBE <code>held</code></td><td class="num">rc 0</td><td class="num">0 / 0</td><td class="find"><code>box_ok: false</code> (<code>tint_top_ok</code>) — PRE-EXISTING: identical on the pristine a39c6e9 worktree (below); arm-side staleness, not this change</td></tr>
+<tr><td>genhash (final tree)</td><td class="num">rc 0</td><td class="num">0 / 0</td><td class="ok">25/25 lines, byte-identical to the AC-0408 reference (and AC-0398 / AC-0384-r8) — generation untouched</td></tr>
+</table>
+<p><b>Pristine A/B (pre-existing drift, not regressions):</b> a second worktree at
+<code>a39c6e9</code> WITHOUT any of this ticket's hunks reproduced the SMOKE anomalies:
+interact <code>place_ok: false</code>, <code>target_cell [8,140,8]</code> (the standing row's
+AC-0314 value was [8,141,8]/true) and held <code>box_ok: false</code> — both byte-similar to
+the main-tree readings, and genhash is byte-identical on both trees, so the drift is
+post-AC-0314 arm-side staleness (the spawn column's top moved with the terrain rebases; the
+grass-top tint expectation is stale). Findings for the coordinator: re-measure the
+player/interact/held standing rows — none are owed by this ticket, which touches none of
+those paths.</p>
+
+<h2>Deviations from plan.html</h2>
+<ol>
+<li><b>The first VMOCC=1 render exposed a bug in my own apply cache</b> (the
+"already-applied" sentinel matched the ON state, so the first sync short-circuited — the
+frame was byte-identical to the OFF run, which is what flagged it). Fixed by also tracking
+the <code>_vm_mats</code> size (re-apply on registry growth, not only on value change);
+toolpose re-run green; the ON render re-done. One render slot consumed by the throwaway.</li>
+<li>The <code>AWECRAFT_CAM=sky</code> preset via the <code>AWECRAFT_HELD</code> branch lands
+on the arm's auto aim spot (a ground view, <code>main.gd:829-846</code> returns before any
+cam handling) — the sky-behind-item shot therefore used <code>AWECRAFT_AIM</code> (explicit
+pose) + the selected item; the item in that frame is the AIM branch's stone (the
+<code>AWECRAFT_FPV_ITEM</code> hook sits inside the skipped auto-aim block) — stone is the
+ticket's own held item anyway; the tan dirt appears in the companion frame.</li>
+<li>The plan's ring estimate (48 chunks/anchor) was arithmetic-wrong: the Chebyshev ring
+taxi 5..8 is <b>208 chunks/anchor</b>; the measured 159,744-column census stands as
+reported (strictly more evidence than planned).</li>
+<li>The census probe ran via <code>--script</code> from <code>.scratch/AC-0394/</code>
+(outside the tree — <code>harness.gd</code> pristine, no probe left in the tree); it is
+preserved at <code>.scratch/AC-0394/census_bandA.gd</code> and embedded below for the
+generation-side ticket.</li>
+</ol>
+<pre>extends SceneTree
+# AC-0394 residual one — band-A un-carved fill census (skip=1 fill top vs the
+# full path's carved top, the farab reference). Pure generation, no world/mesh/render.
+func _initialize() -&gt; void:
+	var seed := 44
+	var H := 384
+	var sea := 126
+	var face := 0
+	var R := 4000.0
+	if not ClassDB.class_exists("AweGen"):
+		printerr("BAND_A_CENSUS AweGen missing")
+		quit(1)
+		return
+	var g = ClassDB.instantiate("AweGen")
+	var anchors := [Vector2i(0, 0), Vector2i(6, -9), Vector2i(-11, 4)]
+	var total := 0
+	var bad := 0
+	var max_delta := 0
+	var max_col := Vector3i(-1, -1, -1)
+	var per_taxi := {}
+	for a in anchors:
+		var a_total := 0
+		var a_bad := 0
+		for tz in range(-8, 9):
+			for tx in range(-8, 9):
+				var taxi := maxi(absi(tx), absi(tz))
+				if taxi &lt; 5:
+					continue
+				var cx: int = a.x + tx
+				var cz: int = a.y + tz
+				var hs: PackedByteArray = g.column_heights16(cx, cz, seed, H)
+				var ct: PackedByteArray = g.carved_tops(cx, cz, seed, H, sea, face, R)
+				for i in 256:
+					var hh := int(hs[2 * i]) | (int(hs[2 * i + 1]) &lt;&lt; 8)
+					var he := int(ct[3 * i]) | (int(ct[3 * i + 1]) &lt;&lt; 8)
+					total += 1
+					a_total += 1
+					var row: Array = per_taxi.get(taxi, [0, 0, 0])
+					row[0] += 1
+					if hh &gt; he:
+						bad += 1
+						a_bad += 1
+						row[1] += 1
+						var d := hh - he
+						row[2] = maxi(row[2], d)
+						if d &gt; max_delta:
+							max_delta = d
+							max_col = Vector3i(cx * 16 + (i % 16), hh, cz * 16 + (i / 16))
+					per_taxi[taxi] = row
+		print("CENSUS_ANCHOR anchor=[%d,%d] cols=%d bad=%d rate=%.4f%%" % [a.x, a.y, a_total, a_bad, 100.0 * a_bad / float(a_total)])
+	var anchor_list := []
+	for ax in anchors:
+		anchor_list.append([ax.x, ax.y])
+	var out := {
+		"seed": seed,
+		"anchors": anchor_list,
+		"cols": total,
+		"un_carved_above_carved_top": bad,
+		"rate_pct": roundf(10000.0 * float(bad) / float(total)) / 100.0,
+		"max_delta": max_delta,
+		"max_col": [max_col.x, max_col.y, max_col.z],
+		"per_taxi": {},
+	}
+	for t in per_taxi:
+		out["per_taxi"][t] = {"cols": per_taxi[t][0], "bad": per_taxi[t][1], "max_delta": per_taxi[t][2]}
+	print("BAND_A_CENSUS " + str(out))
+	quit(0)</pre>
+
+<h2>Deliberately NOT done</h2>
+<ul>
+<li>No commits, no pushes, no <code>TASKS.yaml</code> edits (fence).</li>
+<li><b>No generation-code changes</b> — the band-A fill defect is tracked from the
+generation side by the other ticket at the head of the queue; the number above is for both
+tickets, the fix and its ownership are the coordinator's call.</li>
+<li>No edits to <code>harness.gd</code> (pristine), <code>main.gd</code>, <code>game.gd</code>,
+<code>drop.gd</code>, <code>debug.gd</code>, the other session's dirty shader files, or
+<code>held_mesh.gd</code>.</li>
+<li>HEAVY gates (boundary r4, flake, <code>shaderforce</code>, r50) — the coordinator's.</li>
+<li>No render at the user's fog 332 / edge 400 (box budget, stated above); no C1 haze-ring
+re-verification (removed in bce6053, verified from the frames at AC-0404; the R4 frames
+cannot contain the 336–384 m annulus by construction).</li>
+<li>The wallshot <code>_is_stone</code> predicate was not re-baselined (arm pristine; the
+region metric is documented as insensitive under software Forward+, the frames carry the
+evidence).</li>
+</ul>
+
+<h2>Captures</h2>
+<table>
+<tr><th>File</th><th>What it shows</th><th>State</th></tr>
+<tr><td><code>captures/ac0394-wall-switch-off-default.png</code></td><td>0.4 m wall, held block drawn ON TOP (the defect — preserved as the default look)</td><td>switch OFF (default), a39c6e9 + hunks</td></tr>
+<tr><td><code>captures/ac0394-wall-switch-on-occluded.png</code></td><td>same scene, held block OCCLUDED by the wall (the fix)</td><td>switch ON, a39c6e9 + hunks</td></tr>
+<tr><td><code>captures/ac0394-sky-held-dirt-aimed-switch-on.png</code></td><td>held block complete, upper part against open sky</td><td>switch ON, a39c6e9 + hunks</td></tr>
+<tr><td><code>captures/ac0394-sky-held-item-switch-on.png</code></td><td>tan dirt held, visible against terrain (companion)</td><td>switch ON, a39c6e9 + hunks</td></tr>
+<tr><td><code>captures/ac0394-sky-held-dirt-aimed-switch-on_placed.png</code></td><td>the AWECRAFT_AIM branch's documented place() byproduct (provenance only)</td><td>switch ON, a39c6e9 + hunks</td></tr>
+</table>
+<p>Gate logs: <code>.scratch/AC-0394-*.log</code> (g0-final, g0, smoke, genhash-final,
+genhash, toolpose, toolpose2, held, census, wall-off, wall-on, sky-on, sky-aim,
+pristine-interact, pristine-held, wt-import). Render worktree removed after the last frame.</p>
+
+</body></html>

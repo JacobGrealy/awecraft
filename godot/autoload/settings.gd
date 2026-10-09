@@ -109,6 +109,21 @@ const DEFAULTS := {
 	# centre (verified geometry, the outer shell carries the march).
 	# Env-overridable (AWECRAFT_CLOUDVOL=0|1 at boot, world.gd).
 	"cloud_volume": true,
+	# AC-0394: the held-item occlusion switch (the 2026-10-03 report's
+	# residual H2: every viewmodel material sets no_depth_test, so the
+	# hand draws OVER terrain and reads as floating at the correct
+	# scale). DEFAULTS OFF — conservative: the user reported SIZE, not
+	# occlusion, so the AC-0205/AC-0398 default rule applies (a look
+	# change the user has NOT asked for defaults to the pre-change
+	# look — today's always-on-top behaviour). ON re-enables the depth
+	# TEST on every viewmodel material (player.gd — fist / box / cross /
+	# sprite / the tool child materials; the depth WRITE stays
+	# DEPTH_DRAW_DISABLED in both states, the hand still never blocks
+	# the depth of anything behind it). No apply step: player.gd reads
+	# the live value every frame (the cloud_deck/limb_space pattern).
+	# Env-overridable (AWECRAFT_VMOCC=0|1 at boot, player.gd — the
+	# AWECRAFT_RAMPS pattern, written to Settings.values WITHOUT save).
+	"viewmodel_occlude": false,
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
@@ -315,6 +330,8 @@ func _clamp(k: String, v) -> void:
 		"sky_altitude":  # AC-0402: bool (the sky's altitude-aware space blend).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"cloud_volume":  # AC-0405: bool (the raymarched cloud volume).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"viewmodel_occlude":  # AC-0394: bool (the held-item occlusion switch).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"fullscreen":
 			values[k] = bool(v)

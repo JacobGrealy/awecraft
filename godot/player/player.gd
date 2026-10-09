@@ -190,6 +190,14 @@ var _mine_prog := 0.0
 var _vm_mats: Array = []
 var _vm_box_mats := {}
 var _vm_sprite_mat: StandardMaterial3D = null
+# AC-0394: the held-item occlusion switch — the last-applied state of
+# Settings "viewmodel_occlude" (default false = today's always-on-top
+# look) + the _vm_mats size at the last apply (-1 = never): a material
+# created AFTER an apply (the per-item box/cross/sprite materials, the
+# tool child materials) must receive the flag too, so the sync
+# re-applies on registry growth, not only on a setting change.
+var _vm_occ_applied: bool = false
+var _vm_occ_count: int = -1
 var _vm_eye_cell := Vector3i(-1, -1, -1)
 var _vm_light_ms := 0
 var _vm_sky := 0.0
@@ -200,6 +208,16 @@ var _vm_L := 1.0
 func _ready() -> void:
 	Game.player = self
 	_ac0383_player_init()  # AC-0383: read the env once (zero per-frame cost when off)
+	# AC-0394: harness env preload (the AWECRAFT_RAMPS pattern) —
+	# AWECRAFT_VMOCC=<0|1> overrides the STORED setting for this process
+	# (written to Settings.values WITHOUT save, so the arms never clobber
+	# the user's cfg). The viewmodel is the player's, so the preload rides
+	# _ready here rather than world.gd's boot block; _process reads the
+	# live value every frame (the cloud_deck pattern), so no boot derive
+	# is owed.
+	var vme := OS.get_environment("AWECRAFT_VMOCC")
+	if vme != "":
+		Settings.values["viewmodel_occlude"] = vme == "1"
 	if Game.world != null:
 		# AC-0307: spawn_point() is flat; the placed world needs the
 		# sphere conversion (mm-level near the spawn, exact by contract).
@@ -250,6 +268,7 @@ func _process(dt: float) -> void:
 	_update_swing_loop()
 	_update_swing(dt)
 	_update_sway(dt)
+	_vm_occ_sync()  # AC-0394: the held-item occlusion switch (live value; the material flags re-apply only on change)
 	vm_refresh(false)
 
 
@@ -1063,6 +1082,7 @@ func _build_held() -> void:
 	held_tool = Node3D.new()
 	held_tool.visible = false
 	hand_root.add_child(held_tool)
+	_vm_occ_sync()  # AC-0394: apply the switch state to the built materials (the fist is registered above; the per-item materials apply on first _process / first _update_held)
 
 
 func _update_held(id: int, n: int) -> void:
@@ -1150,6 +1170,35 @@ func _vm_register_mat(m: Material, base: Color) -> void:
 			if ent[0] == m:
 				return
 		_vm_mats.append([m, base])
+
+
+# AC-0394: the held-item occlusion switch (Settings "viewmodel_occlude",
+# default OFF = today's always-on-top look — the user reported the SIZE,
+# not the occlusion, so the un-asked look change defaults to the
+# pre-change behaviour, the AC-0205/AC-0398 rule). ON re-enables the
+# depth TEST on every viewmodel material in the _vm_mats registry (the
+# fist / box / cross / sprite materials + the tool child materials
+# registered through _vm_register_mat): terrain closer than the hand
+# occludes it, sky never does. The depth WRITE stays DEPTH_DRAW_DISABLED
+# in both states — the hand still never blocks the depth of anything
+# behind it (the AC-0067/AC-0097 write-side intent is untouched). The
+# held_sprite node flag is kept coherent with its material (the node one
+# is a no-op in this build — the MATERIAL flag is the effective one —
+# but the toolpose arm reads the node flag). Live-value read (the
+# cloud_deck/limb_space pattern): an Options toggle applies next frame,
+# no apply step owed.
+func _vm_occ_sync() -> void:
+	var on := bool(Settings.values.get("viewmodel_occlude", false))
+	if on == _vm_occ_applied and _vm_mats.size() == _vm_occ_count:
+		return
+	_vm_occ_applied = on
+	_vm_occ_count = _vm_mats.size()
+	for ent in _vm_mats:
+		var m = ent[0]
+		if m is StandardMaterial3D:
+			(m as StandardMaterial3D).no_depth_test = not on
+	if held_sprite != null:
+		held_sprite.no_depth_test = not on
 
 
 func vm_refresh(force: bool = false) -> void:

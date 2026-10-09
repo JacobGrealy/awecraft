@@ -64,6 +64,9 @@ var sky_alt_check: CheckBox
 # AC-0405: the raymarched-volumetric-clouds toggle (Settings page,
 # default ON - the user ordered the rework).
 var cloud_vol_check: CheckBox
+# AC-0394: the held-item occlusion toggle (Settings page, default OFF -
+# conservative: the user reported the SIZE, not the occlusion).
+var vm_occ_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -353,6 +356,23 @@ func _ready() -> void:
 	opt_vbox.add_child(cloud_vol_check)
 	if hi + 12 < opt_vbox.get_child_count():
 		opt_vbox.move_child(cloud_vol_check, hi + 13)
+	# AC-0394: the held-item occlusion toggle — the viewmodel's
+	# no_depth_test made the hand draw OVER terrain (the 2026-10-03
+	# report's residual H2), so ON re-enables the depth test (the hand is
+	# occluded by terrain; sky never occludes). DEFAULTS OFF —
+	# conservative: the user reported the SIZE, not the occlusion, so the
+	# look change the user has NOT asked for defaults to the pre-change
+	# look (the AC-0205/AC-0398 rule). No apply step is owed: player.gd
+	# reads the live value every frame and re-applies the material flag on
+	# change (the cloud_deck/limb_space pattern).
+	vm_occ_check = CheckBox.new()
+	vm_occ_check.name = "VmOccCheck"
+	vm_occ_check.text = "Held item: occluded by terrain"
+	vm_occ_check.add_theme_font_size_override("font_size", 15)
+	vm_occ_check.toggled.connect(_on_vm_occ_toggled)
+	opt_vbox.add_child(vm_occ_check)
+	if hi + 13 < opt_vbox.get_child_count():
+		opt_vbox.move_child(vm_occ_check, hi + 14)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -833,6 +853,8 @@ func _sync_controls() -> void:
 	sky_alt_check.button_pressed = bool(Settings.values.get("sky_altitude", true))
 	# AC-0405: the raymarched-volumetric-clouds toggle (default ON).
 	cloud_vol_check.button_pressed = bool(Settings.values.get("cloud_volume", true))
+	# AC-0394: the held-item occlusion toggle (default OFF).
+	vm_occ_check.button_pressed = bool(Settings.values.get("viewmodel_occlude", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1229,6 +1251,17 @@ func _on_cloud_vol_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("cloud_volume", on)
+
+
+# AC-0394: the held-item occlusion toggle (default OFF - conservative:
+# the user reported the SIZE, not the occlusion). set_value does the
+# clamp chain + the save; no apply step is owed: player.gd reads the
+# live value every frame and re-applies the viewmodel materials'
+# no_depth_test on change (the cloud_deck/limb_space pattern).
+func _on_vm_occ_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("viewmodel_occlude", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

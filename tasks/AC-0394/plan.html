@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0394 plan — settle the two live residuals</title>
+<style>
+body { font: 14px/1.45 system-ui, sans-serif; max-width: 100em; margin: 1.5em auto; padding: 0 1em; }
+h1 { font-size: 1.5em; } h2 { font-size: 1.2em; border-bottom: 2px solid #888; margin-top: 1.8em; }
+code { background: #f2f2f2; padding: 0 3px; }
+table { border-collapse: collapse; margin: .8em 0; } td, th { border: 1px solid #bbb; padding: 4px 8px; vertical-align: top; }
+th { background: #eee; }
+</style></head><body>
+
+<h1>AC-0394 plan — Thu Oct 8 2026 (residuals run)</h1>
+
+<h2>Goal</h2>
+<p>Settle the two live residuals from <a href="triage.html">triage.html</a> with evidence:</p>
+<ol>
+<li><b>Residual one (C2, census — measure only, no generation code change):</b> the band-A
+un-carved fill. Over the band-A ring (taxi 5..8 at a few anchors, user settings sim 4 /
+medium 8 / low 16 / render 24) compare the skip=1 fill top (heightmap H,
+<code>column_heights16</code>) against the full path's carved top
+(<code>AweGen.carved_tops</code>, the farab reference). Record the count and max delta of
+columns where H &gt; carved top, per-taxi and per-anchor, in THIS ticket's results for both
+tickets to use. Do NOT fix generation (the other ticket owns it); if the magnitude says it
+is worth fixing, name the fix (fill to the resident far payload's carved top — AC-0387b/0388
+already put the bytes on the column) and let the coordinator assign it.</li>
+<li><b>Residual two (H2, fix):</b> every viewmodel material sets <code>no_depth_test = true</code>,
+so the held item draws OVER terrain. Add a look switch
+<code>viewmodel_occlude</code> (Settings, default <b>OFF</b> = conservative = today's
+always-on-top behaviour; the user never asked for the new look, the AC-0205/AC-0398
+default rule), env-overridable <code>AWECRAFT_VMOCC=&lt;0|1&gt;</code> (the AWECRAFT_RAMPS
+pattern, preloaded at boot WITHOUT saving). ON re-enables the depth TEST on every viewmodel
+material (the depth WRITE stays <code>DEPTH_DRAW_DISABLED</code> — minimal flip, the hand
+still never blocks the depth of anything behind it). Verify in renders: hand occluded by
+terrain, item still visible against sky.</li>
+</ol>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>DEFAULTS <code>"viewmodel_occlude": false</code> +
+<code>_clamp</code> <code>AnalogTune.sanitize_bool</code> branch (the smooth_ramps/modern_light pattern).
+No apply step in <code>set_value</code> — the player reads the live value every frame
+(the cloud_deck/limb_space/sky_altitude pattern).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>One Settings-page CheckBox
+("Held item: occluded by terrain"), after the cloud_volume row (hi+13 &rarr; hi+14 seat),
+the <code>_sync</code> line, the <code>_on_vm_occ_toggled</code> handler — the modern_light
+pattern verbatim.</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>(a) <code>_ready</code>: the
+<code>AWECRAFT_VMOCC</code> env preload (written to <code>Settings.values</code> WITHOUT
+save). (b) <code>_process</code>: one per-frame sync — read the live value, and only when it
+changed re-apply <code>no_depth_test</code> across the whole <code>_vm_mats</code> registry
+(fist / box / cross / sprite material / the tool child materials registered through
+<code>_vm_register_mat</code>) + the <code>held_sprite</code> node flag for state coherence
+(the toolpose arm reads it). (c) <code>_build_held</code>: one apply at construction so the
+first frame is right.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>One clause in the §2 Settings line for the
+new switch (same pattern as the AC-0401/0402/0405 clauses — the look-switch convention
+documented, new key noted). No structural change.</td></tr>
+</table>
+<p>NOT touched: any generation code (<code>gdext/</code>, <code>godot/world/</code>),
+<code>harness.gd</code>, the fence files (main.gd, game.gd, drop.gd, debug.gd), the other
+session's dirty shader files, <code>held_mesh.gd</code> (its <code>_base_mat</code> stays the
+always-on-top source; the live flag is the switch's job).</p>
+
+<h2>Residual one — the census (headless, no render, no world build)</h2>
+<p>A temporary SceneTree probe (kept in <code>.scratch/AC-0394/</code>, run via
+<code>--script</code> — the pattern AC-0338/0345/0346 used for temporary census arms, but
+outside the tree so <code>harness.gd</code> stays pristine): for each anchor chunk in
+{(0,0), (6,-9), (-11,4)} (the spawn chunk + two reachable offsets) and each chunk at
+taxi 5..8 of it: decode <code>column_heights16</code> (the skip=1 fill top H) and
+<code>carved_tops</code> (the full path's per-column heff — the independent C++ reference
+the farab gate itself uses) and count per column where H &gt; heff (the plateau that floats
+H − heff blocks above the carved ground), max delta, per-taxi and per-anchor breakdown,
+3 anchors × 48 chunks × 256 cols = 2,304 columns (≈3.3× the AC-0290 window). Seed 44,
+face 0, R 4000, H 384, sea 126 (the defaults). Pure generation — no world, no mesh, no
+render; the probe is out of the tree before exit and its code lands in the results page.</p>
+
+<h2>Residual two — the renders (from a CLEAN tree, per the fence)</h2>
+<p>The working tree carries ANOTHER SESSION'S uncommitted shader hunks (fluid_anim,
+satellite_body, chunk_lit_*). Renders come from a <b>separate git worktree at the current
+commit</b> (<code>git worktree add .scratch/AC-0394-wt HEAD</code>) with ONLY this ticket's
+hunks copied in (<code>player.gd</code>, <code>settings.gd</code>, <code>menu.gd</code>) +
+the main tree's <code>godot/bin/libchunkio.so</code> (the AC-0403 guard build — no C++
+change is owed by this ticket). The other session's dirty files are absent from the frames
+by construction. Every frame is reported as <b>HEAD (a39c6e9) + the AC-0394 viewmodel
+hunks</b> — i.e. exactly the diff that will ship.</p>
+<table>
+<tr><th>Shot</th><th>Recipe (all: xvfb + lavapipe + <code>--rendering-driver vulkan</code>, 1280,720)</th><th>Proves</th></tr>
+<tr><td>1. wall, switch OFF (default)</td><td><code>AWECRAFT_LOGIC=wallshot AWECRAFT_WALL_SHOTS=block</code> —
+the arm's own 0.4 m stone wall fixture (hand 0.3 m BEHIND the wall face)</td>
+<td>conservative default = today's look: the held block draws ON TOP of the wall
+(<code>block_depth_on</code> false in the RESULT, non-stone pixels in the VM region)</td></tr>
+<tr><td>2. wall, switch ON</td><td>same + <code>AWECRAFT_VMOCC=1</code></td>
+<td>the fix: the held block is OCCLUDED by the wall (<code>block_depth_on</code> true,
+non-stone count drops to the wall-texture floor) — the user's exact AC-0067 scenario</td></tr>
+<tr><td>3. sky, switch ON</td><td>menu-boot snapshot (NO <code>AWECRAFT_LOGIC</code>),
+<code>AWECRAFT_CAM=sky AWECRAFT_TIME=0.5 AWECRAFT_SNAP_DRAIN=600 AWECRAFT_HELD=2</code> (dirt —
+the user's tan item)</td><td>the item is still VISIBLE against the sky with the switch ON
+(depth test only kills closer terrain, not sky); ground-level companion frame at the spawn
+view</td></tr>
+</table>
+<p>The log of every render run must carry the Forward+ boot line (the AC-0391 assertion) and
+every PNG is checked for existence + non-trivial size after the run. Budget ≤ 1200 s total
+(wallshot ≈ 83 s each measured; the R4 snapshot ≈ 290 s measured). The user's fog 332 /
+edge 400 is NOT reproducible in budget on this box (R25 build exceeds any sane software-Vulkan
+budget — documented AC-0391 class); the occlusion behaviour is fog-independent, and the C1
+haze-ring question stays answered by AC-0404's committed descent frames + this census. Stated
+in the results, not papered over.</p>
+
+<h2>Harness gates (light set, then exit — HEAVY is the coordinator's)</h2>
+<ol>
+<li><b>G0</b>: <code>--headless --quit</code>, <code>gate_census.py</code> ZERO SCRIPT ERROR
++ ZERO SHADER ERROR, <b>AND the process exit status checked</b> (the AC-0403 paired check —
+the stochastic UAF at <code>chunk.gd:657</code> exits 139 on a clean log).</li>
+<li><b>SMOKE</b>: battery <code>player;interact;light;fluids</code> (the dependency-mapped
+set for a player.gd/settings.gd/menu.gd change — the player arm drives the movement/viewmodel
+spawn path, interact the held-item selection).</li>
+<li><b>PROBE</b>: <code>toolpose</code> (the arm that reads the viewmodel's depth state,
+pose, scale — must stay green at the conservative default: it asserts
+<code>no_depth_test</code> true / <code>DEPTH_DRAW_DISABLED</code>) + <code>held</code>
+(box/sprite visibility regions). Run with the default (switch OFF) — the shipped state.</li>
+<li><b>genhash</b>: 25/25 byte-identical to the standing set (no world/* change is owed —
+the switch lives in player/settings/menu; the probe is out of the tree; genhash runs as a
+standing parity check per the ticket instructions).</li>
+</ol>
+
+<h2>Order</h2>
+<ol>
+<li>Implement the switch (4 files above).</li>
+<li>G0 + SMOKE + PROBE + genhash on the main tree (the changed tree).</li>
+<li>Census probe (independent of the switch; pure C++ bindings — run after the gates so the
+godot slot never contends with a render).</li>
+<li>Worktree at HEAD + copy the three changed files + the .so; the three renders; verify
+files; copy the captures into <code>tasks/AC-0394/</code>; remove the worktree.</li>
+<li>Results page + journal. No commits (the fence).</li>
+</ol>
+
+</body></html>

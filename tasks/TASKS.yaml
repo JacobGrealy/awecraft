@@ -1,11 +1,10 @@
 meta:
-  updated_at: 2026-10-08T18:43
+  updated_at: 2026-10-08T20:14
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0397
-- AC-0394
 - AC-0395
 - AC-0186
 - AC-0130
@@ -23955,11 +23954,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-03T20:45
-  updated_at: 2026-10-04T03:10
-  completed_at: null
+  updated_at: 2026-10-08T20:14
+  completed_at: 2026-10-08T20:14
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From the air the world looks broken - the ground surface is distorted into ripples,
@@ -24160,7 +24159,42 @@ intake:
     distance (fog 332, fade edge 400) before changing anything, confirm whether the user is describing
     this same banding or the floating slabs from their screenshot (which remain unconfirmed and may be
     a different cause entirely), and note that the 700 s capture timeout was not enough on this occasion
-    where an earlier identical run succeeded - budget 1200 s or check for the file rather than assuming.'
+    where an earlier identical run succeeded - budget 1200 s or check for the file rather than assuming.
+
+
+    CLOSED - BOTH LIVE RESIDUALS SETTLED, AND ONE OF THEM TURNED OUT TO BE BIGGER THAN THE TRIAGE SUGGESTED.
+    RESIDUAL ONE, THE BAND-A UN-CARVED FILL, MEASURED RATHER THAN ESTIMATED: a census over 159,744 sampled
+    ring columns found 2,597 where the skip=1 fill stands above the full path''s carved top - 1.63 per
+    cent overall, split across three anchors, rising from 0.49 per cent in the inner taxi band to 2.39
+    per cent in the outer - with a MAXIMUM ERROR OF 91 BLOCKS at one column. Both figures are far above
+    the triage''s reading of roughly a quarter of one per cent and twenty-nine blocks, and the affected
+    ring sits between 80 and 128 metres from the player, well inside the user''s fog distance, so these
+    plateaus are not hidden by haze or distance. THE CONSEQUENCE IS THAT THE USER''S STANDING COMPLAINT
+    ABOUT TERRAIN FLOATING IN THE AIR HAS TWO INDEPENDENT CAUSES AND ONLY ONE OF THEM WAS FIXED: the far
+    tier''s haze bridge was real and was deleted in an earlier round, and this fill defect is the second
+    cause and survives on the current build. NO GENERATION CODE WAS TOUCHED, deliberately, because the
+    generation side belongs to another ticket that already tracks this defect and sits at the head of
+    the queue - the census numbers, the split by anchor and band, the maximum-error column and the known
+    fix direction are recorded in that ticket''s notes so its owner uses the measurement rather than re-deriving
+    it. RESIDUAL TWO, THE VIEWMODEL DEPTH TEST, FIXED AND PROVEN WITH RENDERS. Every viewmodel material
+    disabled depth testing, so the held item drew over terrain and read as floating even at its correct
+    scale. A new switch, defaulting OFF, restores the depth test on every viewmodel material with the
+    depth write still disabled, so the conservative state is today''s look and nothing changes for anyone
+    who does not turn it on. Render evidence from a clean worktree: with the switch off the held block
+    is drawn over a wall; with it on the block is occluded by the wall and the frame shows wall only;
+    and in an aimed shot the block is complete with its upper part against open sky, so it remains visible
+    against the sky and is not simply hidden. The default is off rather than on because the user asked
+    for correct size, not for occlusion, and a look change of this kind ships conservative. EVERY FRAME
+    CAME FROM A WORKTREE AT THE CURRENT COMMIT PLUS ONLY THIS TICKET''S HUNKS, because the working tree
+    holds another session''s uncommitted shader edits and a render from the dirty tree would not describe
+    what shipped. GATES, all exiting zero with the census paired against the exit status: G0 clean, the
+    smoke battery ok, the held and toolpose probes ok with depth and scale both asserted, and genhash
+    25/25 byte-identical. ONE RENDER SLOT WAS SPENT ON A SENTINEL BUG THE FIRST ON-STATE FRAME EXPOSED,
+    which was fixed and re-rendered rather than left. TWO FINDINGS PASSED TO THE COORDINATOR RATHER THAN
+    FOLDED IN: the player, interact and held standing rows are stale after an earlier ticket changed the
+    spawn top from 141 to 140 and left place_ok false even on a pristine checkout, so those rows need
+    re-measuring; and the box_ok field reads false on a pristine worktree as well, so it is pre-existing
+    rather than caused by this work.'
   comments: []
 - id: AC-0395
   title: noclip-toggle-for-inspecting-geometry
@@ -24382,7 +24416,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-04T20:29
-  updated_at: 2026-10-04T20:29
+  updated_at: 2026-10-08T20:14
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24479,7 +24513,31 @@ intake:
     \ has to retest it.\n\nCONTEXT: tasks/AC-0387/AC-0387-results.html sections 8-11 (the scope line,\
     \ the cost, and the 556-column note); mesh.cpp's h_avg_emit_impl / avg_grid_emit / low_emit_avg_impl;\
     \ world.gd:2596-2725 (the low-lane entry and the far-vs-slabs choice); world.gd:6700-6760 (the mat\
-    \ landing); world.gd:590-590, 860-910 (the floor derive) and 10010-10066 (_demote_to_far).\n"
+    \ landing); world.gd:590-590, 860-910 (the floor derive) and 10010-10066 (_demote_to_far).\n\n\nCOORDINATOR\
+    \ EVIDENCE 2026-10-08, FROM AC-0394's SETTLEMENT RUN - THIS TICKET'S DEFECT IS USER-VISIBLE ON THE\
+    \ CURRENT BUILD AND IS BIGGER THAN PREVIOUSLY ESTIMATED. A census comparing the skip=1 fill's top\
+    \ against the full path's carved top, over 159,744 sampled ring columns (taxi 5..8, three anchors,\
+    \ seed 44), found 2,597 columns where the fill stands ABOVE the carved top: 1.63 per cent overall,\
+    \ split 0.51 / 2.29 / 2.07 per cent across the three anchors, and rising with the ring's taxi band\
+    \ from 0.49 per cent at taxi 5 to 2.39 per cent at taxi 8. THE MAXIMUM ERROR IS 91 BLOCKS, at column\
+    \ (-91, 147, -48) - a full-resolution plateau standing ninety-one blocks proud of the terrain the\
+    \ carve actually produced. Earlier estimates in this ticket's neighbourhood put the rate near a quarter\
+    \ of one per cent with a maximum around twenty-nine blocks; both figures are low by a wide margin,\
+    \ so any decision already made on the old numbers should be revisited.\nWHY IT MATTERS TO THE OBJECTIVE\
+    \ RATHER THAN ONLY TO BUILD QUALITY: the affected ring lies between 80 and 128 metres from the player,\
+    \ far inside the user's fog distance of 332 metres with the render edge at 400, so these plateaus\
+    \ are NOT hidden by distance or haze. The user's standing complaint about terrain \"floating in the\
+    \ air\" was attributed first to the far tier's haze bridge - which was real, and was deleted - and\
+    \ this is the second, independent cause of the same symptom, still present. A verification run's own\
+    \ words: the user will still see floating slabs on the current build.\nTHE FIX DIRECTION IS ALREADY\
+    \ KNOWN AND WAS NOT TAKEN BY THAT RUN, deliberately, because this ticket owns the generation side:\
+    \ fill band A to the carved top that the far-lane reference already computes. The census run touched\
+    \ no generation code, so the numbers above are measurements of the current tree and can be reproduced\
+    \ by whoever takes this.\nOWNERSHIP NOTE: this ticket predates the coordinator's current objective\
+    \ and sits at the head of the queue. The coordinator has measured its defect twice now, recorded the\
+    \ numbers here, and deliberately did NOT take the ticket - if its original owner is still working\
+    \ it, the evidence above should be used rather than re-derived; if it is abandoned, it should be reassigned\
+    \ explicitly rather than picked up silently."
   comments: []
 - id: AC-0398
   title: interpolated-modern-vertex-lighting
