@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-08T20:14
+  updated_at: 2026-10-08T23:05
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0397
 - AC-0395
 - AC-0186
 - AC-0130
@@ -24413,11 +24412,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-04T20:29
-  updated_at: 2026-10-08T20:14
-  completed_at: null
+  updated_at: 2026-10-08T23:05
+  completed_at: 2026-10-08T23:05
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The valleys are in the ground the player is standing on but not in the terrain\
@@ -24537,7 +24536,38 @@ intake:
     \ and sits at the head of the queue. The coordinator has measured its defect twice now, recorded the\
     \ numbers here, and deliberately did NOT take the ticket - if its original owner is still working\
     \ it, the evidence above should be used rather than re-derived; if it is abandoned, it should be reassigned\
-    \ explicitly rather than picked up silently."
+    \ explicitly rather than picked up silently.\n\nCLOSED - FIXED, AND THE ACCEPTANCE IS THE COORDINATOR'S\
+    \ OWN MEASUREMENT DRIVEN TO ZERO. WHAT THE FILL WAS DOING: band A's materialization filled solid to\
+    \ the UN-CARVED heightmap, so a column the carve had lowered kept a full-resolution plateau above\
+    \ its real surface - the second and surviving cause of the user's \"terrain floating in the air\"\
+    \ complaint after the far tier's haze bridge was deleted. WHAT CHANGED: the fill is now driven from\
+    \ the column's far payload, the carved top the far lane already computes, threaded through the generator\
+    \ as an optional argument with the world handing the worker the column's payload; calls without a\
+    \ payload keep the legacy fill bit-for-bit. A costlier alternative was measured and rejected - re-running\
+    \ the carved-top pass inside the skipped path costs thousands of microseconds per chunk to re-derive\
+    \ bytes already in hand - and the chosen fix costs ZERO microseconds per chunk. THE CENSUS IN THE\
+    \ COORDINATOR'S OWN TERMS, SAME RING, ANCHORS, SEED AND REFERENCE: before, 2,597 of 159,744 columns\
+    \ stood above their carved top, 1.63 per cent, maximum error 91 blocks - reproduced EXACTLY, which\
+    \ is what makes the after-number trustworthy rather than merely similar. The instrument was NEGATIVE-TESTED\
+    \ on the legacy fill and read the same 2,597, proving it can see the defect at all. After: ZERO columns\
+    \ above the carved top, all 159,744 exactly equal. GENHASH DID NOT MOVE, deliberately: the standing\
+    \ window covers the full-resolution path while this change is confined to the skipped one. The standing\
+    \ reference's PRE-EXISTING drift - zero of twenty-five against an untouched baseline - was reported\
+    \ as an attributed delta, not re-based. RENDER: a clean worktree at the current commit plus only this\
+    \ ticket's hunks with a rebuilt native library, so the other session's uncommitted shaders are absent\
+    \ by construction, at the user's radius with a fog proxy aimed at the bearing where the ring is; the\
+    \ frame is in the ticket folder. One render failure worth recording: a fresh worktree needs the engine's\
+    \ import cache copied or the render cannot start. GATES all exit zero with the census paired against\
+    \ the exit status: G0 twice, smoke ok with the interact flags now reading true so an earlier staleness\
+    \ is cleared, meshprobe full match rate, farab ok with no height mismatch, ladder band A twenty of\
+    \ twenty, boundary self-check in band. A/B against the pre-fix library shows farab and ladder bit-identical,\
+    \ so the remaining off-band standing values are PRE-EXISTING STALE BOUNDS - flagged, not re-based.\
+    \ THE FINDING THAT MATTERS BEYOND THIS TICKET: the old nine-argument binding SILENTLY ACCEPTS the\
+    \ new ten-argument call and degrades to the legacy fill without raising anything, verified on both\
+    \ builds - so a stale native library reproduces the old bug instead of reporting an error, and the\
+    \ Windows library MUST be rebuilt for the fix to reach the user. The coordinator rebuilt it: the build\
+    \ log shows the GDExt step running and staging the DLL into the export, and the served build is the\
+    \ commit that carries this fix."
   comments: []
 - id: AC-0398
   title: interpolated-modern-vertex-lighting
