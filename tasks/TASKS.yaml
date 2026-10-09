@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T18:40
+  updated_at: 2026-10-09T18:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,6 +27,7 @@ queue:
 - AC-0406
 - AC-0407
 - AC-0409
+- AC-0412
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25877,4 +25878,77 @@ intake:
     first pass as proof. NOT DONE, deliberately: the sixteen-metre faceting and vertical streaks, which
     the run agrees are a separate finding pointing at the baked texture rather than the shading path,
     and the heavy gate set, which is the coordinator''s lane.'
+  comments: []
+- id: AC-0412
+  title: orbital-bake-faceting-and-vertical-streaks
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T18:42
+  updated_at: 2026-10-09T18:42
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From orbit and high in the atmosphere the planet''s surface should read as a
+    world - land, water, relief - rather than a flat pastel sheet with a visible grid and streaky vertical
+    lines running down it. The shapes should be shapes; the texture should not announce that it is a texture.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0384 ROUND 19 ASSESSMENT and re-confirmed by round 21, both of which recorded it as
+    a distinct finding from the body''s colour, and the round 22 run that fixed the body''s inside-out
+    mesh explicitly agreed these are a SEPARATE cause: the satellite body''s material from orbit is pastel
+    and low-contrast, carries sixteen-metre faceting, and shows vertical streak artifacts. The pastel
+    and low-contrast half of that finding was fixed by the mesh winding repair, which moved the disc''s
+    saturation and contrast at the same time as its hue - so what remains is the FACETING AND THE STREAKS.
+    Those two are characterised in the assessment as bake character, which points at the baked terrain
+    texture the body samples rather than at the live shading path: a sixteen-metre facet is the size of
+    the texel the bake produces at the body''s scale, and vertical streaks of that shape are what a bake
+    produces when its sampling grid is coarser than the relief it is trying to carry.
+
+    WHAT TO ESTABLISH FIRST, before changing anything: what resolution the bake actually produces, how
+    a texel''s footprint compares with the terrain relief over the same area, and whether the streaks
+    come from the bake itself or from how the body samples it - a mip level, a filter mode, or a coordinate
+    derivation that collapses along one axis. Those are different fixes and the evidence should choose
+    between them rather than the run choosing a plausible one.
+
+    THEN DECIDE THE COST HONESTLY. A finer bake costs bake time and memory at load; a better sampling
+    of the existing bake costs nothing at load and may not help; a different filtering costs almost nothing.
+    This project''s rule for look changes applies - ship behind a switch, default conservative, short-circuiting
+    before the work - and the standing budget matters: the satellite body is part of a build that already
+    runs at roughly two to five frames per second on the test box''s software renderer, and any bake that
+    materially lengthens world load must be measured and reported rather than assumed acceptable.
+
+    ACCEPTANCE IS A MEASUREMENT FROM ORBIT, not an impression: at 1600 and 2600 metres, with the same
+    instrument the assessments used, the faceting should stop being visible as a regular grid and the
+    vertical streaks should be gone or reduced to a stated level - and the frame should show terrain shapes
+    that match the baked content rather than a repeating pattern. Give the before and after numbers in
+    whatever terms actually capture it, even if that means inventing the instrument; an honest new measurement
+    is worth more than a borrowed one that does not fit. The landing half of the experience must not regress:
+    from the ground, from inside the cloud layer and at 120 to 300 metres the terrain currently reads
+    correct.
+
+    REFERENCES FOR THE FIX, since the body samples a baked texture rather than live terrain: the bake''s
+    own generation code and its resolution constant, the body''s texture sampling and mip settings, and
+    the section of the assessment that describes the artifact. Note that the terrain''s live near-field
+    path does NOT show this artifact where it is drawn, so the difference between how the near tiers and
+    the body obtain their terrain colour is the place to look.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING to report rather than a re-baseline; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND check the process exit status, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-eleven exit and it appeared once during the round that fixed
+    the body mesh; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); the
+    cloud shell radii and centre stay 4275/4330/4400 about (0, -R, 0); and the recent work must keep holding
+    - the volumetric cloud volume with its skyline and lighting, the altitude-aware sky, the single tier
+    handover with no limb on the near tiers, the carved-top terrain fill, and above all the body''s mesh
+    winding, which was inverted for the entire life of the objective and was fixed in round 22.
+
+    '
   comments: []
