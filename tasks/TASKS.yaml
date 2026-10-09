@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-08T23:05
+  updated_at: 2026-10-09T02:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,6 +27,7 @@ queue:
 - AC-0406
 - AC-0407
 - AC-0409
+- AC-0411
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25739,4 +25740,69 @@ intake:
     \ existing format.\n- Gates: documentation only — no render, no build. Verified by reading each home\
     \ file after the edit\n  and checking every fact has exactly one home (link, never restate).\n- No\
     \ game code, no godot runs, no commits.\n"
+  comments: []
+- id: AC-0411
+  title: body-disc-centre-pale-wash-at-altitude
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-09T02:31
+  updated_at: 2026-10-09T02:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From orbit and high in the atmosphere, the planet should look like the world
+    the player just left - green land, blue water, its own weather - rather than a pale washed-out disc.
+    This is the last significant gap between the current build and the target look, and it is the user''s
+    own long-standing "the planet looks like a plain white ball" complaint, now localised to the body''s
+    own rendering rather than to anything in front of it.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0384 ROUND 19 ASSESSMENT, whose full evidence package is in its results page sections
+    26.3 and 26.6 and was prepared specifically for whoever is working in this shader. THE MEASUREMENT:
+    at 1600 and 2600 metres the satellite body renders its DISC CENTRE as a flat pale-cyan wash reading
+    144,209,221, while the terrain texel baked for that location is 71 per cent grass and the committed
+    formula predicts green there. An A/B isolates it cleanly - the wash is byte-identical with clouds
+    on and off, it disappears entirely with the body switched off to reveal a navy sky disc reading 5,63,89
+    beneath, and a T0.3 reference at the same altitude shows dark green 49,99,46. The reading is therefore
+    that the defect is in the BODY''S OWN PATH and specifically in the daylit regime, not in the atmosphere,
+    the clouds or anything composited over it.
+
+    WHY THIS IS WORTH ITS OWN TICKET RATHER THAN A NOTE: the same symptom has now been attributed to three
+    different causes over the life of the objective - a shader that never compiled, a fog term erasing
+    the body, and a cloud mass sitting over the nadir - and each was real and each was fixed, yet the
+    wash survives all three. This is a fourth, independent cause in the body''s colour path, and it is
+    the one that dominates the orbital view.
+
+    WHAT TO DO: start from the A/B above and bisect the body''s colour path in the daylit regime - the
+    same discipline that found the previous three: establish which term produces 144,209,221 where green
+    is expected, and prove the fix by re-measuring the disc centre across a time-of-day sweep and an altitude
+    ladder, not by eye. NOTE THAT ANOTHER SESSION IS ACTIVELY EDITING godot/core/satellite_body.gdshader,
+    so check the working tree state before you begin and coordinate rather than overwrite: the assessment''s
+    frames came from a clean worktree at the commit named in its section 26 header, and the uncommitted
+    shader edits in the tree are NOT in those frames.
+
+    ACCEPTANCE: the disc centre measured at 1600 and 2600 metres, across at least T0 0.25, 0.5 and 0.75,
+    showing terrain colour that matches the baked texel''s composition rather than a pale wash - with
+    the same instrument and the same A/B the assessment used, so the before numbers above are directly
+    comparable. The landing half of the ladder must not regress: inside-annulus and ground views read
+    close to the target now and that is the state to preserve.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND check the
+    process exit status, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-eleven exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); the cloud shell radii and centre stay 4275/4330/4400 about (0, -R, 0); and the
+    recent work must keep holding - the volumetric cloud volume, its ambient and multiple-scattering lighting,
+    the altitude-aware sky, the single tier handover with no limb on the near tiers, and the carved-top
+    terrain fill.
+
+    '
   comments: []

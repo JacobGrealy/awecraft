@@ -2599,5 +2599,544 @@ ladder altitude (covered 1.00 &times; 5); the deck is sustained across the entir
 now visible, the grain did not regress (6.51/4.29 post vs 7.09/4.67 pre, same recipe), and every
 gate is green on the clean tree.</strong></p>
 
+<h2>25. FINAL ASSESSMENT (2026-10-07) &mdash; landing and leaving the world, looked at whole, against No Man&rsquo;s Sky</h2>
+
+<p class="meta">ASSESSMENT RUN &mdash; no behaviour was changed. Five rounds of fixes had each been
+verified in isolation against a measurement (the r10 cloud-shell draw, AC-0398&rsquo;s interpolated
+vertex lighting, the r8/AC-0400 single-air-colour atmosphere with the dark limb rim removed, and
+AC-0399&rsquo;s view-following streaming fill); nobody had looked at the <em>whole</em> experience since.
+This section is that look: a descent ladder and the same altitudes in reverse (takeoff), read
+against No Man&rsquo;s Sky specifically, at the user&rsquo;s own configuration.</p>
+
+<h3>25.1 Method &mdash; what was captured, how, and the caveats that bound it</h3>
+<p>Tree: HEAD <code>a0a7a1d</code> (AC-0400 closed) plus the uncommitted AC-0396/AC-0038 hunks
+(the snap-fail diagnostic in <code>debug.gd</code> and the particle pool in
+<code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code> &mdash; neither touches the
+landing/takeoff view: the pool only emits on break/hit/pickup, none of which happens in a frozen
+camera flight). <strong>User&rsquo;s configuration, asserted per run from the SATDIAG line:</strong>
+<code>AWECRAFT_RADIUS=24</code> (render edge 400 m) + <code>AWECRAFT_FOG_PCT=83</code>
+(fog fully opaque at <strong>332.0 m</strong>) &mdash; the pin is the global harness preload in
+<code>_run_game</code> (main.gd:810&ndash;816, written to Settings.values without save) and applies
+to the pure snapshot path, which routes through <code>_run_game</code> (main.gd:167); the
+cfg-file route is a dead end for harness runs (<code>_harness_env_set()</code> forces
+<code>AWECRAFT_IGNORE_SETTINGS=1</code>, which reloads settings to defaults &mdash; a trap this
+run paid for with one full re-run). Forward+ via lavapipe + Xvfb, boot line asserted in every log,
+1280&times;720, seed 44 (the canonical shipped-texture seed; the user&rsquo;s 5432 world needs a
+~13&nbsp;min in-process bake per run and is infeasible &times;6, and its taller spawn shifts cull
+thresholds by &asymp;&plusmn;26&nbsp;m). Frozen time + deterministic weather:
+<code>AWECRAFT_TIME_FREEZE=1</code>, <code>AWECRAFT_CLOUD_T0=411200</code>,
+<strong><code>AWECRAFT_TIME=0.5</code></strong> &mdash; chosen over the &sect;22/23 state (0.30)
+because 0.5 is the SUSTAINED-DECK state (&sect;24.4: 27.05/4.83/44.86/53.05/35.86&nbsp;% deck at
+2600/1600/700/300/120&nbsp;m), the state in which the descent actually passes through clouds and
+the 700&nbsp;m deck A/B is meaningful; at 0.30 the 700&nbsp;m deck is in a clear phase (0.000&nbsp;%).
+Camera: the <code>AWECRAFT_CAM=planet</code> preset &mdash; camera at <code>spawn + up&middot;alt</code>
+(up = radial from the centre (0,&minus;4000,0) through the spawn (8.5,141,8.5), so altitude
+a puts the camera at radial 4141+a), aimed near the tangent limb; the frozen player is teleposed
+to the camera position with <code>sync_flight_band()</code> (AC-0399 view-biased fill follows the
+view). <code>AWECRAFT_SNAP_DRAIN=1200</code> frames (~210&ndash;240&nbsp;s of world streaming at
+this box&rsquo;s measured pace at R24), plus <code>AWECRAFT_SNAP_STEPS=600</code> for a free
+mid-drain frame at each altitude. Every run checked for: file exists, Forward+ boot line,
+<code>SNAP</code> lines (the AC-0396 loud-fail made the one relative-path failure visible instead
+of a false pass), zero SCRIPT/SHADER ERRORs. G0 on the measured tree: 0/0.</p>
+<p><strong>Caveats, stated up front:</strong> (1) this box renders on software Vulkan &mdash; the
+shipped Forward+ path (colour, shader compilation, layout are real) but not real-GPU performance
+or precision; (2) stills carry no motion &mdash; &ldquo;passing through&rdquo; is read from the
+altitude sequence, not watched; (3) <strong>the takeoff ladder is the same five frames in reverse
+order.</strong> A still at a given altitude is direction-agnostic: the camera pose, the view-biased
+fill state (the frozen player aims at the view, AC-0399), the body dissolve (a function of radial
+altitude), the space blend S and the cloud shells are all identical on the way down and the way up
+at that altitude &mdash; what differs between descent and ascent is only the <em>order</em> in
+which the views are met, and that order is what the assessment walks in both directions; (4) the
+weather state was chosen for the cloud story; the time-of-day also strongly tints the body&rsquo;s
+appearance (&sect;25.4/D5), which the assessment reports rather than hides.</p>
+
+<h3>25.2 The frames</h3>
+<table>
+<tr><th>frame (tasks/AC-0384/)</th><th>alt (SAT_ALT)</th><th>camera radial</th><th>S (space blend)</th><th>deck (shells 4275/4330/4400)</th><th>deck edge on centre column (measured)</th><th>snap state</th></tr>
+<tr><td><code>ac0384-final-descent-2600.png</code></td><td>2600</td><td>6741</td><td>1.00</td><td>below; silhouette 40.75&deg;</td><td>3.5&deg; above frame centre (space meets deck directly)</td><td>1200 f (FILL)</td></tr>
+<tr><td><code>ac0384-final-descent-1600.png</code></td><td>1600</td><td>5741</td><td>0.92</td><td>below; 50.03&deg;</td><td>5.0&deg; above centre (space meets deck directly)</td><td>1200 f (FILL)</td></tr>
+<tr><td><code>ac0384-final-descent-700.png</code></td><td>700</td><td>4841</td><td>0.13</td><td>below; 65.35&deg;</td><td>7.4&deg; above centre (sky meets deck)</td><td>1200 f (FILL)</td></tr>
+<tr><td><code>ac0384-final-descent-300.png</code></td><td>300</td><td>4441</td><td>0</td><td>camera 41 m above top shell</td><td>deck top fills the frame to the horizon</td><td>1200 f (FILL)</td></tr>
+<tr><td><code>ac0384-final-descent-120.png</code></td><td>120</td><td>4261</td><td>0</td><td><strong>camera inside all three</strong></td><td>deck underside fills the upper ~40&percnt;</td><td>1200 f (FILL)</td></tr>
+<tr><td><code>ac0384-final-700-clouds-off.png</code></td><td>700</td><td>4841</td><td>0.13</td><td><code>AWECRAFT_CLOUDS=0</code></td><td>7.4&deg; above centre (sky meets the hazed planet limb)</td><td>1200 f (FILL)</td></tr>
+</table>
+<p class="note">Geometry per row (camera at radial d, R=4000): the R=4000 tangent is
+asin(4000/d) from the nadir direction &mdash; 36.4&deg; (2600) / 44.2&deg; (1600) / 55.7&deg;
+(700) / 64.2&deg; (300) / 69.8&deg; (120) &mdash; and the deck shells&rsquo; silhouettes are
+40.75&deg;/50.03&deg;/65.35&deg;/82.21&deg;/inside. The preset aims the view near the tangent
+limb, so the <em>visible</em> disc edge sits just above the frame centre at every orbital
+altitude (measured 3.5/5.0/7.4&deg; above centre on the centre column at 2600/1600/700), and the
+sky occupies the top 25&ndash;40&percnt; of the frame. Because the deck sits at a larger
+radius than the planet, its silhouette is <em>outside</em> the planet&rsquo;s tangent at every
+one of these altitudes (e.g. 65.35&deg; vs 55.72&deg; at 700): when the deck is present, the
+edge the eye sees against the sky is the cloud shell&rsquo;s edge, with the planet&rsquo;s own
+limb hidden behind it. The shell crossings are at SAT_ALT 134/189/259 m &mdash; between the
+120 and 300 steps; the satellite body dissolves in over the flight band (radial
+500&ndash;2000 = SAT_ALT ~359&ndash;1859 m), i.e. between the 300 and 700 steps. Intermediate
+<code>_s600</code> frames: fill-in state at the same altitude. Takeoff = rows 5&rarr;1 read
+in reverse.</p>
+
+
+<p><strong>The set (descent 2600&rarr;120; takeoff = reversed):</strong></p>
+<img src="ac0384-final-descent-2600.png" width="720" alt="2600 m"><br><code>ac0384-final-descent-2600.png</code> &mdash; orbit: overcast disc in a star field, S=1.0
+<br><br>
+<img src="ac0384-final-descent-1600.png" width="720" alt="1600 m"><br><code>ac0384-final-descent-1600.png</code> &mdash; 1600 m: the world grows, the sky is already space, S=0.92
+<br><br>
+<img src="ac0384-final-descent-700.png" width="720" alt="700 m clouds on"><br><code>ac0384-final-descent-700.png</code> &mdash; 700 m, clouds ON: one smooth sky, veiled hazed disc, S=0.13
+<br><br>
+<img src="ac0384-final-descent-300.png" width="720" alt="300 m"><br><code>ac0384-final-descent-300.png</code> &mdash; 300 m: just above the deck, cloud tops to the horizon
+<br><br>
+<img src="ac0384-final-descent-120.png" width="720" alt="120 m"><br><code>ac0384-final-descent-120.png</code> &mdash; 120 m: inside all three shells, shaded terrain below
+<br><br>
+<img src="ac0384-final-700-clouds-off.png" width="720" alt="700 m clouds off"><br><code>ac0384-final-700-clouds-off.png</code> &mdash; 700 m, clouds OFF: the same sky over a coloured, hazed planet (the A/B that separates atmosphere from weather)
+<br><br>
+<h3>25.3 What already reads correctly &mdash; said plainly, with the frames</h3>
+
+<p><strong>1. Scale and world-ness (horizon, curvature).</strong> Every frame reads as a world,
+not a box. At 2600/1600 the planet is a curved disc in a star field &mdash; the limb arc is
+unmistakable (2600: the disc edge crosses the frame 3.5&deg; above centre with black space above;
+1600: 5.0&deg;). At 300/120 the ground itself is the horizon and it <em>bulges</em> (terrain up to
+radius 4141 at the spawn pushes into the frame at 64.2&deg;/69.8&deg; from the nadir) &mdash; a
+curving ground plane, not a flat vanishing line. Stars are present and correctly sparse in the
+space frames. This is the same scale language as an NMS approach shot: the planet fills the frame,
+you are clearly <em>outside</em> it, and it curves away below the edge.</p>
+
+<p><strong>2. The atmosphere is one continuous colour, and air reads as depth.</strong> The
+700&nbsp;m sky is a smooth gradient with no banding, no line and no rim: measured down the centre
+column (206,249,255) at the top of the frame &rarr; (210,250,255) &rarr; (202,241,250) &rarr;
+(183,226,236) &rarr; (159,208,219) at the horizon, then haze. The same gradient is present
+<strong>with and without clouds</strong> (700 ON vs 700 OFF: the top band is pixel-identical,
+(205.5,245.4,252.3) both) &mdash; the sky is genuinely decoupled from the weather. In the clear
+700&nbsp;m the planet&rsquo;s limb dissolves into the air through the haze band rather than ending
+in a line, and the dark rim that AC-0400 removed is gone from every frame (0 dark seam pixels;
+the dark limb clump in 2600/1600 is weather, not the rim &mdash; &sect;25.4/D3). At 300/120 the
+terrain fades into a blue-green fog gradient over the user&rsquo;s 332&nbsp;m range &mdash; distant
+hills dissolve into haze, close terrain is fully crisp.</p>
+
+<p><strong>3. The clouds pass through with the correct above/below/inside states &mdash; geometrically.</strong>
+The three shells sit at 134/189/259&nbsp;m above the spawn, and the ladder meets them in the right
+order: at 700/1600/2600 the deck is <em>below</em> the camera, between the camera and the surface,
+and renders as a veil over the disc (the A/B proves it: the deck only ever changes the disc, never
+the sky); at 300 the camera is 41&nbsp;m over the top shell and the deck top stretches to the
+horizon (the &ldquo;just above the layer&rdquo; view); at 120 the camera is <em>inside</em> all
+three and the deck underside fills the upper ~40&nbsp;% of the frame while the terrain is visible
+below through the haze (the &ldquo;in the cloud&rdquo; view). The deck has structure: a streaked
+phase pattern on top and underside, thickness variation, terrain showing through gaps. Its texture
+energy at 120&nbsp;m matches the r10 reference to within the measurement
+(54.4&percnt;/34.9&percnt; vs 56.4&percnt;/32.1&percnt; &mdash; the deck did not regress when the
+ArrayMesh rebuild landed).</p>
+
+<p><strong>4. Terrain resolves smoothly; there is no pop in this ladder.</strong> At every
+altitude the <code>_s600</code> (mid-drain) and the final (1200-frame) frames agree to near-still
+equivalence: 700&nbsp;m is identical in every band except one small near-structure completing;
+300&nbsp;m&rsquo;s bottom band settles gradually (mean 199&rarr;213, &sigma; 33&rarr;22 &mdash; a
+fill, not an edge); 120&nbsp;m&rsquo;s bottom band 182&rarr;171, the same. The 128&ndash;384&nbsp;m
+annulus sits inside the 332&nbsp;m fog wall, so the AC-0399 view-biased fill order is invisible as
+a pop at any ladder altitude: near terrain is fully detailed (the pad grid, block edges, shaded
+slopes) and everything beyond 332&nbsp;m is haze &mdash; a gradient, never a step.</p>
+
+<p><strong>5. The AC-0398 lighting fix is holding at ground level &mdash; the before/after is in the set.</strong>
+Compare <code>ac0384-final-descent-120.png</code> with the r10 reference
+<code>r10c-on-d120.png</code> (same altitude, same T0.5 deck state): the old frame is a washed,
+stepped pale column; the new frame&rsquo;s terrain is shaded &mdash; slopes darker, tops brighter,
+green/sand/teal colours reading. Quantitatively the terrain band dropped from 203 to 171 mean
+luminance (less washed) at comparable spread, i.e. more contrast, real shading.</p>
+
+<p><strong>6. No hard cuts, flicker or artefacts in any of the six frames.</strong> No seams, no
+z-fighting, no black rectangles, no rim artefacts, no banding in the sky gradient. The only anomaly
+found across the whole set is one <em>run-level</em> crash (&sect;25.4/D6), which touched no
+captured frame.</p>
+
+<h3>25.4 Ranked differences vs No Man&rsquo;s Sky, most significant first</h3>
+
+<p><strong>D1 &mdash; The cloud deck reads as a flat patterned membrane, not volumetric clouds
+(characters the whole cloudy descent).</strong> Evidence: 120&nbsp;m (the underside is a flat
+streaked sheet &mdash; it reads as &ldquo;inside a pattern&rdquo;, not inside soft cloud);
+300&nbsp;m (the top is a tan/grey mottled membrane with terrain showing through &mdash; it reads
+as parchment or a tarp, not white cloud tops); 700&nbsp;m ON vs OFF (the veil halves the disc
+contrast, band &sigma; 16.9 vs 32.4, and strips its saturation: disc-centre pixel (222,222,222)
+neutral grey with the deck on vs (181,230,194) green without &mdash; same mean luminance, half the
+texture, no colour). NMS cloud tops are bright, soft-edged, individually massed with
+light/shadow; a uniform overcast reads as <em>white</em>, not as grey-tan mottle. The state
+chosen for this assessment (the sustained deck) is therefore also the state in which the planet
+from orbit is a pale overcast ball (2600/1600) &mdash; at T0.3 (clear) the identical altitudes
+show saturated terrain instead (AC-0400&rsquo;s after-2600: centre (49,99,46) green vs (184,184,184)
+grey here). The orbital impression is strongly weather-state dependent; whatever the shipped
+default weather is, its overcast frequency decides how often the world arrives as a grey ball.</p>
+
+<p><strong>D2 &mdash; In the cloudy state, the limb the eye sees is the deck&rsquo;s crisp
+silhouette, not the atmospheric glow.</strong> Evidence: 700&nbsp;m ON, centre column: sky
+(145,198,212) &rarr; deck (201,201,201) over ~5&nbsp;px with no glow band; 1600&nbsp;m: black
+space &rarr; a faint (0,9,18) blue in the last ~10&nbsp;px &rarr; deck grey. Geometric cause:
+the deck shells sit at a larger radius than the planet, so their silhouettes are
+<em>outside</em> the planet&rsquo;s tangent at every orbital altitude (65.35&deg; vs 55.72&deg; at
+700; 50.03&deg; vs 44.17&deg; at 1600; 40.75&deg; vs 36.40&deg; at 2600) &mdash; with the deck
+present, the planet&rsquo;s own limb and its glow (which is present and visible when the deck is
+absent: the 700&nbsp;m OFF frame and AC-0399&rsquo;s 1600&nbsp;m frame show the blue halo) are
+hidden behind the cloud edge. The atmosphere itself is correct (D&rsquo;s fix held: continuous
+colour, no rim line); what fails is the composition &mdash; exactly when the eye is approaching
+the planet and wants the glowing limb, the deck&rsquo;s hard edge replaces it. NMS keeps a bright
+limb even through cloud.</p>
+
+<p><strong>D3 &mdash; The dark deck core reads as a dark blob on the planet&rsquo;s limb.</strong>
+Evidence: 2600/1600, the left limb carries an irregular dark band (dark pixels, luminance &lt;60:
+5507 in my 2600 frame vs 5505 in the r10c reference &mdash; identical, so it is the weather state,
+not the removed seam rim, which AC-0400 measured at 0.0&percnt;). The &ldquo;dense dark core&rdquo;
+of the T0.5 belt (the &sect;24 description) surfaces as a dark smudge along the disc edge. NMS
+cloud tops brighten the limb (lit cloud over the glow); they do not darken it. This is a
+consequence of D1&rsquo;s membrane character (the core&rsquo;s dark phase is visible against the
+bright limb) plus D2&rsquo;s composition (the core happens to sit at the limb).</p>
+
+<p><strong>D4 &mdash; The sky-to-space transition is short and high; the sky gradient is inverted
+relative to NMS.</strong> Evidence: S (space blend, smoothstep 500&ndash;2000 radial altitude) is
+0.13 at 700&nbsp;m and 0.92 at 1600&nbsp;m &mdash; the 700 frame has a full pale-blue sky, the
+1600 frame is pure black (measured top band 0,0,0 to the deck edge; the residual 8&percnt; sky is
+invisible). The transition is smooth (no cut) but completes so high that on a 4000&nbsp;m planet
+&ldquo;space&rdquo; is effectively reached by 1600&nbsp;m; NMS holds a deep blue gradient much
+longer on the way up, and this ladder has no mid-state frame (S&asymp;0.5 sits at SAT_ALT
+~1110, between the 700 and 1600 steps). Separately, the sky gradient itself runs bright-zenith
+&rarr; deeper-horizon ((206,249,255) at the frame top &rarr; (145,198,219) at the horizon,
+identical at T0.5 and T0.3 &mdash; a property of the air/wash model, not the time of day), i.e.
+inverted relative to NMS&rsquo;s typical bright-horizon day sky.</p>
+
+<p><strong>D5 &mdash; Time-of-day reweighting washes the planet to a pale grey ball at T0.5
+(context, not a defect &mdash; reported because it colours every frame in this set).</strong>
+Evidence: 2600&nbsp;m disc centre (184,184,184) at T0.5 vs (49,99,46) at T0.3 (AC-0400&rsquo;s
+reference, same tree, same altitude, same camera). The body&rsquo;s day/night reweight
+(u_day&minus;u_day_gain&middot;(1&minus;sun_l)) plus the sustained deck desaturate the whole
+disc; the identical view at T0.3 is a saturated green/blue world. NMS planets from orbit are
+colourful; even their overcast states keep colour. Listed here because it is state-dependent
+appearance, and the assessment was deliberately run in the overcast state to test the clouds.</p>
+
+<p><strong>D6 &mdash; A crash in the streaming/mob path under sustained streaming
+(run-level, not a frame artefact).</strong> Evidence: run 6 (700&nbsp;m, clouds off, 1200-frame
+drain) segfaulted ~7.8&nbsp;min in &mdash; signal 11 in <code>chunk.gd:657 get_local</code>
+&larr; <code>world.gd:11131 get_block</code> &larr; <code>surface_top</code> &larr;
+<code>_mob_tick</code> &larr; <code>_physics_process</code> (full backtrace in
+<code>.scratch/AC-0384-final-run/ac0384-final-700-clouds-off.log</code>). The other five runs
+with the identical drain survived &mdash; a stochastic race between mob surface queries and chunk
+streaming. No captured frame was affected (the re-run, <code>...-2.log</code>, was clean:
+rc=0, fog 332.0, both snaps). For the landing/takeoff experience as played, a mob-tick segfault
+during long streaming is a real robustness finding even though the stills never show it.</p>
+
+<h3>25.5 Design decisions, not defects (separate category, per the user&rsquo;s call)</h3>
+
+<ul>
+<li><strong>Planet radius 4000&nbsp;m (the user&rsquo;s lock).</strong> Every curvature fact in
+&sect;25.3/25.4 follows from it. Consequence: the horizon bulge at 120&nbsp;m is steeper than on
+an NMS-scale planet, and the sky-to-space band (500&ndash;2000&nbsp;m radial) is a shorter slice of
+the world&rsquo;s scale. These read as a smaller planet, which is what the lock buys.</li>
+<li><strong>Flat pole world.</strong> The spawn sits at the pole of the R=4000 sphere; the local
+&ldquo;horizon&rdquo; at low altitude is the local terrain, not a global ocean. NMS has a global
+sea horizon; here the fog wall + terrain horizon is the design. The 120&nbsp;m frame&rsquo;s
+white horizon band is that design working, not a gap.</li>
+<li><strong>The tangent-locked assessment framing.</strong> The <code>planet</code> preset aims
+at the limb (disc edge 3.5&ndash;7.4&deg; above frame centre); the in-game camera is free, and the
+user&rsquo;s own screenshot (nadir-facing, 332&nbsp;m fog) shows the same world from the other
+framing. Nothing in the findings is an artefact of the preset except the exact edge positions
+quoted.</li>
+<li><strong>The deck&rsquo;s altitude band (134&ndash;259&nbsp;m above the spawn).</strong> A
+fixed local band (three shells); NMS cloud layers are global and altitude-variant. The ladder
+meets the band between the 120 and 300 steps by construction.</li>
+<li><strong>Seed 44, not the user&rsquo;s 5432.</strong> The canonical shipped-texture seed; 5432
+needs a ~13&nbsp;min in-process bake per run (infeasible &times;6) and its taller spawn shifts
+cull thresholds by &asymp;&plusmn;26&nbsp;m. A capture constraint, not an experience difference.</li>
+</ul>
+
+<h3>25.6 Verdict</h3>
+
+<p>The five fixes are working <em>together</em>, and the whole now reads as a coherent
+NMS-style landing/takeoff. Walking the ladder as a descent: a star field with a curved, overcast
+world (2600) &rarr; the world grows, the sky is already space (1600) &rarr; one smooth blue sky
+with a hazed, veiled planet below (700) &rarr; just above the cloud layer, tops to the horizon
+(300) &rarr; inside the layer, with shaded, resolving terrain below (120). Walking it as a
+takeoff is the same sequence reversed &mdash; the geometry, the body dissolve (300&rarr;700), the
+space blend and the deck crossings are altitude functions, so the reversed walk is the same six
+views in the other order, and the sky-to-space step (700&rarr;1600, S 0.13&rarr;0.92) is smooth.
+Every failure mode the earlier tickets chased is absent from the frames: the clouds draw
+(the r10 fix), the lighting is interpolated (120 vs r10c-on-d120), the atmosphere is one
+continuous colour with no dark rim (700 ON/OFF, 2600), and the fill follows the view with no pop
+(s600/final at every altitude). <strong>Where the experience still falls short of NMS is the
+material of the weather, not the geometry or the air:</strong> the deck is a flat patterned
+membrane with a dark core that darkens the limb it should brighten (D1&ndash;D3), and the
+sky-to-space band is short with an inverted gradient (D4) &mdash; plus the state-dependent pale
+overcast ball of T0.5 (D5) and one stochastic mob-tick crash under long streaming (D6). If the
+deck character (D1) were brought closer to NMS cloud tops &mdash; brighter, softer-edged,
+higher-albedo, no dark core at the limb &mdash; the remaining distance to the target would be
+small and largely state/tuning: the frames that exist today already carry the structure of the
+experience the objective describes.</p>
+
+<h3>25.7 Evidence and exact recipe</h3>
+
+<p>Frames (all in <code>tasks/AC-0384/</code>):
+<code>ac0384-final-descent-{2600,1600,700,300,120}.png</code> (final, 1200-frame drain),
+<code>ac0384-final-descent-{2600,1600,700,300,120}_s600.png</code> (mid-drain),
+<code>ac0384-final-700-clouds-off.png</code> (+ <code>_s600</code>). Logs and per-frame band
+statistics: <code>.scratch/AC-0384-final-run/</code> (<code>ac0384-final-*.log</code>,
+<code>an2600.json</code>/<code>an700.json</code>/<code>an700ab.json</code>/<code>an300.json</code>/
+<code>an120.json</code>, <code>capture.sh</code>, <code>analyze2.py</code>, <code>probes.py</code>).
+Each log asserts the Forward+ boot line, <code>fog_far=332.0 render_edge=400.0</code> (the
+user&rsquo;s R24/F83), the <code>SNAP</code> lines and zero SCRIPT/SHADER ERRORs; G0 on the
+measured tree is 0/0. Exact capture invocation (one per ladder step, SAT_ALT varied):</p>
+
+<pre>xvfb-run -a env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_CAM=planet AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83 \
+  AWECRAFT_SNAP_DRAIN=1200 AWECRAFT_SNAP_STEPS=600 AWECRAFT_TIME=0.5 AWECRAFT_TIME_FREEZE=1 \
+  AWECRAFT_CLOUD_T0=411200 AWECRAFT_SAT_ALT=&lt;2600|1600|700|300|120&gt; \
+  AWECRAFT_SNAPSHOT=&lt;abs path&gt; ~/tools/godot/godot --path godot --rendering-driver vulkan
+# clouds-off pair: add AWECRAFT_CLOUDS=0 at SAT_ALT=700
+# FOG note: AWECRAFT_FOG_PCT is the global harness preload (main.gd _run_game, no save);
+# a written awecraft.cfg is NEVER read by harness runs (AWECRAFT_IGNORE_SETTINGS is forced).</pre>
+
+<h2 id="s26">26. ASSESSMENT RUN, ROUND 19 (2026-10-09) &mdash; landing and takeoff against No Man&rsquo;s Sky, after the cloud rewrite and sky/limb/terrain fixes: what now reads correctly, what remains</h2>
+
+<h3>26.1 What was captured, from which tree, and how</h3>
+
+<p><strong>Tree: every frame in this section was rendered from a CLEAN worktree at
+<code>617e8bb1b077aa9a6d10f7d0618b5bcf76844785</code></strong> (HEAD, &ldquo;AC-0397 closed&rdquo;),
+checked out at <code>.scratch/AC-0384-r19/wt</code> with the <code>.godot</code> import cache and
+<code>godot/bin/libchunkio.so</code> copied in (OPS &sect;2/&sect;5). The session&rsquo;s working tree
+was dirty with <em>another session&rsquo;s</em> uncommitted shader edits (<code>fluid_anim*</code>,
+<code>satellite_body.gdshader</code>, <code>chunk_lit_*</code>, plus <code>main.gd</code>/<code>game.gd</code>/
+<code>drop.gd</code>/<code>debug.gd</code>) &mdash; none of that code is in any frame here. The fixes under
+assessment are all in the tree: cloud rewrite AC-0405/0406/0407 (30b8775, 1761f4e), sky AC-0402
+(156fed4), limb AC-0404 (bce6053), floating-terrain AC-0397 (1db4ea7). <strong>Configuration: the
+user&rsquo;s</strong> &mdash; R24 / <code>AWECRAFT_FOG_PCT=83</code>, asserted in every log&rsquo;s SATDIAG state
+line as <code>fog_far=332.0 render_edge=400.0</code>. Weather: <code>AWECRAFT_TIME=0.5</code> frozen,
+<code>AWECRAFT_CLOUD_T0=411200</code> &mdash; the sustained-deck state the AC-0405/0406/0407 tickets
+verified in (their own captures used the same state, so deck claims cross-check). Seed 44
+(canonical; the user&rsquo;s 5432 needs a ~13&nbsp;min in-process bake per run, infeasible &times;12).
+No behaviour was changed; no game code edited.</p>
+
+<p>Twelve captures, all 1280&times;720, Forward+ on lavapipe under xvfb
+(<code>--rendering-driver vulkan</code>, no <code>AWECRAFT_LOGIC</code> arm), each run
+<code>rc=0</code>, Forward+ boot line asserted, fog wall asserted, zero SCRIPT/SHADER ERROR,
+<code>SNAP 1280x720</code> line + file-existence checked, 1200&nbsp;s budget (walls 102&ndash;1181&nbsp;s):</p>
+
+<ul>
+<li><strong>Descent ladder</strong> (planet preset, tangent-locked): <code>ac0384-r19-descent-{2600,1600,700,300,120}.png</code>
+(each with an <code>_s600</code> mid-drain companion). <strong>The takeoff ladder is these same five
+stills read in reverse</strong> &mdash; a frozen-flight still carries no direction; the camera pose and the
+view-biased fill state are altitude functions only (&sect;25 caveat 3, restated).</li>
+<li><strong>Inside the cloud annulus</strong>: <code>ac0384-r19-inside-200.png</code> (+ <code>_s600</code>) &mdash;
+SAT_ALT 200 m (camera 59&nbsp;m above the cloud base, inside the virtual layer).</li>
+<li><strong>Clouds-off A/B</strong> where the deck fills the frame: <code>ac0384-r19-300-clouds-off.png</code>
+(<code>AWECRAFT_CLOUDS=0</code>).</li>
+<li><strong>Attribution A/Bs at 2600&nbsp;m</strong> (beyond the ladder): <code>ac0384-r19-2600-clouds-off.png</code>
+(clouds off) and <code>ac0384-r19-2600-bodyoff.png</code> (<code>AWECRAFT_SAT_BODY=0</code>, body hidden).</li>
+<li><strong>Ground level</strong> (default cam + <code>AWECRAFT_AIM</code>, eye at spawn eye-height 143.62):
+<code>ac0384-r19-ground-up.png</code> (pitch 1.3 rad, looking up at the deck) and
+<code>ac0384-r19-ground-horizon.png</code> (pitch 0.08 rad &mdash; the mid-distance terrain view, the
+floating-terrain-fix view), re-run at <code>SNAP_DRAIN=3000</code>.</li>
+</ul>
+
+<p>Caveats: (1) software-Vulkan proxy &mdash; colour, layout and shader behaviour are real,
+real-GPU perf/precision are not; (2) the two ground frames note
+&ldquo;SNAPDRAIN not fully drained after 3000 frames&rdquo; &mdash; the R24 cold build does not fully settle
+at this pace, so their mid-distance may include a little unresolved streaming fill (the orbital
+ladder frames are unaffected: 2600 s600-vs-final probe points are byte-identical, the world
+settles by 600 frames at altitude); (3) the default-cam path keeps the HUD (hotbar/hearts) in the
+ground frames &mdash; a capture-path artefact, not in-game; (4) the planet preset&rsquo;s tangent-locked
+framing (disc edge near the frame top); ground shots use the free default camera. Comparison
+frames from the previous assessment (old tree <code>a0a7a1d</code>, same recipe) are
+<code>ac0384-final-descent-*</code>.</p>
+
+<h3>26.2 What now reads correctly (specific terms, vs &sect;25&rsquo;s six defects)</h3>
+
+<p><strong>The weather is volumetric from every near/inside vantage (&sect;25 D1/D2/D3 &mdash; fixed).</strong>
+At 120&nbsp;m (<code>ac0384-r19-descent-120.png</code>) the cloud layer overhead is no longer the flat
+patterned membrane: distinct masses with soft interiors, bright lit edges and shaded cores, and an
+irregular broken horizon edge where the deck meets the haze. Measured: the ceiling band
+(y&nbsp;0&ndash;290) now has mean luminance 178.8 with std&nbsp;30.9 and minimum 107 &mdash; a genuinely
+three-dimensional light distribution; the old membrane (old 120 frame, same band) was 216.8 /
+19.6 / 172, i.e. uniformly bright with no real shadow. No pixel in the deck is black (the old dark
+core, D3, is gone; the darkest core is a mid-grey). From the ground (<code>ground-up</code>), the deck
+reads as a natural partly-cloudy day: soft grey-blue masses against a deep blue zenith with the
+sun out, bright tops where lit. Inside the annulus (<code>inside-200</code>), the view is enveloped in a
+bright opaque cloud fill with soft interior structure, terrain below, no hard line &mdash; the
+AC-0407 &ldquo;the view fills up&rdquo; claim confirmed by eye (their r300/r120 ticket frames agree). At
+700 and 300&nbsp;m the deck band hugs the planet&rsquo;s curvature with clear breaks and individual tops at
+different heights &mdash; the skyline (AC-0407) is visible. At 2600&nbsp;m the deck&rsquo;s silhouette is a
+puffy white ring on the limb (old: a flat slab edge under a grey membrane). On/off census at
+300&nbsp;m: deck coverage 16.47&nbsp;% (core 14.36&nbsp;%) &mdash; consistent with AC-0407&rsquo;s measured
+17.2&nbsp;%/15.0&nbsp;%.</p>
+
+<p><strong>The sky-to-space transition is continuous and long (&sect;25 D4 &mdash; fixed, and the
+&ldquo;inverted gradient&rdquo; clause is refuted).</strong> Measured sky top-band luminance down the ladder:
+237 (700&nbsp;m) / 232 (300) / 173 (1600, a desaturated deep blue at (133,182,194) with stars
+already emerging) / 0 (2600, black + stars, brightest star 175). AC-0402&rsquo;s altitude window
+(500&ndash;3200&nbsp;m radial, vs the old 500&ndash;2000) puts 1600&nbsp;m at a space-blend of only 0.36 (old
+&sect;25 measured 0.92 &mdash; &ldquo;space reached by 1600&rdquo; is over; the old 1600 frame was pure black, the
+new one is clearly still atmosphere). There is no hard cut at any step of the ladder. Separately,
+the old D4&rsquo;s &ldquo;inverted gradient&rdquo; was measured inside the tangent-framed ladder (frame-top =
+mid-sky, zenith excluded); the ground-up frame includes the true zenith and shows the correct
+NMS-style day gradient: deep saturated blue at the zenith (top band mean 124, strongly saturated)
+fading to pale bright cyan at the horizon.</p>
+
+<p><strong>The atmosphere is one continuous colour, with no rim line (&sect;25 dark-rim class &mdash;
+fixed, AC-0404 visually confirmed).</strong> The 300 clouds-off frame (<code>ac0384-r19-300-clouds-off.png</code>)
+is the cleanest statement: a smooth sky gradient, one smooth haze, terrain fading into it, no dark
+limb line, no banding, no seam at the horizon. The limb itself reads as a glow, not a line: the
+body-off frame shows the sky shader&rsquo;s own halo &mdash; a smooth falloff (0,17,28)&rarr;(0,0,0) around
+the planet silhouette.</p>
+
+<p><strong>Terrain resolves continuously on descent, and the floating-terrain fix is visually
+confirmed (AC-0397).</strong> The ladder is a clean resolution progression: 2600 = the baked disc,
+700 = faceted LOD disc, 300 = fog-veiled LOD, 120 = 16-m block resolution, ground = full-texture
+detail (grass texture, flowers, trees, crop plots) &mdash; nothing pops in at any step (2600 s600
+vs final byte-identical at probe points; no pops in any frame). The ground-horizon frame &mdash; the
+exact vantage the user reported floating terrain from &mdash; shows all terrain grounded: trees, the
+stepped sandstone cliff, crops and the stone block all sit on surfaces; no slab floats with sky
+between it and the ground, no ripples. This matches AC-0397&rsquo;s measurement (2,597 plateau columns
+&rarr; 0).</p>
+
+<p><strong>The body&rsquo;s rim is correctly textured and robustness held.</strong> From orbit the disc&rsquo;s rim
+band is crisp green/snow/water (the old dark limb core, D3, is gone; the old grey membrane, D1,
+is gone). All twelve runs finished <code>rc=0</code> with zero SCRIPT/SHADER ERROR &mdash; the &sect;25 D6
+mob-tick segfault (stochastic) did not reproduce in twelve clean runs this round; that is a data
+point, not a proof.</p>
+
+<h3>26.3 Remaining differences vs No Man&rsquo;s Sky, most significant first</h3>
+
+<p><strong>D-26-1 (the significant one) &mdash; the satellite body renders the disc CENTRE as a flat
+pale-cyan wash at orbital altitudes; the user&rsquo;s original &ldquo;plain white ball&rdquo; complaint survives,
+now localised to the body&rsquo;s colour path.</strong> In <code>ac0384-r19-descent-2600.png</code> the disc
+centre (nadir out to ~1.1&nbsp;km, frame y&nbsp;460&ndash;690) is a uniform (144,209,221) with a smooth
+gradient to (209,246,249) at the left edge and (83,151,151) at the right &mdash; a featureless pale
+wash where the planet&rsquo;s continents should read; only the rim band (y&nbsp;345&ndash;460) is crisp
+textured terrain. At 1600&nbsp;m the same wash fills the disc centre (bottom band (144,198,205)); at
+700&nbsp;m it is the teal nadir region (bottom band (153,206,209)). Attribution, by A/B: the wash is
+BYTE-IDENTICAL with the clouds on and off (<code>2600-clouds-off</code> &mdash; not the deck), and it
+DISAPPEARS when the body is hidden (<code>2600-bodyoff</code>, <code>AWECRAFT_SAT_BODY=0</code>) &mdash; with the body
+off, the sky shader&rsquo;s own treatment is visible underneath: a uniform navy disc (5,63,89) plus the
+smooth limb halo. So the wash is the body&rsquo;s own disc rendering. The evidence package for the
+owner: a dense census (95,175 samples) of the baked texture under the exact mapped corridor
+(<code>satellite_face01</code>, u&nbsp;0.30&ndash;0.75, v&nbsp;0.10&ndash;0.90, via the frame&rarr;texture tracer
+<code>trace_r19.py</code>) is 70.9&nbsp;% grass (55,104,34) / 19.0&nbsp;% snow / 6.0&nbsp;% sand / 4.0&nbsp;% deep
+ocean / 0&nbsp;% bright-cyan &mdash; there is no cyan water there; e.g. the frame pixel (640,600) =
+(144,209,221) maps to face01 px(563,513) = (55,104,34) grass. The committed body formula
+(<code>satellite_body.gdshader</code> at 617e8bb: <code>haz = clamp(haz_a + haz_d)</code>,
+<code>haz_a = (1&minus;cosv)&sup2;</code>, <code>haz_d = 1&minus;op</code>,
+<code>op = smoothstep(u_fog_far, u_render_edge, d)</code>) predicts the opposite distribution at
+2600&nbsp;m: <code>op = 1</code> (haz_d = 0) and <code>haz_a &le; 0.09</code> across the wash region &mdash; i.e. the body
+should render near-pure green there and be haziest at the rim, while the frame is haziest-free
+pale cyan at the centre and crisp green at the rim. The defect is time-dependent, which is the key
+clue: &sect;25 D5 measured the same disc centre at (49,99,46) dark green at T0.3 vs pale at T0.5 &mdash;
+the texture IS reaching the shader, and the transform breaks only in the daylit (high-value)
+regime, pointing at an sRGB/linear domain mix in the body path (note: <code>u_air</code> is pushed as
+<code>srgb_to_linear()</code> from <code>Aero.fog_display</code> while the shader header claims &ldquo;sRGB values
+throughout&rdquo;; a full mip chain on the face textures is the other candidate). The wash predates the
+cloud rewrite: the identical (144,209,221) appears in the old tree&rsquo;s (<code>a0a7a1d</code>) 2600 frame
+wherever the old deck membrane&rsquo;s alpha was low. The body&rsquo;s shader is already being edited in
+another session&rsquo;s dirty working tree; this section&rsquo;s A/B frames + texel census + formula are the
+reproduction package. Vs NMS: an orbital planet reads as textured continents; a flat pale wash
+over most of the disc is the single largest remaining gap.</p>
+
+<p><strong>D-26-2 &mdash; the cloud layer has no visible depth from distance (1600&ndash;2600&nbsp;m).</strong> The
+volumetric character (masses, shading, gaps) exists below ~450&nbsp;m (120/inside/ground frames), but
+from orbit the deck contributes only the puffy rim silhouette plus a near-invisible tint over the
+disc: the wash pixels are byte-identical on/off, so the layer adds essentially nothing there &mdash; at
+those angles its (flat, dense per the vprof profile) base saturates the raymarch to a uniform
+in-scatter, the membrane look in a new coat. Vs NMS: orbital clouds show scattered masses with
+gaps revealing the surface below; here the layer reads as a continuous pale film from above.
+(Secondary to D-26-1: at 2600&nbsp;m the wash &mdash; the body, not the deck &mdash; is what actually dominates
+the view.)</p>
+
+<p><strong>D-26-3 &mdash; the orbital disc material is low-contrast pastel, and the 16-m faceting + thin
+streak artefacts are visible.</strong> The 700/1600 frames: the rim terrain reads pale green / white /
+pale blue (low saturation) rather than NMS-saturated continents; the displacement grid facets are
+clearly visible on the disc; and there are thin vertical white/blue streak artefacts running down
+the terrain (700 frame, left-centre rim and top of the disc; the same streaks appear in AC-0407&rsquo;s
+own <code>r700-off.png</code> ticket frame, so they are in-tree, not recipe artefacts). Part is state
+(T0.5 + haze, the old D5 context), part is material/bake, and the streaks are a rendering
+artefact class in their own right.</p>
+
+<p><strong>D-26-4 &mdash; streaming-fill placeholders and a small leak past the fog wall in the stills
+(minor, per-frame).</strong> (a) The 300&nbsp;m frame shows small floating bright yellow-green triangles at
+the bottom (frame y&nbsp;&asymp;690, x&nbsp;&asymp;620 and x&nbsp;&asymp;1100&ndash;1200) &mdash; tier-fill placeholders of
+unbuilt columns reading as floating fragments through the fog-washed terrain (present with clouds
+on and off, so not the deck); in play these resolve as streaming continues. (b) The ground-horizon
+frame has a thin 1-block white line crossing the mid-ground (y&nbsp;&asymp;490, x&nbsp;0&ndash;700) &mdash; possibly a
+legitimate terrain strip (a contour snow line) or a fill edge; flagged, not ranked further.
+(c) The body-off 2600 frame shows a small pale object at the nadir ((206,250,255), ~80&nbsp;m at
+2600&nbsp;m view distance) still visible beyond the 332&nbsp;m fog wall &mdash; a world-side (fluid candidate:
+the nearest ocean column is 73&nbsp;m from spawn) or screen-space leak; minor, but it is a fragment
+past the partition that &ldquo;the body is only where the world has fully faded&rdquo; is supposed to
+guarantee. (d) The ground frames were under-drained (3000-frame note, 26.1 caveat 2).</p>
+
+<h3>26.4 Design decisions, not defects (separate category, per the user&rsquo;s call)</h3>
+
+<ul>
+<li><strong>Planet radius 4000&nbsp;m (the user&rsquo;s lock).</strong> All curvature facts follow from it; the
+horizon sits ~1&nbsp;km out at 120&nbsp;m and the sky-to-space band is a short slice of the world&rsquo;s scale.
+The horizon-scale design lock remains pending the user&rsquo;s decision (CONTINUITY &sect;26).</li>
+<li><strong>The 332&nbsp;m fog wall (user&rsquo;s R24/F83).</strong> At 120&ndash;300&nbsp;m the world reads as a small clear
+bubble: terrain is crisp only to ~150&nbsp;m, then a single-colour wash to the wall. The wash quality
+itself is good (smooth, one colour, no banding &mdash; &sect;26.2); what is capped is the sense of scale vs
+NMS&rsquo;s clear horizon. User configuration, working as set.</li>
+<li><strong>Flat-pole world.</strong> No global sea horizon; the fog wall + terrain horizon is the design
+(the 700/300 frames&rsquo; horizon band is that working, not a gap).</li>
+<li><strong>Fixed local deck band (134&ndash;259&nbsp;m above the spawn, virtual top 309&nbsp;m).</strong> NMS cloud
+layers are global and altitude-variant; the ladder meets this band between the 120 and 300 steps
+by construction.</li>
+<li><strong>Seed 44, not the user&rsquo;s 5432</strong> (bake-time constraint, &sect;26.1); <strong>tangent-locked planet
+preset framing</strong> (ground shots via the default cam + <code>AWECRAFT_AIM</code>, HUD kept by that path);
+<strong>takeoff = the same five stills reversed</strong>; <strong>software-Vulkan proxy</strong> (colour/layout real,
+perf not); <strong>the sustained-deck weather state T0.5/CLOUD_T0=411200</strong> (chosen to test the cloud
+character; the T0.5 reweighting also pale-washes the disc, the old D5 context &mdash; state-dependent,
+not a geometry gap).</li>
+</ul>
+
+<h3>26.5 Verdict</h3>
+
+<p>&sect;25&rsquo;s verdict was: geometry and atmosphere read as target; the remaining distance is the
+<em>material of the weather</em>. That remaining distance is, from every vantage where a player
+actually experiences it, now largely closed: the clouds are volumetric and bright with internal
+depth from the ground, inside the layer, and just above it (&sect;26.2, measured against the old
+membrane frames); the sky-to-space transition is continuous, long, and correctly graded
+(D4 closed, including the refutation of the &ldquo;inverted gradient&rdquo; clause); the atmosphere is one
+continuous colour with the limb as a glow; terrain resolves continuously on descent; and the
+floating-terrain symptom is visually confirmed fixed from the user&rsquo;s own vantage.
+<strong>The landing half of the ladder (120&nbsp;m and below, including the inside-annulus and ground
+views) reads close to the NMS target; the takeoff half is the same states reversed and converges
+to them. The orbital half does not yet read close to target:</strong> the body&rsquo;s pale disc-centre wash
+(D-26-1) dominates the 2600&nbsp;m view and is the single largest remaining gap &mdash; it is the user&rsquo;s
+original &ldquo;plain white ball&rdquo; complaint surviving in localised form (the rim band, the sky, the
+cloud ring and the limb glow around it are all correct now). Behind it: the deck&rsquo;s distance
+flatness (D-26-2), the pastel/faceted orbital material (D-26-3), and the minor fill/leak items
+(D-26-4). If D-26-1 is fixed (the body&rsquo;s daylit colour path), the remaining distance to the
+target is small and largely state/tuning &mdash; the structure of the whole experience is in place,
+and the evidence above says so by name.</p>
+
+<h3>26.6 Evidence and exact recipe</h3>
+
+<p>Frames (all in <code>tasks/AC-0384/</code>): <code>ac0384-r19-descent-{2600,1600,700,300,120}.png</code>
++ <code>_s600</code> companions, <code>ac0384-r19-inside-200.png</code> (+ <code>_s600</code>),
+<code>ac0384-r19-300-clouds-off.png</code>, <code>ac0384-r19-2600-clouds-off.png</code>,
+<code>ac0384-r19-2600-bodyoff.png</code>, <code>ac0384-r19-ground-up.png</code>,
+<code>ac0384-r19-ground-horizon.png</code>. Old-tree comparison frames:
+<code>ac0384-final-descent-*.png</code> (tree <code>a0a7a1d</code>, same recipe). Logs, band/probe
+statistics (<code>r19-analysis.json</code>), capture scripts and the frame&rarr;texture tracer:
+<code>.scratch/AC-0384-r19/</code> (<code>ac0384-r19-*.log</code>, <code>analyze_r19.py</code>,
+<code>trace_r19.py</code>, <code>capture.sh</code>, <code>capture-ground2.sh</code>,
+<code>capture-2600off.sh</code>, <code>capture-2600bodyoff.sh</code>, progress logs). Each log asserts the
+Forward+ boot line, <code>fog_far=332.0 render_edge=400.0</code>, the <code>SNAP 1280x720</code> line, the
+<code>&quot;planet&quot;:true</code> RESULT (planet preset runs) and zero SCRIPT/SHADER ERRORs. Clean worktree at
+<code>.scratch/AC-0384-r19/wt</code>, commit <code>617e8bb</code>. Exact capture invocation (one per ladder
+step, SAT_ALT varied; the A/Bs add the single noted variable; ground shots use the default cam +
+AIM instead of the planet preset):</p>
+
+<pre># all runs: HOME=/tmp/dsh_home, ulimit -v 20971520, timeout 1200, from the clean worktree
+xvfb-run -a env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_CAM=planet AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83 \
+  AWECRAFT_TIME=0.5 AWECRAFT_TIME_FREEZE=1 AWECRAFT_CLOUD_T0=411200 \
+  AWECRAFT_SNAP_DRAIN=1200 AWECRAFT_SNAP_STEPS=600 AWECRAFT_SAT_ALT=&lt;2600|1600|700|300|120|200&gt; \
+  AWECRAFT_SNAPSHOT=&lt;abs path&gt; ~/tools/godot/godot --path godot --rendering-driver vulkan
+# clouds-off: add AWECRAFT_CLOUDS=0 (SAT_ALT=300 and SAT_ALT=2600)
+# body-off A/B: add AWECRAFT_SAT_BODY=0 (SAT_ALT=2600)
+# ground shots: no AWECRAFT_CAM; AWECRAFT_AIM="8.5,143.62,8.5,0,&lt;1.3|0.08&gt;"; SNAP_DRAIN=3000, no STEPS
+# FOG note: AWECRAFT_FOG_PCT is the global harness preload (main.gd _run_game, no save) - it
+# applies to the pure snapshot path; a written awecraft.cfg is NEVER read (AWECRAFT_IGNORE_SETTINGS).</pre>
+
 </body>
 </html>
