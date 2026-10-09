@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T18:42
+  updated_at: 2026-10-09T18:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,6 +28,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0413
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25949,6 +25950,78 @@ intake:
     - the volumetric cloud volume with its skyline and lighting, the altitude-aware sky, the single tier
     handover with no limb on the near tiers, the carved-top terrain fill, and above all the body''s mesh
     winding, which was inverted for the entire life of the objective and was fixed in round 22.
+
+    '
+  comments: []
+- id: AC-0413
+  title: cloud-deck-flattens-at-distance
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T18:43
+  updated_at: 2026-10-09T18:43
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Looking down at the cloud layer from orbit or from high in the atmosphere, it
+    should still look like a layer of cloud with structure inside it - masses, gaps, depth - rather than
+    a flat tinted ring painted around the planet. Up close it already does; from a distance it does not.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0384 ROUND 19 ASSESSMENT and re-confirmed by round 21, recorded as D-26-2: from a
+    distance the cloud layer shows only a rim ring and a tint, with no visible internal depth. This is
+    worth separating from the landing-altitude result, which is the opposite: at 120 metres and from inside
+    the annulus the same layer reads as a genuine volume with a minimum luminance of 107 and a spread
+    of 30.9, verified in two rounds. So the layer is right up close and flat far away, and the question
+    is why the same material loses its structure with distance.
+
+    THE LIKELY CAUSE, to be tested rather than assumed: THE RAYMARCH STEP DENSITY. The volume is sampled
+    at a fixed number of steps per segment - twenty-four at the time it was built - but the length of
+    the ray''s segment through the annulus grows with distance. From orbit that segment is very long compared
+    with the annulus thickness, so a fixed step count spreads the samples far apart and the accumulated
+    result loses the small-scale density variation that gives the layer its texture, leaving a nearly
+    uniform tint. This is the classic reason a volumetric layer looks right close and flat far, and the
+    fix shape follows from it: make the sampling respond to the segment''s length rather than being fixed,
+    or accumulate at a distance-appropriate density, or use the depth already available to composite a
+    coarser far-field appearance that still carries structure.
+
+    IMPORTANT CAUTION BEFORE MEASURING ANYTHING: the frames that recorded this finding were taken from
+    a tree in which the satellite body''s mesh winding was INVERTED, so the planet beneath the clouds
+    was showing its own underside and rendering as a flat wash of air colour. That was fixed in round
+    22 and changed the orbital picture substantially. RE-MEASURE THIS FINDING ON THE CURRENT TREE FIRST
+    - it may look different, or the ring-and-tint reading may have been partly the body''s underside showing
+    through. Do not bisect anything until the defect has been re-confirmed on the tree that ships.
+
+    ACCEPTANCE IS THE LAYER''S OWN STRUCTURE MEASURED FROM ALTITUDE, using the same instrument the earlier
+    cloud rounds used so the numbers are comparable - the brightness spread across the layer, which ran
+    16.9 for the old flat deck, 32.4 for the reference look, and reached 68.9 when the volume was first
+    built before settling at 44.9 after the lighting pass. Give the before and after at 1600 and 2600
+    metres, and show the frames. AND DO NOT REGRESS THE NEAR FIELD: at 120 metres, 300 metres and from
+    inside the annulus the layer currently reads as a volume, and that is the property the user verified
+    by eye. If the fix for distance costs structure up close, that is not a fix.
+
+    COST IS THE REAL CONSTRAINT and must be measured: the layer''s raymarch already makes the test box''s
+    renders long - the walls run between roughly 830 and 980 seconds against a 1200 second budget, and
+    the previous lighting round traded one light-march tap away to pay for what it added. More samples
+    at distance will cost time; state what your change costs and keep it inside the budget, trading step
+    count or resolution rather than the structure the user asked for, and say which you traded.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND check the process exit status, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-eleven exit and it appeared once during the round that fixed
+    the body mesh; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); the
+    cloud shell radii and centre stay 4275/4330/4400 about (0, -R, 0); the cloud_volume switch keeps working
+    with its off state unchanged; the skyline, the ambient and multiple-scattering lighting and the fog-wall
+    partition must keep working; and the body''s mesh winding fix from round 22 must not be disturbed
+    - it was inverted for the entire life of the objective and is the reason the planet now renders as
+    a world.
 
     '
   comments: []
