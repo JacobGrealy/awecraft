@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T02:31
+  updated_at: 2026-10-09T05:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -25751,7 +25751,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-09T02:31
-  updated_at: 2026-10-09T02:31
+  updated_at: 2026-10-09T05:59
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -25804,5 +25804,38 @@ intake:
     the altitude-aware sky, the single tier handover with no limb on the near tiers, and the carved-top
     terrain fill.
 
-    '
+
+
+    COORDINATOR LINK ADDED 2026-10-09 AFTER THE ROUND 21 VERIFICATION: THIS TICKET''S WASH AND THE ASSESSMENT''S
+    "PASTEL, LOW-CONTRAST ORBITAL MATERIAL" FINDING MAY BE A SINGLE CAUSE, AND THAT SHOULD BE TESTED FIRST
+    RATHER THAN ASSUMED EITHER WAY. The two observations come from different runs and were filed separately:
+    this ticket''s disc-centre measurement of 144,209,221 where the baked texel is seventy-one per cent
+    grass, and the separate finding that the body''s material from orbit reads pastel with low contrast.
+    If the body''s daylit path contains a term that desaturates or lifts the terrain toward a pale wash,
+    it would produce BOTH symptoms at once - the centre of the disc reading far paler than its texel,
+    and the whole disc reading washed out relative to the terrain a player sees from the ground. The test
+    is cheap and decides the shape of the fix: measure the disc centre AND the disc''s overall saturation
+    and contrast before and after any change, and see whether one edit moves both.
+
+    THE REST OF THE ORBITAL FINDING IS PROBABLY SEPARATE and should not be conflated with this: the same
+    run reports sixteen-metre faceting and vertical streaks, which it characterises as bake character
+    - that points at the resolution or the filtering of the baked terrain texture rather than at the live
+    shading path, and it is likely its own ticket.
+
+    ONE THING THAT CHANGED SINCE THIS TICKET WAS FILED, and it removes a coordination hazard: the file
+    this defect lives in, godot/core/satellite_body.gdshader, was listed as being actively edited by another
+    session when the ticket was written. It is now clean and committed - the uncommitted hunks that had
+    been sitting in it for many rounds were identified as this project''s own work from an earlier ticket
+    and were committed and built. So whoever takes this ticket is not competing with anyone for the file.
+    That also means the assessment frames that localised this defect were taken from a tree that did NOT
+    contain those hunks, so the first thing to do is re-confirm the measurement still holds on the current
+    tree before bisecting anything - a defect re-attributed across four separate causes already deserves
+    re-measurement on the tree that actually ships.
+
+    FOR CONTEXT ON HOW MANY TIMES THIS SYMPTOM HAS MOVED: the user''s "the planet looks like a plain white
+    ball" complaint has now been attributed to a shader that never compiled, a fog term erasing the body,
+    a cloud mass sitting over the nadir, and this - the body''s own daylit colour path. Each of the first
+    three was real and each was fixed, and the symptom survived all of them. That history is the argument
+    for bisecting the colour path with an A/B rather than trusting a plausible story about which term
+    is responsible.'
   comments: []
