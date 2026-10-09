@@ -13,6 +13,9 @@ uniform vec3 u_player_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_player_light = 0.0;
 uniform float u_player_radius = 5.0;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
+// world.gd _process - the same value main.gd sets on the env fog).
+uniform float u_fog_far = 332.0;
 varying vec3 v_world_pos;
 
 
@@ -21,6 +24,16 @@ void vertex() {
 }
 
 void fragment() {
+	// AC-0401: the near detail obeys the satellite body's fog wall -
+	// beyond it the world is 100% fog colour and the body (its haz_d rim
+	// is exactly that air colour) owns the view. Pre-AC-0401 the high
+	// tiers kept drawing past the wall as a fog-colour patch over the
+	// body's terrain from orbit (the "patch of ground you just left");
+	// the engine fog already fades them to air up to the wall, so the
+	// dissolve as the camera climbs is the fog itself.
+	if (distance(CAMERA_POSITION_WORLD, v_world_pos) >= u_fog_far) {
+		discard;
+	}
 	vec4 t = texture(tex, UV);
 	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);

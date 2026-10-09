@@ -14,6 +14,9 @@ uniform float u_player_radius = 5.0;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 uniform float u_underwater : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 u_cam_pos = vec3(0.0);
+// AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
+// world.gd _process - the same value main.gd sets on the env fog).
+uniform float u_fog_far = 332.0;
 varying vec3 v_world_pos;
 
 
@@ -22,6 +25,12 @@ void vertex() {
 }
 
 void fragment() {
+	// AC-0401: the fog-wall partition (chunk_lit_opaque.gdshader owns the
+	// contract) - the fluid kind stays inside the world's fog window; the
+	// satellite body owns the view beyond it.
+	if (distance(CAMERA_POSITION_WORLD, v_world_pos) >= u_fog_far) {
+		discard;
+	}
 	// AC-0036 (+AC-0245): underwater near-cull - while the eye is in water,
 	// hide only the water face actually around the head (~1.2 blocks); the
 	// surface a short distance above/below stays visible so the boundary is
