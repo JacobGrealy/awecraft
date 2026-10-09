@@ -3138,5 +3138,111 @@ xvfb-run -a env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 # FOG note: AWECRAFT_FOG_PCT is the global harness preload (main.gd _run_game, no save) - it
 # applies to the pure snapshot path; a written awecraft.cfg is NEVER read (AWECRAFT_IGNORE_SETTINGS).</pre>
 
+<h2>27. Round 21 — the AC-0401 shader half ships: verify-and-assess of the fog-wall partition + 2 m body inset (2026-10-09)</h2>
+<p><strong>What this round is.</strong> Seven shader files holding AC-0401's fix (commits <code>9665390</code>
+cutout+fluid_anim partition + the <code>satellite_body.gdshader</code> 2 m radial inset; <code>449654c</code>
+opaque+flower+fluid+fluid_anim_bf partition; the <code>lod_avg.gdshader</code> partition already shipped via AC-0404
+<code>bce6053</code>) sat uncommitted in another session's tree for many rounds and were excluded from every prior
+render as "another session's work". They are now committed (= HEAD) and this round renders them for the first time
+from the shipping tree. Every frame is the standing §26.6 user configuration: <code>AWECRAFT_RADIUS=24</code> +
+<code>AWECRAFT_FOG_PCT=83</code> (fog_far=332.0, render_edge=400.0 — asserted per-log in the SATDIAG lines),
+T=0.5 frozen, CLOUD_T0=411200, seed 44, 1280×720, LVP vulkan, <code>AWECRAFT_SNAP_DRAIN=600</code> (counts frames).
+No <code>AWECRAFT_LOGIC</code>, no fence-file edits. Captures (12 frames + mid-drain companions): the five descent
+altitudes, the two multi-step runs, the two clouds A/B runs, the two body-off runs and the ground-horizon re-check —
+<code>tasks/AC-0384/ac0384-r21-*.png</code>, logs <code>.scratch/AC-0384-r21/</code>.</p>
+
+<h3>27.1 The contract this change owes, and the controlling A/B</h3>
+<p>The partition makes every near-field material discard beyond the 332 m fog wall (<code>d &gt;= u_fog_far</code>),
+so near tiers hand over to the satellite body at one threshold — terrain is genuinely <em>not drawn</em> beyond the
+wall, which is a hole if the body does not cover. The inset moves the body 2 m radially inside the displaced surface
+(<code>VERTEX -= normalize(VERTEX) * 2.0</code>; 0.028° at R4000), so where near tiers and the body overlap, the
+near tiers win the depth test by construction — the geometric fix for the user-reported flicker between clouds, low
+LOD and the satellite body. The clean A/B for this change is <strong>r19 tree (617e8bb, no partition/inset) vs r21
+(shipping tree)</strong> at identical state: the AC-0401 "after" control frames were rendered from a dirty working
+tree whose exact state is no longer recoverable (its scratch logs were cleaned), and they deviate from BOTH shipping
+trees in sky/deck appearance at 120/1600 m (their 1600 m frame has a black space sky where both shipping trees
+render the pale-teal veil; their 120 m frame has a neutral-gray veil sky where both shipping trees render the
+volumetric deck). The r19-vs-r21 comparison is used for all verdicts below; the AC-0401 frames agree with the
+shipping trees in all disc <em>content</em> (the 2600 m disc centre is pixel-identical) but carry a per-run sub-pixel
+rim phase that makes their silhouette arc differ by ~4–5% — usable as a content control, not a rim control.</p>
+<table>
+<tr><th>altitude</th><th>r19 vs r21 (≥8 / ≥24)</th><th>where the difference is</th></tr>
+<tr><td>2600 m</td><td>1.10% / 0.70%</td><td>the removed Manhattan-diamond zone (fog-bright in r19, disc colour in r21) + a thin rim-arc of sub-pixel inset jitter; disc centre identical</td></tr>
+<tr><td>1600 m</td><td>1.5% / 0.83%</td><td>thin contours along high-contrast terrain edges only; sky and veil byte-identical (d=0 probes)</td></tr>
+<tr><td>700 m</td><td>2.45% / 1.33%</td><td>thin inset contours on the rim + a few streaming-state tier-fill placeholders; bottom-center byte-identical (148,212,224 = the body's own haz in both trees)</td></tr>
+<tr><td>300 m</td><td>2.79% / 1.42%</td><td>the entire wall-band column (y 560–700 at x=640, spanning the 332 m wall) is BYTE-IDENTICAL (d=0–1); residual = inset contours + deck streaming state</td></tr>
+<tr><td>120 m</td><td>6.06% / 3.99%</td><td>confined to the blocky near/annulus region (y≥380): the 2 m inset shifts heightfield-peak poke/no-poke crossings against the annulus boxes (5–12 px at 120–200 m view distance) + farm-edge sub-pixel shifts; deck and handover band unchanged</td></tr>
+</table>
+<div class="box green"><strong>Verdict — holes: NONE, at every altitude.</strong> In all five descent frames the disc is
+continuous rim-to-frame-edge: at ≥700 m the near tiers draw nothing (all terrain is past the 332 m wall) and the body
+covers everything; at 300/120 m the near tiers hand over at the wall and the body continues underneath — no dark
+void, no missing terrain, no hard seam line (max edge-row energy 4.3 at 300 m; a hard seam would read 20+). The
+handover is invisible by design: AC-0400's single-source air colour means the fog-faded near tier and the body's
+haz_d rim land on the same colour at the wall — which is why the wall column is byte-identical between the old and
+new trees at 300 m. The partition's visible work at 300/120 m is geometric, not chromatic: it removes the coplanar
+z-fight between the body and the near tiers (the 120 m diff shows exactly that — the blocky region that mottled is
+now cleanly depth-ordered), and at 2600 m it removes the Manhattan-diamond leak.</div>
+
+<h3>27.2 The flicker — gone (still-frame evidence across streaming states)</h3>
+<p>The reported symptom was layers fighting between clouds, low LOD and the satellite body. The geometric
+precondition — coplanar body and near tiers in the overlap — no longer exists (inset + partition depth-order every
+pair by construction; the deck is depth-write-transparent and cannot fight). The multi-step runs bracket the
+streaming fill states at both handover altitudes:</p>
+<ul>
+<li><strong>300 m</strong> (s150→s450→s750→s1050→final): full-drain change = <strong>0.7%</strong>, bbox
+[554,652,772,718] — ONLY the nadir fog-terrain blob filling in (the nadir chunk completes building between frames
+150 and 450). The wall band, the deck band, the rim and the tier-fill triangles are <strong>unchanged across the
+entire drain</strong>. No mottling appears, moves or disappears in any step.</li>
+<li><strong>120 m</strong> (s150→s450→s900→final): all change is the high-detail farm/terrain fill in the bottom
+half (s150→final 23.2%, bbox y≥380); nothing above y=380 (deck, distant horizon) changes at any step. s150 — with no
+high detail built yet — already shows a clean, continuous annulus+body handover with zero artifacts.</li>
+</ul>
+<p>Every boundary region is stable across streaming state, and no z-fight mottling is present in any of the twelve
+frames. <span class="ok">Flicker: gone</span> to the extent still frames can demonstrate it — the depth ordering that
+was flickering is now fixed by 2 m of geometry. (Temporal confirmation in-game remains the user's; the geometric
+cause is eliminated.)</p>
+
+<h3>27.3 The descent ladder (fresh, shipping tree)</h3>
+<table>
+<tr><th>altitude</th><th>frame</th><th>what it shows</th><th>holes / seams</th></tr>
+<tr><td>2600 m</td><td><code>ac0384-r21-descent-2600.png</code></td><td>body disc in black space; crisp terrain rim band; cloud ring; pale smooth centre; <strong>Manhattan diamond GONE</strong> (pixel 640,700 = (144,209,221) disc colour, was (202,248,255) fog-bright in r19)</td><td>none — disc continuous rim-to-frame-edge; the near tiers draw nothing at this altitude and the body covers all of it</td></tr>
+<tr><td>1600 m</td><td><code>ac0384-r21-descent-1600.png</code></td><td>S≈0.92: pale-teal veil sky (stars show through — sky-side haze, identical in both trees), textured body disc, cloud ring</td><td>none — byte-identical sky/veil probes (d=0); disc differs only in 0.83% inset-jitter contours</td></tr>
+<tr><td>700 m</td><td><code>ac0384-r21-descent-700.png</code></td><td>body disc with the standing D-26-3 character (see 27.4); deck seen from above at the horizon; <strong>no dark z-fight band</strong></td><td>none — 1.33% total diff vs r19, all thin contours</td></tr>
+<tr><td>300 m</td><td><code>ac0384-r21-descent-300.png</code> + <code>ac0384-r21-300-steps*.png</code></td><td>near terrain through 86–99% engine fog (the white nadir wash — the near tier at this altitude is only the bottom few tens of pixels, and through near-total fog it reads as a smooth wash, not crisp blocks) → smooth single-source-air handover band → body; the white nadir blob is the near-tier terrain at 300–332 m — legitimate fog, byte-identical in both trees, NOT the Manhattan diamond; tier-fill triangles still present (5, standing — see 27.4)</td><td>none — wall band byte-identical between trees; no seam line (edge-row max 4.3); the r19 "dark band" at this altitude proved to be the CLOUD DECK (the clouds-off frame removes it entirely) — it is not z-fighting</td></tr>
+<tr><td>120 m</td><td><code>ac0384-r21-descent-120.png</code> + <code>ac0384-r21-120-steps*.png</code></td><td>crisp voxel farm at the nadir + blocky near terrain → body beyond the wall; volumetric deck overhead (camera below the 275 m base); farm clean, no mottling</td><td>none — continuous terrain bottom-to-horizon; the 120 m diff vs r19 is the inset's poke-suppression in the blocky region (the z-fight resolution the fix owes)</td></tr>
+</table>
+<p class="small">Ladder note: at 300 m the near tiers occupy only the bottom ~100 px (terrain within 332 m of a
+camera 300 m up is a ~134 m-radius disc); the "handover altitude" the user experiences is this frame and 120 m —
+both verified clean.</p>
+
+<h3>27.4 The four §26 findings, re-checked</h3>
+<table>
+<tr><th>finding</th><th>verdict</th><th>evidence</th></tr>
+<tr><td><strong>D-26-1</strong> — the pale-cyan disc-centre wash</td><td><span class="warn">STILL PRESENT, unchanged — and re-attributed</span></td><td>Three-way agreement at 2600 m: r19 (130.8,195.8,206.6, sat 0.374, wash 0.49%), AC-0401 (130.6,195.7,206.4, 0.374, 0.44%), r21 (130.7,195.7,206.5, 0.374, 0.43%) — statistically identical, so the partition/inset does not touch it. It is the body's <em>own</em> state-dependent appearance at T=0.5 (the r19 sRGB-suspicion + lexel-census package stands), not a fog patch and not a layer conflict. At 1600 m the same centre reads (127.2,191.6,201.9, sat 0.378, wash 1.6%) in r21 vs r19 — unchanged.</td></tr>
+<tr><td><strong>D-26-2</strong> — the deck adds no visible depth at distance</td><td><span class="warn">STILL PRESENT (unchanged)</span></td><td>Shipping-tree 2600 m clouds on/off A/B: 3.09% ≥8 / 2.63% ≥24 — the deck's footprint at orbital distance is still only the rim ring (r19 baseline: 3.15%/2.67%, within streaming noise). The disc itself — including the pale centre — is the body regardless of deck state (centre pixel-identical in the A/B). <code>ac0384-r21-2600-clouds-off.png</code> shows the crisp rim band with no ring and an unchanged disc.</td></tr>
+<tr><td><strong>D-26-3</strong> — pastel low-contrast orbital material with faceting + vertical streaks</td><td><span class="warn">STILL PRESENT, all three sub-parts, at 700 m (and the disc at 1600/2600 m)</span></td><td>Faceting: flat gray/white 16 m displacement facets across the disc centre and rim. Streaks: thin light lines at the right-of-centre rim and the left disc edge. Pastel: the pale low-contrast teal centre. All are the body's BAKE character (displacement + 2 m baked colour), untouched by the partition/inset — the r19-vs-r21 diff at 700 m is 1.33% thin contours only.</td></tr>
+<tr><td><strong>D-26-4</strong> — minor artifacts</td><td>(a) <span class="warn">STILL PRESENT</span> · (b) <span class="warn">STILL PRESENT</span> · (c) <span class="ok">GONE</span></td><td>(a) Tier-fill triangles at 300 m: 5 yellow-green floating triangles, and they are <em>standing</em> — present at identical positions in s150, s600 and the final (a stable streaming state, not a transient; the view-locked fill does not prioritise their directions within 1200 frames). World-side, unchanged by the partition. (b) the white lines at the ground horizon: the supplementary ground shot (<code>ac0384-r21-ground-horizon.png</code>, r19 recipe) shows the same straight white seam lines across the midground grass (diagonal lower-left, horizontal mid, right edge) plus the parallel dark crack — the r19-vs-r21 ground diff is 0.53% (≥24), all sub-pixel edge jitter in the midground band; the lines are inside the 332 m wall (they are ~50–200 m out), so the partition/inset do not reach them. (c) the small pale object past the wall in the old body-off frame: that r19 frame was actually <em>body+clouds both off</em> (its log: "the AC-0385 shell is not in the tree") and showed the fog-patch dome + the white object — the near-tier leak. The shipping-tree direct test (<code>ac0384-r21-2600-alloff.png</code>, body off + clouds off) is <strong>pure black space + stars — nothing else is drawn</strong>: with the body hidden, the near tiers contribute zero pixels, i.e. the fog-patch dome and the diamond/white object are gone (the partition discards them at the wall). Note the separate <code>ac0384-r21-2600-bodyoff.png</code> (body off, deck ON) shows a mottled teal disc: that is the <em>cloud deck shell</em> rendered against space (the deck is a separate system — <code>AWECRAFT_SAT_BODY</code> only hides the body — and the shell's ~40° apparent disc nearly matches the body's ~42° at this altitude), not a partition leak.</td></tr>
+</table>
+
+<h3>27.5 What the partition/inset broke — nothing observed</h3>
+<p>No new artifact class appears anywhere in the nine shipping-tree frames: no hard seam (edge-row census clean at
+all altitudes), no holes (27.1), no new mottling (the 120 m blocky diff is the fix working, 27.2), no fog-colour
+shift (the wall column is byte-identical, 27.3), no deck/sky change (deck and veil byte-identical probes at 120/1600
+m). The only visible changes are the design's own: the removed diamond at 2600 m, the sub-pixel rim jitter
+(inset), and the cleaned blocky region at 120 m (z-fight resolution). <span class="ok">Landing/takeoff: close to
+target</span> — the handover is seamless in stills at both handover altitudes; what this round cannot prove from
+stills is the temporal feel, which the geometric cause of (inset + partition) is designed to have removed.</p>
+
+<div class="box"><strong>Provenance and state notes.</strong> Frames render from the working tree at commit
+<code>449654c</code> (= HEAD) — the partition/inset hunks are committed — plus another session's uncommitted,
+render-neutral hunks in <code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code>
+(particle pool / controls arm; fence-locked, untouched this round; noted so the coordinator can clean or commit
+them). One godot at a time; all runs rc=0 with the Forward+ boot line, the fog-wall SATDIAG assertion
+(fog_far=332.0 render_edge=400.0), a <code>SNAP … 1280x720</code> line and zero SCRIPT ERROR. Two supplementary
+runs (the 2600 m body+clouds-off direct partition test and the ground-horizon re-check) followed the main set.
+The capture-script snap-skip check and the relative-path snap failure were fixed before the set (see continuity.md —
+the first 10-run attempt was scrapped because <code>SNAP FAILED</code> does not flip the exit code; file existence is
+the only reliable check).</div>
+
 </body>
 </html>
