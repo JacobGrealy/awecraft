@@ -1056,14 +1056,24 @@ func _geom_for_face(f: int, hgrid: PackedInt32Array = PackedInt32Array()) -> Dic
 			verts.append(p)  # body origin = the sphere centre: local == radial
 			uvs.append(Vector2(u, v))
 			nrm.append(p / rr)
-	# winding per face: the chart axes differ per face; pick the
-	# order whose corner normal points outward (cull_back then keeps
-	# exactly the front hemisphere from outside - one front patch per
-	# view ray, no self-ordering problem).
+	# winding per face: the chart axes differ per face; the corner
+	# test picks the per-face index order. AC-0411: the comparison is
+	# INVERTED relative to the original - under Forward+ cull_back an
+	# indexed triangle rasterises as FRONT from outside exactly when
+	# its geometric normal (v1-v0)x(v2-v0) points TOWARD the centre,
+	# i.e. the order this test labels "inward" in 3D terms. Verified
+	# against the exact orbital camera (screen-space winding of the
+	# real index orders, .scratch/AC-0411 analysis): with the old
+	# sign, faces 0/1 (the +-Y hemisphere = the whole near cap) were
+	# back-facing and culled, and faces 2-11 drew their FAR side -
+	# the orbital disc was the planet's UNDERSIDE (the disc-centre
+	# wash at haz=1, the fourth "plain white ball" attribution).
+	# Flipped: the near hemisphere rasterises front, the far side is
+	# culled - one front patch per view ray, no self-ordering problem.
 	var p00: Vector3 = SphereMath.uv_to_world(f, 0.0, 0.0, RB)
 	var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
 	var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
-	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) >= 0.0
+	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) < 0.0
 	for j in nv:
 		for i in nu:
 			var a: int = j * (nu + 1) + i
@@ -1130,6 +1140,14 @@ func _build_face(f: int) -> void:
 	var sm := ShaderMaterial.new()
 	sm.shader = _shader
 	sm.set_shader_parameter("tex", textures[f])
+	# AC-0411: the AC-0242 sRGB round-trip (the baked face bytes are
+	# sRGB-companded but the upload is a linear-format texture; the
+	# shader pre-decodes the terrain term so the Forward+ output encode
+	# round-trips the bake - the daylit disc's pale wash). The renderer
+	# method is constant per run: build-time push, the house pattern
+	# (main.gd pushes the same value to the other sRGB-domain materials
+	# at build time).
+	sm.set_shader_parameter("u_srgb_pre", Aero.srgb_pre())
 	mi.material_override = sm
 	mi.cast_shadow = 0  # the body casts no shadow (no world light path)
 	add_child(mi)

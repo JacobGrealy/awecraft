@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T05:59
+  updated_at: 2026-10-09T18:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,7 +27,6 @@ queue:
 - AC-0406
 - AC-0407
 - AC-0409
-- AC-0411
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25748,11 +25747,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-09T02:31
-  updated_at: 2026-10-09T05:59
-  completed_at: null
+  updated_at: 2026-10-09T18:40
+  completed_at: 2026-10-09T18:40
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit and high in the atmosphere, the planet should look like the world
@@ -25837,5 +25836,45 @@ intake:
     a cloud mass sitting over the nadir, and this - the body''s own daylit colour path. Each of the first
     three was real and each was fixed, and the symptom survived all of them. That history is the argument
     for bisecting the colour path with an A/B rather than trusting a plausible story about which term
-    is responsible.'
+    is responsible.
+
+
+    CLOSED - THE WASH WAS AN INSIDE-OUT MESH, NOT A COLOUR PATH, AND THE FIX IS ONE LINE. WHAT IT ACTUALLY
+    WAS: the satellite body''s triangle index order was inverted against Godot''s front-face convention,
+    so back-face culling discarded the ENTIRE NEAR-SIDE CAP - faces 0 and 1, the whole +Y hemisphere -
+    and what the player saw from orbit was the FAR SIDE of the remaining faces, which is to say the underside
+    of the planet. At the far-side nadir the outward normal points away from the camera, so the cosine
+    term goes to zero and the haze weight reaches exactly one, making the albedo exactly the single-source
+    air colour: a flat pale-cyan disc of 144,209,221 with no terrain detail in it whatsoever. THE BAKED
+    TEXEL THAT SHOULD HAVE BEEN THERE, seventy-one per cent grass, sits on a near-side cap texel and was
+    NEVER DRAWN. That is why four successive explanations for the user''s "plain white ball" came and
+    went without curing it: a shader that never compiled, a fog term erasing the body, a cloud mass over
+    the nadir - each real, each fixed - while the actual geometry was facing the wrong way the entire
+    time. HOW IT WAS PROVEN, because a finding this structural deserves more than a plausible story: a
+    census showing all 1.4 million triangles wound outward in three dimensions, a face-identity diagnostic
+    render in which the disc resolved as the green FAR side with only red speckle for the near one, and
+    a screen-space winding test of the real index orders against the exact camera. THE FIX: one comparison
+    inverted in the face geometry builder, so all twelve faces are now front-facing from outside. All
+    diagnostics were reverted before delivery. THE LINK TEST CAME BACK AS ONE JOB: the coordinator had
+    asked whether this and the separate "pastel, low-contrast orbital material" finding shared a cause,
+    and the single winding edit moved both - the disc centre from a cyan wash of 130,195,206 to a green
+    134,202,151 with green dominance rising from 1.7 to 94.7 per cent, AND the disc''s overall saturation
+    from 0.337 to 0.370 and its contrast from 45.7 to 62.5. They were the same defect seen twice. A SECOND,
+    GENUINELY SEPARATE DEFECT WAS FIXED ALONGSIDE IT and is worth knowing about: an sRGB decode applied
+    after a transfer-scale, which double-companded lit terrain; it was a byte-identical no-op on the wash,
+    which is consistent with the wash being pure haze colour, and it is a real fix in its own right. ACCEPTANCE,
+    same instrument as the assessment: at 1600 metres the disc centre moves from 127,192,202 to 143,206,147
+    with green dominance of 96.1 per cent, at 2600 metres green dominance is 94.7 per cent, the night
+    rows stay dark and green-dominant rather than washing to the night air colour, and a clouds-off A/B
+    is byte-identical. Ten of ten renders exited zero with the Forward+ boot line asserted. THE LANDING
+    HALF DID NOT REGRESS, which mattered because it currently reads close to the target: at 120 metres
+    the near terrain is identical and the body is not visible from there anyway, at 300 metres the frame
+    actually IMPROVED - a streaky pastel far-side wash replaced by a textured cap with no artifacts -
+    and the ground geometry is identical. GATES: G0 clean with a zero census and a zero exit, smoke ok,
+    genhash 25 of 25 byte-identical, meshprobe at full match rate, and shaderforce 12 of 12. One stochastic
+    crash was seen during the run - the documented use-after-free class, signal eleven with a single libc
+    stub frame and a completely clean log - and the run re-ran it to zero rather than treating a clean
+    first pass as proof. NOT DONE, deliberately: the sixteen-metre faceting and vertical streaks, which
+    the run agrees are a separate finding pointing at the baked texture rather than the shading path,
+    and the heavy gate set, which is the coordinator''s lane.'
   comments: []

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0411 results — the body-disc-centre pale wash</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;line-height:1.45}
+table{border-collapse:collapse;margin:1em 0}
+th,td{border:1px solid #999;padding:4px 10px;text-align:right}
+th{background:#eee}
+td:first-child,th:first-child{text-align:left}
+.box{border:1px solid #888;padding:8px 12px;margin:1em 0}
+.good{background:#e6f4e6}.bad{background:#f9e6e6}.warn{background:#fdf6e3}
+code{background:#f4f4f4;padding:1px 4px}
+img{max-width:640px;margin:0.5em 0;border:1px solid #ccc}
+</style></head>
+<body>
+<h1>AC-0411 — the body-disc-centre pale wash: what it was, the fix, and the measurement</h1>
+<p><em>Builder: single subagent. Tree: HEAD <code>e243af2</code> (the coordinator's AC-0411 link
+commit; the godot shader tree is byte-identical to the r21-assessed <code>449654c</code>).
+Fenced files untouched (main.gd / game.gd / drop.gd / debug.gd — another session's uncommitted
+work). harness.gd untouched (no <code>AWECRAFT_LOGIC</code> arm for measurement renders).
+No commits, no pushes, no TASKS.yaml edits.</em></p>
+
+<h2>1. What the wash actually was</h2>
+<div class="box bad"><strong>THE WASH IS THE PLANET'S UNDERSIDE: the body mesh is wound
+inside-out, <code>cull_back</code> culls the entire near-side cap, and the far side (the &minus;Y
+hemisphere) is drawn instead. At the far-side nadir the outward normal points away from the
+camera, so <code>cosv&nbsp;=&nbsp;0</code> &rarr; <code>haz_a&nbsp;=&nbsp;(1&minus;cosv)&sup2;
+=&nbsp;1.0</code> &rarr; <code>ALBEDO&nbsp;=&nbsp;mix(base, u_air, 1.0)&nbsp;=&nbsp;u_air</code>
+exactly &mdash; the flat pale-cyan wash (144,209,221), independent of the texture.</div>
+<p><strong>The mechanism.</strong> <code>_geom_for_face</code> (<code>godot/world/satellite_body.gd</code>)
+chose each face's index order with a per-face corner test:
+<code>outward = (p01&minus;p00).cross(p10&minus;p00).dot(p00) &gt;= 0</code> &mdash; a 3D
+geometric-normal test. That selects the order whose indexed geometric normal points
+<strong>outward</strong>. But under Forward+ <code>cull_back</code> an indexed triangle
+rasterises as <em>front-facing from outside</em> exactly when its geometric normal
+<code>(v1&minus;v0)&times;(v2&minus;v0)</code> points <strong>toward the centre</strong> (the
+opposite side). The test was therefore inverted for the engine, on every face:</p>
+<ul>
+<li><strong>Faces 0/1</strong> (the &plus;Y hemisphere &mdash; the whole near-side cap) rasterised
+back-facing &rarr; <strong>culled</strong>. The cap the camera is looking at is never drawn.</li>
+<li><strong>Faces 2&ndash;11</strong> rasterise their far side &rarr; the visible orbital "disc"
+is the planet's <strong>underside</strong>, seen where the cap should be.</li>
+<li><strong>Disc centre</strong> (nadir ray, far intersection at (640,575), d&asymp;10215): the
+far-side nadir's outward normal is (0,&minus;1,0), pointing away from the camera &rarr;
+<code>cosv = clamp(dot(normalize(cam&minus;p), NORMAL), 0, 1) = 0</code> &rarr;
+<code>haz_a = 1.0</code> &rarr; the full <code>u_air</code> wash, exactly. The perfect flatness
+(659/665 samples byte-identical) is the flat far-side surface at haz=1 across the whole nadir
+region. The baked 71%-grass texel the ticket cites is a <em>near-side cap</em> texel &mdash; it
+is never rendered; the disc shows the far side's chart at haz=1.</li>
+<li>The "green rim" of the real frames: far-side fragments near the silhouette, where
+<code>dot(normal, view)</code> rises from 0, so haz drops below 1 and far-side terrain shows.</li>
+</ul>
+<p><strong>Why the earlier attributions and theories were wrong (or incomplete).</strong> The
+three previous attributions of the "plain white ball" were real, separate, and already fixed
+(the shader that never compiled &mdash; AC-0391; the fog erasure &mdash; AC-0384 r3; the cloud
+mass in front &mdash; the body-off A/B). This is the fourth, and it is the one that dominates the
+daylit orbital view. The "shifted duplicate sphere ~2300 m below" and "12&ndash;14&deg; hole"
+theories from earlier analysis were wrong: the disc is the far side of the <em>true</em> sphere
+&mdash; correctly positioned, correctly drawn-from-inside because of the inverted cull
+classification. A mid-analysis red herring is recorded for the file: the uniform (155,255,68)
+disc interior in the DIAG-12 face-id frame was the run's <strong>thick cloud deck</strong>
+(cov=0.750, the AC-0385 shell, transparent/no-depth, drawn in front), not a mystery surface &mdash;
+the thin-deck real frames show the far-side haze wash instead. No second sphere, duplicate,
+gizmo, or near-clip exists anywhere (swept: single <code>SatelliteBody</code> instance at
+(0,&minus;4000,0) scale 1, op_nadir=1, camera near 0.1, the 10 m walk pad is 2 px at 2600 m).</p>
+<p><strong>The evidence chain</strong> (artifacts in <code>.scratch/AC-0411/</code>):</p>
+<ol>
+<li><strong>Mesh census on the actual arrays</strong> (<code>meshprobe2.log</code>): all
+1,399,218 triangles of all 12 faces have <em>outward</em> 3D geometric normals (inward=0
+everywhere) &mdash; the mesh data is perfect; only the engine-facing classification is
+inverted (3D-outward &ne; engine-front for this index order).</li>
+<li><strong>DIAG-12 face-id render</strong> (<code>ac0411-diag12-2600-t050.png</code>): per-face
+<code>u_face_id</code> uniform, red = home pair (faces 0/1), green = faces 2&ndash;11. The disc
+is almost entirely green (faces 2&ndash;11, their far side, through the culled cap) with scattered
+red triangular speckles (face 0/1 fragments whose screen winding locally flips under the
+displacement). The disc is the body &mdash; seen inside-out.</li>
+<li><strong>The original render_mode</strong> is <code>cull_back, depth_draw_always,
+fog_disabled</code> (verified by git diff; diagnostics only ever added <code>unshaded</code>,
+removed before this result).</li>
+<li><strong>Screen-space winding of the real index orders</strong>, computed in Python against
+the exact orbital camera (cam (14.47, 2741, 14.47), planet centre (0,&minus;4000,0), FOV 75&deg;,
+nadir at pixel (640,706), rim at (640,360)): faces 0/1 in their shipped order
+<code>[a,c,b]</code> are back-facing from outside; faces 2&ndash;11 draw their far side. Matches
+the render exactly (red speckles only).</li>
+<li><strong>The term</strong>: at the far-side nadir every other term carries zero or
+irrelevant weight &mdash; <code>haz_d = 1&minus;op = 0</code> (op=1), the day factor is 1.0 at
+T0.5, <code>haz_a = 1</code> &rarr; the centre is exactly <code>u_air</code>. The time
+dependence (wash only daylit; T0.25/T0.75 dark) is the day factor on the far-side terrain,
+with the wash term dominant only when the terrain reads bright.</li>
+</ol>
+
+<h2>2. Re-confirmation on the current tree (the assessment frames predate the last shader hunks)</h2>
+<p>The r19/r21 assessment frames came from a tree without the committed shader hunks
+(<code>9665390</code>/<code>449654c</code>); the current HEAD's godot tree is identical to the
+r21-assessed <code>449654c</code>, and the re-measured before numbers below land on the r21
+values within run noise &mdash; the defect re-confirms on the tree that ships:</p>
+<table>
+<tr><th>state</th><th>r21 reference (assessment)</th><th>this run (current tree)</th><th>&Delta;</th></tr>
+<tr><td>2600 m, T0.5 &mdash; nadir box RGB</td><td>(130.7, 195.7, 206.5)</td><td>(130.7, 195.7, 206.5)</td><td>0.0 &mdash; exact match</td></tr>
+<tr><td>2600 m, T0.5 &mdash; sat / wash</td><td>0.374 / 0.43%</td><td>0.374 / 0.43%</td><td>0.0 &mdash; exact match</td></tr>
+<tr><td>1600 m, T0.5 &mdash; nadir box RGB</td><td>(127.2, 191.6, 201.9), sat 0.378, wash 1.6%</td><td>(127.2, 191.6, 201.9), sat 0.378, wash 1.6%</td><td>0.0 &mdash; exact match</td></tr>
+</table>
+<p>The defect re-confirms on the current tree at the assessment's own numbers, in the
+assessment's own instrument, under the assessment's own recipe. All six before runs: rc=0,
+the Forward+ boot line, zero SCRIPT/SHADER ERROR, and the SATDIAG config assertion
+(fog_far&nbsp;332.0 / render_edge&nbsp;400.0, phase&nbsp;LOADED) in every log.</p>
+
+<h2>3. The fix (files, and why this shape)</h2>
+<p><strong>Primary &mdash; <code>godot/world/satellite_body.gd</code>, <code>_geom_for_face</code>
+(one line):</strong> the corner test's comparison is inverted,
+<code>dot(p00) &gt;= 0.0</code> &rarr; <code>dot(p00) &lt; 0.0</code>. Every face now uses the
+index order the engine rasterises as front from outside; the near hemisphere (including the
+whole +Y cap, faces 0/1) draws, the far side is culled &mdash; one front patch per view ray, no
+self-ordering problem. The per-face selection structure is kept (the 12 charts have different
+3D handedness, so the per-face test is still required; only the engine-convention comparison
+was wrong). The change is mesh-index only: vertex positions, UVs, and normals are untouched
+(normals were already correct outward, <code>nrm.append(p / rr)</code>).</p>
+<p><strong>Kept alongside &mdash; <code>godot/core/satellite_body.gdshader</code>, <code>u_srgb_pre</code>
+(fix v1 from the first half of this task):</strong> the baked face bytes are sRGB-companded
+(the bake's <code>_l2s</code>) but the upload is a linear-format texture
+(<code>ImageTexture.create_from_image</code>, no sRGB flag), so the sampler returns them as-is
+and the Forward+ output encode re-compands them &mdash; a genuine double companding on the
+daylit terrain term. The shader now pre-decodes the terrain term
+(<code>texv = mix(texv, pow(texv, vec3(2.2)), u_srgb_pre)</code>), decode-then-scale (the day
+factor is a linear light scalar, not part of the display colour; at sun_l=1 the two orders
+coincide, so this agrees with the AC-0242 convention exactly where it is measured).
+<code>u_air</code> is NOT pre-decoded (already linear via <code>Aero.fog_display</code>), so the
+mixed ALBEDO is linear-domain, exactly like the annulus (<code>lod_avg.gdshader</code>). Pushed
+by <code>_build_face</code> as <code>Aero.srgb_pre()</code> &mdash; build-time push, the house
+pattern (main.gd pushes the same value to the other sRGB-domain materials); unconditional, no
+Settings row. <em>Note:</em> fix v1 alone was a byte-identical NO-OP on the wash (centre pixel
+unchanged) &mdash; consistent with &sect;1 (the wash is haz=1 u_air, independent of the texel
+domain). It is a real, separate defect on the now-correctly-rendered cap, and it ships with
+the fix.</p>
+
+<h2>4. The link test (one edit, two symptoms &mdash; one job?)</h2>
+<p>Ticket instruction: measure the disc centre <em>and</em> the disc's overall saturation and
+contrast before and after, and see whether a single edit moves both. The single winding edit
+moved <strong>both</strong>:</p>
+<table>
+<tr><th>2600 m, T0.5 &mdash; before (HEAD) &rarr; after (fix)</th><th>before</th><th>after</th><th>verdict</th></tr>
+<tr><td>disc centre &mdash; nadir box RGB</td><td>(130.7, 195.7, <strong>206.5</strong>) pale cyan</td><td>(134.4, 202.8, <strong>151.9</strong>) green</td><td>moves &mdash; B drops below G; the 71%-grass texel now reads green</td></tr>
+<tr><td>disc centre &mdash; green-dominant fraction</td><td>1.7%</td><td><strong>94.7%</strong></td><td>moves &mdash; matches the baked texel's composition</td></tr>
+<tr><td>whole-disc saturation (mean S, non-space mask)</td><td>0.337</td><td><strong>0.370</strong></td><td>moves</td></tr>
+<tr><td>whole-disc contrast (luminance std)</td><td>45.7</td><td><strong>62.5</strong></td><td>moves</td></tr>
+</table>
+<div class="box good"><strong>VERDICT: the ticket and the pastel low-contrast orbital-material
+finding are ONE job.</strong> One edit (the winding sign in <code>_geom_for_face</code>) moves
+both the disc centre (flat u_air wash &rarr; textured green cap terrain) and the disc's overall
+saturation/contrast (flat far-side wash &rarr; the cap's full tonal range). The pastel
+character the finding described was not a separate companding-only defect; it was the
+inside-out surface (a flat haz=1 u_air disc with only far-side texture variation at the rim)
+rendering where the textured cap should be.</div>
+
+<h2>5. Acceptance: the disc centre at 1600 and 2600 m across T0 &isin; {0.25, 0.5, 0.75}</h2>
+<p>Same instrument and recipe as the assessment (r21 capture verbatim: user config
+<code>AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83</code>, fog_far 332 / render_edge 400 asserted per
+log, <code>AWECRAFT_TIME</code> frozen, seed 44, <code>AWECRAFT_CAM=planet</code> +
+<code>AWECRAFT_SAT_ALT</code>, 1280&times;720, LVP Forward+ under xvfb,
+<code>AWECRAFT_SNAP_DRAIN=1200</code> frames, 1200 s budget, file-existence checked; the
+200&times;200 nadir box at (640,575) per <code>analyze-ac0411.py</code>). All after runs rc=0,
+Forward+, zero SCRIPT/SHADER ERROR.</p>
+<table>
+<tr><th>state</th><th>before nadir RGB</th><th>after nadir RGB</th><th>after green-dom / sat</th><th>after wash</th></tr>
+<tr><td>1600 m, T0.25</td><td>(2.3, 49.5, 64.0)</td><td>(11.5, 13.8, 9.1)</td><td>82.8% / 0.525</td><td>0.0%</td></tr>
+<tr><td>1600 m, T0.5</td><td>(127.2, 191.6, 201.9)</td><td>(143.4, 206.2, 147.3)</td><td><strong>96.1%</strong> / 0.385</td><td>30.84%</td></tr>
+<tr><td>1600 m, T0.75</td><td>(18.7, 95.5, 107.3)</td><td>(14.4, 20.1, 12.2)</td><td>81.6% / 0.768</td><td>0.0%</td></tr>
+<tr><td>2600 m, T0.25</td><td>(1.4, 50.3, 66.4)</td><td>(7.6, 12.1, 9.6)</td><td>91.1% / 0.698</td><td>0.0%</td></tr>
+<tr><td>2600 m, T0.5</td><td>(130.7, 195.7, 206.5)</td><td>(134.4, 202.8, 151.9)</td><td><strong>94.7%</strong> / 0.396</td><td>20.47%</td></tr>
+<tr><td>2600 m, T0.75</td><td>(12.1, 86.2, 100.7)</td><td>(9.5, 17.9, 12.8)</td><td>92.0% / 0.839</td><td>0.0%</td></tr>
+</table>
+<p class="box good"><strong>Acceptance: met.</strong> The daylit rows (T0.5, 1600 and 2600 m)
+now read green-dominant (green-dom 96.1% / 94.7%; before 5.2% / 1.7%) with G &gt; B by &asymp;55&ndash;60
+&mdash; the composition of the baked 71%-grass texel (before, B dominated by &asymp;60: the u_air
+wash). The dark rows stay dark (the 0.18 night floor; nadir luminance 11&ndash;18) and are now
+green-dominant too (81&ndash;92%) &mdash; before they were the night <code>u_air</code> haze
+wash of the far side (moderately bright cyan, B-dominant); they are the same defect seen at
+night, fixed by the same edit. The daylit wash_frac (30.8% / 20.5%) is the bright-low-sat
+fraction of the now-textured cap (dry-grass and bright patches read as "wash" to the old
+indicator) &mdash; the green-dom / RGB-composition columns are the acceptance metric, and both
+daylit rows pass it.</p>
+<p><strong>Clouds-off A/B</strong> (the assessment's A/B, reproduced on the fixed tree,
+2600 T0.5): nadir box (134.4, 202.8, 151.9) with clouds and <em>byte-identical</em> without
+them (the clouds are transparent, no-depth shells in front; the disc centre is the body's own
+path &mdash; confirmed on the fixed tree as on the before tree).</p>
+
+<h2>6. Landing half (must not regress)</h2>
+<p>The 120 m / 300 m planet-preset frames (the r21 recipe: <code>AWECRAFT_CAM=planet</code> +
+<code>AWECRAFT_SAT_ALT</code>, TIME 0.5 frozen, CLOUD_T0 411200, 1280&times;720) and the
+ground-horizon control (default cam + <code>AWECRAFT_AIM</code>, eye at spawn eye-height), all
+on the fixed tree, compared against the r21 references. Per-r21 precedent, the comparison
+standard is the <em>near terrain</em> (r21's own 120 m A/B: 61% of pixels differ run-to-run
+&mdash; sky/horizon weather drift, water-phase &mdash; while the near terrain is "unchanged on
+inspection"); cloud deck and sky are per-run procedural (the AC-0385 shells advance over the
+drain frames), so whole-frame pixel identity is not the contract at this altitude.</p>
+<table>
+<tr><th>frame</th><th>vs r21</th><th>verdict</th></tr>
+<tr><td>120 m</td><td>whole-frame diff 73.8% (r21's own A/B precedent: 61%); bottom-centre farm/nadir 28% at mean |d| 12; sky 100% (deck drift)</td><td>no regression &mdash; the voxel farm and near terrain are layout- and colour-identical; the horizon band is weather/fog drift (same class as r21's precedent). The body is not visible at 120 m (the AC-0401 2 m inset keeps the terrain winning the depth test), so the winding fix has no surface there</td></tr>
+<tr><td>300 m</td><td>whole-frame diff 98.8%</td><td><strong>visible change &mdash; the fix, not a regression</strong>: at 300 m the near terrain is almost fully fogged (a few tens of pixels at the bottom in both) and the horizon view is the <em>body itself</em>. r21's 300 m frame is the streaky pastel wash (the far side of the inside-out mesh &mdash; the finding's material at low altitude); the fixed frame shows the textured near-side cap (green terrain / sand / water, correct curvature, smooth handover band, no z-fighting at the nadir). The defect removed, at the altitude where the player sees it on landing</td></tr>
+<tr><td>ground</td><td>whole-frame diff 89.4% (lighting/sky drift); geometry identical on inspection (same spawn trees, flowers, stone block, sandstone cliff, HUD)</td><td>no regression &mdash; the body is below the terrain everywhere at ground level; only the per-run light/cloud state differs</td></tr>
+</table>
+
+<h2>7. Gates (light set, with exit statuses; the heavy set is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>command / recipe</th><th>result</th><th>exit status</th></tr>
+<tr><td>G0 &mdash; zero script+shader errors</td><td><code>gate_census.py</code> over the SMOKE log</td><td>0 / 0 ok</td><td>rc=0 (census rc=0; godot rc=0)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_LOGIC=smoke</code>, Forward+ under xvfb</td><td>all arms green (fly / mine / cave census / light)</td><td>rc=0 (a first attempt on the fix-v1 tree hit the KNOWN stochastic UAF class: signal 11, single <code>libc.so.6(+0x45f60)</code> stub frame, clean log, <code>_process (world.gd:5248)</code> streaming context &mdash; the documented engine-class signature; re-run rc=0, and the fixed-tree run rc=0 with no crash)</td></tr>
+<tr><td>genhash</td><td>world-hash battery vs the standing reference <code>.scratch/AC-0408-gates/genhash_r1.log</code></td><td><strong>25/25 identical</strong> (GENMS 150) &mdash; the fix is mesh-index only, world data untouched</td><td>rc=0</td></tr>
+<tr><td>meshprobe</td><td>probe arm, mesh match_rate</td><td><strong>match_rate 1.0</strong>, ok true, verts_gd = verts_cpp = 236716, 32/32 samples, quadcheck 0/0 (the world-slab comparison is unaffected by the body's index order; the body builds cleanly with the flipped winding)</td><td>rc=0</td></tr>
+<tr><td>shaderforce</td><td>12-shader forced-compile arm</td><td><strong>12/12 ok</strong>, failed [], including <code>satellite_body.gdshader</code> (declared 8 / params 8 &mdash; the new <code>u_srgb_pre</code> registered)</td><td>rc=0</td></tr>
+</table>
+<p>Every render in &sect;2/&sect;5/&sect;6 booted the mandatory Forward+ line
+(<code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe</code>), exited rc=0,
+produced its PNG (file-existence checked &mdash; SNAP FAIL does not set rc), and logged zero
+SCRIPT/SHADER ERROR lines.</p>
+
+<h2>8. Captures</h2>
+<p>All in <code>tasks/AC-0411/</code>: before sweep
+(<code>ac0411-sweep-before-{1600,2600}-t0{25,50,75}.png</code>), final after sweep
+(<code>ac0411-final-{1600,2600}-t0{25,50,75}.png</code>), the clouds-off A/B
+(<code>ac0411-final-2600-t050-cloudsoff.png</code>), the landing half
+(<code>ac0411-after-landing-{120,300}.png</code>, <code>ac0411-after-ground.png</code>), plus
+the diagnostic frames that proved the mechanism
+(<code>ac0411-diag12-2600-t050.png</code> face-id render, the others in the directory; each
+with an <code>_s600</code> mid-drain companion). Logs in <code>.scratch/AC-0411/</code>
+(including <code>meshprobe2.log</code> winding census and the per-frame SATDIAG state lines).</p>
+
+<h2>9. Deviations</h2>
+<ul>
+<li>The first-half hypothesis (the double sRGB companding as the wash's cause) was overtaken:
+fix v1 (<code>u_srgb_pre</code>) measured a byte-identical NO-OP on the wash &mdash; recorded as
+a deviation, kept as the separate real domain defect (&sect;3). The mechanism was found by
+mesh census + face-id render + screen-space winding analysis, not by the shader bisect.</li>
+<li>12 diagnostic renders at 2600 T0.5 (diag1&ndash;9, diag12, clouds-off, meshprobe arms) were
+spent identifying the mechanism &mdash; each ~13 min, one godot at a time, all rc=0, all
+diagnostic code fully reverted before the final set.</li>
+<li>The first SMOKE attempt (fix-v1 tree) died in the known stochastic UAF class (rc=134;
+signal 11, single libc stub frame, clean log, streaming context) &mdash; the documented
+engine-class signature, not an effect of this change (one uniform, one build-time push, and a
+mesh index order &mdash; none of it slab/streaming code); the re-run and the fixed-tree run
+both rc=0.</li>
+<li>meshprobe2's 6 leaked ObjectDB entries at exit are the pre-existing leak noted in the
+HARNESS, not this change.</li>
+</ul>
+
+<h2>10. Deliberately NOT done</h2>
+<ul>
+<li>The 16-m faceting / vertical streaks (bake resolution/filtering) &mdash; left as their own
+finding, per the ticket (do not conflate with this wash).</li>
+<li>The heavy gate set (farab / ladder / halo / lightstate / r16 / boundary / the satellite arm
+re-run) &mdash; the coordinator's, per the ticket.</li>
+<li>No commit, no push, no TASKS.yaml edit, no fence-file touch, no <code>AWECRAFT_LOGIC</code>
+arm in harness.gd &mdash; per the fences.</li>
+</ul>
+</body></html>

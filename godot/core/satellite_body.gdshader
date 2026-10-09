@@ -58,9 +58,20 @@
 //      new texture channel: the ratio is exact for the radial term,
 //      which is the one that moves the terminator.
 //
-// Colour domain: sRGB values throughout (the texture bytes, u_air and
-// the output are all sRGB-domain, the same convention the aero sky
-// shader and the env fog colour use). No linear conversion here.
+// Colour domain (AC-0411): the baked face bytes are sRGB-COMPANDED (the
+// bake's _l2s; a 71%-grass disc centre reads (55,104,34) in the face
+// PNG) but the texture upload is a LINEAR-format texture (ImageTexture.
+// create_from_image, no sRGB flag), so the sampler returns them as-is
+// and the Forward+ pipeline sRGB-encodes ALBEDO again at the output -
+// a double companding: the daylit disc's flat pale-cyan wash where
+// green is expected (the user's "plain white ball", the fourth
+// attribution of that symptom). The AC-0242 round-trip applies to the
+// terrain term only: the shader pre-decodes it (pow 2.2, gated by
+// u_srgb_pre, 1.0 on Forward+) so the output encode round-trips the
+// bake. u_air is the one already-linear input (Aero.fog_display is
+// srgb_to_linear'd) and stays as-is; the ALBEDO mix is therefore
+// linear-domain, exactly like the annulus (lod_avg.gdshader), the one
+// far material that reads correctly from orbit.
 shader_type spatial;
 // AC-0384 r3: fog_disabled - the body's own op/haz model IS the fog-wall
 // bridge: existence ramps over the world's fog window and haz_d mixes the
@@ -85,6 +96,10 @@ uniform float u_day_gain : hint_range(0.0, 2.0);
 // frame (the body carries translation only, no rotation), so the dot
 // against the local-space NORMAL is the world-space sun lambert.
 uniform vec3 u_sun;
+// AC-0411: the AC-0242 sRGB round-trip switch (1.0 on Forward+, 0.0 on
+// gl_compatibility) - pushed by satellite_body.gd, the same value
+// main.gd pushes to the other sRGB-domain materials.
+uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
@@ -151,7 +166,18 @@ void fragment() {
 	float haz_d = 1.0 - op;
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
 	float sun_l = clamp(dot(u_sun, NORMAL) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
-	vec3 base = texture(tex, UV).rgb * (u_day - u_day_gain * (1.0 - sun_l));
+	// AC-0411: decode the baked sRGB bytes BEFORE the day factor. The
+	// factor (u_day - u_day_gain*(1-sun_l), in [0.18, 1.0]) is a linear
+	// light scalar, not part of the display colour, so the domain
+	// correction belongs on the texture value: decode-then-scale
+	// preserves the texel's channel ratios (its hue) at the 0.18 night
+	// floor, where scale-then-pow (the atlas materials' order) would
+	// shift them; at sun_l = 1 the two orders are identical, so this
+	// agrees with the AC-0242 convention exactly where it is measured.
+	// u_air is NOT pre-decoded (already linear) - see the header.
+	vec3 texv = texture(tex, UV).rgb;
+	texv = mix(texv, pow(texv, vec3(2.2)), u_srgb_pre);
+	vec3 base = texv * (u_day - u_day_gain * (1.0 - sun_l));
 	// AC-0394: spatial outputs are ALBEDO and ALPHA - COLOR is the canvas_item
 	// (2D) output and is a read-only vertex input here, which is why the parser
 	// reported "Constants cannot be modified" at this line.

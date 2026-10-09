@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0411 plan — body-disc-centre pale wash at altitude</title></head>
+<body>
+<h1>AC-0411 — plan: the body-disc-centre pale wash</h1>
+
+<h2>Goal</h2>
+<p>Establish by A/B which term in the body's daylit colour path renders the disc centre as the
+flat pale-cyan wash (assessment: 144,209,221 at T0.5 / r21 measured 130.7,195.7,206.5) where the
+baked texel is 71&nbsp;per&nbsp;cent grass and the committed formula predicts green. Fix it, then
+re-measure the disc centre <em>and</em> the disc's overall saturation/contrast at 1600 and 2600&nbsp;m
+across T0&nbsp;&isin;&nbsp;{0.25,&nbsp;0.5,&nbsp;0.75}, before and after, with the assessment's exact
+recipe and instrument, so the before numbers are directly comparable. Test the coordinator's link:
+does ONE edit move both the disc centre and the disc's overall saturation/contrast (the
+"pastel, low-contrast orbital material" finding) — if yes, one job; if no, say so. The landing
+half (120&nbsp;m, 300&nbsp;m, ground) must not regress against the r21 reference frames.</p>
+
+<h2>Hypothesis (code-reading; the A/B decides)</h2>
+<p>The bake writes <strong>sRGB-companded</strong> bytes (grass = 55,104,34; <code>_l2s</code>).
+<code>ImageTexture.create_from_image()</code> uploads them with no sRGB flag &rarr; linear-format
+texture &rarr; the shader samples the bytes as if linear and writes them to <code>ALBEDO</code> &rarr;
+Forward+ sRGB-encodes <code>ALBEDO</code> at the output &rarr; <strong>double companding</strong> &rarr;
+pale, desaturated, low contrast — worst in the daylit high-value regime, mildest where values are
+dark (the rim's terminator side; dawn/dusk, where <code>sun_l</code>&nbsp;=&nbsp;0 gives the 0.18
+floor). This is exactly the defect class AC-0242 fixed in the other nine sRGB-domain materials
+with the <code>u_srgb_pre</code> pow(2.2) pre-decode; the body (AC-0310, later) never received it.
+Controls: the annulus (<code>lod_avg.gdshader</code>) — the only far material with a truly
+<em>linear</em> albedo — reads correctly from orbit; the wash's time dependence (T0.3 dark green
+vs T0.5 pale) is the same texel at a different daylit value. The shader's header comment
+("sRGB values throughout") is FALSE for the real pipeline and is corrected with the fix.</p>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/core/satellite_body.gdshader</code> — add <code>u_srgb_pre</code>; pre-decode the
+<strong>terrain term only</strong>, before the <code>u_air</code> mix (u_air is already linear —
+<code>Aero.fog_display</code> is srgb_to_linear'd — so pow-ing the mixed ALBEDO would darken the
+air term; the terrain sample is the only sRGB-domain input). Fix the "Colour domain" header.</li>
+<li><code>godot/world/satellite_body.gd</code> — push <code>u_srgb_pre = Aero.srgb_pre()</code> in
+<code>_build_face</code> (build-time push, the house pattern; the renderer method is constant
+per run). No per-frame cost.</li>
+</ul>
+<p>Fenced files (main.gd / game.gd / drop.gd / debug.gd) untouched. <code>harness.gd</code>
+untouched — the satellite arm's numeric twin models the haz/existence/dominance contract, the
+formula it twins is unchanged, so the standing gate keeps its meaning.</p>
+
+<h2>Terms to bisect</h2>
+<p>The body's daylit path at 2600&nbsp;m nadir (shader order): (1) the texture sample's domain,
+(2) the day factor <code>u_day - u_day_gain*(1-sun_l)</code> (= 1.0 at the T0.5 nadir),
+(3) <code>haz_a</code> (limb; &asymp;0 at nadir — cosv&asymp;1), (4) <code>haz_d</code>
+(= 0: d&nbsp;&asymp;&nbsp;2740 &gt; edge&nbsp;400), (5) the <code>u_air</code> mix (weighted by
+haz&nbsp;&asymp;&nbsp;0 at the centre), (6) engine lighting (ambient+directional on the lit
+material — shared with the correctly-reading annulus), (7) the output sRGB encode. At the nadir
+terms 3–5 carry &asymp;0 weight, so the wash is (1)+(6)+(7). The A/B isolates:</p>
+<ul>
+<li><strong>B0</strong> = current tree (re-confirm first — the assessment frames predate the last
+two shader-hunk commits).</li>
+<li><strong>B1</strong> = the fix (terrain-term pre-decode). If the centre snaps to a
+green texel-composition match &rarr; the term is (1)+(7), the domain of the terrain sample.
+If only partial &rarr; continue with A/Bs on (5) and (6) before declaring the fix.</li>
+</ul>
+
+<h2>Measurement (same instrument as the assessment)</h2>
+<ul>
+<li>Nadir box: 200&times;200 at (640,&nbsp;575) — mean RGB, lum_mean, sat_mean, wash_frac
+(lum&ge;150 &amp; sat&le;0.25) — <code>analyze_r21.py</code> semantics, copied for this
+ticket.</li>
+<li>Whole-disc stats for the pastel-link test: per-pixel saturation mean + luminance std
+(contrast) over the disc silhouette mask.</li>
+<li>Recipe: the r21 capture script verbatim — user config <code>AWECRAFT_RADIUS=24
+AWECRAFT_FOG_PCT=83</code> (fog_far&nbsp;332 / render_edge&nbsp;400, asserted per log),
+<code>AWECRAFT_TIME</code> + <code>AWECRAFT_TIME_FREEZE=1</code>,
+<code>AWECRAFT_CLOUD_T0=411200</code>, seed 44, <code>AWECRAFT_CAM=planet</code> +
+<code>AWECRAFT_SAT_ALT</code>, <code>AWECRAFT_SIZE=1280,720</code>,
+<code>AWECRAFT_SNAP_DRAIN=1200</code> (frames), <code>AWECRAFT_SNAP_STEPS=600</code>, LVP
+Forward+ under xvfb, 1200&nbsp;s budget, file-existence checked (<code>Debug.snap</code> prints
+SNAP&nbsp;FAIL rather than failing loudly). No <code>AWECRAFT_LOGIC</code> arm. One godot at a
+time; <code>pgrep</code> before every call; logs to <code>.scratch/AC-0411/</code>.</li>
+</ul>
+<p>Runs: 6 before (1600/2600 &times; T0.25/0.5/0.75) + 6 after (same) + 1 clouds-off A/B at
+2600/T0.5 after (the assessment's A/B) + 3 landing half (120/300/ground after, vs the r21
+reference frames).</p>
+
+<h2>Harness gates (light, mine — heavy set is the coordinator's)</h2>
+<ul>
+<li>G0: <code>--headless --quit</code> &rarr; <code>gate_census.py</code>: zero SCRIPT ERROR and
+zero SHADER ERROR, <strong>and</strong> the process exit status checked (the stochastic
+use-after-free leaves a clean log with a signal-eleven exit).</li>
+<li>SMOKE: battery <code>player;interact;light;fluids;genhash</code>.</li>
+<li>PROBE: <code>meshprobe</code> &rarr; match_rate 1.0.</li>
+<li>genhash 25/25 byte-identical (world/ touched — the change is uniform-only, no generation;
+drift would be a FINDING).</li>
+<li>shaderforce 12/12 (a .gdshader changed; Forward+ path).</li>
+</ul>
+
+<h2>Deliverables</h2>
+<p>Self-contained <code>AC-0411-results.html</code> (before/after tables across the sweep, the
+A/B, the pastel-link verdict, the landing-half check, gate outputs with exit statuses,
+deviations) + the capture PNGs in <code>tasks/AC-0411/</code>.</p>
+</body></html>
