@@ -272,13 +272,27 @@
 //
 // AC-0284b FAR (h-only) COLUMNS: skip == 2 (generate_resl) produces NO
 // slabs at all — only the 1024-byte FAR PAYLOAD (256 H as u16 LE + 256
-// biome + 256 top-block id; see gen_far). The H is bit-exact with the
-// full path's H (the shared col_heights_pass — the 3 surface fields at
-// the same lattice; the promotion-consistency contract). skip == 1 keeps
-// the AC-0216/AC-0284a SLAB-SKIP fill (solid 0..H slabs + palettize):
-// nothing enqueues it in-game after AC-0284b — it survives as the
-// A/B REFERENCE for the farab gate (h_avg_emit must be byte-identical to
-// low_emit_avg on the same column's skip-filled slabs). Cumulative
+// biome + 256 top-block id; see gen_far). Since AC-0387 the H is the
+// full path's CARVED top (the carved_top_pass — the height the full
+// path would produce; the promotion-consistency contract) and the top
+// row the post-carve top block (the farab gate re-pointed at
+// carved_tops). skip == 1 is the AC-0312 BAND-A MATERIALIZATION fill
+// (the tier-1 draw tier — world.gd's mat dispatch): the slab-skip fill
+// (solid slabs + palettize) that the far column's first high dispatch
+// materializes into the full column's mesh. AC-0397: driven from the
+// column's FAR PAYLOAD (generate_resl's optional last arg — the 1024
+// bytes gen_far emits): the fill is solid exactly 0..PAYLOAD H (the
+// carved top, NOT the un-carved heightmap — the pre-AC-0397 fill stood
+// on the un-carved H, i.e. a plateau up to 91 blocks proud of the
+// carved ground on every carved column of the ring), the top row is
+// the payload TOP id (the far emit's surface block — a rule
+// re-derivation would diverge on carved-into-deepslate columns), and
+// the water gate is the fill's own top (the far emit's St rule). The
+// veg loop's in-column base reads heff, so trees/flowers follow the
+// fill's (carved) surface — matching the far lane's veg (gen_veg_cells,
+// AC-0387). A caller that passes no payload keeps the legacy un-carved
+// fill (he = the heightmap H) bit-for-bit — the farab gate's A/B
+// reference and the ladder's far-race fallback still use it. Cumulative
 // counters: g_t_cols_far / g_t_far_us (the far columns' end-to-end cost;
 // gen_timing).
 //
@@ -3267,7 +3281,8 @@ static std::vector<uint8_t> gen_veg_cells(int cx, int cz, int64_t seed, int hmax
 static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int sea,
 		int skip = 0, const uint8_t *p_keep = nullptr, std::vector<uint8_t> *p_fl = nullptr,
 		int face = 0, double R = 4000.0, std::vector<int> *p_heff = nullptr,
-		std::vector<uint8_t> *p_topblk = nullptr, std::vector<uint8_t> *p_far = nullptr) {
+		std::vector<uint8_t> *p_topblk = nullptr, std::vector<uint8_t> *p_far = nullptr,
+		const uint8_t *p_pay = nullptr) {
 	int bx = cx * 16;
 	int bz = cz * 16;
 	int nsl = hmax / 16;
@@ -3489,6 +3504,16 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 				// pocket). The aquifer/surface/dirt/ore rules below apply
 				// unchanged with he = H.
 				he = H;
+				if (p_pay != nullptr) {
+					// AC-0397: the band-A materialization fill is driven
+					// from the column's FAR PAYLOAD — the carved top the
+					// far lane already computed (gen_far's H; the full
+					// path's own, farab-gated). A caller passing no
+					// payload keeps the un-carved H bit-for-bit (the
+					// farab A/B reference + the ladder's far-race
+					// fallback).
+					he = (int)p_pay[2 * idx] | ((int)p_pay[2 * idx + 1] << 8);
+				}
 			} else {
 				// The ONE density field, top-down: the solid flags + the
 				// effective surface (topmost d > 0). Above H + R + 1 the field
@@ -3566,6 +3591,15 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 			}
 			g_t_scan_us.fetch_add(now_us() - t_scan, std::memory_order_relaxed);
 			heff[idx] = he;
+			// AC-0397: the water gate's height — the column's own terrain
+			// top as this fill draws it. The payload-driven band-A fill
+			// draws its water at the far emit's St rule (St = max(H, sea)
+			// — a land column the carve drops below sea draws its water
+			// surface; the farab (2) reference synthesizes exactly this,
+			// and the far emit sees only the payload, so its gate is the
+			// payload's H). The legacy skip (he = the un-carved H) and the
+			// full path keep the pre-carve H gate bit-for-bit.
+			const int he_wgate = (skip && p_pay != nullptr) ? he : H;
 			// AC-0292: the per-column CAVE BIOME table — one entry per
 			// 8-block y-LEVEL (48 levels; the fill + drip paths index
 			// bio[y >> 3] up to level 47, so the table must cover the
@@ -3633,10 +3667,29 @@ static std::vector<uint8_t> gen_flat(int cx, int cz, int64_t seed, int hmax, int
 					// obeyed this rule — the full path was the odd one out, so
 					// the three paths now agree and a demoted-then-promoted
 					// column can no longer change its water.
-					if (y >= he + 1 && y <= sea && H < sea) {
-						cell = B_WATER; // aquifer: ocean fill up to Sea 126, gated on pre-carve H
+					// AC-0397: the gate's height is he_wgate — pre-carve H on
+					// the full path and the legacy skip (bit-for-bit), and the
+					// fill's own carved top on the payload-driven band-A fill:
+					// the far emit draws only the payload, so its water rule is
+					// St = max(payloadH, sea) — a land column the carve drops
+					// below sea draws its water surface there (the farab (2)
+					// reference synthesizes exactly this shape).
+					if (y >= he + 1 && y <= sea && he_wgate < sea) {
+						cell = B_WATER; // aquifer: ocean fill up to Sea 126, gated on the column's own terrain top (see AC-0342/AC-0397 above)
 					} else if (y == he) {
-						if (he < DEEPSLATE_Y) {
+						if (skip && p_pay != nullptr) {
+							// AC-0397: the payload TOP id — the full path's
+							// FINAL top block (the carver re-skin rule where
+							// the carve dropped the top, the fill top-row
+							// rule otherwise — gen_far's top row; the farab
+							// 4a identity). Re-deriving this fill's own
+							// top-row rule here would diverge on a column the
+							// carve drops into the deepslate band: the
+							// re-skin rule (1673-1680) has no deepslate
+							// branch, so the far emit draws grass/sand there
+							// and the rule would draw deepslate.
+							cell = p_pay[768 + idx];
+						} else if (he < DEEPSLATE_Y) {
 							// AC-0292: below vanilla y=0 no biome top fires
 							// (they are all y_above 0) — the top falls to the
 							// stone rule = deepslate. gen_far's top formula
@@ -4278,7 +4331,7 @@ public:
 		// skip (see the file header).
 		ClassDB::bind_method(D_METHOD("generate_flat", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_flat, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
 		ClassDB::bind_method(D_METHOD("generate_slabs", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_slabs, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
-		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0));
+		ClassDB::bind_method(D_METHOD("generate_resl", "cx", "cz", "s", "h", "sea", "skip", "keep", "face", "R", "pay"), &AweGen::generate_resl, DEFVAL(0), DEFVAL(PackedByteArray()), DEFVAL(0), DEFVAL(4000.0), DEFVAL(PackedByteArray()));
 		// AC-0283 P3: the halo band's heightmap sky source (the heights
 		// pass only — see column_heights above).
 		ClassDB::bind_method(D_METHOD("column_heights", "cx", "cz", "s", "h", "face", "R"), &AweGen::column_heights, DEFVAL(0), DEFVAL(4000.0));
@@ -4558,7 +4611,13 @@ public:
 	// the fluid tick's explicit-fl pass makes them flow: the waterfalls).
 	// The skip paths keep all-null fl (no flow marks — the band-A/far
 	// payloads stay bit-exact by construction).
-	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0) const {
+	// AC-0397: the optional last arg p_pay — the column's 1024-byte FAR
+	// PAYLOAD (gen_far's bytes: 512 H u16 + 256 biome + 256 top id) —
+	// drives the skip=1 band-A fill (solid 0..payload H, top row = the
+	// payload top id, water gate = the fill's own top). Ignored unless
+	// skip != 0 and the size is exactly 1024; an absent/undersized
+	// payload keeps the legacy un-carved fill (never an error).
+	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0, PackedByteArray p_pay = PackedByteArray()) const {
 		if (p_skip == 2) {
 			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea, p_face, p_R);
 			Array resl;
@@ -4585,10 +4644,12 @@ public:
 			return resl;
 		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
+		const uint8_t *pay = (p_skip != 0 && p_pay.size() == 1024)
+			 ? (const uint8_t *)p_pay.ptr() : nullptr; // AC-0397
 		std::vector<uint8_t> ffl;
 		std::vector<uint8_t> far_pay;
 		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, &ffl, p_face, p_R,
-			 nullptr, nullptr, &far_pay);
+			 nullptr, nullptr, &far_pay, pay);
 		Array resl;
 		resl.append(awegen::palettize_slabs(f, p_h));
 		if (p_skip == 0) {

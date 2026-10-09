@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>AC-0397 plan</title></head>
+<body>
+<h1>AC-0397 — plan: the band-A materialization fill stands on the carved top</h1>
+
+<h2>Goal</h2>
+<p>The band-A materialization (the tier-1 draw, 80–128 m at the user's sim 4 / medium 8) runs
+<code>generate_resl(skip=1)</code>, whose fill is solid 0..<em>un-carved</em> heightmap H. The far lane's
+reference (the far payload H) is already the full path's <em>carved</em> top (AC-0387, farab-gated). The
+defect: where the carve drops the top, the band-A plateau stands above the carved ground — the coordinator's
+census: 2,597 of 159,744 ring columns (1.63 %, 2.39 % outer band, max 91 blocks at (−91, 147, −48)).
+Fix per the recorded direction: fill band A to the carved top the far-lane reference already computes, not to
+the un-carved height. No toggle: (b) is a contract violation (the ticket's own switch analysis).</p>
+
+<h2>Shape of the change</h2>
+<ul>
+<li><strong>Drive the fill from the resident far payload, do not re-derive.</strong> The mat dispatch
+(world.gd <code>_mesh_dispatch_hslab</code> band-A branch) already requires the column to be a far column with a
+512-byte <code>far_h</code>; the handoff keeps the payload with the fill. AC-0388 established the pattern
+(reuse the resident bytes instead of re-deriving) and <code>world/AGENTS.md</code> forbids re-deriving a value
+another lane computes. The payload H is bit-exact the carved top (farab h_mismatch 0, negative-tested), so
+driving from it is driving from the carved top — at zero added generation cost (the alternative — re-running
+<code>carved_top_pass</code> inside the skip path — costs the AC-0387 price, ~3,258 µs/chunk, on every
+materialization, and re-derives bytes the lane already holds).</li>
+<li><strong>gen.cpp:</strong> <code>gen_flat</code> gains an optional 1024-byte far-payload pointer (used only on
+the skip path). Skip fill: <code>he</code> = payload H; the top row = the payload TOP id (the re-skin/top-row id
+the far emit draws — a rule re-derivation here would diverge on carved-into-deepslate columns); the water gate
+becomes the fill's own top (<code>he &lt; sea</code> — the same rule the skip path and the far path already
+obeyed, AC-0342's comment, and it matches the far emit's St rule and the farab (2) reference exactly). The veg
+loop is untouched in logic: its in-column base already reads <code>heff</code>, which is now the payload H —
+matching the far lane's veg (gen_veg_cells, AC-0387: base = carved top, gate = pre-carve H2).</li>
+<li><strong>Binding:</strong> <code>generate_resl</code> gains an optional trailing <code>p_pay</code>
+(1024-byte far payload; ignored unless skip ≠ 0 and the size is right — a bad/absent payload falls back to the
+legacy un-carved fill, never a hard error). Existing callers (ladder's far race fallback, farab 3b codec
+round-trip) pass the payload they already have — data-source sync only, no assertion change in any arm.</li>
+<li><strong>world.gd:</strong> the mat entry carries <code>"far_pay": c.far_payload()</code>; the worker's mat
+branch passes it through. Nothing else in the dispatch/handoff moves.</li>
+</ul>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>gdext/src/gen.cpp</code> — <code>gen_flat</code> (skip branch, water gate, top row) + the
+<code>generate_resl</code> binding + the file-header lane description.</li>
+<li><code>godot/world/world.gd</code> — mat entry field + worker mat call (+ comments).</li>
+<li><code>godot/scenes/harness.gd</code> — ladder far-fallback + farab 3b: pass the payload (data-source sync
+only; no arm logic or assertion changes).</li>
+<li><code>godot/world/AGENTS.md</code> + <code>godot/ARCHITECTURE.md</code> — the "skip=1 fill stays
+un-carved" documentation line becomes wrong by construction; updated in this task (invariant 2).</li>
+<li><code>tasks/AC-0397/</code> — continuity (this journal), plan (this), results page + captures.</li>
+</ul>
+<p>Not touched (fence): <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>,
+the other session's dirty shader files, TASKS.yaml. No commits.</p>
+
+<h2>Harness gates (light set, then exit)</h2>
+<ol>
+<li><strong>G0</strong> ×2: zero SCRIPT ERROR + zero SHADER ERROR via <code>tasks/scripts/gate_census.py</code>
+<strong>AND process exit status 0</strong> (the stochastic use-after-free leaves a clean log with a signal-11
+exit — AC-0403).</li>
+<li><strong>SMOKE</strong> battery <code>player;interact;light;fluids;genhash</code> + census. (interact's
+drop_spawned/place_ok are known-stale on this tree from the other session's in-flight drop.gd — AC-0403 §8;
+attribute, do not chase, A/B in the clean worktree if red.)</li>
+<li><strong>PROBE</strong> = <code>meshprobe</code> (standing <code>match_rate</code> 1.0) + census.</li>
+<li><strong>genhash</strong> — baseline (pre-edit, current .so) vs post-edit, same tree. The standing
+reference (<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>) is <em>already stale</em>: AC-0403 §8
+found it reads 0/25 against the untouched baseline (post-AC-0367 world drift). Report the baseline→post delta
+as a deliberate, attributed movement — not a re-baseline, not a regression. Expectation: 0/25 columns move
+(genhash hashes the skip=0 FULL path over the taxi ≤ 2 window; this change is confined to the skip=1
+materialization fill) — the census, not genhash, is the proof of the move.</li>
+<li><strong>farab</strong> (h_mismatch 0, slab 0/0, 4a top-identity, 4b report) + census.</li>
+<li><strong>ladder</strong> (the band-A arm: materialization identity on the resident form + sky-eff rule) —
+the standing gate that now has teeth; 20/20 expected.</li>
+<li><strong>boundary r4</strong> — the builder's ONE permitted self-check (world/AGENTS.md) since the mat
+dispatch path moved.</li>
+</ol>
+<p>HEAVY (r16, battery, flake, r50, build_windows.sh + the Windows DLL) = the coordinator's. Exit after mine.</p>
+
+<h2>How the plateau columns are verified gone (acceptance)</h2>
+<p>The acceptance is the <strong>census re-run, measured, not asserted</strong> — the same ring the coordinator
+measured (taxi 5..8 Chebyshev, anchors (0,0) / (6,−9) / (−11,4), seed 44, 159,744 columns), same per-taxi and
+max-error shape:</p>
+<ol>
+<li><strong>Proxy re-run (pre-fix baseline):</strong> the coordinator's own instrument
+(<code>.scratch/AC-0394/census_bandA.gd</code> — fill-top via <code>column_heights16</code> vs
+<code>carved_tops</code>) on the untouched tree + current .so. Must read 2,597 / 91 (reproduces the ticket's
+baseline on this exact build).</li>
+<li><strong>Actual-fill instrument, legacy fill (pre-fix):</strong> a new scratch instrument
+(<code>.scratch/AC-0397/census_bandA2.gd</code>) that runs the <em>actual</em> band-A materialization
+generation per column (exactly the worker's call) and reads the fill's per-column SOLID top (topmost
+non-air / non-water / non-veg cell) from the generated slabs, compared against the same
+<code>carved_tops</code> reference. In legacy mode (no payload) it must read the same 2,597 — calibrating the
+new instrument to the coordinator's terms (the pre-fix fill's solid top IS the un-carved H).</li>
+<li><strong>Actual-fill instrument, payload-driven fill (post-fix):</strong> the same instrument passing the
+column's far payload (the 1024-byte <code>generate_far</code> output — what the mat worker passes).
+<strong>Acceptance: the count of columns whose filled top stands ABOVE the carved top must be 0</strong> — and
+the stronger identity (fill top == carved top on every column) is reported as well. Negative test: step (2)
+is the same instrument reading RED on the pre-fix build.</li>
+</ol>
+<p>Cost: the census instrument times the <code>generate_resl</code> call in both modes — the per-chunk price of
+the change is reported from the measurement (expect flat: no new noise/scan work, only payload-byte reads).</p>
+
+<h2>Render (one shot, clean worktree)</h2>
+<p>One ground-level render from a <code>git worktree</code> at the current commit (a4c953f) plus only this
+ticket's hunks (the dirty working tree holds the other session's uncommitted shader/code edits — a render
+from it would not describe what ships): Forward+ / lavapipe recipe, 1280×720 (comma),
+<code>AWECRAFT_SNAP_DRAIN=600</code> frames, NO <code>AWECRAFT_LOGIC</code> arm, 1200 s budget, verify the
+file exists, the log carries the llvmpipe Forward+ boot line, census the log. Radius 8 (the smallest that
+contains the 80–128 m band-A ring; the user's full 400 m edge is infeasible on this box) with
+<code>AWECRAFT_FOG_PCT=87</code> (max allowed — the user's fog 332 sits far outside the ring; 87 % keeps the
+fog at/just past the ring's outer edge 128 m, the closest faithful proxy). The results page states which
+commit + hunks the frames came from.</p>
+</body>
+</html>

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0397 results — the band-A fill stands on the carved top</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:1020px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:.3rem .5rem;vertical-align:top;text-align:left}
+.ok{color:#166023}.bad{color:#a11}.warn{color:#8a6d00}
+.small{font-size:.85em;color:#555}
+.verdict{background:#eef7ee;border:2px solid #166023;padding:.6rem .9rem;margin:.8rem 0}
+img{max-width:100%;border:1px solid #bbb}
+</style>
+</head>
+<body>
+<h1>AC-0397 — carve the missing from the low-LOD drawn surface (the band-A materialization fill)</h1>
+<p class="small">Builder: subagent. 2026-10-08 21:14–23:00 EDT. Tree at <code>a4c953f</code> (AC-0394) + one
+other session's in-flight godot/* changes (main.gd / game.gd / debug.gd / drop.gd / chunk_lit_* / fluid_* /
+satellite_body shaders) — all fenced files untouched by this task. Gates on the dirty tree; the render from a
+clean worktree (a4c953f + this task's hunks only). No commits.</p>
+
+<div class="verdict"><b>Bottom line.</b> The band-A materialization fill (<code>generate_resl(skip=1)</code>) was solid
+0..<em>un-carved</em> heightmap H; it now runs on the far payload's <em>carved</em> top — the value the far lane
+already computes (Option (b) of the ticket, at zero added cost). The acceptance is the census re-run, measured
+the same way the coordinator measured: the count of ring columns whose filled top stands <b>above</b> the carved
+top goes <b class="bad">2,597</b> (1.63 %, max 91 blocks at (−91,147,−48)) → <b class="ok">0</b> (159,744/159,744 columns
+with filled top <em>equal</em> to the carved top). Cost A/B (in-process): <b>0 µs</b> per chunk. genhash:
+<b>0/25 columns moved</b> (deliberate — the genhash window is the skip=0 full path; the standing reference is
+already stale pre-fix, see §4). Light gates all green (G0×2, SMOKE, meshprobe, farab, ladder 20/20, one boundary
+r4 self-check), each with <code>rc=0</code> + 0/0 error census; the standing values that read off-band were
+A/B'd against the pre-fix <code>.so</code> and are <b>pre-existing stale bounds, not this change</b> (§5). One
+ground-level render at the user's fog ratio from the clean worktree (§7). No re-baseline, no toggle, no commit.</div>
+
+<h2>1. The defect, as measured (pre-fix, this exact build)</h2>
+<p>The coordinator's instrument (<code>.scratch/AC-0394/census_bandA.gd</code> — fill top via
+<code>column_heights16</code> vs <code>carved_tops</code>, taxi 5..8 ring, anchors (0,0)/(6,−9)/(−11,4), seed 44,
+H 384, sea 126, face 0, R 4000) re-run on the untouched tree + current <code>.so</code>
+(<code>.scratch/AC-0397/census-proxy-baseline.log</code>):</p>
+<pre>BAND_A_CENSUS { "cols": 159744, "un_carved_above_carved_top": 2597, "rate_pct": 1.63,
+  "max_delta": 91, "max_col": [-91, 147, -48],
+  "per_taxi": { 5: 151, 6: 383, 7: 890, 8: 1173 } }   # 0.49% → 2.39% outward</pre>
+<p>Reproduced exactly — the ticket's baseline numbers are the numbers of this build. The user-visible symptom:
+the 80–128 m draw tier (band A, the user's sim 4 / medium 8 pair) shows solid plateaus up to 91 blocks proud of
+the carved ground on every carved column of the ring, inside the fog.</p>
+
+<h2>2. What changed</h2>
+<p><b>Drive the fill from the resident far payload — do not re-derive.</b> The payload H <em>is</em> the carved top
+(AC-0387: the far lane runs the full path's per-column sequence; farab-gated, negative-tested), so driving from
+it is driving from the carved top, at zero added generation cost. Rejected alternative: re-running
+<code>carved_top_pass</code> inside the skip path — the AC-0387 price (~3,258 µs/chunk) on every materialization,
+re-deriving bytes the lane already holds (the project's "never re-derive a value another lane computes").</p>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>gdext/src/gen.cpp</code></td>
+<td><code>gen_flat</code> gains an optional trailing <code>p_pay</code> (the 1024-byte payload). On the skip path:
+<code>he</code> = payload H; the top row = the payload <b>TOP id</b> (a rule re-derivation would diverge on columns the
+carve drops into the deepslate band — the re-skin rule has no deepslate branch); the water gate becomes the fill's
+own top (the far emit's St rule — "a land column the carve drops below sea draws its water surface there", exactly
+what the farab (2) reference synthesizes). The veg loop is untouched in logic: its in-column base already reads
+<code>heff</code>, which is now the payload H — matching the far lane's veg (AC-0387). <code>generate_resl</code> binding +
+D_METHOD gain the optional <code>pay</code> arg (ignored unless skip ≠ 0 and the size is exactly 1024 — an absent or
+undersized payload keeps the legacy un-carved fill, never an error). File-header lane description updated in-task.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>The band-A mat entry carries <code>"far_pay": c.far_payload()</code> (one 1 KB copy per dispatch — the same
+pattern as the <code>snap_rings</code> neighbour calls in the same branch); the worker's mat branch passes it to
+<code>generate_resl</code> (face 0 / R 4000 — the production defaults the payload was generated with). Comments
+updated. The data lane's offscreen-interior skip=1 call (world.gd:6276) is deliberately <em>not</em> changed: those
+columns are outside the render circle (never drawn as tier 1) and full-regenerate before any mesh — the legacy
+fill there is invisible.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td>
+<td><b>Data-source sync only — no arm logic, branch, or assertion changed.</b> Two arms model the production fill
+shape: the ladder's far-race fallback reference and the farab (3b) codec round-trip vehicle now pass the payload
+they already hold. Left stale they would model the pre-fix fill; the arms' <code>ok</code> verdicts are untouched.</td></tr>
+<tr><td><code>godot/world/AGENTS.md</code> + <code>godot/ARCHITECTURE.md</code></td>
+<td>The "skip=1 band-A fill stays un-carved" documentation is wrong by construction after this change — updated in
+the same task (invariant 2): the fill is payload-driven; the no-payload call keeps the legacy fill bit-for-bit
+(farab A/B reference + the data lane's offscreen interior).</td></tr>
+</table>
+<p><b>Binding-compat finding (measured, not assumed):</b> godot-cpp's <code>D_METHOD</code> binding validates only the
+<em>minimum</em> arg count and converts exactly the declared parameters — the old 9-arg binding accepts the new
+10-arg call silently, ignoring the trailing payload. Verified on both <code>.so</code> builds (<code>argcheck2</code>):
+a newer GDScript on a stale <code>.so</code> degrades to the legacy un-carved fill (the pre-fix shape) rather than
+erroring; the old call shape on the new <code>.so</code> is byte-identical legacy. The call-shape change is
+ABI-lenient in both directions.</p>
+
+<h2>3. Acceptance — the census re-run (measured, not asserted)</h2>
+<p>Same ring, same anchors, same seed, same <code>carved_tops</code> reference — but now asked of the
+<b>actual</b> fill: per column the instrument runs the worker's exact call (<code>generate_resl</code> skip=1,
+with/without the payload), flattens the generated slabs, and reads the per-column <b>SOLID</b> top (topmost
+non-air / non-water / non-veg cell) — <code>.scratch/AC-0397/census_bandA2.gd</code>.</p>
+<table>
+<tr><th>Run</th><th>Fill top above carved top</th><th>== carved top</th><th>max Δ</th><th>rc</th></tr>
+<tr><td class="bad">Coordinator proxy (pre-fix baseline)</td><td>2,597 / 159,744 (1.63 %)</td><td>—</td><td>91 @ (−91,147,−48)</td><td class="ok">0</td></tr>
+<tr><td class="bad">My instrument, <b>legacy</b> fill (pre-fix, negative test)</td><td>2,597 / 159,744 (1.63 %)</td><td>157,147</td><td>91 @ (−91,147,−48)</td><td class="ok">0</td></tr>
+<tr><td class="ok"><b>My instrument, payload-driven fill (post-fix)</b></td><td><b>0 / 159,744 (0.00 %)</b></td><td><b>159,744 (100 %)</b></td><td>0</td><td class="ok">0</td></tr>
+</table>
+<p>The legacy row proves the instrument reads the defect in the coordinator's terms (2,597, same max, same
+column — the RED half of the negative test); the post-fix row is the acceptance: <b>no filled top stands above
+the carved top anywhere on the ring, and every column's filled top equals the carved top</b> (the stronger
+identity). Per-taxi post-fix: 5/6/7/8 all 0 bad. The band-A surface is now the far emit's surface, column for
+column.</p>
+
+<h2>4. genhash movement — deliberate, attributed</h2>
+<table>
+<tr><th>Comparison</th><th>Moved</th></tr>
+<tr><td>Pre-edit baseline (current tree + AC-0403 <code>.so</code>) vs <b>post-edit</b> (this change)</td>
+<td class="ok"><b>0/25</b> — 25/25 byte-identical (standalone arm + the SMOKE battery's genhash)</td></tr>
+<tr><td>Pre-edit baseline vs the <b>standing reference</b> (<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>)</td>
+<td class="warn">0/25 — <b>measured before any edit</b> on the untouched tree</td></tr>
+</table>
+<p>The 0/25 movement of this change is deliberate and structural: genhash hashes <code>WorldGen.generate</code> =
+<code>generate_flat(skip=0)</code> over the taxi ≤ 2 window — the <em>full</em> path, which this change does not touch
+(<code>p_pay</code> is ignored when skip=0). The census, not genhash, is the proof of the move. The standing
+reference's staleness is the AC-0403 §8 finding, re-confirmed on this tree (post-AC-0367 world drift —
+AC-0384 r5–r8, AC-0388, AC-0398, AC-0399, …). Per the instruction: the reference's actual state was established
+before concluding anything, and the movement is reported as a deliberate, attributed delta — <b>not re-based,
+not chased</b>. The reference set should be re-recorded at closeout (coordinator's call).</p>
+
+<h2>5. Gates (light set; all <code>rc=0</code> + <code>gate_census.py</code> 0 SCRIPT / 0 SHADER ERROR)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>rc</th><th>Notes</th></tr>
+<tr><td>G0 ×2</td><td class="ok">0/0 both</td><td class="ok">0 / 0</td>
+<td>Paired check per AC-0403: clean census <b>and</b> exit status (the stochastic UAF leaves a clean log with a
+signal-11 exit; two clean boots taken for coverage).</td></tr>
+<tr><td>SMOKE <code>player;interact;light;fluids;genhash</code></td><td class="ok">ok:true</td><td class="ok">0</td>
+<td>All arms at standing values (<code>drop_spawned</code>/<code>place_ok</code> TRUE — the AC-0403 stale-false is no
+longer present on this tree). Battery genhash 25/25 == baseline.</td></tr>
+<tr><td>PROBE (meshprobe)</td><td class="ok">match_rate 1.0, ok</td><td class="ok">0</td><td>Standing invariant.</td></tr>
+<tr><td>farab</td><td class="ok">ok, h_mismatch 0, slab_mismatch 0/0, mat_surf_diff 0, codec ok</td><td class="ok">0</td>
+<td><b>A/B vs pre-fix <code>.so</code>: RESULT bit-identical</b> (every field). The §3 standing values that read
+off-band (<code>water_slabs</code> 6/7/28 vs listed 4/5/20; <code>far_bytes</code> 127 vs listed 198) are
+<b>pre-existing stale bounds</b> — the baseline <code>.so</code> produces the same numbers (AC-0408 protocol:
+mechanism + A/B flat → stale bound; flagged, not re-based).</td></tr>
+<tr><td>ladder (the band-A arm)</td><td class="ok">band_a_ok 20/20, ok:true</td><td class="ok">0</td>
+<td>The materialization identity now holds <em>universally</em> (it was the natural negative test — red pre-fix on
+any carved band-A column). <b>A/B vs pre-fix <code>.so</code>: RESULT bit-identical</b> (band_a 20/20 on both — the
+ladder world's 20 ring columns have no active carve). The off-band §3 values (B 144/155, C 90/94, flip 90/94,
+sky_mixed 46/72, ms_h 2144/1888) are pre-existing stale bounds by the same A/B.</td></tr>
+<tr><td>boundary r4 (the builder's ONE permitted self-check)</td><td class="ok">ok:true</td><td class="ok">0</td>
+<td>crossing_frame p95 38 ms (drift band 35–55), fence fields 0/0, marker/remesh ok. Structurally a no-op at r4
+(no band A inside radius 4 — the change cannot fire there). <code>built_final</code> 68 / <code>staged_dropped</code>
+2663 sit off the AC-0311-era bands — the AC-0408 staged-drop rework era, not this change (no band-A path runs at
+r4).</td></tr>
+</table>
+<p class="small">HEAVY (r16, full battery, flake, r50, the Windows <code>build_windows.sh</code> DLL rebuild) left to the
+coordinator's gate job. Exit after the light set, per the ticket.</p>
+
+<h2>6. Cost — measured</h2>
+<p>In-process A/B (same process, interleaved legacy vs payload-driven calls over the ring's 96-chunk sample,
+8 rounds): <b>legacy 1,219 µs/chunk vs payload 1,219 µs/chunk — 0 µs delta</b> (<code>cost-ab.log</code>). No new noise
+fields, no new scan — the fill reads 2 bytes of H + 1 byte of top id per column from bytes the far lane already
+computed (the ticket's (b) shape). The per-dispatch overhead is one 1 KB <code>far_payload()</code> copy (same
+pattern as the <code>snap_rings</code> calls in the same branch).</p>
+
+<h2>7. The render — clean worktree, the user's fog ratio</h2>
+<p>Frames from <b>worktree at <code>a4c953f</code> (the current commit) + this task's 5 hunks only</b>
+(gen.cpp / world.gd / harness.gd / world/AGENTS.md / ARCHITECTURE.md) + the rebuilt <code>.so</code> — the dirty
+working tree holds another session's uncommitted shader/code edits, so a render from it would not describe what
+ships. (A fresh worktree has no <code>.godot</code> import cache and boots into atlas failures — the cache was copied
+from the main tree; that miss was the one real render failure of the run.)</p>
+<p>Recipe: <code>xvfb-run</code> + <code>VK_ICD_FILENAMES=…/lvp_icd.json</code> + <code>--rendering-driver vulkan</code>
+(boot line in the log: <code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256
+bits)</code>); <code>AWECRAFT_SNAPSHOT</code> (no <code>AWECRAFT_LOGIC</code>), <code>AWECRAFT_SIZE=1280,720</code> (comma),
+<code>AWECRAFT_RADIUS=8</code> — the smallest radius that contains the whole 80–128 m band-A ring (the user's full
+400 m edge is infeasible on this box) — <code>AWECRAFT_FOG_PCT=87</code> (the max allowed; the user's fog 332 sits far
+outside the ring, 87 % keeps the fog at the ring's outer edge 128 m — the closest faithful proxy for the 332/400
+pair), <code>AWECRAFT_TIME=0.5</code>, <code>AWECRAFT_SNAP_DRAIN=1500</code> frames,
+<code>AWECRAFT_AIM='8.78,142.6,8.78,1.05,0.08'</code> (eye at the spawn surface, toward the (−6,−3) census direction
+— the max-error chunk's bearing). <code>rc=0</code>, 0/0 census, file exists (verified), the log's
+<code>SNAPDRAIN not fully drained after 1500 frames</code> = the R8 stream was still settling at the shot — the
+in-view ring is materialized (its trees draw only from the band-A fill or the far-lane veg).</p>
+<img src="captures/ac0397-ground-bandA.png" alt="ground-level render: the band-A ring, 80-128 m, from the clean worktree">
+<p class="small"><code>captures/ac0397-ground-bandA.png</code> (1280×720, 554 KB; the <code>_placed</code> twin is the same
+frame with the held item). Ground level at the spawn; the near field is the real band (taxi ≤ 4, full-LOD with
+roses/dandelions/trees); beyond it the 80–128 m ring is <b>materialized band A</b> (the sand mesa, the tree line
+on the right, the mid terrain) — continuous with the real band's surface, no proud plateaus. This is a
+software-GL (lavapipe Forward+) proxy: evidence about geometry, never about the shipped look.</p>
+
+<h2>8. Deviations and deliberate non-actions</h2>
+<ul>
+<li><b>SCons is not installed on this box</b> (AC-0403 precedent): the <code>.so</code> was rebuilt by manual g++ with
+the SConstruct's exact flags (<code>-O2 -ffp-contract=off</code>, the prebuilt godot-cpp at
+<code>.scratch/godot-cpp</code>). The <b>Windows DLL</b> still has to go through <code>build_windows.sh</code> on the
+coordinator's lane (real-HOME build) — the <code>.so</code> gates prove the C++ change; the DLL rebuild is owed by the
+coordinator.</li>
+<li><b>No re-baseline of any standing value.</b> The stale bounds (genhash reference; farab water/far_bytes;
+ladder B/C/flip/sky_mixed/ms_h; boundary built_final era bands) are flagged with A/B evidence (baseline
+<code>.so</code> produces the same numbers) — the AC-0408 stale-bound protocol, not a silent re-baseline.</li>
+<li><b>harness.gd edits disclosed</b>: data-source sync in two arms (ladder far-fallback, farab 3b vehicle) — no arm
+branch/verdict/assertion changed. A task that edits an instrument cannot be judged by it: the acceptance is the
+independent census instrument (<code>.scratch/AC-0397/census_bandA2.gd</code>, scratch-only, nothing shipped), not the
+arms.</li>
+<li><b>boundary r4</b> run once (the builder's at-most-one self-check, world/AGENTS.md); the rest of the heavy set is
+the coordinator's background job.</li>
+<li><b>No commits, no pushes, no TASKS.yaml mutation.</b> Fenced files untouched: <code>main.gd</code>,
+<code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>, the other session's dirty shaders. The clean render
+worktree was removed after the successful shot (AC-0394 convention).</li>
+<li><b>Known residual edge (recorded, not in scope):</b> a land column the carve drops <em>below y = 8</em> shows the
+fill's Y-only lava rule (cells above the top, y &lt; 8) in band A, where bands B/C (payload-only) draw no lava and
+the full path draws aquifer output. Same documented far-band-vs-real-band seam class as the demote/promote
+contract; the census ring shows how rare the carve depth is (2,597 carved columns, all now at the carved top —
+the sub-8 subset is a fraction of those, and the rule is bit-identical to the pre-fix skip path's treatment of
+any low top, e.g. deep-ocean floors). Needs a decision, not a silent change — candidate for a follow-up ticket if
+the user ever sees it.</li>
+</ul>
+
+<h2>Artifacts</h2>
+<p class="small">
+<code>tasks/AC-0397/plan.html</code> · <code>continuity.md</code> (append-only journal) · this page ·
+<code>captures/ac0397-ground-bandA.png</code> (+ <code>_placed</code>) · <code>.scratch/AC-0397/</code>:
+<code>census-proxy-baseline.log</code> (2,597) · <code>census2-legacy-baseline.log</code> (2,597, RED) ·
+<code>census2-pay-after.log</code> (0, acceptance) · <code>genhash-baseline.log</code> / <code>genhash-after.log</code>
+(25/25) · <code>cost-ab.log</code> (0 µs) · <code>g0-1/2.log</code> · <code>smoke.log</code> · <code>meshprobe.log</code> ·
+<code>farab.log</code> / <code>farab-baseline.log</code> (A/B) · <code>ladder.log</code> / <code>ladder-baseline.log</code>
+(A/B) · <code>boundary-r4.log</code> · <code>render.log</code> / <code>render2.log</code> ·
+<code>libchunkio.so.baseline</code> / <code>libchunkio.so.fixed</code> · <code>census_bandA2.gd</code> /
+<code>cost_ab.gd</code> / <code>argcheck2.gd</code> (scratch instruments — not shipped).</p>
+</body>
+</html>

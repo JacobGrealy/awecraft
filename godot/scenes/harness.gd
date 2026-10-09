@@ -11447,7 +11447,9 @@ func _halo_test(spawn: Vector3) -> void:
 					# the null slabs. skip=1 is the exact fill. (In a
 					# settled real band no column is far — kept for the
 					# streaming race.)
-					var fresl: Array = WorldGen.gen_cpp().generate_resl(int(c.cx), int(c.cz), int(Game.world_seed), H, int(Data.SEA), 1, PackedByteArray())
+					# AC-0397: driven from the column's own payload — the
+					# production band-A fill shape (the carve fix).
+					var fresl: Array = WorldGen.gen_cpp().generate_resl(int(c.cx), int(c.cz), int(Game.world_seed), H, int(Data.SEA), 1, PackedByteArray(), 0, 4000.0, c.far_payload())
 					f = io.slabs_flat(fresl)
 			slabs[k] = io.palettize_flat(f, 24)
 			tops[k] = int(io.slabs_top(slabs[k]))
@@ -14078,7 +14080,11 @@ func _farab_test() -> void:
 	}
 	# (3b) the 284a bit-0 slab no-caves shape (the slabs ARE the data —
 	# the written shape between 284a and 284b must still decode).
-	var resl1b: Array = g.generate_resl(1, 2, seed, H, sea, 1, PackedByteArray())
+	# AC-0397: the round-trip vehicle is the production band-A fill —
+	# driven from the column's far payload (data-source sync only; the
+	# codec assertion is unchanged).
+	var payb: PackedByteArray = g.generate_far(1, 2, seed, H, sea)
+	var resl1b: Array = g.generate_resl(1, 2, seed, H, sea, 1, PackedByteArray(), 0, 4000.0, payb)
 	var flatb: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl1b[0])
 	var flflatb: PackedByteArray = ChunkIO.io_cpp().slabs_flat(resl1b[1])
 	var blobb: PackedByteArray = ChunkIO.encode_column(flatb, flflatb, seed, H, {}, -1, 0xFFFFFF, true)

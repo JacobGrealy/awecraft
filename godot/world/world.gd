@@ -6710,14 +6710,24 @@ func _tm_worker_run(skey: int) -> void:
 	# fill — the exact band-A contract: no caves, sky-only light, water
 	# + trees + flowers) and build the FULL column's mesh under the
 	# dispatch-time sky eff (the entry's eff + eff_strips — no star:
-	# band A is never seeded). The slabs ride back as mat_data (the
-	# handoff stamps the column — the far payload is kept). A failed
-	# generation (null / wrong shape) datadrops: the entry stays queued
-	# and retries (the retrigger re-enqueues it).
+	# band A is never seeded). AC-0397: the fill stands on the far
+	# payload's CARVED top (solid 0..payload H, the payload top row) —
+	# the band-A surface is the far emit's surface. The slabs ride back
+	# as mat_data (the handoff stamps the column — the far payload is
+	# kept). A failed generation (null / wrong shape) datadrops: the
+	# entry stays queued and retries (the retrigger re-enqueues it).
 	if bool(entry.get("mat", false)):
 		var mat_t0 := Time.get_ticks_usec()
 		var mg: Variant = WorldGen.gen_cpp()
-		var mresl: Array = mg.generate_resl(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA), 1, PackedByteArray())
+		# AC-0397: the fill is driven from the column's FAR PAYLOAD (the
+		# carved top the far lane already computed — solid 0..payload H,
+		# the payload top row, the far emit's water rule). A missing or
+		# undersized payload falls back to the legacy un-carved fill
+		# (the C++ treats any non-1024-byte payload as absent — never
+		# an error). face/R are the production defaults (0 / 4000) —
+		# the payload was generated with them (generate_far, defaults).
+		var mat_pay: PackedByteArray = entry.get("far_pay", PackedByteArray())
+		var mresl: Array = mg.generate_resl(int(entry["cx"]), int(entry["cz"]), int(Game.world_seed), int(Data.HEIGHT), int(Data.SEA), 1, PackedByteArray(), 0, 4000.0, mat_pay)
 		if mresl == null or int(mresl.size()) != 2:
 			entry["result"] = null
 			return
@@ -7923,6 +7933,11 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 	# is never ok — defer-forever without this branch). The mat handoff
 	# stamps the slabs (the column's data IS the landing); the retrigger
 	# lands through the unchanged hslab path below.
+	# AC-0397: the fill is driven from the column's FAR PAYLOAD (the
+	# carved top the far lane already computed — the payload H, the
+	# payload top row, the far emit's water rule), so the band-A surface
+	# matches the far emit and the full path's carved top. The entry
+	# hands the payload to the worker.
 	var band_a := bool(c.far) \
 			and _lod_tier_of(int(cx) - last_pcx, int(cz) - last_pcz) == 1
 	if band_a:
@@ -7971,6 +7986,12 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		var entry_a := {
 			"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
 			"data": mc_a.slab_copy(c.data),  # all-null (a far column) — the mat build owns the data
+			# AC-0397: the far lane's payload (1024 B: H u16 + biome + top
+			# id) — drives the mat fill's top (the carved top, not the
+			# un-carved heightmap). Only the mat branch consumes it (only
+			# the mat runs generate_resl skip=1; the retrigger path lands
+			# slabs through the unchanged hslab path).
+			"far_pay": c.far_payload(),
 			"fl": mc_a.slab_copy(c.fl),
 			"stamp": c.stamp(),
 			"band": int(c.band),
