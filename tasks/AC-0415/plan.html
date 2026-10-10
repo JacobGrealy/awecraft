@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0415 — plan</title>
+<style>body{font:15px/1.5 ui-monospace,Consolas,monospace;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:20px}h2{font-size:16px;margin-top:22px;border-bottom:1px solid #ccc;padding-bottom:3px}code,pre{font:13px/1.45 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}</style>
+</head><body>
+<h1>AC-0415 — plan: the far tier takes the engine fog; the duplicate goes</h1>
+
+<h2>Goal</h2>
+<p>Delete the far tier's hand-rolled copy of the engine depth fog from
+<code>godot/core/lod_avg.gdshader</code> so the whole render ladder runs on the one
+environment fog. The <code>fog_enabled</code> setting (and <code>AWECRAFT_NO_FOG</code>) then govern
+the far tiers too — the user's "fog disabled" frame stops showing flat pale-blue
+plateaus where the annulus should show terrain. The AC-0401 partition discard
+(<code>d &gt;= u_fog_far</code>) is NOT fog; it stays. The far tier's fog-ON look is VERIFIED and
+must not move (the wall band where the near tiers hand over to the satellite body
+stays matching: both sides take their colour from the single-source air value, and
+the engine fog factor is 1.0 at <code>d == fog_depth_end</code> — exactly where the manual
+ramp already reached <code>u_air</code>).</p>
+
+<h2>What the duplicate currently computes (godot/core/lod_avg.gdshader)</h2>
+<pre>render_mode fog_disabled            // engine fog OFF for this material only
+uniform vec3  u_air         // main.gd push = env.fog_light_color = Aero.fog_display
+uniform float u_fog_near    // main.gd push = env.fog_depth_begin
+uniform float u_fog_far     // main.gd push = env.fog_depth_end   (also the partition)
+uniform vec3  u_render_edge // main.gd push — declared, NEVER read (dead, AC-0404 residue)
+uniform vec3  u_center      // main.gd push — declared, NEVER read (dead, AC-0404 residue)
+...
+float d      = length(CAMERA_POSITION_WORLD - v_world_pos);
+if (d &gt;= u_fog_far) discard;                          // AC-0401 partition (KEEP)
+float fog_f  = clamp((d - u_fog_near)/max(u_fog_far-u_fog_near, 1.0), 0.0, 1.0);
+float haz    = fog_f;                                  // the AC-0399/AC-0400/AC-0404-patched copy
+ALBEDO = mix(ALBEDO, u_air, haz);                      // the duplicate fog (DELETE)</pre>
+<p><code>fog_f</code> is the engine's own depth-fog ramp reimplemented — the engine fog gives
+this material the same factor and the same colour (<code>env.fog_light_color</code> is
+<code>u_air</code> by construction, AC-0384 r8). The manual copy exists only to ignore the
+switch: with <code>env.fog_enabled = false</code> the engine stops and this keeps fading to
+<code>u_air</code>.</p>
+
+<h2>What replaces it</h2>
+<ul>
+<li>Remove <code>render_mode fog_disabled</code> — the environment fog applies to the
+material through the standard path, exactly like the four chunk_lit_*.gdshader
+kinds and the two fluid materials already run. One fog model for the whole
+ladder; the <code>fog_enabled</code> switch governs all of it.</li>
+<li>Delete the manual haze: the <code>u_air</code>/<code>u_fog_near</code> uniforms, the
+<code>fog_f</code>/<code>haz</code> computation and the <code>mix(ALBEDO, u_air, haz)</code> line.</li>
+<li>Delete the two dead uniforms (<code>u_render_edge</code>, <code>u_center</code> — declared and
+pushed, never read).</li>
+<li>Keep <code>u_fog_far</code> + the <code>d &gt;= u_fog_far</code> discard (the AC-0401 partition:
+the annulus ends where the body's existence ramp begins; the body's haz_d rim
+at the wall is the seam, single-source air colour — unchanged by this ticket).</li>
+<li>Keep the static per-fragment hash breakup (the med/low flat-wall treatment)
+and the AC-0283 P3 lit floor — not fog.</li>
+</ul>
+<p><b>main.gd is fence-locked</b> (another session's uncommitted work): its
+<code>_update_sky</code> push block (main.gd:1474-1479) keeps running, but the
+<code>u_air</code>/<code>u_fog_near</code>/<code>u_render_edge</code>/<code>u_center</code> pushes become
+harmless no-ops on a material that no longer declares those uniforms
+(Godot 4 <code>set_shader_parameter</code> stores without name validation; G0's
+zero-SCRIPT-ERROR census is the live check). The <code>u_fog_far</code> push (line 1477)
+stays LIVE — the partition needs it. Per the ticket's fence note, the four dead
+pushes land in the coordinator's commit once the fence lifts; this run leaves
+main.gd byte-identical.</p>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/core/lod_avg.gdshader</code> — the whole change (uniform list +
+fragment fog block + header note; ~50 lines of stale history comment trimmed).</li>
+<li><code>godot/ARCHITECTURE.md</code> — sync the far-tier fog description (the
+AC-0338 bullet's "haze bridge" sentence is stale since AC-0404 and doubly so
+after this ticket; new AC-0415 bullet in §6 per invariant 2).</li>
+<li><code>tasks/AC-0415/</code> — this plan, continuity.md, AC-0415-results.html,
+captures (A/B PNGs).</li>
+</ul>
+<p>NOT touched: <code>godot/scenes/main.gd</code>, <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> (fences), and
+<code>world/*</code> (no world/ or autoload/data.gd change — genhash must stay
+byte-identical to the standing reference).</p>
+
+<h2>Expected size/behaviour changes</h2>
+<ul>
+<li>Shader: 6 uniforms → 2 (<code>day</code>, <code>u_fog_far</code>); shaderforce should report
+<code>lod_avg declared=2 params=2</code> (was 6/6 at AC-0404).</li>
+<li>Fog-ON: engine fog on the far tier ≡ the manual ramp (same factor by the
+band A/annulus coexistence proof, same colour by single source) — before/after
+frames near-identical; any visible difference is drift to report, measured at
+the band A/annulus boundary and the annulus/body rim.</li>
+<li>Fog-OFF: the annulus renders vertex-coloured (no haze); the partition wall
+still reads <code>env.fog_depth_end</code> (unchanged push), so the drawn extent is the
+same; the flat <code>u_air</code> plateau is gone. Note: with a FRESH fog-off boot the
+env depth pair sits at the engine defaults (4/100) in both builds — measured
+with the fogsettings arm and reported, not papered over.</li>
+</ul>
+
+<h2>Harness gates (light set — heavy gates are the coordinator's)</h2>
+<ol>
+<li><b>G0</b>: headless boot + <code>gate_census.py</code> — ZERO SCRIPT ERROR and ZERO
+SHADER ERROR, <b>and rc == 0</b> (the stochastic UAF leaves a clean log with a
+signal-eleven exit). Baseline run on the pre-edit tree first.</li>
+<li><b>SMOKE</b>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>
+(dependency-mapped set for a world/render-touching change, per HARNESS.md §3).</li>
+<li><b>PROBE</b>: <code>AWECRAFT_LOGIC=meshprobe</code> (the mesh byte probe — standing
+gate for the far-tier path; the spec's "meshprobe" in the owed set).</li>
+<li><b>genhash</b>: 25 lines byte-identical to
+<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code> (no world/ change — must
+not move).</li>
+<li><b>shaderforce</b>: every shipped .gdshader forced through the live Forward+
+renderer (the edited lod_avg.gdshader included) — verdict ok, lod_avg
+declared=2/params=2, no SHADER ERROR in the census.</li>
+<li><b>A/B on the look</b> (the acceptance): planet-preset renders, R24 /
+FOG_PCT 83 / seed 44 / TIME 0.30 / 1280×720 / SNAP_DRAIN 600 / Forward+
+lavapipe, before (current tree) vs after (edited tree), fog ON and OFF at
+SAT_ALT 300 m (far tier + handover + wall band) and 120 m (far tier).
+Whole-frame pixel diff + wall-band colour samples. One godot at a time,
+budget 1200 s per run, file-existence check after every run (SNAP FAIL prints
+rather than succeeding).</li>
+</ol>
+</body></html>

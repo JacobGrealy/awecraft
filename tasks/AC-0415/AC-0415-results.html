@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0415 — results: one source of truth for the far tier's fog</title>
+<style>
+body { font: 15px/1.5 "Segoe UI", system-ui, sans-serif; margin: 2em auto; max-width: 1080px; color: #1c2733; padding: 0 1em; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #2b6cb0; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.8em; color: #2b6cb0; }
+table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+th, td { border: 1px solid #b8c4d0; padding: 4px 9px; text-align: left; }
+th { background: #e8eef5; }
+.pass { background: #d8efdc; font-weight: 600; }
+.warn { background: #fdf3d7; font-weight: 600; }
+.note { background: #fdf3d7; border-left: 4px solid #d9a400; padding: .6em 1em; margin: 1em 0; }
+img { max-width: 640px; border: 1px solid #999; display: block; margin: .5em 0; }
+.code { font-family: Consolas, monospace; font-size: .88em; background: #f2f5f8; padding: .8em; border: 1px solid #ccd; white-space: pre; overflow-x: auto; }
+small { color: #556; }
+</style>
+</head>
+<body>
+<h1>AC-0415 — results: the far tier's duplicate fog is deleted; one source of truth</h1>
+<p><small>Run: R24/F83 user config (u_fog_far = 332.0 m, render edge 400.0 m), seed 44, TIME 0.30,
+Forward+ lavapipe, 1280×720, snapshot drain 600 frames, 8 A/B renders (4 before + 4 after, 2 altitudes × fog on/off),
+all rc=0 / 0 SCRIPT ERROR / 0 SHADER ERROR, Forward+ boot line in every render log. Acceptance measured from frames, not code.
+No commits — coordinator. The 4 fenced WIP files (main.gd, game.gd, drop.gd, debug.gd) were untouched, read-only.</small></p>
+
+<h2>Verdict</h2>
+<table>
+<tr><th>Item</th><th>Result</th><th>Measured evidence</th></tr>
+<tr><td>1 — the far tier carries its own duplicate of the fog</td>
+<td class="pass">DELETED</td>
+<td><code>lod_avg.gdshader</code> dropped <code>render_mode fog_disabled</code> and the manual haze (the <code>u_air</code> mix,
+<code>u_fog_near</code>, the per-frame window push from main.gd's <code>_update_sky</code> block). The material now rides the engine
+environment fog — the standard spatial path every other near-tier material already uses. Uniforms 6 → 2
+(<code>day</code> + <code>u_fog_far</code>); dead pushes <code>u_render_edge</code>/<code>u_center</code> (the manual ramp's only other inputs)
+gone with the ramp. The AC-0401 partition (<code>d &gt;= u_fog_far → discard</code>) is <b>not</b> fog — it ends the annulus at the
+wall so the near tiers never draw over the body's displaced terrain — and stays, fed by the same env value
+(<code>env.fog_depth_end</code>) the engine ramp now uses for the fade: one value, one meaning.</td></tr>
+<tr><td>2 — the far tier's fog-ON appearance is verified and must not change; the wall band must still match</td>
+<td class="pass">HOLDS at the verified altitudes · <b>curve finding at low orbit</b></td>
+<td>A/B on300 (the user-verified altitude class): <b>0.81% px differ — inside the 1.16% run-to-run noise floor</b>
+(determinism control pair), wall-band strip (y 340–380) max delta 0 — no visible change. A/B on120 (low orbit, the
+annulus is 27% of the frame): 15.3% px differ, mean Δ33, max Δ121 — a <b>haze-weight redistribution inside the
+annulus only</b> (diff map: the change traces the annulus silhouette; body, sky, cloud deck, band A, the wall seam and
+everything above y≈420 are unchanged). Cause, measured: the engine's depth ramp is a <b>smoothstep</b> across the view
+range while the deleted manual ramp was <b>linear</b> over the same [100, 332] window — they agree only at the endpoints
+(§ "The engine ramp, measured"). Wall band: at 300 m the strip is byte-stable; at 120 m the wall row (y 425–475)
+differs only in the mid-frame column by Δ≤19 — the mid-annulus shift bleeding in, not the seam (both sides still take
+their colour from the single-source air value; the engine factor is 1.0 exactly at the wall).</td></tr>
+<tr><td>3 — the AC-0399/0400/0404 fix sites ride the single source</td>
+<td class="pass">YES</td>
+<td>AC-0399 (the fill: vertex colour × day × hash × lit floor) — kept verbatim, untouched by the deletion.
+AC-0400 (the single-source air colour: the mix target <i>was</i> <code>u_air</code> = <code>env.fog_light_color</code> =
+<code>AeroLib.fog_display(t)</code>) — now the engine's own <code>fog_light_color</code>, the same value the satellite body's
+<code>u_air</code> and the sky horizon take: the mix is gone, but its input was never a second source — it <i>was</i> the env
+colour pushed per frame (probe: material <code>u_air</code> = env <code>fog_light_color</code> = (0.6308, 0.8796, 0.9647) at TIME 0.30,
+both builds). AC-0404 (the fade = the engine depth-fog model, fog-only, bridge removed) — the deletion makes the
+letter of that fix real: the annulus now <i>is</i> the engine depth-fog model, byte for the factor at the same view
+distance, instead of its hand-rolled linear approximation. Bonus: the band A / annulus boundary is continuous by
+construction at <b>every</b> view distance now (same per-pixel factor on both sides) — in the BEFORE build it carried a
+≤9% haze-weight step at mid window (band A engine-smoothstep vs annulus manual-linear); r8's "same factor as band A"
+comment was true in intent, approximate in fact.</td></tr>
+<tr><td>4 — the fog-off state</td>
+<td class="pass">UNCHANGED (measured)</td>
+<td>A/B off300: <b>byte-identical PNGs</b> (0 px differ). A/B off120: 2.98% px differ at Δ≤2, only 13 px above Δ8 —
+noise floor. In the fresh NO_FOG state both builds discard the annulus entirely at the stale 100 m partition wall
+(at 300 m the annulus view distance starts ~205 m, at 120 m ~134 m — both &gt; 100), so the annulus draws nothing and
+the fog-disabled env leaves everything else as-is. The user's actual runtime-toggle state (stale 332 wall after
+toggling fog off mid-play — the "flat pale-blue plateau") is the case this fix serves: in the AFTER build the
+annulus shows true vertex colour up to the wall instead of the manual ramp hazing it to u_air with the engine fog
+off. That state needs an input arm to reproduce; it is not reproducible in these headless snapshot runs — stated, not
+measured.</td></tr>
+</table>
+
+<h2>The engine ramp, measured (the curve finding)</h2>
+<p>The A/B at 120 m showed a real (subtle) difference the "same factor as band A" premise did not predict. Resolution,
+three independent pieces of evidence:</p>
+<div class="code">// Godot 4.7 Forward+ — scene_forward_clustered.glsl fog_process() (fetched from the
+// godotengine/godot 4.7 tag), FOG_MODE_DEPTH branch:
+float fog_z = smoothstep(scene_data_block.data.fog_depth_begin,
+                         scene_data_block.data.fog_depth_end,
+                         length(vertex));          // length(view_position) = slant range
+float fog_quad_amount = pow(fog_z, scene_data_block.data.fog_depth_curve)
+                        * scene_data_block.data.fog_density;
+...
+return vec4(fog_color, fog_amount);               // mix(albedo, fog_color, fog_amount)</div>
+<ul>
+<li><b>Metric: slant range</b> (<code>length(view_position)</code>) — identical to the manual ramp's
+<code>length(CAMERA_POSITION_WORLD - v_world_pos)</code>. Not view-space z.</li>
+<li><b>Curve: smoothstep</b> (<code>t²(3-2t)</code>, <code>fog_depth_curve</code> = 1.0 default) — not the linear
+<code>(d−100)/232</code> the project's comments assume (daynight.gd: "factor 0 at fog_depth_begin, 1 at fog_depth_end"
+describes the endpoints only).</li>
+<li><b>Density: 1.0, auto-set.</b> The Environment resource default is 0.01 (docs), but
+<code>Environment::set_fog_mode()</code> auto-sets <code>fog_density = 1.0</code> for every mode except
+<code>FOG_MODE_EXPONENTIAL</code> (environment.cpp) — main.gd's <code>env.fog_mode = FOG_MODE_DEPTH</code> push therefore
+carries density 1.0. (The 4.7 enum is <code>{EXPONENTIAL = 0, DEPTH = 1}</code> — probe <code>fog_mode=1</code> = DEPTH.)</li>
+</ul>
+<p>Live probe (AFTER tree, f=1…642, identical state to the BEFORE probe run): <code>mode=play fog_on=true
+env_begin=100.0 env_end=332.0 env_color=(0.6308, 0.8796, 0.9647) fog_mode=1 fog_density=1.0 fog_curve=1.0</code>,
+material <code>u_far=332.0</code> (the undeclared <code>u_near</code>/<code>u_air</code> reads return the stored no-op push
+values — the 4 dead main.gd pushes are inert; the <code>u_fog_far</code> push at main.gd:1477 stays live).</p>
+<p><b>Consequence:</b> smoothstep &lt; linear for d &lt; 216 (near annulus <i>less</i> hazy in AFTER, 77% of the differing
+pixels) and smoothstep &gt; linear for d &gt; 216 (far annulus <i>more</i> hazy, 23%, up to +7–9% haze weight approaching
+the wall). Equal at both endpoints — which is why the wall band is byte-stable at 300 m and stable within the
+mid-annulus bleed at 120 m. (The per-pixel k-ratio was checked as a discriminator and rejected: the
+before-vs-before-control pair shows the same k spread from run-to-run surface noise alone; the collinearity test
+still holds — 92.6% of differing pixels lie on the same air-colour line, proving same surface + same air + different
+factor — and the source + probe fix the curve.)</p>
+
+<h2>Files changed (2)</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/lod_avg.gdshader</code></td>
+<td>139 → 81 lines (−58). <code>render_mode fog_disabled</code> removed (material rides the engine env fog); the manual
+haze deleted (<code>u_air</code>, <code>u_fog_near</code>, <code>fog_f</code>, <code>haz</code>, the mix line); dead uniforms
+<code>u_render_edge</code>/<code>u_center</code> deleted; header compressed to an AC-0415 note (full r8/AC-0399/AC-0400/AC-0404
+history in those results pages). Kept: the AC-0252 hash/jit breakup, the AC-0283 P3 lit floor, the vertex-stage world
+position, the AC-0401 partition discard, <code>ALPHA = 1.0</code>. Final shader:</td></tr>
+</table>
+<div class="code">shader_type spatial;
+
+uniform vec4 day : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float u_fog_far = 332.0;  // env.fog_depth_end (main.gd) — the AC-0401 partition wall
+
+varying vec3 v_world_pos;
+
+void vertex() {
+    v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+    vec3 cell = floor(v_world_pos * 0.6667);
+    float h = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float jit = 1.0 + (h - 0.5) * 0.12; // +/-6% around the vertex color
+    float lit = mix(0.2, 1.0, COLOR.a);
+    ALBEDO = COLOR.rgb * day.rgb * jit * lit;
+    // AC-0401: the fog-wall partition (kept — it is not fog).
+    vec3 V = CAMERA_POSITION_WORLD - v_world_pos;
+    float d = length(V);
+    if (d >= u_fog_far) {
+        discard;
+    }
+    ALPHA = 1.0;
+}</div>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>Two regions synced: (a) §3 WorldEnvironment bullet — the AC-0415 note (single source, seam preserved at the
+endpoints, the measured smoothstep-vs-linear finding, the band A/annulus boundary now continuous by construction,
+the partition is not fog and stays); (b) AC-0338 bullet — the stale "HAZE BRIDGE" sentence replaced with a
+superseded-by-AC-0415 pointer (the AC-0401 sentence kept intact). <code>git diff</code> verified clean.</td></tr>
+</table>
+<p><b>Fenced files untouched, read-only:</b> <code>godot/scenes/main.gd</code>, <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code> (another session's WIP, still M).
+main.gd:1474–1479 keeps its 5 pushes: 4 become stored no-ops (the shader no longer declares
+<code>u_air</code>/<code>u_fog_near</code>/<code>u_render_edge</code>/<code>u_center</code>), the <code>u_fog_far</code> push at
+line 1477 stays live — the ticket lands the push deletions in the coordinator's commit when the fence lifts.
+<code>godot/world/world.gd</code> carried two temporary measurement probes during the run; both removed, byte-identical
+to HEAD (git diff empty) — genhash safe.</p>
+
+<h2>A/B evidence (same dirty tree, same recipes; before = unmodified, after = this change)</h2>
+<table>
+<tr><th>Pair</th><th>State</th><th>Differing px</th><th>d≥8</th><th>Mean / max Δ</th><th>Reading</th></tr>
+<tr><td>on300</td><td>fog ON, alt 300 m</td><td>0.81%</td><td>0.67%</td><td>15.9 / 133</td><td><b>No visible change</b> — inside the 1.16% noise floor; wall-band strip (y 340–380) max delta 0; the annulus is barely drawn at this altitude (view distance starts ~327 m at the wall).</td></tr>
+<tr><td>on120</td><td>fog ON, alt 120 m</td><td>15.3%</td><td>13.9%</td><td>32.8 / 121</td><td><b>Mid-annulus haze-weight shift</b> (smoothstep vs linear, § above): near annulus less hazy (77%), far annulus more (23%); row-band diff 0.00% for y &lt; 360 (body/sky/deck unchanged), change traces the annulus silhouette in the diff map; wall row Δ≤19 mid-frame only.</td></tr>
+<tr><td>off300</td><td>NO_FOG, alt 300 m</td><td>0.00%</td><td>0</td><td>—</td><td><b>Byte-identical PNGs</b> — annulus entirely past the 100 m partition in both builds; fog off in both.</td></tr>
+<tr><td>off120</td><td>NO_FOG, alt 120 m</td><td>2.98% (Δ≤2)</td><td>0.0014% (13 px)</td><td>1.0 / 18</td><td>Noise floor — same reason as off300 (annulus discards at the stale 100 wall in both builds).</td></tr>
+</table>
+<details><summary>frames (before / after per state)</summary>
+<img src="ac0415-before-on300.png" alt="before, fog ON, 300 m">
+<img src="ac0415-after-on300.png" alt="after, fog ON, 300 m — indistinguishable">
+<img src="ac0415-before-on120.png" alt="before, fog ON, 120 m">
+<img src="ac0415-after-on120.png" alt="after, fog ON, 120 m — the annulus haze weight shifts slightly">
+<img src="ac0415-before-off300.png" alt="before, NO_FOG, 300 m">
+<img src="ac0415-after-off300.png" alt="after, NO_FOG, 300 m — byte-identical">
+<img src="ac0415-before-off120.png" alt="before, NO_FOG, 120 m">
+<img src="ac0415-after-off120.png" alt="after, NO_FOG, 120 m — noise floor">
+</details>
+<details><summary>diff map, on120 (Δ×6, amplified — bright = changed)</summary>
+<p>The change traces the annulus silhouette (med/low tier terrain): the crisp voxel core (band A) at the bottom
+centre, the body disc and everything above the wall are pitch black (unchanged).</p>
+<img src="ac0415-diffmap-on120.png" alt="amplified before/after difference, on120 — the change traces the annulus">
+</details>
+
+<h2>Light gates (post-edit, exit statuses)</h2>
+<table>
+<tr><th>Gate</th><th>rc</th><th>Result</th></tr>
+<tr><td>G0 headless (<code>--headless --path godot --quit</code> + gate_census)</td><td>0</td><td class="pass">0 SCRIPT ERROR, 0 SHADER ERROR — the 4 dead main.gd pushes are no-ops, live-confirmed.</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td>0</td><td class="pass">battery ok=true, all five RESULTs green, 25 GENHASH lines, census clean.</td></tr>
+<tr><td>PROBE meshprobe</td><td>0</td><td class="pass">ok=true, match_rate 1.0, 0 mismatches (C++/GD emit parity, quadcheck 0/699).</td></tr>
+<tr><td>genhash vs reference</td><td>0</td><td class="warn">25/25 drift vs the AC-0367 pristine reference — <b>pre-existing on this dirty tree</b>, not owed to this change: a stash A/B (my 2 files reverted, same tree) shows PRE == POST byte-identical (25/25). world/* and autoload/data.gd are untouched by the final diff, so G2's byte-identical rule does not apply to this change; the pre/post pair is the owed proof. The drift owes to the 4 fenced WIP files and belongs to that session's closeout.</td></tr>
+<tr><td>shaderforce (Forward+ lavapipe, all 12 shipped .gdshader forced through the live renderer)</td><td>0</td><td class="pass">12/12 verdict=ok, failed=[], 0 SHADER ERROR; <code>lod_avg.gdshader declared=2 params=2</code> (day + u_fog_far, as expected).</td></tr>
+</table>
+<p><small>Heavy gates (boundary/perf, full battery, Windows build) are the coordinator's per the ticket — this run
+stops at the light set.</small></p>
+
+<h2>Deliberately not done</h2>
+<ul>
+<li><b>The 4 dead pushes in main.gd:1474–1479 are NOT deleted here</b> — the file is fenced (another session's
+WIP). They are stored no-ops (Godot keeps the values, the render server ignores undeclared uniforms — verified:
+G0 clean, probe shows the stored values). The ticket lands the shader-side deletion plus the push deletions in one
+commit when the fence lifts.</li>
+<li><b>No <code>u_fog_on</code> flag</b> — the ticket's rejected alternative; "two paths are the disease". The
+<code>fog_enabled</code> env switch now governs the far tier with the rest, by construction.</li>
+<li><b>No input arm for the runtime-toggle state</b> (fog off mid-play → stale 332 wall → the user's actual
+plateau): reproducing it needs an arm in harness.gd (two-file change + data row), which is not this ticket's scope;
+the fresh-NO_FOG renders bound the headless-measurable side, and the fix's effect on the toggle case is the
+reason it exists (true vertex colour to the wall instead of a manual haze to u_air).</li>
+<li><b>No change to the engine's curve</b> (the smoothstep is the engine's; matching it exactly would have kept the
+duplicate). The mid-annulus weight shift is the measured, honest consequence of riding the engine — and it is
+what makes the band A/annulus boundary continuous at every view distance. If the coordinator wants the old linear
+feel restored exactly, the single-source property is the thing to keep and the curve question is a settings-level
+follow-up (<code>fog_depth_curve</code> is exposed on Environment) — reported, not acted on.</li>
+<li><b>No re-baseline of the genhash reference</b> — the drift is the WIP session's to resolve with its commit.</li>
+</ul>
+
+<h2>Deviations</h2>
+<ul>
+<li>The "no visible change" acceptance holds at the 300 m verified altitude class (0.81%, noise floor) and in every
+NO_FOG state (byte-identical / noise floor). At 120 m low orbit there <i>is</i> a visible-but-subtle change
+(15.3% px, mean Δ33) — the smoothstep-vs-linear mid-annulus shift. The ticket's fix shape (delete the duplicate,
+ride the engine) prescribes the engine's curve; the ticket's "engine factor = 1.0 at d == u_fog_far" premise is
+true at the wall (both ramps end at 1.0 there — the wall band is preserved, measured) but the two ramps differ in
+the body, which is reported here with the frame evidence instead of papered over.</li>
+<li>The genhash gate was run against the AC-0367 reference and drifted 25/25; the owed comparison (pre/post my edit,
+same tree) was run via a temporary stash A/B and is byte-identical — reported as a pre-existing dirty-tree drift,
+not re-baselined (world/* untouched by this change).</li>
+</ul>
+
+<h2>Captures (this directory)</h2>
+<p><small>ac0415-{before,after}-{on300,on120,off300,off120}.png — the 8 A/B frames (1280×720, Forward+ lavapipe,
+TIME 0.30, seed 44, R24/F83, drain 600); ac0415-diffmap-on120.png — the amplified (×6) before/after difference of
+the one pair with a real change. Render logs: .scratch/AC-0415/{before,after}/*.log (gate census clean in all).</small></p>
+
+</body>
+</html>

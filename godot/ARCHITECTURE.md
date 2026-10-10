@@ -92,6 +92,25 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         S² and it erased the fog wall at flight altitude
 │                         (measured 2600 m nadir (177,240,255) → (24,25,23));
 │                         reverted and documented in aero.gd.
+│                         AC-0415: the far-tier material (core/lod_avg.gdshader) rides this same
+│                         env fog now — its hand-rolled duplicate (render_mode fog_disabled + the
+│                         u_air mix of the engine's own depth ramp, the AC-0384 r8 haze-bridge
+│                         residue thinned to a plain fade by AC-0400/AC-0404) is deleted: one
+│                         ramp, one air colour, and the fog_enabled switch governs the whole
+│                         ladder, not the near tiers only. The single-source seam at the fog wall
+│                         is preserved by construction (the engine factor is 1.0 at fog_depth_end,
+│                         exactly where the manual ramp reached u_air — the body's haz_d rim at
+│                         the same wall, AC-0400). AC-0415 measured: the engine depth ramp is a
+│                         SMOOTHSTEP across the view range (Godot 4.7 fog_process:
+│                         pow(smoothstep(begin, end, |view_pos|), curve) * density, with density
+│                         auto-set to 1.0 by set_fog_mode), where the deleted manual ramp was
+│                         LINEAR over the same window - the two agree only at the endpoints (the
+│                         wall band stays byte-stable) but the mid-annulus haze weight shifts
+│                         (120 m A/B: near annulus less hazy, far annulus more; 300 m: within the
+│                         run-to-run noise floor), and the band A / annulus boundary is continuous
+│                         by construction now (one factor per pixel), not only at the window
+│                         edges as r8's "same factor as band A" comment assumed. The AC-0401
+│                         partition (d >= u_fog_far, fed by env.fog_depth_end) is not fog and stays.
 │                         AC-0384 r4 adds the ATMOSPHERIC LIMB GLOW: an additive rim
 │                         term in the background keyed to the view ray's IMPACT
 │                         PARAMETER about the planet centre (b = |cross(centre,
@@ -1340,20 +1359,15 @@ Match these; do not improvise a different approach in a task.
   coordinates (surface 0 = the opaque avg in the shared `_lod_avg_mat()`; surfaces
   1/2 = the WATER EXCEPTION faces in the shared fluid materials — the two-pass
   camera-side cull is per surface and survives the merge). AC-0384 r8: the
-  `_lod_avg_mat()` material (core/lod_avg.gdshader) carries the far tier's HAZE
-  BRIDGE — `render_mode fog_disabled` + a per-fragment haz: inside 336 m the
-  fragment takes the engine depth-fog model (the same factor as band A at the
-  same view distance — at orbit altitude the flat fog wall), and the outer 48 m
-  of the annulus (Manhattan distance 336→384 from the terrain anchor, the
-  exact tier boundary) crossfades into the satellite body's own haz model
-  (same model and same u_air as the dome; the haz mixes the slab colour
-  toward u_air) — so the 100%-fog annulus dissolves
-  into the dome instead of
-  stepping onto it (pre-r8 the plain engine fog left the annulus a flat
-  featureless wall against the body's crisp terrain, the measured seam); the
-  bridge's uniforms (u_air / u_fog_near / u_fog_far / u_render_edge / u_center)
-  are pushed per frame from main.gd `_update_sky` off the live env fog +
-  render radius + `Aero.fog_display`. AC-0401: the annulus now ENDS at the fog wall — lod_avg.gdshader discards its fragments at d >= u_fog_far (the PARTITION; pre-AC-0401 it drew out to the render edge at 100% fog colour, coplanar with the body's displaced terrain: the orbital fog-colour patch + the 332-400 m z-fighting band). The body's haz_d rim at the wall is the seam (same u_air), so the AC-0400 single-source seam target is preserved — the fade now runs in the body's rim, not in the annulus. See the AC-0401 bullet in §4. The per-slab RECORD
+  `_lod_avg_mat()` material (core/lod_avg.gdshader) took the far tier OFF the
+  engine fog — `render_mode fog_disabled` + a hand-rolled per-fragment copy of
+  the engine's own depth ramp (the "haze bridge", thinned to a plain u_air
+  fade by AC-0400/AC-0404) — superseded by AC-0415: the duplicate is deleted
+  and the material rides the engine environment fog like every other
+  near-tier material (one ramp, one air colour, the fog switch governs this
+  tier too — see the AC-0415 note in the §3 WorldEnvironment bullet; the full
+  r8/AC-0399/AC-0400/AC-0404 history lives in those results pages). AC-0401:
+  the annulus now ENDS at the fog wall — lod_avg.gdshader discards its fragments at d >= u_fog_far (the PARTITION; pre-AC-0401 it drew out to the render edge at 100% fog colour, coplanar with the body's displaced terrain: the orbital fog-colour patch + the 332-400 m z-fighting band). The body's haz_d rim at the wall is the seam (same u_air), so the AC-0400 single-source seam target is preserved — the fade now runs in the body's rim, not in the annulus. See the AC-0401 bullet in §4. The per-slab RECORD
   survives on the slot `MeshInstance3D`s that `c.low_instances` holds — the slots
   are OFF-TREE now (pooled exactly as before; their `.visible` flag is the far
   draw state the ring re-derives, and their `.mesh` is the exact emit arrays the
