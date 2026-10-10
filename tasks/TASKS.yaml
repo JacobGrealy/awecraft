@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T22:19
+  updated_at: 2026-10-09T22:21
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26330,7 +26330,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-09T21:57
-  updated_at: 2026-10-09T22:13
+  updated_at: 2026-10-09T22:21
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -26437,7 +26437,19 @@ intake:
     \ halo, lightstate) must\n   stay green - this is a PLACEMENT fix, so the arrays must not move; genhash\
     \ 25/25 (no generation);\n   G0 zero SCRIPT/SHADER ERROR; the ring census (MI count, slabs, rebuild\
     \ ms) re-measured with the\n   per-vertex transform in place.\n4. A frame at the tier boundary before/after,\
-    \ from a stated in-plane distance - the user's own view\n   (a raised far shelf) is the before."
+    \ from a stated in-plane distance - the user's own view\n   (a raised far shelf) is the before.\n\n\
+    \nCONFIRMATION FOR THE IMPLEMENTER (one line of code reading, so it is not re-derived): the ring merge\
+    \ IS the sole draw path for bands B/C, so the flat offset is not shadowed by a correctly placed one.\
+    \ The per-slab slot MeshInstance3Ds are OFF-TREE (the AC-0338 contract: \"the slots are OFF-TREE now...\
+    \ their `.visible` flag is the far draw state the ring re-derives, and their `.mesh` is the exact\
+    \ emit arrays the harness byte gates read\"), and `_ring_rebuild_sector` reads exactly that flag -\
+    \ `if mi == null or not mi.visible or not (mi.mesh is ArrayMesh): continue` (world.gd:1804-1806) -\
+    \ before merging the slot's arrays with the flat `off`. So a slot never draws itself, and every far\
+    \ slab that reaches the screen carries the flat placement described above.\n\nAlso, the byte gates'\
+    \ blindness is structural, not an oversight in one arm: the slot's `.mesh` IS the array the gates\
+    \ read, and the ring copies it faithfully - into the wrong frame. Nothing in the standing set compares\
+    \ a far slab's WORLD placement against the high mesh for the same column, which is the instrument\
+    \ this ticket owes (acceptance item 1)."
   comments: []
 - id: AC-0417
   title: sky-local-zenith-and-atmosphere-height
