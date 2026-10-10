@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0414 results — bake before load, multi-threaded, no fake planet</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;line-height:1.45}
+table{border-collapse:collapse;margin:1em 0}
+th,td{border:1px solid #999;padding:4px 10px;text-align:right}
+th{background:#eee}
+td:first-child,th:first-child{text-align:left}
+.box{border:1px solid #888;padding:8px 12px;margin:1em 0}
+.good{background:#e6f4e6}.bad{background:#f9e6e6}.warn{background:#fdf6e3}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px 12px;overflow-x:auto;font-size:0.9em}
+img{max-width:640px;margin:0.5em 0;border:1px solid #ccc}
+</style>
+</head>
+<body>
+<h1>AC-0414 — bake before load, multi-threaded, no fake planet</h1>
+<p>
+User report (2026-10-09, Windows build 222b1d6, seed 5432): "after a recent build the level
+of detail was not showing at all, and when they looked into it the world 'was still baking'."
+The satellite body's baked terrain was not ready when the player arrived — the 196,196-record
+bake ran as ONE <code>WorkerThreadPool</code> task at <b>LOW</b> priority, which on this box
+measured <b>1.00 effective thread</b> (the thread-priority census, world.gd:6216-6222: LOW =
+1.00, HIGH = 5.97) — ~794 s (~13 min) of bake wall for a ~2 s world load, so the planet never
+made it. Two clauses: (1) bake BEFORE the world handover, on all cores, with the loading
+screen saying what it is doing; (2) while the body is not LOADED, the sky must not
+fake-present a planet.
+</p>
+
+<div class="box">
+<b>Scope fences</b> — no commits / pushes / TASKS.yaml edits (the coordinator closes the
+ticket). <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>,
+<code>debug.gd</code> untouched (another session's uncommitted work). Light gates only; the
+heavy gate set is the coordinator's. Two temporary probe arms — <code>satboot</code>
+(the bake-before-load walls) and <code>satmid</code> (the clause-2 mid-bake sky) — each
+went in and out of <code>harness.gd</code> in this task (pristine rule; both removed at
+closeout, G0 re-verified); the standing <code>satellite</code>
+arm is untouched.
+</div>
+
+<h2>1. What was built</h2>
+<ul>
+<li><b>Multi-threaded sharded bake</b> (<code>world/satellite_body.gd</code>) — the payload
+stage splits the 196,196 <code>generate_far</code> records into <b>98 shards × 2,002</b>,
+<b>streamed at the core-count width</b> (the poller enqueues the next shard as slots open —
+the first batch fills the pool at start) as <code>WorkerThreadPool</code> tasks; each shard
+appends to its OWN buffer (no shared-array writes from workers). The priorities are
+<b>yield-aware</b>: HIGH under the loading-window hold (the bake owns the cores); after the
+hold's bounded late release, world.gd sets <code>bake_yield</code> and the bake's remaining
+work enqueues LOW until the player lands — so the diamond build (HIGH) does not queue
+behind the bake's payload and the player lands at the budget + at most one shard slice (the
+pre-yield design measured a 109 s release on this box instead — §6); after landing the tail
+goes HIGH again (capped). The main thread merges the shards in deterministic order into the
+payload (one concat), then enqueues the <b>12 face tasks</b> (colour + PNG + read-back +
+guard + geometry on the worker, per-face state dict, inflight capped: 12 while the loading
+window holds the bake, 4 after a late release so streaming keeps 2+ of the 6 pool threads).
+The main thread is the single writer of <code>pay</code>/<code>guard</code>/
+<code>_worker_images</code>/<code>_geom</code>/<code>bake_done</code>; the per-face
+arithmetic is verbatim from the old path (machine copies <code>_step_face_mt</code>/
+<code>_pixel_mt</code>/<code>_guard_check_mt</code>/<code>_geom_for_face_local</code>), and
+the sharded path is bit-identical to the old one by construction (deterministic shard
+order, verbatim per-face math). <b>Proof:</b> the satellite arm's REBAKE through the NEW
+path pixel-compared against the shipped seed-44 textures —
+<code>rebuild_vs_shipped: identical=true, diff_px=0, max_abs_diff=0</code> (589,824
+samples).</li>
+<li><b>Bake before the world handover</b> (<code>world/world.gd</code>) — with the switch
+ON, a fresh-spawn loading window holds the drain's phase 1 (the real-band diamond — the ONLY
+dispatch path in a loading window, so the hold holds exactly the sim-band release set and
+nothing else) while the bake is in WORK: <code>_ac0414_hold_tick()</code> (bounded 42 s
+budget, LOUD release line on the timeout, latched — no second stall), the drain skip
+(<code>if _ac0414_hold_active(): continue</code> after the real-column filter), and the
+loading screen's live progress line (seed, shard k/98 or face k/12, payload) instead of a
+frozen bar (<code>ui/loading_screen.gd set_note</code>). On the late release the bake
+yields (<code>satellite.bake_yield = true</code>) and comes back to HIGH when the window
+closes (<code>stop_loading</code>, the player has landed); the tail cap
+(<code>satellite.tail_inflight_cap</code>, pushed every frame) drops from 12 to 4 after a
+late release.</li>
+<li><b>The switch</b> — <code>sat_preload</code> bool in <code>settings.gd</code> DEFAULTS
+(<b>DEFAULT ON</b>, the user's verbatim quote in the comment), <code>sanitize_bool</code>
+clamped corrupt-safe, CheckBox row "Planet: bake before the world loads (recommended)" on
+the Options surface (<code>menu.gd</code>), and the <code>AWECRAFT_SATPRELOAD=0|1</code>
+harness env preloaded at boot WITHOUT save (<code>world.gd _ready</code>, the
+AWECRAFT_RAMPS discipline). OFF = the pre-AC-0414 single LOW-priority task with no hold —
+the old path is byte-identical (only inert abort checks added; the REBAKE arm through the
+OFF path re-proves its bit-identity).</li>
+<li><b>Clause 2 — no fake planet</b> (<code>core/aero_sky_gradient.gdshader</code> +
+<code>world.gd _ac0401_push</code>) — the limb term is LOADED-gated behind two change-gated
+uniforms: <code>u_limb_loaded</code> (the switch) and <code>u_body_loaded</code> (1.0 iff
+<code>satellite.phase == LOADED</code>), pushed through the same fence-locked seam as every
+other limb uniform. The term is multiplied by
+<code>mix(1.0, u_body_loaded, u_limb_loaded)</code>: OFF (shader default 0.0) = ×1.0
+<b>exactly</b> (pre-AC-0414); ON + not LOADED = ×0.0 (the sky never draws the limb disc
+over an unbaked body); ON + LOADED = ×1.0 (the full limb term). This gate is the contract
+any future limb-radius work (AC-0417) rides on.</li>
+</ul>
+
+<h2>2. Design decisions</h2>
+<ul>
+<li><b>Why shard the payload instead of the faces.</b> The payload stage (196,196 ×
+<code>generate_far</code>, 201 MB) is 94 % of the old bake's worker time on this box
+(742 s of 794 s); the 12 faces are ~52 s total. Sharding the payload across the 6 HIGH
+threads buys the 4× wall; the faces (colour + PNG + read-back, per-face state) were already
+per-face and simply became per-task. <code>generate_far</code> is a <code>const</code> pure
+C++ method already proven on worker threads by the threadgen lane — sharding it is
+bit-safe, and the REBAKE pixel-compare is the standing proof.</li>
+<li><b>Why a bounded hold instead of an unbounded one.</b> The ticket sanctions "a bounded
+timeout with a loud line" as the acceptable fallback when the hardware cannot bake that
+fast — and on every realistic machine it cannot (measured below: the MT bake wall exceeds
+the 42 s budget even here, and far more on the user's desktop-class hardware the ticket
+targets). The hold exists so that ON <i>fast</i> hardware the player is never released
+before the planet exists, and so the loading screen tells the truth while it waits. The
+42 s budget sits under the 3000-frame (~50 s) sim-band release cap so the hold never
+pushes the release past the existing fence.</li>
+<li><b>Why the bake YIELDS after a late release (the probe's finding drove this).</b> The
+first probe run (14 up-front HIGH shards, no yield) released the player at <b>109.5 s</b>,
+not the ~44 s the loud line claimed: every shard was HIGH, so the payload held the whole
+pool to its 160 s wall and the diamond build — also HIGH — only crept through the gaps.
+The loud line was lying about the release. The fix is a finite yield window, chosen
+against the pool's two priorities: after the late release the bake's remaining work
+enqueues LOW (world.gd sets <code>bake_yield</code>) until the window closes, so the
+diamond's finite HIGH work (41 columns) takes the pool and the player lands; the bake's
+LOW work still makes progress in the gaps, and after landing the tail goes HIGH again
+(capped at 4, so the steady streaming trickle keeps 2+ threads — a permanent LOW tail
+would starve behind the trickle forever, which is why the yield is windowed, not
+permanent). Shards are STREAMED (and cut to 98 × 2,002) so at release time at most
+one shard slice (~7.7 s on this box, sub-second on the user's hardware) of in-flight
+HIGH work can delay the diamond — the release wall is then the budget + at most one
+slice, by construction: measured 48.4 s on this box.</li>
+<li><b>Why the hold rides the drain's phase 1.</b> In a loading window the drain dispatches
+ONLY the real-band columns (the sim taxi diamond) — phase 1 — the halo waits for streaming
+to resume after the window closes. Skipping phase 1's dispatch while the bake is in WORK
+holds exactly the release set and nothing else; the streaming lanes are already idle in a
+loading window (<code>streaming := not loading_active</code>), so the bake takes the cores
+with no new starvation.</li>
+<li><b>Why the clause-2 gate is a multiply, not a branch.</b> The shader defaults
+(0.0) make the OFF state bit-exact with the pre-AC-0414 limb expression
+(<code>mix(1.0, x, 0.0) == 1.0</code>), so the gate costs nothing when the switch is OFF
+and cannot regress the look it guards. Pushed change-gated from
+<code>world._ac0401_push()</code> like the other limb uniforms (the <code>sky_mat</code>
+seam in <code>main.gd</code> is fence-locked — the push side, not the material owner).</li>
+</ul>
+
+<h2>3. The bake wall, measured (before / after, this box)</h2>
+<table>
+<tr><th>path</th><th>worker time</th><th>wall</th><th>note</th></tr>
+<tr><td>pre-AC-0414 (single LOW task, seed 44, REBAKE-OFF)</td><td>798.2 s measured (matches the AC-0384 r2 ~794 s baseline)</td><td><b>798.2 s</b></td><td>1.00 effective thread; <code>identical=true, diff_px=0</code> (589,824 samples) — the OFF path is byte-identical to today</td></tr>
+<tr><td>AC-0414 MT, 98 streamed shards + 12 faces, seed 5432 probe</td><td>gen 751.5 s (98 shards) + colour 88.3 s + PNG 7.0 s</td><td><b>169.3 s</b> (gen_wall 145.0 s, face_wall 23.5 s)</td><td>the final code state (yield design); main-thread merge step ≤ 264 ms — no frame spikes</td></tr>
+<tr><td>AC-0414 MT, 14 HIGH shards + 12 HIGH faces, seed 44 rebake (pre-yield build)</td><td>gen 800.1 s + colour 121.9 s + PNG 7.0 s</td><td><b>194.9 s</b> (gen_wall 168.4 s, face_wall 26.3 s)</td><td>the same-seed A/B pair to the OFF row above; <code>identical=true, diff_px=0</code> (589,824 samples)</td></tr>
+</table>
+<p><b>4.1–4.7× the bake wall</b> (798.2 → 194.9 s same-seed; 798.2 → 169.3 s on the final
+streaming build). The per-record cost on this box is ~3.8–4.0 ms (software dev box, 6
+cores) — the user's desktop-class hardware the ticket targets is ~40× faster per record
+(the 92 µs/column figure of record), so the same sharding lands the whole bake in a few
+seconds there — well inside the 42 s budget, so the player is released the moment the
+planet exists (the acceptance ideal) and the loud path never fires. On <b>this</b> box the
+budget is always exceeded, so the loud bounded release (with the yield, §6) is the
+measured outcome here. That is the ticket's sanctioned deviation, stated with the
+measurement — not a plan deviation.</p>
+
+<h2>4. Gates (light set; HEAVY is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>log</th></tr>
+<tr><td>G0 (headless load, parse + census)</td><td class="good">rc 0, SCRIPT ERROR 0, SHADER ERROR 0 (after the two parse fixes — see §7)</td><td><code>.scratch/AC-0414-g0r2.log</code></td></tr>
+<tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td class="good">combined ok true, 0/0 census, 5/5 modes</td><td><code>.scratch/AC-0414-smoke.log</code></td></tr>
+<tr><td>genhash 25/25 (world/* changed)</td><td class="good">25/25 identical vs the current-tree reference set (the AC-0367 file is a superseded stale reference — the AC-0403/AC-0408/AC-0411 sets match byte-for-byte; generation code untouched by this task)</td><td><code>.scratch/AC-0414-smoke.log</code></td></tr>
+<tr><td>satellite arm (seed 44, res path)</td><td class="good">ok true — 12/12 meshes+textures, guard 12/12 ok, angular 0.25, height_decode ok</td><td><code>.scratch/AC-0414-sat-stand.log</code></td></tr>
+<tr><td>satellite arm REBAKE (switch ON, pre-yield 14-shard build)</td><td class="good">ok true — <code>rebuild_vs_shipped: identical=true, diff_px=0, max_abs_diff=0</code> (589,824 samples); bake wall 194.9 s</td><td><code>.scratch/AC-0414-sat-rebake-on.log</code></td></tr>
+<tr><td>satellite arm REBAKE (switch OFF — the pre-change single task)</td><td class="good">ok true — <code>identical=true, diff_px=0, max_abs_diff=0</code> (589,824 samples); old-path wall 798.2 s — the OFF path is today, byte-identical</td><td><code>.scratch/AC-0414-sat-rebake-off.log</code></td></tr>
+<tr><td>satellite arm REBAKE (switch ON, FINAL streamed+yield build)</td><td class="good">ok true — <code>rebuild_vs_shipped: identical=true, diff_px=0, max_abs_diff=0</code> (589,824 samples) on the closeout code state (98 shards + yield + exit mitigation); 0/0 census, rc 0</td><td><code>.scratch/AC-0414-sat-rebake-on2.log</code></td></tr>
+<tr><td>probe satboot (ON, cold seed 5432, final build)</td><td class="good">ok true — hold engaged, LOUD timeout at the 42 s budget, <b>release wall 48.4 s</b> (budget + 1 shard slice, the pre-yield design measured 109.5 s), planet LOADED at 169.4 s, bake mt=true, 98 shards, guard clean</td><td><code>.scratch/AC-0414-probe-on.log</code></td></tr>
+<tr><td>probe satboot (OFF, seed 5432)</td><td class="good">ok true — hold NEVER engaged (no hold on the OFF path), release wall <b>1.29 s</b> (exactly today), old single-task path (bake_mt=false), clean bounded abort (1,705 frames ≈ 28 s wind-down of the in-flight slice), clean quit</td><td><code>.scratch/AC-0414-probe-off.log</code></td></tr>
+<tr><td>probe satmid (TEMP — clause-2 mid-bake sky, removed at closeout)</td><td class="good">rc 0 — snapshot at <b>body_phase=6 (WORK)</b> (<code>phase_is_WORK=true</code>, the standing planet preset can never capture this: it waits for LOADED first), clean abort wind-down 17-24 frames (the <code>_fail</code>→<code>bake_done</code> fix), no segfault (the exit UAF mitigation held)</td><td><code>.scratch/AC-0414-satmid4.log</code> / <code>-satmid5.log</code></td></tr>
+<tr><td>boundary r4 (the builder's ONE self-check)</td><td class="good">ok true — 0/0 census, rc 0; <code>col_deferred_in_footprint=0</code> (fence tripwire), marker+remesh ok, crossing_frame_p95 34 ms, walk 24.4 s</td><td><code>.scratch/AC-0414-boundary-r4.log</code></td></tr>
+<tr><td>renders R1–R5 + the mid-bake A/B (Forward+ proxy, llvmpipe boot line verified)</td><td class="good">all rc 0, 0 SNAP FAIL, PNGs verified — findings in §5</td><td><code>.scratch/AC-0414-r*.log</code></td></tr>
+<tr><td>G0 final (after both temp arms removed) + smoke battery</td><td class="good">G0 0/0 rc 0; battery <code>player;interact;light;fluids;genhash</code> ok, 0/0, GENHASH <code>40c8e34e…</code> identical to the pre-arm run</td><td><code>.scratch/AC-0414-g0final.log</code> / <code>-smoke3.log</code></td></tr>
+</table>
+
+<h2>5. Renders (proxy warning applies — geometry/layout only, not the shipped look)</h2>
+<p>All seed 5432, <code>AWECRAFT_CAM=planet</code> framing (camera at spawn + 2000 m
+altitude, looking out at the limb), 1280×720 Forward+/llvmpipe,
+<code>NO_FOG=1 CLOUDS=0 TIME=0.5</code>. R1 bakes cold (the 98-shard wall 146.7 s
+payload + faces); R2–R5 reuse the same <code>user://</code> cache (one bash call).
+PNGs in <code>tasks/AC-0414/renders/</code>.</p>
+<ul>
+<li><b>R1 — the acceptance (<code>r1.png</code>)</b>: the body LOADED — the complete
+12-face planet (land/water/snow) with the limb glow ringing the silhouette. The
+end state the ticket wants the player to land on.</li>
+<li><b>R2 — <code>AWECRAFT_LIMB=0</code> (<code>r2_limb0.png</code>)</b>: same planet,
+the limb ring gone — isolates the limb term (the halo around the edge) as the
+clause-2-gated quantity.</li>
+<li><b>R3 — <code>AWECRAFT_GRADE_GLOW=0</code> (<code>r3_glow0.png</code>)</b>: the
+sky grade-glow control (no body change).</li>
+<li><b>R4 — <code>AWECRAFT_SAT_BODY=0</code> (<code>r4_body0.png</code>)</b>: the
+single-launch painter A/B for the "pale disc around the sun" report. With the
+textured body hidden but the limb uniform still on, the sky paints a <b>flat
+featureless disc + a distinct limb-glow ring</b> around it. That is the "pale
+disc" mechanism: the limb term's halo drawn around the body-silhouette disc. A
+fix for it is a separate clause/ticket (the ticket deliberately stops at
+identifying it).</li>
+<li><b>R5c — clause-2 mid-bake (<code>r5c_midbake.png</code>)</b>: the key shot.
+Captured by the temp <code>satmid</code> probe (planet camera WITHOUT its LOADED
+wait) while the body was still <b>WORK</b> (<code>body_phase=6</code>,
+<code>phase_is_WORK=true</code>). The frame is <b>empty sky</b> — no body, no
+limb ring, no pale disc — exactly the clause-2 contract: while the body is not
+LOADED the sky must not fake-present a planet. (The first attempt at this shot
+used default cloud/fog settings and showed the cloud shell, not the sky region;
+re-shot with the R1-matching env above.)</li>
+<li><b>R5 — settled time series (<code>r5.png</code> + <code>_s300/_s900/_s1800</code>)</b>:
+cache-reused run (body LOADED from the start), a stable established planet
+across the drain — the look the player settles into.</li>
+</ul>
+<p class="warn">These are llvmpipe proxy frames: geometry/layout evidence only,
+never the shipped <code>forward_plus</code> look (HARNESS.md §2).</p>
+
+<h2>6. Deviations and findings</h2>
+<ul>
+<li><b>Measured deviation (sanctioned):</b> on this box the bake wall (169–195 s) exceeds
+the 42 s hold budget, so the loud bounded release fires — measured release wall
+<b>48.4 s</b> (the budget + at most one in-flight shard slice, by construction), the
+diamond builds at full speed behind the yield, and the planet lands at <b>169.4 s</b>
+after boot (vs ~13.3 min before). The ticket's acceptance ideal (bake ready before
+release) is met on hardware ~5× faster per record — there the loud path never fires;
+the ticket sanctions the bounded-timeout-loud path "only if it is measured and stated" —
+stated here, with the measurement. (The probe's walls in §4 carry the per-run numbers.)</li>
+<li><b>Finding → fix (the yield):</b> the first probe (14 up-front HIGH shards, no yield)
+released the player at <b>109.5 s</b> — 67 s past the loud line's claim — because the
+shards held the pool to the payload's 160 s wall and the diamond build (also HIGH) only
+crept through the gaps. A loud line that does not match the release wall is a defect, so
+the design changed: the shards stream at the core-count width (98 × 2,002) and, after the
+late release, the bake's remaining work enqueues LOW (world.gd <code>bake_yield</code>)
+until the window closes — a FINITE yield, because the diamond's HIGH work is finite
+(41 columns) while the steady post-landing streaming trickle would starve a permanent
+LOW tail forever. Re-measured: release 48.4 s. This also bounds the worst case on any
+hardware: release ≤ budget + one shard slice + the diamond build (~3 s), because at most
+one slice of in-flight HIGH bake work can overlap the release.</li>
+<li><b>Finding → mitigation (the mid-bake exit UAF):</b> the clause-2 probe quit the
+process while a bake worker was still running and <b>segfaulted on a pool thread</b>
+(<code>Bad address index</code> in <code>_pixel_mt</code>): the worker holds the node's
+script instance in its call stack, and process exit frees it mid-slice. This class
+predates AC-0414 (the old single-task bake had the same race — a user closing the game
+during the ~13 min bake) but is now much more reachable (the bake runs for minutes on
+slow hardware). Mitigation (in <code>satellite_body.gd</code>): a file-scope
+<code>static var _mt_exit_aborted</code> (readable WITHOUT touching the instance), set in
+<code>_exit_tree()</code>; every worker abort check reads it first and stands down at the
+next record/slice boundary with no further instance access. It shrinks the UAF window
+from a whole slice to the function epilogue — a full close needs the workers detached
+from the node (their own ticket). The probe arm exits the honest way instead
+(abort + bound-wait, the probe-OFF pattern).</li>
+<li><b>Finding → fix (the MT failure path never set <code>bake_done</code>):</b> an
+aborted/faulted sharded bake left <code>bake_done</code> false forever, so any wait on it
+ran its full frame cap (a 100 s wasted wait, measured). <code>_fail()</code> now sets
+<code>bake_done = true</code> (the pre-AC-0414 path already did on its abort wind-down);
+the probe's abort wind-down then finishes in 17-24 frames.</li>
+<li><b>Process note (for the coordinator):</b> one REBAKE run and one render probe
+overlapped (a one-godot-at-a-time miss). Both runs independently passed their gates
+(0/0 census, <code>identical=true</code>; rc 0 + RESULT + SNAP) — no observed
+<code>.godot</code> corruption — but the overlap was not sanctioned; all other godot
+calls were strictly serial.</li>
+<li><b>Two parse errors on the first G0</b> (fixed, both in the new code):
+<code>PackedByteArray</code> has no <code>replace()</code> in 4.7.1 — the merge is the
+deterministic <code>append_array</code> concat in shard order (plus a size assert); and
+<code>hgrid</code> was declared in the <code>_step_face_mt</code> loop body but read in the
+PNG section — moved to function scope.</li>
+<li><b>One consume handover bug</b> (found by the first REBAKE run, which hung and was
+killed at the 600 s cap): once the sharded assembly set <code>bake_done</code>, the poller
+re-ran the assembly every frame (re-appending guard/images/geom, reallocating the 201 MB
+payload per frame) and the shared consume loop never took over — <code>bake_active</code>
+never cleared. Fixed by dispatching to the shared <code>_bake_main_step</code> (the consume
+loop) as soon as <code>bake_done</code> is set; the re-run REBAKE is the clean pass above.</li>
+</ul>
+
+<h2>7. Files</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>world/satellite_body.gd</code></td><td>the sharded MT bake (98 streamed shards × 2,002 records at the core-count width + 12 face tasks, yield-aware priorities, main-thread merge/assemble, single-writer discipline); <code>bake_yield</code>, the mid-bake exit mitigation (<code>static var _mt_exit_aborted</code> + <code>_exit_tree</code> + static-first abort checks), <code>_fail</code> now sets <code>bake_done</code>; <code>bake_progress_line()</code>, <code>abort_bake()</code>, <code>mt_settled()</code>, <code>tail_inflight_cap</code>; <code>configure()</code>/<code>force_rebake()</code> branch on the switch; <code>bake_stats</code> carries <code>mt</code>/<code>shards</code>/<code>gen_wall_ms</code>/<code>face_wall_ms</code>; the old path untouched except inert abort checks</td></tr>
+<tr><td><code>world/world.gd</code></td><td>the <code>AWECRAFT_SATPRELOAD</code> env preload (no save); the bounded hold (<code>_ac0414_hold_tick</code>/<code>_ac0414_hold_active</code>, the drain phase-1 skip, the 42 s budget + LOUD release, the <code>bake_yield</code> true/false transitions at late release / window close, the tail cap push, the loading-screen progress line); the clause-2 push (<code>u_limb_loaded</code>/<code>u_body_loaded</code> in <code>_ac0401_push</code>, change-gated)</td></tr>
+<tr><td><code>ui/loading_screen.gd</code></td><td><code>set_note()</code> — the live progress line (the bar is untouched)</td></tr>
+<tr><td><code>core/aero_sky_gradient.gdshader</code></td><td>clause 2 — <code>u_limb_loaded</code>/<code>u_body_loaded</code> uniforms + the <code>mix(1.0, u_body_loaded, u_limb_loaded)</code> gate on the limb term (defaults = pre-change)</td></tr>
+<tr><td><code>autoload/settings.gd</code></td><td><code>sat_preload</code> DEFAULT ON + the <code>sanitize_bool</code> clamp</td></tr>
+<tr><td><code>ui/menu.gd</code></td><td>the Options-surface CheckBox row + sync + toggle handler</td></tr>
+<tr><td><code>ARCHITECTURE.md</code></td><td>same-task sync — the sharded bake (two sites), the <code>sat_preload</code> settings bullet, the load-screen hold bullet, the clause-2 sky-gate note</td></tr>
+<tr><td><code>scenes/harness.gd</code></td><td>the TEMPORARY <code>satboot</code> probe arm (the bake-before-load walls) and the TEMPORARY <code>satmid</code> arm (the clause-2 mid-bake sky) — both in + out this task (the pristine rule), REMOVED at closeout, G0 re-verified 0/0</td></tr>
+</table>
+<p class="warn"><b>Deliberately NOT done:</b> a C++ port of the bake (the ticket's
+multithreading is a GDScript scheduling change — <code>generate_far</code> is already
+worker-thread C++); the coordinator's heavy gate set (the Windows build, the
+<code>shaderforce</code> arm); a third clause for the "pale disc around the sun" painter —
+the A/B renders in §5 identify it, and a fix for it would be its own clause/ticket.</p>
+
+</body>
+</html>

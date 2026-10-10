@@ -3891,6 +3891,16 @@ func _ready() -> void:
 	var ske := OS.get_environment("AWECRAFT_SKYALT")
 	if ske != "":
 		Settings.values["sky_altitude"] = ske == "1"
+	# AC-0414: the bake-before-load switch (Settings "sat_preload",
+	# default ON — the user asked for the planet to be there on arrival;
+	# OFF is today's behaviour: the world is released first, the body
+	# may appear late). AWECRAFT_SATPRELOAD=<0|1> overrides the STORED
+	# setting for this process only (no save; the AWECRAFT_RAMPS
+	# pattern). Read live by the satellite's configure/force_rebake and
+	# by _ac0401_push + _ac0414_hold_tick, so no boot derive is owed.
+	var spe := OS.get_environment("AWECRAFT_SATPRELOAD")
+	if spe != "":
+		Settings.values["sat_preload"] = spe == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -4973,6 +4983,9 @@ func _wprof_recon_raw_pct() -> float:
 var _ac0401_fog_wall := -1.0
 var _ac0401_deck := -1.0
 var _ac0401_limb := -1.0
+# AC-0414: the clause-2 limb gate push state (same seam, change-gated).
+var _ac0414_limb_loaded := -1.0
+var _ac0414_body_loaded := -1.0
 var _ac0402_skyalt := -1.0
 var _ac0402_skyblend := -1.0
 # AC-0405: the raymarched-volume push state (same seam: _ac0401_push,
@@ -4993,6 +5006,22 @@ const AC0407_VOL_TOP_EXTEND := 50.0
 # pushes once; a full cycle re-pushes only as the colour moves).
 var _ac0406_air := Color(1.0, 1.0, 1.0, 1.0)
 var _ac0406_air_invalid := true
+# AC-0414: the bake-before-load HOLD (Settings "sat_preload" ON). While
+# a bake is in flight inside the loading window, the SIM DIAMOND (taxi
+# <= band0_r — the release set main.gd _await_sim_band awaits, the
+# fenced 3000-physics-frame cap ≈ 50 s wall) is never dispatched by the
+# loading-window drain (its phase 1 only dispatches real-band columns,
+# so the hold gates exactly the release set). The hold has its own
+# BOUNDED budget: at expiry it releases the diamond with a LOUD line
+# and the bake tail keeps running at the worker cap below (streaming
+# keeps its share) — the player is never released into a silent late
+# planet, and the window can never outlast the release cap (42 < 50).
+const AC0414_HOLD_BUDGET_MS := 42000
+const AC0414_TAIL_WORKERS := 4
+var _ac0414_hold_engaged := false
+var _ac0414_hold_t0 := 0
+var _ac0414_hold_released_late := false
+var _ac0414_hold_titled := false
 
 
 func _ac0401_push() -> void:
@@ -5034,6 +5063,25 @@ func _ac0401_push() -> void:
 		if sm is ShaderMaterial:
 			sm.set_shader_parameter("u_limb_gate", limb_v)
 		_ac0401_limb = limb_v
+	# (2b) AC-0414 clause 2: while the body is not LOADED, the sky must
+	# not fake-present a planet. The limb term's impact-parameter clamp
+	# makes it a FILLED disc (the "pale ball" class the user saw), so it
+	# is multiplied by u_body_loaded — pushed here like the other limb
+	# uniforms. Two change-gated values: u_limb_loaded is the switch
+	# (Settings "sat_preload", default ON — OFF keeps the pre-change limb
+	# exactly: mix(1.0, x, 0.0) == 1.0) and u_body_loaded is the phase
+	# (1.0 iff LOADED; it moves at most once per bake).
+	var limb_load_v := 1.0 if bool(Settings.values.get("sat_preload", true)) else 0.0
+	var body_load_v := 0.0
+	if satellite != null and int(satellite.phase) == int(SatelliteBody.Phase.LOADED):
+		body_load_v = 1.0
+	if limb_load_v != _ac0414_limb_loaded or body_load_v != _ac0414_body_loaded:
+		var sm2 = mn.get("sky_mat")
+		if sm2 is ShaderMaterial:
+			sm2.set_shader_parameter("u_limb_loaded", limb_load_v)
+			sm2.set_shader_parameter("u_body_loaded", body_load_v)
+		_ac0414_limb_loaded = limb_load_v
+		_ac0414_body_loaded = body_load_v
 	# (3) AC-0402: the sky's altitude-aware space blend (Settings
 	# "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env preload). The
 	# background blend of aero_sky_gradient uses u_space_sky with a
@@ -5161,6 +5209,13 @@ func _process(_delta: float) -> void:
 	if satellite != null:
 		if not satellite.configured:
 			satellite.configure(0, int(Game.world_seed), Game.planet_R, int(Data.HEIGHT), int(Data.SEA))
+		# AC-0414: the bake tail's in-flight face cap - 12 while the
+		# loading-window hold is active (the bake owns the cores: the
+		# player is not in the world yet), AC0414_TAIL_WORKERS after the
+		# loud late release (streaming keeps its share; the planet is
+		# already ~5x sooner than the pre-AC-0414 single-thread tail).
+		# OFF path: the cap is inert (the single-task bake ignores it).
+		satellite.tail_inflight_cap = 12 if not _ac0414_hold_released_late else AC0414_TAIL_WORKERS
 		var _sp: Vector3 = Game.player.position if Game.player != null else Vector3.ZERO
 		if ac0383_on:
 			# AC-0383: the SATELLITE sub-stage bracket (the per-frame driver —
@@ -5769,6 +5824,61 @@ func stop_loading() -> void:
 	threadmesh_max = _tm_max_norm
 	if _loading_screen != null:
 		_loading_screen.hide_screen()
+	# AC-0414: the held window's title latches per window (a later
+	# radius-change window may hold again — the body may not be LOADED
+	# yet in that rare case).
+	_ac0414_hold_titled = false
+	# AC-0414: the window closed - the player is landing/landed. The
+	# bake's tail comes back to HIGH (capped at 4 by the driver, so the
+	# steady streaming trickle keeps its 2+ threads) and the planet
+	# finishes at full speed instead of idling behind the LOW yield.
+	if satellite != null and satellite.bake_active:
+		satellite.bake_yield = false
+
+
+# AC-0414: the hold's per-frame tick (called from _loading_tick — only
+# while loading_active). Engages on the first frame the bake is in
+# flight, fires the LOUD bounded release at the budget (the ticket's
+# "bounded timeout with a loud line" — measured in the probe arm), and
+# latches: a later window in the same boot never re-holds (no second
+# 42 s stall while the tail is still baking).
+func _ac0414_hold_tick() -> void:
+	if not loading_active or not bool(Settings.values.get("sat_preload", true)):
+		return
+	if satellite == null or not satellite.configured:
+		return
+	if int(satellite.phase) != int(SatelliteBody.Phase.WORK):
+		return  # LOADED / FAILED / LOAD (cache-res): nothing to hold
+	if not _ac0414_hold_engaged:
+		_ac0414_hold_engaged = true
+		_ac0414_hold_t0 = Time.get_ticks_msec()
+		print("SATELLITE AC0414: holding the world release for the bake (seed %d, budget %d ms) - the planet lands when the bake is LOADED, or the player is released loudly at the budget" % [satellite.seed, AC0414_HOLD_BUDGET_MS])
+		satellite._satline("AC0414: hold engaged (budget %d ms)" % AC0414_HOLD_BUDGET_MS)
+	if Time.get_ticks_msec() - _ac0414_hold_t0 >= AC0414_HOLD_BUDGET_MS and not _ac0414_hold_released_late:
+		_ac0414_hold_released_late = true
+		# The bake YIELDS from here until the player lands (bake_yield):
+		# its remaining work enqueues LOW so the sim-band diamond build
+		# (HIGH) takes the pool and the player's ground lands at the
+		# budget instead of queuing behind the bake's payload (the
+		# pre-yield design measured a 109 s release on this box - the 14
+		# up-front HIGH shards held the pool past the budget).
+		satellite.bake_yield = true
+		print("SATELLITE AC0414 TIMEOUT: the bake is not LOADED after %d ms of the loading window - the ground build resumes now (the bake tail yields until the player lands, then resumes at %d workers); the planet appears when the bake completes" % [AC0414_HOLD_BUDGET_MS, AC0414_TAIL_WORKERS])
+		satellite._satline("AC0414: hold released LATE (budget %d ms) - the bake yields (LOW) until landing, tail cap %d" % [AC0414_HOLD_BUDGET_MS, AC0414_TAIL_WORKERS])
+
+
+# AC-0414: the hold's live state (the drain phase-1 skip consults it).
+# False when the switch is OFF, when no window is open, when no bake is
+# in flight, or after the loud release — in which cases the dispatch is
+# exactly the pre-AC-0414 one.
+func _ac0414_hold_active() -> bool:
+	if not _ac0414_hold_engaged or _ac0414_hold_released_late:
+		return false
+	if not loading_active:
+		return false
+	if satellite == null:
+		return false
+	return int(satellite.phase) == int(SatelliteBody.Phase.WORK)
 
 # AC-0178: called from Settings.apply_render_distance (the Options path).
 # Re-enters the loading window on a real radius change after the first load
@@ -5876,6 +5986,8 @@ func band_drained() -> bool:
 func _loading_tick() -> void:
 	if not loading_active:
 		return
+	# AC-0414: the bake-before-load hold (the engage / loud release).
+	_ac0414_hold_tick()
 	# A radius change mid-load (Options over a paused load) re-anchors the
 	# target instead of stalling on the stale one.
 	if render_radius != _loading_radius:
@@ -5892,7 +6004,18 @@ func _loading_tick() -> void:
 				100.0 * float(m) / maxf(1.0, float(_loading_target)),
 				m, _loading_target, threadmesh_inflight.size(), threadgen_inflight.size(), disk_reads, gen_count, queue_size, hslab_defer_nbs, hslab_defer_dedup, hslab_stale_key_n, _tm_capdrop, load_phase1_ready_fail, _tm_inflight_keys.size(), float(_load_wms_sum) / maxf(1.0, float(_load_wms_n)), _load_wms_n])
 	if _loading_screen != null:
-		_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
+		if _ac0414_hold_active():
+			# AC-0414: while the release is held for the bake, the screen
+			# says WHAT it is doing (the ticket: "the loading screen says
+			# what it is doing") - a title once, then the live progress
+			# line (payload shards / face k of 12) instead of a bar that
+			# cannot move while the diamond is held.
+			if not _ac0414_hold_titled:
+				_loading_screen.show_loading(_loading_target, "Baking the planet (seed %d)" % satellite.seed)
+				_ac0414_hold_titled = true
+			_loading_screen.set_note("baking the planet (seed %d) - %s" % [satellite.seed, satellite.bake_progress_line()])
+		else:
+			_loading_screen.update_progress(m, _loading_target, disk_reads, gen_count)
 	# AC-0313 (user decision B; clause 4 as CORRECTED): the window closes
 	# the moment the LOAD TARGET (the SIM TAXI DIAMOND, taxi <= band0_r)
 	# is meshed - the pools keep running: the loading screen waits until
@@ -8868,6 +8991,18 @@ func _drain_build_queue() -> void:
 				var dxl := int(e["cx"]) - last_pcx
 				var dzl := int(e["cz"]) - last_pcz
 				if not _is_real_col(dxl, dzl):
+					continue
+				# AC-0414: the bake-before-load hold (Settings "sat_preload",
+				# default ON). While a bake is in flight inside the loading
+				# window, the real band — here exactly the sim taxi diamond,
+				# the release set — is NEVER dispatched: it stays at the head
+				# of the (taxi, layer) queue and lands first the moment the
+				# gate opens (the bake finished LOADED, or the loud bounded
+				# budget expired). Everything else (caps, phase 2 gen, the
+				# halo's off-state) is unchanged. OFF = the skip never runs
+				# (_ac0414_hold_active is false the whole time) — the
+				# pre-AC-0414 dispatch, byte for byte.
+				if _ac0414_hold_active():
 					continue
 				if not _build_ready(int(e["cx"]), int(e["cz"])):
 					load_phase1_ready_fail += 1

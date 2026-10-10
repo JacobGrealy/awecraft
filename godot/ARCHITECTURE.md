@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) and the AC-0405 `cloud_volume` bool (DEFAULT ON — the raymarched-volumetric-clouds rework the user ordered; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_CLOUDVOL=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_vol` + the annulus radii `u_vol_r/rmin/rmax` (change-gated on `planet_R`) to the three cloud-layer materials and toggles the two inner shells' visibility (ON = the outer shell carries the raymarched volume in the [R+275, R+400] annulus, inner shells hidden; OFF = the exact AC-0401 three-shell path — the shader short-circuits on `u_vol < 0.5` before any volume work); see the AC-0405 note in the CloudLayer bullet, §3), and the AC-0394 `viewmodel_occlude` bool (DEFAULT OFF — conservative: the 2026-10-03 report's held-item residual was the viewmodel's `no_depth_test` making the hand draw OVER terrain, and the user reported the item's SIZE (the 0.33 scale they themselves ordered, AC-0097), not the occlusion, so the un-asked look change defaults to the pre-change always-on-top look; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_VMOCC=0|1` harness env (preloaded at boot WITHOUT save in `player.gd _ready` — the viewmodel is the player's, so the preload rides the player rather than world.gd's boot block) — and NO apply step: `player.gd _process` reads the live value every frame and re-applies `no_depth_test` across the whole viewmodel material registry on change (ON re-enables the depth TEST only — the depth WRITE stays `DEPTH_DRAW_DISABLED` in both states, the hand still never blocks the depth of anything behind it); the render evidence: `tasks/AC-0394/` (the 0.4 m wall A/B, hand occluded with the switch ON, still visible against sky)), and the AC-0395 `noclip` bool (DEFAULT OFF — the player-collision switch for geometry inspection, the user's own request: the body stops colliding while movement stays under the player's control; same pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_NOCLIP=0|1` harness env preloaded at boot WITHOUT save in `player.gd _ready` (the noclip is the player's, so the preload rides the player) — and NO apply step: `player.gd _process` reads the live value and applies on change — `col_shape.disabled` (the player's OWN shape only — the slab bodies, mobs, drops and the grid-DDA mine/place raycast are untouched) + the AC-0145 `flying` state (noclip implies FREE FLIGHT: no gravity, the existing flight controls, so the radial gravity is not fought) + the void-kill gate (`not _noclip` — the tool's purpose is being below the surface) + the one-line indicator label visible only while on; the arm evidence: `tasks/AC-0395/` (the stop/pass-through arm, the same-path repeat, the before/after cave renders)) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) and the AC-0405 `cloud_volume` bool (DEFAULT ON — the raymarched-volumetric-clouds rework the user ordered; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_CLOUDVOL=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_vol` + the annulus radii `u_vol_r/rmin/rmax` (change-gated on `planet_R`) to the three cloud-layer materials and toggles the two inner shells' visibility (ON = the outer shell carries the raymarched volume in the [R+275, R+400] annulus, inner shells hidden; OFF = the exact AC-0401 three-shell path — the shader short-circuits on `u_vol < 0.5` before any volume work); see the AC-0405 note in the CloudLayer bullet, §3), and the AC-0394 `viewmodel_occlude` bool (DEFAULT OFF — conservative: the 2026-10-03 report's held-item residual was the viewmodel's `no_depth_test` making the hand draw OVER terrain, and the user reported the item's SIZE (the 0.33 scale they themselves ordered, AC-0097), not the occlusion, so the un-asked look change defaults to the pre-change always-on-top look; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_VMOCC=0|1` harness env (preloaded at boot WITHOUT save in `player.gd _ready` — the viewmodel is the player's, so the preload rides the player rather than world.gd's boot block) — and NO apply step: `player.gd _process` reads the live value every frame and re-applies `no_depth_test` across the whole viewmodel material registry on change (ON re-enables the depth TEST only — the depth WRITE stays `DEPTH_DRAW_DISABLED` in both states, the hand still never blocks the depth of anything behind it); the render evidence: `tasks/AC-0394/` (the 0.4 m wall A/B, hand occluded with the switch ON, still visible against sky)), and the AC-0395 `noclip` bool (DEFAULT OFF — the player-collision switch for geometry inspection, the user's own request: the body stops colliding while movement stays under the player's control; same pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_NOCLIP=0|1` harness env preloaded at boot WITHOUT save in `player.gd _ready` (the noclip is the player's, so the preload rides the player) — and NO apply step: `player.gd _process` reads the live value and applies on change — `col_shape.disabled` (the player's OWN shape only — the slab bodies, mobs, drops and the grid-DDA mine/place raycast are untouched) + the AC-0145 `flying` state (noclip implies FREE FLIGHT: no gravity, the existing flight controls, so the radial gravity is not fought) + the void-kill gate (`not _noclip` — the tool's purpose is being below the surface) + the one-line indicator label visible only while on; the arm evidence: `tasks/AC-0395/` (the stop/pass-through arm, the same-path repeat, the before/after cave renders)), and the AC-0414 `sat_preload` bool (DEFAULT ON — the user's own request: the satellite body's terrain baked BEFORE the world handover, "the level of detail was not showing at all ... the world was still baking"; same pattern — `sanitize_bool` clamp, the Settings-surface row — and NO apply step: the bake starts at `SatelliteBody.configure()` from the live value (and `force_rebake()` follows the same switch, so the arm's REBAKE proves whichever path the game will use), and the loading window rides it — `world._ac0414_hold_tick()` holds the loading-window drain phase 1 (the real-band diamond) while the bake is in WORK, on a bounded 42 s budget with a LOUD release line when it fires (the bake continues in the background at the 4-worker tail); the loading screen shows a live progress line (seed, shard k/14 or face k/12, payload); the `AWECRAFT_SATPRELOAD=0|1` harness env preloads at boot WITHOUT save in `world.gd _ready`; OFF = the pre-AC-0414 single LOW-priority task with no hold — byte-identical behaviour; see the AC-0414 bullets in §3/§4) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -135,7 +135,22 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         "sky_altitude", DEFAULT ON, env AWECRAFT_SKYALT): 0.0
 │                         (also the shader default) makes ws exactly the
 │                         pre-AC-0402 expression. The gate/stars/sun-glow keep
-│                         riding the physics S (the AC-0386 contracts).
+│                         riding the physics S (the AC-0386 contracts). AC-0414
+│                         clause 2: the limb term is ADDITIONALLY LOADED-GATED
+│                         (the user's 2026-10-09 report — the "planet" was a
+│                         pale disc while the body was still baking): two more
+│                         change-gated uniforms, `u_limb_loaded` (the switch,
+│                         sat_preload) and `u_body_loaded` (1.0 iff
+│                         satellite.phase == LOADED, pushed by
+│                         world.gd _ac0401_push — the same fence-locked seam as
+│                         every other limb uniform), and the term is multiplied
+│                         by `mix(1.0, u_body_loaded, u_limb_loaded)` — OFF
+│                         (u_limb_loaded = 0, the shader default) = ×1.0
+│                         exactly (pre-AC-0414); ON + body not yet LOADED =
+│                         ×0.0 (the sky never fakes a planet over an unbaked
+│                         body); ON + LOADED = ×1.0 (the full limb term). This
+│                         gate is the "no planet faked while the body is not
+│                         LOADED" contract any future limb-radius work rides on.
 ├─ CloudLayer ×3          core/cloud_layer.gdshader — the cloud SHELL (AC-0235 →
 │                         AC-0385): three concentric transparent shells at
 │                         radii R + 275/330/400, centred at (0,-R,0), WORLD-FIXED
@@ -464,7 +479,15 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         user://satellite/p{planet}_r{R}_s{seed}_h/ (the _h token = the
 │                         height-channel era; pre-r2 RGB caches trigger a one-time re-bake),
 │                         seeded from godot/assets/satellite/ for the canonical seed 44; the
-│                         bake pipeline runs off-thread (one WorkerThreadPool slot, AC-0382)
+│                         bake pipeline runs off-thread, AC-0414: sharded multi-threaded
+│                         (98 payload shards × 2,002 records, streamed at the core-count
+│                         width + 12 face tasks; HIGH under the loading-window hold, LOW
+│                         (world.gd bake_yield) after the bounded late release until the
+│                         player lands, HIGH-capped after; the main thread merges +
+│                         assembles — single-writer, bit-identical to the pre-AC-0414
+│                         single LOW task, which remains the sat_preload OFF path) —
+│                         gated by the sat_preload setting (ON default; the loading window
+│                         holds on the in-flight bake, bounded + loud, AC-0414)
 │     (scenes/test_range.tscn substitutes for World in the AC-0191 test range)
 ├─ Player                 player/player.tscn  →  player/player.gd
 │                         CharacterBody3D + CollisionShape3D + Camera3D
@@ -630,9 +653,30 @@ Build and loading:
   `filter_linear_mipmap_anisotropic` (the 4.7.1 combined hint) — a
   mipmap-filtering sampler over a chainless texture is a no-op, so the
   sampler and the chain ship together.**
-  (off-thread on one WorkerThreadPool slot —
-  generate_far × 196,196 + colour + PNG + read-back + guard + geometry — keyed by
+  (off-thread, keyed by
   (planet_id, R, seed); the main thread polls and consumes one face per frame, AC-0382).
+  **AC-0414: the bake is sharded and multi-threaded** — the payload stage splits the
+  196,196 `generate_far` records into 98 shards (2,002 each) STREAMED at the core-count
+  width (the poller enqueues the next shard as slots open — the first batch fills the
+  pool at start), each shard appending to its OWN buffer (no shared-array writes from
+  workers); the main thread merges the shards in deterministic order into the payload
+  (one concat), then enqueues the 12 face tasks (colour + PNG + read-back + guard +
+  geometry on the worker, per-face state dict, inflight capped — 12 while the loading
+  window holds the bake, 4 after a late release so streaming keeps 2+ workers). The
+  pre-AC-0414 single LOW task was the defect (it measured 1.00 effective thread — LOW is
+  a one-thread pool class, world.gd:6216-6222 — and starved behind streaming, so the
+  planet landed ~13 min after the player). The priorities are YIELD-AWARE: HIGH under
+  the loading-window hold (the bake owns the cores); after the hold's bounded late
+  release, world.gd sets `bake_yield` and the bake's remaining work enqueues LOW until
+  the window closes, so the sim-band diamond build (HIGH) does not queue behind the
+  bake's payload — the player lands at the budget + at most one shard slice (the
+  pre-yield design measured a 109 s release on this box instead of ~48); after landing
+  the tail goes HIGH again (capped). The main thread is the single writer of
+  `pay`/`guard`/`_worker_images`/`_geom`/`bake_done`; the sharded path is bit-identical
+  to the old single-task path by construction (deterministic shard order, verbatim
+  per-face arithmetic) — the standing proof is the satellite arm's REBAKE pixel-compare
+  through whichever path the `sat_preload` switch selects. OFF (the setting or
+  `AWECRAFT_SATPRELOAD=0`) runs the untouched pre-AC-0414 single LOW task.
   **AC-0311 piece 3**: the in-engine bake's per-face SEED SALT was dropped in
   `world/satellite_body.gd` `_gen_one` (the two far lanes thread (face, R) raw into
   `generate_far`, matching the sphere-domain port — the field is one planet, one seed, so the
@@ -1669,7 +1713,29 @@ Match these; do not improvise a different approach in a task.
   the 5x5 through the normal build queue; the (taxi, layer) inside-out order
   builds the inner ring first), and the diamond gate above is the anti-fall:
   the player activates only on fully meshed footing, so no mechanism the
-  player can see owes their ground.
+  player can see owes their ground. **AC-0414 (the bake-before-load hold)**:
+  with `sat_preload` ON (default), a fresh-spawn loading window ALSO waits on
+  the satellite body's in-flight bake before closing — `world.gd
+  _ac0414_hold_tick()` holds the drain's phase 1 (the real-band diamond, the
+  ONLY dispatch path in a loading window) while `satellite.phase == WORK`, so
+  the window's release set is exactly the sim-band release set (nothing else
+  rides the hold; the OFF path never runs it). The hold is BOUNDED: a 42 s
+  budget (`AC0414_HOLD_BUDGET_MS`) after which it releases the player with a
+  LOUD log line. On that late release the bake YIELDS (world.gd sets
+  `satellite.bake_yield`): its remaining work enqueues LOW priority until the
+  window closes, so the diamond build (HIGH) takes the pool and the player's
+  ground lands at the budget + at most one shard slice — measured 48.4 s
+  release on this box (the pre-yield design measured 109 s: the up-front HIGH
+  shards held the pool past the budget). After the window closes the tail goes
+  HIGH again at a reduced 4-worker inflight cap (`AC0414_TAIL_WORKERS`, so
+  streaming keeps 2+ of the 6 pool threads) and the planet finishes at full
+  speed. The loading screen shows a live progress line (seed, shard k/98 or
+  face k/12, payload) instead of a frozen bar. This is the bounded-timeout-
+  loud path the ticket sanctions, the measured outcome on every realistic
+  machine (the bake's wall exceeds 42 s even multi-threaded here; the planet
+  lands ~2.8 min after spawn instead of 13+; on desktop-class hardware the
+  bake finishes inside the budget and the player is never released early).
+  The hold latches (no second stall) and resets with the window.
 - **Deterministic spawn search (AC-0324)**: the player's start column is NOT a
   fixed constant — `World.spawn_point()` runs a no-RNG search once the
   SIM-BAND data the load gate guarantees is built, and returns the searched

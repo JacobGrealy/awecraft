@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0414 — plan (bake before load, multithreaded)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0414 — satellite bake before load, multithreaded — plan</h1>
+<p class="note">The ticket notes (TASKS.yaml) are the specification; this plan follows them.
+Deviations, if any, are recorded in the results page and continuity.</p>
+
+<h2>Goal</h2>
+<ul>
+<li><b>Clause 1</b> — a world whose seed is not the shipped one bakes its planet texture
+<b>before the player is handed the world</b>, on all cores, with the loading screen saying
+what it is doing. The release gate (the sim taxi diamond, <code>main.gd _await_sim_band</code> —
+fenced) is gated on the body's phase <b>from the world side</b>: while a bake is in flight
+inside the loading window, the diamond's columns are never dispatched (the loading-window
+drain phase 1 only ever dispatches real-band columns, so this holds exactly the release
+set). Bounded: a 42 s hold budget (the 3000-frame release cap is 50 s wall) releases the
+diamond with a LOUD line; the bake tail then runs at a 4-worker cap so streaming keeps its
+share. The player is never released into a silent late planet.</li>
+<li><b>Clause 2</b> — while the body is not LOADED the sky must not fake a planet: the sky's
+limb term (the clamped impact-parameter term is a filled disc — the "pale ball" class) is
+multiplied by the body's LOADED state, pushed from the <code>_ac0401_push</code> seam like the
+other limb uniforms. The correction's open question (what paints the disc <i>over</i> a
+rendered body) is identified with the single-launch A/B renders (LIMB=0 / GRADE_GLOW=0 /
+SAT_BODY=0) — a finding, reported; a fix for it would be a third clause.</li>
+<li><b>Switch</b> — one player setting <code>sat_preload</code> (Options &gt; Settings,
+persisted, default ON — the user asked), env override <code>AWECRAFT_SATPRELOAD=0|1</code>
+(the AWECRAFT_RAMPS pattern). <b>OFF is the pre-change path literally</b>: the old
+single-task low-priority <code>_bake_worker</code> runs unchanged, no hold, the shader gate
+uniforms at their pre-change defaults (<code>mix(1.0, x, 0.0) == 1.0</code>).</li>
+</ul>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/satellite_body.gd</code></td><td>the new multithreaded bake path:
+14 payload shards (196,196 = 14 × 14,014 records, exact) as HIGH-priority pool tasks writing
+per-shard buffers; 12 per-face tasks (colour + PNG + read-back + variance guard + geometry —
+the row machine refactored to a per-face state struct, arithmetic unchanged); the single
+writer is the main thread (merge shards into <code>pay</code> once, assemble guard/images/
+geom in face order once, set <code>bake_done</code>). In-flight face cap = 12 while the hold
+is active, 4 after a late release (<code>tail_inflight_cap</code>, pushed by world.gd).
+<code>abort_bake()</code> clean-quit handle for the probe arm (the game never aborts).
+<code>bake_progress_line()</code> for the loading screen. OFF path (<code>_start_bake</code> /
+<code>_bake_worker</code>) untouched apart from inert abort checks.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>(1) the hold: <code>_ac0414_hold_tick</code> /
+<code>_ac0414_hold_active</code> + the drain phase-1 skip (real-band columns while loading and
+the bake is WORK-phase) + budget/loud-release state; (2) <code>AWECRAFT_SATPRELOAD</code>
+env preload in <code>_ready</code>; (3) <code>_ac0401_push</code>: push <code>u_limb_loaded</code>
+(the switch) + <code>u_body_loaded</code> (the phase) to the sky material; (4) loading screen:
+while held, the screen's title says "Baking the planet (seed N)" and its note line carries
+the progress (payload x/14 shards / face k/12) instead of the col count.</td></tr>
+<tr><td><code>godot/ui/loading_screen.gd</code></td><td><code>set_note(text)</code> — one-line
+status override for the stats label (the bake progress line).</td></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td><td>clause 2: two uniforms —
+<code>u_limb_loaded</code> (default 0.0 = pre-change) and <code>u_body_loaded</code> — and the
+limb term multiplied by <code>mix(1.0, u_body_loaded, u_limb_loaded)</code>.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"sat_preload": true</code> in
+DEFAULTS + the sanitize_bool clamp branch (the cloud_deck/limb_space pattern).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>the Options checkbox row ("Bake the planet before
+the world loads", the cloud_deck_check pattern) + refresh + toggle handler.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td><b>TEMPORARY probe arm <code>satboot</code></b>
+(in + out in the same task — scenes/AGENTS.md rule): drives the real loading window
+(<code>world.start_loading</code>), measures boot→body-LOADED (readiness) vs boot→sim-band
+(release) in both switch states, asserts the hold engaged (ON) / never engaged (OFF),
+<code>bake_stats.mt</code> true/false, aborts the bake cleanly before quitting. Removed at
+closeout; the standing arms are not modified.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>same-task sync: the satellite TEXTURE
+SOURCE (3) bake description (was "ONE WorkerThreadPool task, LOW priority") and the
+settings bullet (the new switch).</td></tr>
+</table>
+<p class="note">Fences honoured: <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>,
+<code>debug.gd</code> untouched (the hold rides the world-side diamond dispatch precisely
+because the release await lives in main.gd). No TASKS.yaml edits, no git writes.</p>
+
+<h2>Harness gates (light, builder's)</h2>
+<table>
+<tr><th>gate</th><th>what it proves</th><th>expect</th></tr>
+<tr><td>G0 ×2 (after impl + after probe removal)</td><td>zero SCRIPT/SHADER ERROR via
+<code>gate_census.py</code> <b>and</b> process exit status checked (the signal-eleven
+stochastic UAF leaves a clean log)</td><td>0/0 + exit 0, both runs</td></tr>
+<tr><td>SMOKE battery</td><td><code>player;interact;light;fluids;genhash</code> (world/*
+touched)</td><td>all ok, genhash 25/25 byte-identical</td></tr>
+<tr><td>genhash</td><td>byte-identity vs the recorded reference (the battery runs it; a
+standalone run is compared)</td><td>25/25</td></tr>
+<tr><td><code>satellite</code> arm (seed 44, res path)</td><td>standing arm green: 12/12
+faces, variance guard, thresholds, the 0.25 angular ratio, ladder</td><td>ok</td></tr>
+<tr><td><code>satellite</code> arm <code>AWECRAFT_SATELLITE_REBAKE=1</code> (ON) and
+<code>AWECRAFT_SATPRELOAD=0</code> (OFF)</td><td>the rebake pixel-compares vs the shipped
+seed-44 PNGs — the MT path must be bit-identical (<code>max_diff ≤ 1</code>, diff ≤ 1%);
+the OFF rebake proves the old path still is (and that the env switch routes the bake)</td><td>both ok;
+<code>bake_stats.mt</code> true (ON) / false (OFF)</td></tr>
+<tr><td>probe <code>satboot</code> (temporary, in+out)</td><td>ON: cold seed 5432 — hold
+engaged, loud timeout (expected on this box), body LOADED, walls reported; OFF: same seed —
+no hold, single-task bake, release at the diamond wall, bake aborted cleanly before quit</td><td>the
+RESULT JSON is the measurement; OFF run to bake completion runs in the background
+(~13 min, the fresh "before" wall on this tree)</td></tr>
+<tr><td><code>boundary</code> r4 (one self-check, per world/AGENTS.md)</td><td>the drain
+edit is loading-window-gated; steady-state scheduling must be untouched</td><td>standing
+walk/p95 values</td></tr>
+<tr><td>render (Forward+ recipe, one bash call, cache-reused)</td><td>R1 acceptance: cold
+seed 5432, <code>AWECRAFT_CAM=planet</code>, <code>AWECRAFT_SAT_ALT=2000</code>,
+<code>AWECRAFT_SNAP_DRAIN=600</code> — a complete planet with <code>body_phase</code>
+LOADED (the old build showed WORK/limb-disc at the same moment). R2-R4 the correction's
+A/B: <code>AWECRAFT_LIMB=0</code>, <code>AWECRAFT_GRADE_GLOW=0</code>,
+<code>AWECRAFT_SAT_BODY=0</code> — identify the painter of the disc-over-body frame class</td><td>4 files
+exist (check! — <code>SNAP FAIL</code> prints, it does not fail loudly), log carries the
+llvmpipe Forward+ boot line</td></tr>
+</table>
+<p class="note">Heavy gates (full battery, lightstate/ladder rebases, boundary re-measure,
+the R50 <code>load</code> arm, Windows build) are the coordinator's. Note for the
+coordinator: the R50 <code>load</code> arm at a NON-canonical seed will now report
+<code>simband_ms</code> including the bake hold (default seed 44 is res-path — unchanged).</p>
+
+<h2>Load-time budget targeted, and how it is measured</h2>
+<p>Baseline (this box, 6 cores): the release gate (sim taxi diamond) is
+<b>2089 ms</b> at the user config (AC-0313 re-measure; 959 ms harness default). The old
+bake: <b>~794 s</b> worker wall (AC-0384 r2, same box, the exact code the OFF switch
+keeps). After: the release wall = min(bake wall, 42 s budget) + the diamond build
+(≈ 1–2 s at the load caps); the readiness wall (boot→body-LOADED) ≈ shards (~4–6 s) +
+12 faces at 6 workers (~110–120 s) on this box, the tail at 4 workers after a late
+release. Target: readiness a multiple of <b>~3 min or less</b> here (vs ~13 min), and the
+release wall never more than <b>~44 s</b> (bounded + loud). Measured by the temporary
+<code>satboot</code> probe: <code>t_loaded</code> (first frame phase==LOADED) and
+<code>t_band</code> (first frame the diamond is meshed — the exact <code>_await_sim_band</code>
+condition) from boot, both switch states, cold seed 5432; OFF runs to completion for the
+fresh before-walls. The bake's own <code>bake_stats</code> (wall_ms, per-stage ms, the new
+<code>mt</code> field) is reported from every run.</p>
+
+</body></html>
