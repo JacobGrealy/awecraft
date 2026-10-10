@@ -1080,6 +1080,25 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			# scope); the heavy-gate job carries it.
 			await _shaderforce_test()
 			return
+		if logic == "noclip":
+			# AC-0395: the noclip toggle arm (the ticket's own instrument) —
+			# with the toggle OFF the player is stopped short of a solid
+			# wall (the shipped behaviour, byte-identical by default: no
+			# env -> the shape boots active + walk mode), with it ON the
+			# SAME drive ends with the player's chest cell SOLID inside the
+			# wall (the pass-through proof is cell occupancy, not "the
+			# player moved"), the mine/place DDA hits the same cell in both
+			# states, and the StaticBody3D census is count-identical across
+			# the toggle (the switch touches only the player's own shape).
+			# AWECRAFT_NOCLIP=1 proves the env preload instead of the
+			# walk state. The harness.gd dispatch is the arm's own (main.gd
+			# just forwards `logic`).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _noclip_test()
+			get_tree().quit()
+			return
 		world.collision_enabled = false
 		world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
 		if OS.get_environment("AWECRAFT_MESH_INFO") != "":
@@ -2831,6 +2850,469 @@ func _ramp_test(spawn: Vector3) -> void:
 	Debug.result(res)
 
 
+# AC-0395: the StaticBody3D census — the SLAB colliders, everything that
+# is not the player walks on. The noclip toggle disables the player's OWN
+# CollisionShape3D (the node stays, disabled) and must touch none of
+# these: the count across the toggle is the "the world's collision is
+# untouched" proof (mobs and drops collide against these bodies; the
+# drop is a grid-read ground and the DDA is a grid ray — neither ever
+# saw the player's shape).
+func _noclip_count_static_bodies(n: Node) -> int:
+	var c := 1 if n is StaticBody3D else 0
+	for ch: Node in n.get_children():
+		c += _noclip_count_static_bodies(ch)
+	return c
+
+
+# Pixel-level "the wall's stone is DRAWN" check — the CPU-side mesh
+# landing is not the GPU side: the proxy renderer's upload backlog can
+# lag the CPU by many frames (r2/r3's wall-less frames), so a stone-gray
+# sample at the expected screen position is the ground truth. The band
+# is TIGHT (r4's false positive was fogged sand at (207,207,181) —
+# mx 0.81): the stone face as rendered measures 49..103 per channel, so
+# mx must stay under 0.60; low saturation separates it from sky/grass;
+# the sample points avoid the hotbar (bottom centre) and the NOCLIP
+# label (top left). Returns the passing sample's [r,g,b] (empty = no).
+func _noclip_sample_stone(path: String) -> Array:
+	var img := Image.load_from_file(path)
+	if img == null:
+		return []
+	var w := img.get_width()
+	var h := img.get_height()
+	var pts: Array = [[w / 2, h / 2], [w / 2 - w / 6, h / 2], [w / 2 + w / 6, h / 2],
+		[w / 2, h / 2 - h / 6], [w / 2, h / 2 + h / 6]]
+	for pt in pts:
+		var px: Color = img.get_pixel(int(pt[0]), int(pt[1]))
+		var mx := maxf(px.r, maxf(px.g, px.b))
+		var mn := minf(px.r, minf(px.g, px.b))
+		if (mx - mn) < 0.18 and mx > 0.15 and mx < 0.60:
+			return [int(roundf(px.r * 255.0)), int(roundf(px.g * 255.0)), int(roundf(px.b * 255.0))]
+	return []
+
+
+# Snapshot-retry loop: fire a THROWAWAY snap, verify the wall's stone
+# is in the buffer, and only then let the caller fire the real shot
+# (one frame later — the stone is already on the GPU). Returns the
+# passing sample's [r,g,b] or [] (recorded in the RESULT's shots diag —
+# empty = the stone was never verified, the shot is not evidence).
+func _noclip_shot_wait_stone(path: String, max_ticks: int) -> Array:
+	var tmp := path
+	if tmp.ends_with(".png"):
+		tmp = tmp.left(tmp.length() - 4) + ".tmp.png"
+	for t in max_ticks:
+		if t % 20 == 0:
+			await Debug.snap(tmp)
+			var hit: Array = _noclip_sample_stone(tmp)
+			if hit.size() > 0:
+				DirAccess.remove_absolute(tmp)
+				return hit
+		await get_tree().physics_frame
+	DirAccess.remove_absolute(tmp)
+	return []
+
+
+# AC-0395: the noclip toggle arm (the ticket's own instrument — the
+# measurement, not the description).
+#
+# THE FIXTURE: a stone pad + a stone wall ~8 m above the spawn surface,
+# built with set_block (the survival-arm fixture pattern) and restored
+# before exit (the genhash 25/25 stays the pristine proof). The pad
+# carries the walker; the wall is the obstacle — one column thick, 6
+# tall, 7 wide, its face flush with the pad's east edge. The height is
+# SCANNED over pad + wall + the EAST GAP column (any pre-existing solid
+# in that volume disqualifies the band: the restore sets the wall cells
+# back to air, so a solid there would be eaten; and the mesher culls
+# the wall's east face against a solid east neighbour — the gap keeps
+# that face exposed, the one the after shot photographs from its far
+# side — a 1 m column is faceless from inside, every normal points
+# outward).
+#
+# THE MEASUREMENT (negative-tested — "the player moved" is exactly the
+# check that passes for the wrong reason, so the pass-through proof is
+# CELL OCCUPANCY: the player's chest cell is SOLID, i.e. the body is
+# inside a block that would stop it):
+#   state 0 (noclip off — the shipped default): the walk STOPS at the
+#     wall — the center never crosses the wall's grid face (measured:
+#     de-penetrated flush, face − 0.004; the stop band tolerates face
+#     contact, not a capsule-radius offset) and the chest cell NEVER
+#     goes solid; the indicator label is off;
+#   state 1 (noclip on — the UI path, the live Settings value): the same
+#     drive ends with the chest cell solid INSIDE the wall column;
+#   the mine/place DDA (VoxelMath.raycast_blocks — the game's own grid
+#     DDA, the exact call the player's interaction path makes) hits the
+#     SAME wall cell from the same eye in both states;
+#   the StaticBody3D census is count-identical across the toggle;
+#   state 0 again: the same path, the same stop (|Δx| < 0.15 m) — the
+#     OFF behaviour the toggle must not move.
+# The AWECRAFT_NOCLIP=1 run skips the walk state (the shape boots
+# disabled) and proves the env preload: shape disabled + flight at boot,
+# then the same pass-through from the same start.
+func _noclip_test() -> void:
+	const NC_STONE := 3
+	const NC_REACH := 6.0
+	# untyped: the arm reaches the player's dynamic members (camera, EYE,
+	# col_shape, flying, _noclip_label) — a typed Node3D reference would
+	# make those parse errors
+	var p = player
+	var nc_env := OS.get_environment("AWECRAFT_NOCLIP")
+	for i in 20:
+		await get_tree().physics_frame
+	# --- the boot state (the ship-state assertion): with no env the
+	# shipped default must be EXACTLY today's behaviour — the shape
+	# active, walk mode (the byte-identical claim, measured); with
+	# AWECRAFT_NOCLIP=1 the env preload (player.gd _ready, the
+	# AWECRAFT_VMOCC pattern) must have booted the toggle on.
+	var boot_shape_disabled := bool(p.col_shape.disabled)
+	var boot_flying := bool(p.flying)
+	var default_ok := not boot_shape_disabled and not boot_flying
+	var env_preload_ok := boot_shape_disabled and boot_flying
+	var why := ""
+	# --- the fixture volume scan (pad 8x7 + the wall column + the EAST
+	# GAP column, 6 tall). The scan must cover the wall's own column and
+	# the column east of it: (a) the restore sets the wall cells back to
+	# air, so a solid pre-existing there would be EATEN (the restore-
+	# safety the scan exists for); (b) the east face of the 1 m wall is
+	# culled by the mesher when the east neighbour is solid (solid|solid
+	# shares no face) — the gap column keeps the face exposed, which is
+	# exactly the face the after shot photographs (the 1 m column is
+	# faceless from inside — every face normal points outward).
+	var ax := int(floorf(p.position.x))
+	var az := int(floorf(p.position.z))
+	var st: int = world.surface_top(ax, az)
+	var fy := -1
+	for band in [8, 12, 16, 20, 24]:
+		var clear := true
+		for dx in range(-3, 7):
+			for dz in range(-3, 4):
+				for dy in range(0, 6):
+					if world.get_block(ax + dx, st + band + dy, az + dz) != 0:
+						clear = false
+						break
+				if not clear:
+					break
+			if not clear:
+				break
+		if clear:
+			fy = st + band
+			break
+	var fix_cells: Array = []
+	var wall_center := Vector3i(ax + 5, -1, az)
+	if fy < 0:
+		why = "fixture_height"
+	else:
+		for dx in range(-3, 5):
+			for dz in range(-3, 4):
+				fix_cells.append([ax + dx, fy, az + dz])
+		for dz in range(-3, 4):
+			for dy in range(0, 6):
+				fix_cells.append([ax + 5, fy + dy, az + dz])
+		for fc in fix_cells:
+			world.set_block(int(fc[0]), int(fc[1]), int(fc[2]), NC_STONE)
+		wall_center = Vector3i(ax + 5, fy + 2, az)
+	var fix_solid_ok: bool = world.get_block(wall_center.x, wall_center.y, wall_center.z) == NC_STONE
+	# --- the start: 1.5 m in front of the wall face, on the pad.
+	var stand := Vector3(float(ax) + 3.5, float(fy) + 1.0, float(az) + 0.5)
+	# --- the collider FACE of the fixture wall (measured, not assumed):
+	# the per-slab StaticBody3D carries the ConcavePolygonShape3D derived
+	# from the slab's MESH — the builder's documented coords (chunk/world
+	# x,z at the chunk origin, no shift; the fixture is spawn-relative and
+	# the spawn is col [8,8] of chunk (0,0), so the region stays inside
+	# [0,16)^2 and the faces ARE world coords). The min x over the
+	# triangles inside the wall region (above the pad top, so the pad's
+	# own corners don't count) is the wall's WEST face plane — the plane
+	# the state-0 stop resolves against. This wait ALSO gates the first
+	# teleport: in the slow proxy renderer the drain is frame-budgeted
+	# and a teleport onto a not-landed pad collider sinks the player
+	# into the pad floor row (the r1 render's stuck-player artifact);
+	# headless lands the body in a few frames, so the wait is a no-op.
+	var wall_face_x := 1.0e9  # min over the region's triangles; +inf = none
+	var face_diag := {"chunk_found": false, "slabs_bodied": 0, "tris_scanned": 0,
+		"vmin": null, "vmax": null}
+	var wmin := Vector3(float(ax) + 4.9, float(fy) + 1.5, float(az) - 3.5)
+	var wmax := Vector3(float(ax) + 6.5, float(fy) + 6.5, float(az) + 3.5)
+	var landed_ok := false
+	if fy >= 0:
+		for tries in 24000:
+			var ch0 = world.chunks.get(world._key(0, 0))
+			if ch0 != null:
+				face_diag["chunk_found"] = true
+				for si in range(int(fy) / 16, int(fy + 5) / 16 + 1):
+					if si < 0 or si >= ch0.slabs.size():
+						continue
+					var s = ch0.slabs[si]
+					if s == null or s.collision_body == null or not is_instance_valid(s.collision_body) \
+							or s.collision_body.get_child_count() == 0:
+						continue
+					face_diag["slabs_bodied"] += 1
+					var cs = s.collision_body.get_child(0)
+					if not (cs is CollisionShape3D) or not (cs.shape is ConcavePolygonShape3D):
+						continue
+					var faces: PackedVector3Array = cs.shape.get_faces()
+					face_diag["tris_scanned"] += faces.size() / 3
+					# first pass only: record the vertex coordinate span
+					# (the coordinate space the faces live in)
+					if tries == 0 and face_diag["vmin"] == null and faces.size() > 0:
+						var vmin := faces[0]  # Vector3 is a value — copies
+						var vmax := faces[0]
+						for v: Vector3 in faces:
+							vmin = vmin.min(v)
+							vmax = vmax.max(v)
+						face_diag["vmin"] = [snappedf(vmin.x, 0.001), snappedf(vmin.y, 0.001), snappedf(vmin.z, 0.001)]
+						face_diag["vmax"] = [snappedf(vmax.x, 0.001), snappedf(vmax.y, 0.001), snappedf(vmax.z, 0.001)]
+					for i in range(0, faces.size(), 3):
+						var a: Vector3 = faces[i]
+						var b: Vector3 = faces[i + 1]
+						var c: Vector3 = faces[i + 2]
+						var tmin := Vector3(minf(minf(a.x, b.x), c.x), minf(minf(a.y, b.y), c.y), minf(minf(a.z, b.z), c.z))
+						var tmax := Vector3(maxf(maxf(a.x, b.x), c.x), maxf(maxf(a.y, b.y), c.y), maxf(maxf(a.z, b.z), c.z))
+						if tmin >= wmin and tmax <= wmax and tmin.x < wall_face_x:
+							wall_face_x = tmin.x
+			if wall_face_x < 1.0e8:
+				break
+			await get_tree().physics_frame
+		Debug.teleport(stand.x, stand.y, stand.z)
+		if nc_env != "1":
+			# shape active: the drop onto the pad proves the pad's
+			# collider exists (the landing IS the collision measurement).
+			for i in 120:
+				await get_tree().physics_frame
+				if p.is_on_floor():
+					landed_ok = true
+					break
+		# env run: the shape is disabled, the hover stays exactly where
+		# the teleport put it (no floor to settle on — none needed).
+		for i in 10:
+			await get_tree().physics_frame
+		p.look(-PI / 2, 0.0)  # forward = world +x, into the wall face
+		for i in 4:
+			await get_tree().physics_frame
+	# --- the mine/place DDA from the start eye (the game's own grid DDA,
+	# the exact call the player's interaction path makes): the wall's
+	# front face is the first solid cell in +x — the hit must be the
+	# fixture wall in BOTH states (the DDA is a grid read; the player's
+	# collision state is not in its path — proven, not assumed).
+	var eye: Vector3 = p.position + p.basis.y * (p.camera.position.y if p.camera != null else p.EYE)
+	var ray0: Dictionary = VoxelMath.raycast_blocks(eye, Vector3(1.0, 0.0, 0.0), NC_REACH, Game.world.get_block)
+	var ray0_cell := Vector3i(int(ray0["cell"].x), int(ray0["cell"].y), int(ray0["cell"].z))
+	# --- state 0 (the no-env run): the walk is stopped by the wall and
+	# never enters a solid cell. The negative test is the point: the
+	# assertion is the STOP (the center never crosses the wall's grid
+	# face — move_and_slide de-penetrates the origin FLUSH to the face,
+	# measured: stop at face − 0.004; the body never enters the wall
+	# column) + the never-solid chest census, not the distance moved.
+	var shots_diag := {"before_stone": null, "after_stone": null}
+	var state0: Dictionary = {}
+	var stop0_x := -1.0
+	if nc_env != "1":
+		# the BEFORE render (the ticket's extra evidence): at the stand,
+		# collision ON, 1.5 m in front of the wall — the stone face
+		# AHEAD (the obstacle the player is about to stop at), label off.
+		# Pixel-verified: the GPU must actually be drawing the fixture
+		# before the shot (the proxy renderer's upload backlog lags the
+		# CPU — the CPU-side mesh landing is not the GPU side).
+		var snap0 := OS.get_environment("AWECRAFT_SNAPSHOT")
+		if snap0 != "":
+			var before_path := snap0
+			if before_path.ends_with(".png"):
+				before_path = before_path.left(before_path.length() - 4) + "_off.png"
+			shots_diag["before_stone"] = await _noclip_shot_wait_stone(before_path, 24000)
+			await Debug.snap(before_path)
+		var max_x := -1.0e9
+		var entered := false
+		Input.action_press("move_forward")
+		for i in 90:
+			await get_tree().physics_frame
+			max_x = maxf(max_x, p.position.x)
+			var chest: Vector3i = Vector3i(int(floorf(p.position.x)), int(floorf(p.position.y + 0.5)), int(floorf(p.position.z)))
+			if world.get_block(chest.x, chest.y, chest.z) != 0:
+				entered = true
+		Input.action_release("move_forward")
+		for i in 8:
+			await get_tree().physics_frame
+		stop0_x = p.position.x
+		state0 = {
+			"stop_x": snappedf(stop0_x, 0.001),
+			"max_x": snappedf(max_x, 0.001),
+			"started": bool(p.position.x > float(ax) + 3.6),
+			# stopped BY the wall: the center never crosses the wall's grid
+			# face (ax+5; flush contact within 0.05 tolerated — measured
+			# stop is face-0.004) AND it actually approached the wall
+			# (within 0.6 of the face — a stall 2 m short would not pass).
+			"blocked": bool(stop0_x < float(ax) + 5.0 + 0.05 and stop0_x > float(ax) + 4.4),
+			"never_solid": not entered,
+			"label_off": not bool(p._noclip_label.visible),
+		}
+	# --- state 1: the world's slab colliders BEFORE the toggle, then the
+	# UI path (the live Settings value — the same read the Options row
+	# writes through set_value; the arm skips the cfg write so it never
+	# clobbers the user's save, the AWECRAFT_VMOCC discipline).
+	var bodies_before := _noclip_count_static_bodies(get_tree().root)
+	if nc_env != "1":
+		Settings.values["noclip"] = true
+		# the sync runs in the player's _process (a PROCESS frame); the
+		# arm waits physics frames — under a slow renderer several
+		# physics frames fit in ONE process frame, so wait for the
+		# APPLIED state, not a tick count (a no-op in headless).
+		for i in 240:
+			await get_tree().physics_frame
+			if bool(p.col_shape.disabled) and bool(p.flying):
+				break
+	else:
+		for i in 6:
+			await get_tree().physics_frame
+	var s1_shape_disabled := bool(p.col_shape.disabled)
+	var s1_flying := bool(p.flying)
+	var s1_label_on := bool(p._noclip_label.visible)
+	Debug.teleport(stand.x, stand.y, stand.z)
+	for i in 6:
+		await get_tree().physics_frame
+	p.look(-PI / 2, 0.0)
+	for i in 4:
+		await get_tree().physics_frame
+	# the same eye, the same DDA — the toggle must not move the ray.
+	var eye1: Vector3 = p.position + p.basis.y * (p.camera.position.y if p.camera != null else p.EYE)
+	var ray1: Dictionary = VoxelMath.raycast_blocks(eye1, Vector3(1.0, 0.0, 0.0), NC_REACH, Game.world.get_block)
+	var ray1_cell := Vector3i(int(ray1["cell"].x), int(ray1["cell"].y), int(ray1["cell"].z))
+	# the same drive: the FIRST frame the chest cell is solid is the
+	# pass-through proof (the body is inside a block that would stop it).
+	var inside := Vector3i(-1, -1, -1)
+	var inside_id := 0
+	Input.action_press("move_forward")
+	for i in 90:
+		await get_tree().physics_frame
+		var chest2: Vector3i = Vector3i(int(floorf(p.position.x)), int(floorf(p.position.y + 0.5)), int(floorf(p.position.z)))
+		var bid: int = world.get_block(chest2.x, chest2.y, chest2.z)
+		if bid != 0:
+			inside = chest2
+			inside_id = bid
+			break
+	Input.action_release("move_forward")
+	for i in 6:
+		await get_tree().physics_frame
+	var bodies_after := _noclip_count_static_bodies(get_tree().root)
+	# the AFTER render (the ticket's extra evidence): the player INSIDE
+	# the wall, collision OFF, free flight — the state that lets them
+	# in. Snapped at the pass-through moment (the chest cell is solid =
+	# the eye is inside a block); pixel-verified like the before shot —
+	# the interior stone must be on the GPU before the real snap.
+	# Arm-owned; no env = no PNG.
+	var snap1 := OS.get_environment("AWECRAFT_SNAPSHOT")
+	if snap1 != "":
+		# framing: 0.5 m past the wall's EAST face, in the scanned air
+		# gap, looking BACK at the face the body just crossed. The 1 m
+		# column is faceless from inside (every face normal points
+		# outward — a camera inside it sees through it), and the gap
+		# column is what keeps the east face exposed to the mesher, so
+		# this is the view the renderer actually draws. The pass-through
+		# itself is the cell occupancy measured above, not this pose.
+		# Headless: untouched.
+		Debug.teleport(float(ax) + 6.5, float(fy) + 2.5, float(az) + 0.5)
+		p.velocity = Vector3.ZERO  # kill the drive's residual +x drift
+		for i in 8:
+			await get_tree().physics_frame
+		p.look(PI / 2, 0.0)  # -x, back at the wall's east face
+		for i in 4:
+			await get_tree().physics_frame
+		p.velocity = Vector3.ZERO
+		shots_diag["after_stone"] = await _noclip_shot_wait_stone(snap1, 24000)
+		await Debug.snap(snap1)
+	# --- state 0 again (the no-env run): the toggle off must restore the
+	# shape + walk mode, and the same path must give the same stop — the
+	# OFF behaviour is unchanged by the round trip (the "byte-identical
+	# when off" claim in the arm's own terms).
+	var state0b: Dictionary = {}
+	if nc_env != "1":
+		Settings.values["noclip"] = false
+		# the same applied-state wait (the _process sync, the slow-
+		# renderer frame grouping — see state 1).
+		for i in 240:
+			await get_tree().physics_frame
+			if not bool(p.col_shape.disabled) and not bool(p.flying):
+				break
+		var s0b_shape := bool(p.col_shape.disabled)
+		var s0b_flying := bool(p.flying)
+		Debug.teleport(stand.x, stand.y, stand.z)
+		for i in 120:
+			await get_tree().physics_frame
+			if p.is_on_floor():
+				break
+		p.look(-PI / 2, 0.0)
+		for i in 4:
+			await get_tree().physics_frame
+		Input.action_press("move_forward")
+		for i in 90:
+			await get_tree().physics_frame
+		Input.action_release("move_forward")
+		for i in 8:
+			await get_tree().physics_frame
+		var stop2_x: float = p.position.x
+		state0b = {
+			"shape_disabled": s0b_shape,
+			"flying": s0b_flying,
+			"stop_x": snappedf(stop2_x, 0.001),
+			"repeat_ok": bool(absf(stop2_x - stop0_x) < 0.15),
+			"delta": snappedf(absf(stop2_x - stop0_x), 0.001),
+		}
+	# --- restore the fixture (the genhash 25/25 stays the pristine proof)
+	# and leave the ship state (noclip off).
+	var restore_ok := true
+	if fy >= 0:
+		for fc in fix_cells:
+			world.set_block(int(fc[0]), int(fc[1]), int(fc[2]), 0)
+		for i in 10:
+			await get_tree().physics_frame
+		restore_ok = world.get_block(wall_center.x, wall_center.y, wall_center.z) == 0 \
+			and world.get_block(ax - 3, fy, az) == 0
+	Settings.values["noclip"] = false
+	var pass_through_ok := bool(inside.x == ax + 5 and inside_id == NC_STONE)
+	var ray_same := bool(ray0["hit"]) and ray0_cell == wall_center \
+		and bool(ray1["hit"]) and ray1_cell == wall_center
+	var ok := why == "" and bool(fix_solid_ok) and ray_same and pass_through_ok \
+		and s1_shape_disabled and s1_flying and s1_label_on \
+		and bodies_after == bodies_before and bool(world.collision_enabled) \
+		and bool(restore_ok)
+	if nc_env == "1":
+		ok = ok and env_preload_ok
+	else:
+		ok = ok and default_ok \
+			and bool(state0["started"]) and bool(state0["blocked"]) \
+			and bool(state0["never_solid"]) and bool(state0["label_off"]) \
+			and bool(state0b["repeat_ok"]) and not bool(state0b["shape_disabled"]) \
+			and not bool(state0b["flying"])
+	Debug.result({
+		"ok": ok,
+		"env": nc_env,
+		"boot": {"shape_disabled": boot_shape_disabled, "flying": boot_flying,
+			"default_ok": default_ok, "env_preload_ok": env_preload_ok},
+		"fixture": {"fy": fy, "wall_center": [wall_center.x, wall_center.y, wall_center.z],
+			"solid_ok": fix_solid_ok, "landed_ok": landed_ok, "cells": fix_cells.size()},
+		# the measured collider geometry: the wall's west FACE plane from
+		# the slab body's concave shape (not the grid plane) + how far
+		# the state-0 stop sits from it (the resolved capsule contact).
+		"col_face": {"face_x": (-1.0e9) if wall_face_x > 1.0e8 else snappedf(wall_face_x, 0.001),
+			"grid_plane_x": int(ax) + 5,
+			"stop_to_face": (-1.0) if (wall_face_x > 1.0e8 or stop0_x < 0.0) else snappedf(wall_face_x - stop0_x, 0.001),
+			"diag": face_diag},
+		# the arm-owned shots (null = no AWECRAFT_SNAPSHOT — the headless
+		# runs); *_stone = the passing pixel sample [r,g,b] that verified
+		# the wall's stone in the rendered buffer when the shot fired
+		# ([] = the stone was never verified — the shot is NOT evidence).
+		"shots": shots_diag,
+		"ray0": {"hit": bool(ray0["hit"]), "cell": [ray0_cell.x, ray0_cell.y, ray0_cell.z]},
+		"ray1_same": ray_same,
+		"state0": state0,
+		"state1": {"shape_disabled": s1_shape_disabled, "flying": s1_flying, "label_on": s1_label_on,
+			"inside": [inside.x, inside.y, inside.z], "inside_id": inside_id,
+			"pass_through": pass_through_ok},
+		"bodies": {"before": bodies_before, "after": bodies_after,
+			"unchanged": bodies_after == bodies_before,
+			"collision_enabled": bool(world.collision_enabled)},
+		"state0b": state0b,
+		"restore_ok": bool(restore_ok),
+		"why": why if why != "" else ("assertion" if not ok else ""),
+	})
+
+
 func _settings_test() -> void:
 	if FileAccess.file_exists(Settings.PATH):
 		DirAccess.remove_absolute(Settings.PATH)
@@ -3131,6 +3613,34 @@ func _settings_test() -> void:
 	var rp_row_sync_ok := rp_row_present and bool(rchk.button_pressed) == true
 	# back to the shipped default (OFF).
 	Settings.set_value("smooth_ramps", false)
+	# AC-0395: the noclip toggle — DEFAULT OFF (the shipped state is
+	# today's behaviour; a debug tool must not be left on by accident —
+	# the indicator + the row make an ON state obvious). The AC-0389 /
+	# AC-0205 mechanism: declared in DEFAULTS, _clamp-validated
+	# (sanitize_bool — a corrupt stored value fails to false, never a
+	# raise that aborts the load), set_value persists, load_settings
+	# reads it back; the Settings-page row exists and re-syncs. The
+	# player-side apply (the shape disable + the free flight + the
+	# indicator) is owned by the `noclip` arm — not measured here.
+	Settings.load_settings()
+	var nc_default_off := bool(Settings.values["noclip"]) == false
+	Settings.set_value("noclip", true)
+	var nc_saved_ok := bool(Settings.values["noclip"]) == true
+	Settings.load_settings()
+	var nc_reload_ok := bool(Settings.values["noclip"]) == true
+	var cfn := ConfigFile.new()
+	cfn.set_value("settings", "noclip", "corrupt")
+	cfn.save(Settings.PATH)
+	Settings.load_settings()
+	var nc_corrupt_ok := bool(Settings.values["noclip"]) == false
+	var nchk = yset2.get_node_or_null("NoclipCheck") if yset2 != null else null
+	ymenu._sync_controls()
+	var nc_row_present := nchk != null and nchk is CheckBox and bool(nchk.button_pressed) == false
+	Settings.set_value("noclip", true)
+	ymenu._sync_controls()
+	var nc_row_sync_ok := nc_row_present and bool(nchk.button_pressed) == true
+	# back to the shipped default (OFF).
+	Settings.set_value("noclip", false)
 	ymenu.queue_free()
 	Debug.result({
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
@@ -3178,7 +3688,10 @@ func _settings_test() -> void:
 		# AC-0205: the smooth-ground-ramps toggle (default OFF, clamp,
 		# round-trip, corrupt-fails-false, the Settings-page row syncs).
 		"ramps": {"default_off": rp_default_off, "saved": rp_saved_ok, "reload": rp_reload_ok, "corrupt_false": rp_corrupt_ok, "row_present": rp_row_present, "row_sync": rp_row_sync_ok, "ok": rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok and rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok,
+		# AC-0395: the noclip toggle (default OFF, clamp, round-trip,
+		# corrupt-fails-false, the Settings-page row syncs).
+		"noclip": {"default_off": nc_default_off, "saved": nc_saved_ok, "reload": nc_reload_ok, "corrupt_false": nc_corrupt_ok, "row_present": nc_row_present, "row_sync": nc_row_sync_ok, "ok": nc_default_off and nc_saved_ok and nc_reload_ok and nc_corrupt_ok and nc_row_present and nc_row_sync_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok and rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok and nc_default_off and nc_saved_ok and nc_reload_ok and nc_corrupt_ok and nc_row_present and nc_row_sync_ok,
 	})
 
 

@@ -124,6 +124,22 @@ const DEFAULTS := {
 	# Env-overridable (AWECRAFT_VMOCC=0|1 at boot, player.gd — the
 	# AWECRAFT_RAMPS pattern, written to Settings.values WITHOUT save).
 	"viewmodel_occlude": false,
+	# AC-0395: the noclip toggle (the user's own request — disable the
+	# player's collision so they can fly through blocks and inspect
+	# geometry). DEFAULTS OFF: the shipped state is exactly today's
+	# behaviour (the same collision, the same movement), and a debug tool
+	# must not be left on by accident (the indicator label + the Options
+	# row make the ON state obvious — the ticket's "if it persists,
+	# default OFF and make the toggle obvious"). Same switch discipline as
+	# every other player-facing bool: sanitize_bool-clamped, persisted on
+	# the Options surface, env-overridable (AWECRAFT_NOCLIP=0|1 preloaded
+	# WITHOUT save in player.gd _ready — the AWECRAFT_VMOCC pattern; the
+	# viewmodel is the player's, the noclip is the player's). No apply
+	# step: player.gd _noclip_sync reads the live value every frame and
+	# applies on change (the viewmodel_occlude/cloud_deck pattern) —
+	# col_shape.disabled + the AC-0145 flight state (free flight: no
+	# gravity, the existing flight controls) + the void-kill gate.
+	"noclip": false,
 	"fullscreen": false,
 	"resolution": "1280x720",
 	"seed": 44,
@@ -332,6 +348,10 @@ func _clamp(k: String, v) -> void:
 		"cloud_volume":  # AC-0405: bool (the raymarched cloud volume).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"viewmodel_occlude":  # AC-0394: bool (the held-item occlusion switch).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"noclip":  # AC-0395: bool (the player-collision switch). sanitize_bool
+			# as viewmodel_occlude: a hand-edited string in the cfg fails to
+			# false (the OFF state), never raises and aborts the load.
 			values[k] = AnalogTune.sanitize_bool(v)
 		"fullscreen":
 			values[k] = bool(v)

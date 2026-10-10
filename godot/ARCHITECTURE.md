@@ -41,7 +41,7 @@ Registered in `godot/project.godot`, **exactly in this order**, six of them:
 | 2 | `Data` | `autoload/data.gd` | all tables + lookups: world constants (`CHUNK` 16, `HEIGHT` 384, `SEA` 126), block/item/mob/recipe tables, atlas rects, colours, crafting match |
 | 3 | `Audio` | `autoload/audio.gd` | the procedural sound layer (AC-0039 — §6): 9 synthesized voices cached at startup, the 16-voice SFX pool, the ambient bed player (toggleable, default OFF — AC-0389, `Audio.set_ambient`), `play(name)` + the alias table; the `sound` arm asserts the generated buffers under the dummy driver |
 | 4 | `Debug` | `autoload/debug.gd` | the headless test API (§6 of this file lists its shape), plus `error()`/crash capture with the modal dialog, session logs, `bug_report`, console tee |
-| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) and the AC-0405 `cloud_volume` bool (DEFAULT ON — the raymarched-volumetric-clouds rework the user ordered; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_CLOUDVOL=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_vol` + the annulus radii `u_vol_r/rmin/rmax` (change-gated on `planet_R`) to the three cloud-layer materials and toggles the two inner shells' visibility (ON = the outer shell carries the raymarched volume in the [R+275, R+400] annulus, inner shells hidden; OFF = the exact AC-0401 three-shell path — the shader short-circuits on `u_vol < 0.5` before any volume work); see the AC-0405 note in the CloudLayer bullet, §3), and the AC-0394 `viewmodel_occlude` bool (DEFAULT OFF — conservative: the 2026-10-03 report's held-item residual was the viewmodel's `no_depth_test` making the hand draw OVER terrain, and the user reported the item's SIZE (the 0.33 scale they themselves ordered, AC-0097), not the occlusion, so the un-asked look change defaults to the pre-change always-on-top look; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_VMOCC=0|1` harness env (preloaded at boot WITHOUT save in `player.gd _ready` — the viewmodel is the player's, so the preload rides the player rather than world.gd's boot block) — and NO apply step: `player.gd _process` reads the live value every frame and re-applies `no_depth_test` across the whole viewmodel material registry on change (ON re-enables the depth TEST only — the depth WRITE stays `DEPTH_DRAW_DISABLED` in both states, the hand still never blocks the depth of anything behind it); the render evidence: `tasks/AC-0394/` (the 0.4 m wall A/B, hand occluded with the switch ON, still visible against sky)) |
+| 5 | `Settings` | `autoload/settings.gd` | user options, ranges and the clamp chain (sim → render, window apply, chunk meshes per frame), plus the AC-0088 controls remap layer (`controls` key — a flat `action:cls:idx` token list, default `[]` = the shipped `project.godot [input]` map; the merge/apply/conflict logic lives in `core/controls_map.gd` and a corrupt stored map fails safe toward the defaults — it can never empty an action), and the AC-0089 analog tuning layer (`look_sensitivity` 0.25–2.0, `deadzone_left`/`deadzone_right` 0–0.9, `invert_y`/`invert_x` bool — bounds + math in `core/analog_tune.gd`, applied live by the player's look/movement paths; a corrupt stored value clamps into the band, never out of it), plus the AC-0205 `smooth_ramps` bool (default OFF — the smooth ground-ramp toggle; the `sanitize_bool` clamp, `world.note_ramps()` on change, the Settings-surface row and the `AWECRAFT_RAMPS` harness env all follow the pattern — see the AC-0205 bullet in §4), and the AC-0398 `modern_light` bool (DEFAULT ON — the modern per-vertex lighting toggle; same pattern — `sanitize_bool` clamp, `world.note_modern()` on change (colour-only, no `geom_epoch` bump), the Settings-surface row and and the AC-0401 `cloud_deck` + `limb_space` bools (both DEFAULT ON — the user asked for both; the deck character and the limb-glow altitude gate; same look-change pattern — `sanitize_bool` clamp, the Settings-surface rows, the `AWECRAFT_CLOUDDECK=0|1` / `AWECRAFT_LIMB=0|1` harness envs — but NO apply step: `world._ac0401_push()` reads the live values every frame and pushes `u_deck` to the three cloud-layer materials and `u_limb_gate` to the sky material, and the shader defaults (0.0) short-circuit to the pre-AC-0401 paths; see the AC-0401 bullet in §4), and the AC-0402 `sky_altitude` bool (DEFAULT ON — the sky's altitude-aware space blend; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_SKYALT=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_sky_alt` (change-gated) + `u_space_sky` (per frame, the stretched-window blend from the live player's band constants; skipped when OFF) to the sky material; see the AC-0402 bullet in §4) and the AC-0405 `cloud_volume` bool (DEFAULT ON — the raymarched-volumetric-clouds rework the user ordered; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_CLOUDVOL=0|1` harness env — and NO apply step: `world._ac0401_push()` pushes `u_vol` + the annulus radii `u_vol_r/rmin/rmax` (change-gated on `planet_R`) to the three cloud-layer materials and toggles the two inner shells' visibility (ON = the outer shell carries the raymarched volume in the [R+275, R+400] annulus, inner shells hidden; OFF = the exact AC-0401 three-shell path — the shader short-circuits on `u_vol < 0.5` before any volume work); see the AC-0405 note in the CloudLayer bullet, §3), and the AC-0394 `viewmodel_occlude` bool (DEFAULT OFF — conservative: the 2026-10-03 report's held-item residual was the viewmodel's `no_depth_test` making the hand draw OVER terrain, and the user reported the item's SIZE (the 0.33 scale they themselves ordered, AC-0097), not the occlusion, so the un-asked look change defaults to the pre-change always-on-top look; same look-change pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_VMOCC=0|1` harness env (preloaded at boot WITHOUT save in `player.gd _ready` — the viewmodel is the player's, so the preload rides the player rather than world.gd's boot block) — and NO apply step: `player.gd _process` reads the live value every frame and re-applies `no_depth_test` across the whole viewmodel material registry on change (ON re-enables the depth TEST only — the depth WRITE stays `DEPTH_DRAW_DISABLED` in both states, the hand still never blocks the depth of anything behind it); the render evidence: `tasks/AC-0394/` (the 0.4 m wall A/B, hand occluded with the switch ON, still visible against sky)), and the AC-0395 `noclip` bool (DEFAULT OFF — the player-collision switch for geometry inspection, the user's own request: the body stops colliding while movement stays under the player's control; same pattern — `sanitize_bool` clamp, the Settings-surface row, the `AWECRAFT_NOCLIP=0|1` harness env preloaded at boot WITHOUT save in `player.gd _ready` (the noclip is the player's, so the preload rides the player) — and NO apply step: `player.gd _process` reads the live value and applies on change — `col_shape.disabled` (the player's OWN shape only — the slab bodies, mobs, drops and the grid-DDA mine/place raycast are untouched) + the AC-0145 `flying` state (noclip implies FREE FLIGHT: no gravity, the existing flight controls, so the radial gravity is not fought) + the void-kill gate (`not _noclip` — the tool's purpose is being below the surface) + the one-line indicator label visible only while on; the arm evidence: `tasks/AC-0395/` (the stop/pass-through arm, the same-path repeat, the before/after cave renders)) |
 | 6 | `Save` | `autoload/save.gd` | slot save/continue and the per-slot on-disk layout |
 
 Adding an autoload means editing `project.godot` **and this table** (and the order matters —
@@ -485,6 +485,24 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         full-extent anchor meshes (pose contract — the toolpose
 │                         arm's AABB centroid must not move); the visible meshes are
 │                         one per colour (head_cN/handle_cN).
+│                         NOCLIP (AC-0395): the player-collision switch for geometry
+│                         inspection (the user's own request — fly through blocks to
+│                         see a build from inside / inspect misbehaving geometry):
+│                         the `noclip` setting (DEFAULT OFF — the shipped state is
+│                         exactly today's behaviour; §2 owns the row/env/clamp, §6
+│                         the decision) is read live in `_process` (`_noclip_sync`,
+│                         the viewmodel_occlude pattern) and applied on change:
+│                         `col_shape.disabled` (the body stops colliding — the slab
+│                         bodies, mobs, drops and the grid-DDA mine/place raycast are
+│                         untouched) + the AC-0145 `flying` state (noclip implies
+│                         FREE FLIGHT: no gravity, the existing flight controls, so
+│                         the radial gravity is not fought; the `fly` key F stays the
+│                         in-flight exit — pressing it drops the player at gravity
+│                         speed) + the void-kill gate (`not _noclip` — the tool's
+│                         purpose is being below the surface) + the one-line
+│                         indicator label on the debug CanvasLayer (visible only
+│                         while on — the "not left on by accident" pair to the
+│                         default OFF).
 ├─ ui/inventory.gd        CanvasLayer — hotbar, backpack + crafting grid, armour,
 │                         hearts/food, crosshair, messages (Game.hotbar)
 ├─ ui/console.gd          CanvasLayer — in-game console (AC-0121)
@@ -1120,6 +1138,42 @@ Match these; do not improvise a different approach in a task.
   Settings surface + `world.note_ramps()` (the geom-epoch bump re-derives
   mesh + collider band-wide) + the harness env override `AWECRAFT_RAMPS=0|1`
   (written into `Settings.values` without `save()`).
+- **AC-0395 — noclip (a PLAYER-collision toggle, not H, not a new model)**:
+  the user's own request (2026-10-03, "an option for disabling my characters
+  collision box so I can [fly] through blocks") — a diagnostic instrument for
+  inspecting geometry without walls in the way. The toggle is the player's
+  (player.gd `_noclip_sync`, the viewmodel_occlude pattern: live value read
+  every frame, applied on change): `col_shape.disabled` — the player's OWN
+  `CollisionShape3D` (the node stays, disabled; the slab bodies, mobs, drops
+  and the grid-DDA mine/place raycast are untouched — the DDA is a grid read,
+  not a physics raycast, and the drop's ground is a grid read — so nothing
+  else in the world changes in either state) — plus the AC-0145 `flying`
+  state: noclip implies FREE FLIGHT, not merely "collision off" (the walk
+  band's 26 m/s² radial gravity would free-fall the player through terrain —
+  which cannot hover over a broken chunk; the flight branch applies no
+  gravity at any altitude, so the radial gravity is not fought by
+  construction; the `fly` key F stays the in-flight exit — pressing it with
+  noclip on drops the player at gravity speed, the user's own escape). The
+  void kill (`flat_h < -12`) is gated on `not _noclip`: the tool's purpose is
+  being BELOW the surface, and a hard-kill is a wall-in-the-way of exactly
+  that (walking/flight without noclip keeps it — the player cannot normally
+  get below the local floor). Fall damage / drown / hunger already skip for
+  `flying`; lava damage stays (documented, not gated). The state that ships
+  is exactly today's: `noclip` defaults OFF, the sync is a no-op, and the
+  OFF-path is byte-identical by construction (proven by the `noclip` arm's
+  state-0 stop + the same-path repeat stop |Δx| < 0.15 m, and by the
+  movement arms' standing values unchanged at the default). Persistence
+  follows the AC-0205/AC-0389/AC-0394 pattern: the `noclip` setting (DEFAULT
+  OFF, `sanitize_bool` clamped) on the Settings surface (the user called it
+  "an option" — a player-facing switch lives there, not on a key: a
+  one-keystroke path is the "left on by accident" route the ticket forbids)
+  + the harness env override `AWECRAFT_NOCLIP=0|1` (preloaded at boot
+  WITHOUT save in player.gd `_ready`). The "not left on by accident" pair to
+  the default OFF is the one-line indicator label on the player's debug
+  CanvasLayer (visible only while on). Proof: the `noclip` arm
+  (`tasks/AC-0395/` — the stop / pass-through by cell occupancy / same-cell
+  DDA in both states / count-identical StaticBody3D census / same-path
+  repeat / env-preload run) + the before/after cave renders.
 - **AC-0398 — modern per-vertex lighting (a SHADING toggle, not H)**: the
   per-face shading constant `FSH` and the 4-level `AO_MULT` corner steps
   (both AC-0159) plateau across the terrain, so a step edge renders as a hard

@@ -98,6 +98,11 @@ var _chunk_y := 0  # AC-0234: the tracked 16-block Y slab (a crossing re-centers
 var _anchor: Dictionary = {}  # AC-0309 C5: the sim anchor (World.player_anchor)
 var _debug_layer: CanvasLayer = null
 var _debug_label: Label = null
+var _noclip_label: Label = null  # AC-0395: the noclip indicator (visible only while on)
+# AC-0395: the last-applied noclip state — _noclip_sync (the
+# viewmodel_occlude pattern) reads the live setting every frame and
+# applies ONLY on change (the shape disable + the flight entry/exit).
+var _noclip := false
 var inv: Array = []
 var sel := 0
 var armor: Array = []
@@ -218,6 +223,15 @@ func _ready() -> void:
 	var vme := OS.get_environment("AWECRAFT_VMOCC")
 	if vme != "":
 		Settings.values["viewmodel_occlude"] = vme == "1"
+	# AC-0395: harness env preload (the AWECRAFT_VMOCC pattern) —
+	# AWECRAFT_NOCLIP=<0|1> overrides the STORED setting for this process
+	# (written to Settings.values WITHOUT save, so the arms never clobber
+	# the user's cfg). The noclip is the player's, so the preload rides
+	# _ready here; _noclip_sync reads the live value every frame and
+	# applies on change, so no boot derive is owed.
+	var nce := OS.get_environment("AWECRAFT_NOCLIP")
+	if nce != "":
+		Settings.values["noclip"] = nce == "1"
 	if Game.world != null:
 		# AC-0307: spawn_point() is flat; the placed world needs the
 		# sphere conversion (mm-level near the spawn, exact by contract).
@@ -269,6 +283,7 @@ func _process(dt: float) -> void:
 	_update_swing(dt)
 	_update_sway(dt)
 	_vm_occ_sync()  # AC-0394: the held-item occlusion switch (live value; the material flags re-apply only on change)
+	_noclip_sync()  # AC-0395: the noclip toggle (live value; applied only on change)
 	vm_refresh(false)
 
 
@@ -817,7 +832,12 @@ func _physics_process_impl(dt: float) -> void:
 		fall_start = -1.0
 	_recenter()
 	_update_interaction(dt)
-	if flat_h < -12.0:  # AC-0307: the void is below the LOCAL surface
+	# AC-0395: the void kill does not apply while noclip is on — the tool's
+	# purpose is being BELOW the surface (flying toward the core dips the
+	# flat height past -12), and a hard-kill is a wall-in-the-way of
+	# exactly that. Walking/flight without noclip keeps it (the player
+	# cannot normally get below the local floor).
+	if not _noclip and flat_h < -12.0:  # AC-0307: the void is below the LOCAL surface
 		damage_player(100.0, "void")
 	if in_lava:
 		lava_t += dt
@@ -1199,6 +1219,41 @@ func _vm_occ_sync() -> void:
 			(m as StandardMaterial3D).no_depth_test = not on
 	if held_sprite != null:
 		held_sprite.no_depth_test = not on
+
+
+# AC-0395: the noclip toggle — the live value read every frame (the
+# viewmodel_occlude pattern), applied ONLY on change. The toggle is the
+# player's: it disables the player's OWN CollisionShape3D (the body stops
+# colliding with the world — the slab bodies, mobs, drops and the mine/
+# place DDA are untouched: the DDA is a grid read, not a physics raycast)
+# and enters the AC-0145 flight state — noclip implies FREE FLIGHT, not
+# merely "collision off": with the walk band's 26 m/s² radial gravity the
+# player would free-fall through terrain, which cannot hover over a broken
+# chunk. The flight branch applies no gravity at any altitude, so the
+# radial gravity is not fought (the `fly` key, F, stays the in-flight exit
+# — pressing it with noclip on drops the player at gravity speed, the
+# user's own escape). OFF restores the shape and walk mode: the shipped
+# state (noclip false, default) is exactly today's behaviour — the sync is
+# a no-op and none of this runs.
+func _noclip_sync() -> void:
+	var on := bool(Settings.values.get("noclip", false))
+	if on == _noclip:
+		return
+	_noclip = on
+	if col_shape != null:
+		col_shape.disabled = on
+	flying = on
+	if on:
+		# the flight entry un-crouches (the `fly` key's own rule) — the
+		# capsule re-extends with the crouch lerp below.
+		crouched = false
+		Game.message("Noclip ON — collision off, free flight")
+	else:
+		Game.message("Noclip OFF")
+	if _noclip_label != null:
+		# the visible-when-on indicator (the ticket: nobody should be
+		# confused about why they are flying through the world).
+		_noclip_label.visible = on
 
 
 func vm_refresh(force: bool = false) -> void:
@@ -3216,6 +3271,16 @@ func _build_debug() -> void:
 	_debug_label.position = Vector2(8, 8)
 	_debug_label.visible = false
 	_debug_layer.add_child(_debug_label)
+	# AC-0395: the noclip indicator — a one-line "why am I flying through
+	# the world" readout, visible ONLY while the toggle is on (the debug
+	# label's home, the project's existing debug-overlay surface; the
+	# ticket: a visible state, nobody confused). _noclip_sync owns its
+	# visibility; it rides the same layer so the shot hooks capture it.
+	_noclip_label = Label.new()
+	_noclip_label.position = Vector2(8, 30)
+	_noclip_label.text = "NOCLIP — collision off (free flight)"
+	_noclip_label.visible = false
+	_debug_layer.add_child(_noclip_label)
 
 
 func _update_debug_label() -> void:

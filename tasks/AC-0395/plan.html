@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0395 plan — noclip toggle</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:1.6rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+code,pre{font-family:ui-monospace,monospace;font-size:.85em}
+pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow-x:auto}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.3rem .5rem;text-align:left;vertical-align:top}
+.note{background:#fff8e6;border-left:4px solid #e0b000;padding:.6rem .8rem}
+</style>
+</head>
+<body>
+
+<h1>AC-0395 — plan: the noclip toggle (disable the player's collision for geometry inspection)</h1>
+
+<h2>Goal</h2>
+<p>The user asked, in their words, for "an option for disabling my characters collision box so I can
+[fly] through blocks" — a tool to inspect misbehaving geometry without walls in the way. Ship a
+<p><strong>Noclip</strong> toggle that disables the player's collision with the world while movement stays
+under the player's control. Hard requirements: the default state is byte-identical to today (the same
+collision, the same movement), the toggle cannot be left on by accident (default OFF, visible indicator,
+Options surface), and nothing else in the world changes — mobs, drops, arrows and the mine/place raycast
+behave as they do in both states.</p>
+
+<h2>Design decisions (the two the ticket leaves open)</h2>
+<ol>
+<li><strong>Noclip implies free flight, it is not just "collision off".</strong> With collision off alone,
+the walk band's 26 m/s² radial gravity would make the player free-fall through terrain — unusable for
+hovering over a broken chunk. The AC-0145 flight model already exists (no gravity, thrust control:
+WASD + A up / Shift down + sprint, the <code>fly</code> key F stays the exit). Noclip ON therefore sets the
+existing <code>flying</code> state and disables the player's <code>CollisionShape3D</code>; OFF restores both.
+This also satisfies "must not fight the radial gravity" by construction: the flight branch never applies
+gravity at any altitude. One line is owed beyond the shape toggle: the void kill
+(<code>flat_h &lt; -12</code>) must not fire while noclip is on — the tool's purpose is being below the
+surface, and the void rule is a wall-in-the-way of exactly that. (Fall damage / drown / hunger already
+skip for <code>flying</code>; lava damage stays — documented, not gated.)</li>
+<li><strong>Reached two ways: the Options-surface checkbox (persisted, default OFF) + the harness env
+<code>AWECRAFT_NOCLIP=0|1</code>.</strong> No extra key — see below.</li>
+</ol>
+
+<h2>How the toggle is reached — and why that matches this project</h2>
+<p>Every player-facing switch in this project follows the same shape (AC-0205 <code>smooth_ramps</code>,
+AC-0389 <code>ambient_enabled</code>, AC-0394 <code>viewmodel_occlude</code>, the AC-0401–0405 look toggles):
+a bool in <code>Settings.DEFAULTS</code> (defaulting to the conservative behaviour), <code>sanitize_bool</code>-clamped,
+persisted via <code>Settings.set_value</code>, a CheckBox row on the Options surface, and an
+<code>AWECRAFT_*=0|1</code> harness env that preloads <code>Settings.values</code> <em>without</em>
+<code>save()</code> so arms never clobber the user's cfg. The user called the tool "an option", and the
+ticket's standing convention says a player-facing switch lives on the Options surface and persists —
+so: <strong>checkbox on the Options (Settings) tab + <code>AWECRAFT_NOCLIP</code> for scripted/arm use</strong>.
+A dedicated key is deliberately <em>not</em> added: the one-keystroke path is the very "left on by
+accident" route the ticket forbids, and the <code>fly</code> key already covers the in-flight exit.</p>
+<p>The player owns the switch (like <code>viewmodel_occlude</code>): <code>player.gd</code> preloads the env in
+<code>_ready</code> (the AC-0394 seam) and syncs the live value in <code>_process</code>, applying on change
+only — no apply step in <code>settings.gd</code> (the cloud_deck/limb_space pattern). The state that ships is
+exactly today's: <code>noclip</code> defaults to <code>false</code>, the sync is a no-op, and the shape/flight/void
+code paths are only reached when the value changes to on.</p>
+<p><strong>Visible when on:</strong> a one-line label (<em>“NOCLIP — collision off (free flight)”</em>) on the
+player's existing debug <code>CanvasLayer</code> (the <code>_debug_label</code> home, player.gd <code>_build_debug</code>),
+visible only while on — the ticket's one-line indicator, in the place the project already draws debug
+overlays.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>noclip</code> in <code>DEFAULTS</code> (default <code>false</code>, AC-0395 comment); <code>_clamp</code> branch via <code>AnalogTune.sanitize_bool</code>. No apply step (the player reads live).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td><code>NoclipCheck</code> CheckBox on the Settings tab (after the AC-0394 row); <code>_on_noclip_toggled</code> (<code>_syncing</code> guard + <code>set_value</code>); the <code>_sync_controls</code> line.</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>env preload in <code>_ready</code> (<code>AWECRAFT_NOCLIP</code>, the AC-0394 seam); <code>_noclip_sync()</code> in <code>_process</code> (apply-on-change: <code>col_shape.disabled</code>, <code>flying</code>, un-crouch, <code>Game.message</code>, indicator); the void-kill gate (<code>not _noclip</code>); the <code>_noclip_label</code> indicator in <code>_build_debug</code>.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>new <code>noclip</code> arm (<code>_noclip_test</code> + dispatch branch — harness.gd dispatches its own modes; <code>main.gd</code> is untouched): fixture (stone pad + wall, the survival-arm pattern), state 0 stop / state 1 pass-through (negative-tested: crossing the wall plane AND inside a solid cell), mine/place raycast hit in both states, slab-body census unchanged in both states, same-path repeat stop with noclip off again, env-preload assertion, fixture restore. Plus the <code>settings</code> arm gains the <code>noclip</code> block (default OFF, bool clamp, corrupt→false, round-trip, row presence + sync — the AC-0394/AC-0389 pattern).</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code></td><td>row for the <code>noclip</code> mode; the <code>settings</code> row notes the new block. Then <code>python3 tasks/scripts/harness_doc.py --render</code> (the GENERATED blocks in HARNESS.md — never hand-edited).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>invariant 2 sync: §2 Settings row (the new bool), §3 Player bullet (the toggle: shape disable + forced flight + void gate + indicator), §6 AC-0395 bullet next to AC-0205/AC-0394.</td></tr>
+</table>
+<p class="note"><strong>Fences respected:</strong> no edit to <code>godot/scenes/main.gd</code>,
+<code>godot/autoload/game.gd</code>, <code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code>
+(another session's uncommitted work) or <code>tasks/TASKS.yaml</code>. No commits/pushes. The new arm lives in
+harness.gd (a fence-free file) and rides the existing <code>main.gd</code> → <code>harness.run(logic)</code>
+forwarding — no dispatch change owed there.</p>
+
+<h2>Harness gates (light set — HEAVY is the coordinator's)</h2>
+<ol>
+<li><strong>G0</strong>: headless load, zero <code>SCRIPT ERROR</code> AND zero <code>SHADER ERROR</code> lines
+(<code>tasks/scripts/gate_census.py</code>) <em>and</em> the process exit status paired (the stochastic UAF
+leaves a clean log with a signal-11 exit).</li>
+<li><strong>SMOKE</strong>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> (the
+dependency-mapped set + the generation parity).</li>
+<li><strong>PROBE (the ticket's own arm)</strong>: <code>AWECRAFT_LOGIC=noclip</code> — default-off run
+(state 0 stop + state 1 pass-through + repeat) and the <code>AWECRAFT_NOCLIP=1</code> run (env preload proof).</li>
+<li><strong>genhash</strong>: 25/25 byte-identical vs the standing reference
+(<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>) — player-side change, no generation owed, but
+the constraint is explicit.</li>
+<li><strong>Movement arms</strong> (the ticket's named set, in their own terms — standing values, no
+re-baseline): <code>player</code> (WASD/floor/jump/fly), <code>look</code>, <code>swing</code>,
+<code>spherewalk</code> (the movement model — the physics path this ticket touches), <code>boundary</code> r4
+(crossings + the <code>col_deferred_in_footprint</code>/footprint collision fences).</li>
+<li><strong>Collision arm</strong>: <code>consumers</code> (walk across seams — the no-fall-through census —
+plus mine/place through the DDA; the raycast still hits in both states).</li>
+<li><strong>settings</strong>: the arm's new <code>noclip</code> block green (default OFF, round-trip, row).</li>
+<li><strong>RENDERS (evidence, ~300 s budget each, Forward+/lavapipe recipe)</strong>: before/after — the
+<code>cave</code> preset WITHOUT noclip (the player cannot occupy the pocket: shape active) vs
+<code>cave</code> + <code>AWECRAFT_NOCLIP=1</code> (the player inside terrain, the indicator in frame). No
+<code>AWECRAFT_LOGIC</code> in either (the arm would own the shot); <code>AWECRAFT_SIZE=1280,720</code> (comma);
+<code>AWECRAFT_SNAP_DRAIN=600</code> (frames); check the files exist.</li>
+</ol>
+
+</body>
+</html>

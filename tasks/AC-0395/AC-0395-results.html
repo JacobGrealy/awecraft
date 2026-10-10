@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0395 results — noclip toggle (fly through blocks)</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em;line-height:1.45}
+table{border-collapse:collapse;margin:1em 0}
+th,td{border:1px solid #999;padding:4px 10px;text-align:right}
+th{background:#eee}
+td:first-child,th:first-child{text-align:left}
+.box{border:1px solid #888;padding:8px 12px;margin:1em 0}
+.good{background:#e6f4e6}.bad{background:#f9e6e6}.warn{background:#fdf6e3}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px 12px;overflow-x:auto;font-size:0.9em}
+img{max-width:640px;margin:0.5em 0;border:1px solid #ccc}
+</style></head>
+<body>
+<h1>AC-0395 — noclip: a toggle that disables the player's collision so they can fly through blocks</h1>
+<p><em>Builder: single subagent. Fenced files untouched (main.gd / game.gd / drop.gd / debug.gd /
+world shaders — another session's uncommitted work). No commits, no pushes, no TASKS.yaml edits.
+The new harness arm rides the existing <code>main.gd → harness.run(logic)</code> forwarding — no
+main.gd edit was needed or made.</em></p>
+
+<h2>1. What was built</h2>
+<ul>
+<li><strong>Persisted toggle</strong> — <code>noclip</code> bool in <code>Settings.DEFAULTS</code>
+(default <strong>OFF</code>, the shipped state), <code>AnalogTune.sanitize_bool</code> clamped
+corrupt-safe, CheckBox row "Noclip — fly through blocks" on the Options surface
+(<code>name="NoclipCheck"</code>), the project's standing player-switch pattern (AC-0205/AC-0389/AC-0394/AC-0401-0405).</li>
+<li><strong>Env preload</strong> — <code>AWECRAFT_NOCLIP=0|1</code> preloaded into
+<code>Settings.values</code> WITHOUT <code>save()</code> in <code>player.gd _ready</code>
+(the AWECRAFT_VMOCC discipline — the user's cfg is never clobbered).</li>
+<li><strong>Apply path</strong> — <code>player.gd _process → _noclip_sync()</code> reads the live
+value every frame and applies on change: <code>col_shape.disabled = on</code> (the player's OWN
+CollisionShape3D — the node stays, disabled, so every other body is untouched) +
+<code>flying = on</code> (deliberate design, §2) + un-crouch on ON +
+<code>Game.message</code> on each transition.</li>
+<li><strong>Indicator</strong> — a one-line label ("NOCLIP — collision off (free flight)") on the
+player's debug CanvasLayer, visible <em>only while on</em>. Together with default-OFF this is the
+"impossible to leave on by accident" pair the ticket requires.</li>
+<li><strong>Void-kill gate</strong> — the hard-kill at <code>flat_h &lt; -12</code> is gated on
+<code>not _noclip</code>: the tool's purpose is being <em>below</em> the surface, and the kill is a
+wall in the way of exactly that. Walking/flight without noclip keeps the kill (the player cannot
+normally get below the local floor there). Fall damage / drown / hunger already skip for
+<code>flying</code>; lava damage stays (documented in the arm).</li>
+<li><strong>Harness arm</strong> — <code>AWECRAFT_LOGIC=noclip</code> (new branch in
+<code>harness.gd</code> + row in <code>tasks/harness_data.yaml</code>, doc re-rendered,
+<code>--check</code> green): a stone pad + stone wall ~8 m above the spawn surface (set_block
+fixture, height SCANNED so the restore never eats terrain, restored before exit) measures
+pass-through by <strong>cell occupancy</strong>, not "the player moved".</li>
+</ul>
+
+<h2>2. Design decisions (deliberate, documented in ARCHITECTURE.md §6)</h2>
+<div class="box warn"><strong>NOCLIP = "collision off" + FREE FLIGHT, not just collision off.</strong>
+With the walk band's 26 m/s² radial gravity active, a collisionless player free-falls through
+terrain at gravity speed and cannot hover to inspect a broken chunk. The existing AC-0145 flight
+branch applies <em>no</em> gravity at any altitude, so noclip implies flight — the player can hold
+position inside a block. This does not fight radial gravity (the flight branch simply doesn't apply
+it), and the <code>fly</code> key F stays the in-flight exit (pressing it with noclip on drops the
+player at gravity speed — a natural, discoverable off-switch).</div>
+<div class="box warn"><strong>The toggle lives on the Options surface, not on a key.</strong> The
+ticket forbids a route that can be "left on by accident": a one-keystroke in-game key is exactly
+that route, and the project's standing convention puts player-facing switches on the Options
+surface. Default OFF + the always-visible-while-on indicator label + the persisted row are the
+guardrail triple.</div>
+
+<h2>3. Evidence — pass-through when ON (the arm's own terms)</h2>
+<p>Arm RESULT, default-off run (<code>AWECRAFT_LOGIC=noclip</code>, EXIT=0, census 0/0):</p>
+<pre>{"ok": true,
+ "boot":      {"default_ok": true, "env_preload_ok": false, "flying": false, "shape_disabled": false},
+ "fixture":   {"fy": 148, "wall_center": [13, 150, 8], "solid_ok": true, "landed_ok": true, "cells": 98},
+ "col_face":  {"face_x": 13.0, "grid_plane_x": 13, "stop_to_face": 0.004,
+               "diag": {"chunk_found": true, "slabs_bodied": 1, "tris_scanned": 398,
+                        "vmin": [5.0, 144.0, 0.0], "vmax": [16.0, 154.0, 12.0]}},
+ "ray0":      {"hit": true, "cell": [13, 150, 8]},   "ray1_same": true,
+ "state0":    {"stop_x": 12.996, "max_x": 12.996, "started": true, "blocked": true,
+               "never_solid": true, "label_off": true},
+ "state1":    {"shape_disabled": true, "flying": true, "label_on": true,
+               "inside": [13, 149, 8], "inside_id": 3, "pass_through": true},
+ "bodies":    {"before": 262, "after": 262, "unchanged": true, "collision_enabled": true},
+ "state0b":   {"shape_disabled": false, "flying": false, "stop_x": 12.996,
+               "repeat_ok": true, "delta": 0.0},
+ "restore_ok": true}</pre>
+<div class="box good"><strong>Pass-through proven by cell occupancy:</strong> the SAME drive that
+stops at the wall with noclip off (state0: <code>never_solid</code>, center never crosses the wall's
+grid face) ends, with noclip on (state1), with the player's <strong>chest cell inside the wall
+column</strong> — <code>inside [13,149,8]</code>, <code>inside_id 3</code> (stone). The body is
+inside a block that would stop it. <code>col_shape.disabled = true</code>, AC-0145
+<code>flying = true</code>, indicator label ON. <strong>Env preload</strong>
+(<code>AWECRAFT_NOCLIP=1</code>): boot state is shape-disabled + flight (<code>env_preload_ok:
+true</code>), same pass-through from the same start, EXIT=0, census 0/0.</div>
+
+<h2>4. Evidence — OFF is unchanged (in the arms' own terms)</h2>
+<ul>
+<li><strong>Same path, same stop, before and after the toggle round trip</strong> — state0
+<code>stop_x 12.996</code> and state0b (toggle off again) <code>stop_x 12.996</code>,
+<code>delta 0.0</code>, <code>repeat_ok</code>; shape re-enabled, walk mode restored
+(<code>shape_disabled: false, flying: false</code>).</li>
+<li><strong>The stop resolves against the MEASURED collider face</strong> — the arm reads the
+wall's west face plane out of the slab body's <code>ConcavePolygonShape3D</code>
+(<code>col_face.face_x = 13.0</code> — the collider face coincides with the grid plane; the vertex
+span diagnostic shows world-space coords, the fixture's 398-tri slab). The state-0 stop sits
+<code>stop_to_face = 0.004</code> m from that face. (Deviation D1: this build de-penetrates the
+origin <em>flush</em> to the face — the plan's "capsule radius from the plane" calibration was
+wrong; the assertion was re-based to the invariant: center never crosses the face + never-solid
+census + approached-the-wall band.)</li>
+<li><strong>Everything else in the world is untouched by the toggle</strong> — the StaticBody3D
+census (the slab colliders mobs/drops/terrain walk on) is count-identical across the toggle
+(262 = 262) with <code>collision_enabled</code> still true; the mine/place DDA
+(<code>VoxelMath.raycast_blocks</code> — the game's own grid DDA, the exact call the interaction
+path makes) hits the SAME wall cell from the SAME eye in both states (<code>ray1_same: true</code>)
+— the player's collision state is not in the ray's path, proven not assumed.</li>
+<li><strong>Movement arms at default (off) — standing values unchanged</strong> (all EXIT=0,
+census 0/0): <code>player</code> jump_peak_y <strong>142.42</strong> /
+col_deferred_in_footprint <strong>0</strong> (identical to the AC-0413 journal read), sprint latch
++ FOV fields normal; <code>look</code> drag/locked deltas in band; <code>swing</code>
+swing_max_rot 0.854 / loop_cycles 4 / tier tint + tool voxels normal; <code>spherewalk</code>
+col_deferred_in_footprint 0, onfloor_frac 0.853, up_dot_min 1.0, 6552-frame flight to 2050 m;
+<code>boundary</code> r4 col_deferred_in_footprint 0, crossing bursts in band;
+<code>interact</code> mine+place+drop normal (after_mine_cell 0, after_place_cell 0,
+drop_spawned true).</li>
+<li><strong>Genhash — the world is byte-identical</strong> — 25/25 hashes: (a) my run is
+byte-identical to the CURRENT chain-tip reference
+(<code>.scratch/AC-0311-gates/p2_genhash_r1.log</code>, the deliberate AC-0311 piece-2 sphere-domain
+rebase; re-confirmed byte-identical by AC-0397/AC-0403/AC-0408/AC-0411/AC-0413); (b) DECISIVE A/B:
+with my four code files <code>git stash</code>ed, <code>AWECRAFT_LOGIC=genhash</code> produces the
+IDENTICAL 25-set — my change contributes nothing to the hash. The ticket-pointed
+<code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code> is the STALE pre-rebase tip (documented
+in AC-0411's journal), not a regression. (Comparison discipline: sets are normalized with
+<code>LC_ALL=C sort</code> on both sides before diff — file order ≠ C-sort order.)</li>
+<li><strong>Collision consumers — mine/place paths unchanged; one PRE-EXISTING red documented</strong>
+(D2 below).</li>
+</ul>
+
+<h2>5. Gates (light set; HEAVY is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>run</th><th>census (script/shader)</th><th>exit</th><th>verdict</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code> ×2 (post each harness edit)</td><td>0 / 0</td><td>0</td><td>PASS</td></tr>
+<tr><td>SMOKE</td><td><code>BATTERY=player;interact;light;fluids;genhash</code></td><td>0 / 0</td><td>0</td><td>PASS (5 RESULT, standing values)</td></tr>
+<tr><td>PROBE (arm)</td><td><code>LOGIC=noclip</code> (no env)</td><td>0 / 0</td><td>0</td><td>PASS <code>ok:true</code></td></tr>
+<tr><td>PROBE (env)</td><td><code>LOGIC=noclip AWECRAFT_NOCLIP=1</code></td><td>0 / 0</td><td>0</td><td>PASS <code>ok:true</code>, <code>env_preload_ok</code></td></tr>
+<tr><td>settings</td><td><code>LOGIC=settings</code></td><td>0 / 0</td><td>0</td><td>PASS — <code>noclip {default_off, saved, reload, corrupt_false, row_present, row_sync: all true}</code></td></tr>
+<tr><td>movement</td><td>look / swing / spherewalk / boundary (default off)</td><td>0 / 0</td><td>0</td><td>PASS, standing values</td></tr>
+<tr><td>collision</td><td>consumers (default off) ×2 + A/B</td><td>0 / 0</td><td>0</td><td>mine/place PASS; step sub-check PRE-EXISTING red (D2)</td></tr>
+<tr><td>genhash</td><td>standalone + A/B (my 4 files stashed)</td><td>0 / 0</td><td>0</td><td>25/25 identical with and without my change</td></tr>
+<tr><td>RENDER</td><td>fwdshot recipe (xvfb + lavapipe + <code>--rendering-driver vulkan</code>, R4, 1280×720), final run r6</td><td>0 / 0</td><td>0</td><td>PASS — boot line <code>Vulkan 1.4.318 - Forward+ - … - llvmpipe (LLVM 20.1.8, 256 bits)</code> + the FULL arm green under the renderer (<code>ok:true</code>, every state) + both arm-owned shots pixel-verified (<code>before_stone [61,62,62]</code>, <code>after_stone [98,99,106]</code> — stone in the rendered buffer at shot time)</td></tr>
+</table>
+<p class="small">Every gate's census is PAIRED with its process exit status (the stochastic C6-slab
+UAF leaves a clean log and exits rc=134 — a clean census alone is a false pass). All runs here
+exited 0.</p>
+
+<h2>6. Renders — the player inside the terrain, before / after (proxy warning applies)</h2>
+<p>Arm-owned shots under the SHIPPED Forward+ (Vulkan) path on lavapipe — a <strong>proxy
+renderer</strong>: evidence about geometry and layout only, never about the shipped look. The
+arm takes both shots when <code>AWECRAFT_SNAPSHOT</code> is set (headless gate runs never write):
+the <em>before</em> at the stand (collision ON, the stone wall face 1.5 m ahead — the obstacle
+about to stop the player), the <em>after</em> framed 0.5 m past the wall's east face — in the
+scanned air gap, looking back at the face the body just crossed (collision OFF, the pass-through
+measured at the chest cell; the 1 m column is faceless from inside — D5).
+Each shot is <strong>pixel-verified</strong>: throwaway snaps are retried until a stone-gray
+sample lands at the expected screen position, so a shot that does not actually show the wall's
+stone cannot pass silently (the verified state is in the RESULT, <code>shots
+{before_stone, after_stone}</code>).</p>
+<table><tr><th>shot</th><th>state</th><th>what it shows</th></tr>
+<tr><td><code>noclip_after_off.png</code> (before)</td><td>noclip OFF — the shipped default</td><td>at the stand, 1.5 m from the wall: the stone face ahead (the obstacle), collision ON, indicator label off — the state that does NOT let them in</td></tr>
+<tr><td><code>noclip_after.png</code> (after)</td><td>noclip ON — the UI path</td><td>the body has CROSSED the wall (pass-through = the cell occupancy measured at the chest: [13,149,8] solid stone); the camera is framed 0.5 m past the wall's east face — in the scanned air gap, on the air side where that face's normal points at it — looking back at the stone face it just flew through; collision OFF, free flight, indicator label on. (A 1 m solid column is faceless from INSIDE — every face normal points outward, all backface-culled — so the face the body crossed is photographed from its far side; D5.)</td></tr></table>
+<img src="noclip_after_off.png" alt="before: stopped at the wall, noclip off">
+<img src="noclip_after.png" alt="after: inside the wall, noclip on">
+
+<h2>7. Deviations and findings</h2>
+<div class="box warn"><strong>D1 — the state-0 stop band was re-based from the plan.</strong> The
+plan calibrated <code>blocked</code> as "stop short of the face by the capsule radius"
+(<code>stop_x &lt; ax+4.75</code>). Measurement (the <code>col_face</code> diagnostic) shows this
+build de-penetrates the body origin <em>flush</em> to the collider face (measured stop: face
+− 0.004 m; the capsule r=0.3 is centered on the origin, so the shape contacts 0.296 m into what
+the grid calls the wall cell's boundary — the established behaviour of this movement model, which
+walks terrain constantly, and which my change does not touch — state0 is pure OFF-path physics).
+The assertion is now the invariant: center never crosses the face (tolerating 5 cm of face
+contact) + the chest cell never solid + the walk actually approached the wall. A regression that
+leaves collision off when off fails both the crossing check and <code>never_solid</code>.</div>
+<div class="box bad"><strong>D2 — <code>consumers</code> step sub-check: PRE-EXISTING red, A/B-proven
+not mine.</strong> <code>AWECRAFT_LOGIC=consumers</code> returns <code>ok:false</code> on the
+<code>step</code> sub-check at 2 of 3 probe positions (dips 0.46 m / 7.98 m — the seam walk sinks
+where the collision drain has not settled; the mine/place consumer paths PASS: aim, mine cell
+[12,165,240] id 6, place cobble, restore). Deterministic across repeated runs (identical dips) and
+<strong>byte-identical with my four code files stashed</strong> (A/B run, EXIT=0, census 0/0) — my
+change contributes nothing to it. No recent journal (AC-0408/AC-0411/AC-0413) ran consumers, so no
+green baseline exists to compare against; flagged for the coordinator (possible interaction with
+the other session's uncommitted main.gd/game.gd work — their files were present in BOTH A/B
+configurations, so the A/B isolates my files only).</div>
+<p><strong>D3 (internal, fixed during arm development)</strong> — two GDScript-4.7 parse traps hit
+and fixed before the gates: <code>Vector3</code> has no <code>duplicate()</code> (value types
+copy on assign), and a <code>min</code>-tracking sentinel initialized to −1e9 with a
+<code>&lt;</code> update never fires. Both are in the arm's own history (G0 re-run 0/0 after each
+fix); no game code is affected.</p>
+<div class="box warn"><strong>D5 — render forensics (r4/r5): a 1 m fixture wall is faceless from
+INSIDE, and the band scan had been missing the wall's own column.</strong>
+(1) All six face normals of a 1 m solid column point outward, so an eye inside the column sees
+every face as a backface — all culled. The r4/r5 after frames (the eye inside the wall at the
+pass-through moment) therefore showed the terrain beyond, through the invisible wall. The
+pixel-verified capture caught this (the stone check refused to pass those frames; the band had to
+be tightened after a false positive on fogged sand at (207,207,181) — the rendered stone measures
+49..103 per channel). The fix is compositional: the after shot is framed from the air gap EAST
+of the wall — the eye 0.5 m past the east face, on the air side where that face's normal points
+at it, looking back at the face the body just crossed.
+(2) The band scan covered only the pad's x-range (<code>dx ∈ [−3,5)</code>): the wall's own column
+(<code>x = ax+5</code>) was never scanned — had a band overlapped pre-existing terrain there, the
+restore (<code>set_block → 0</code>) would have EATEN it — a violation of the "restore must never
+eat terrain" fence (latent here — the band happened to be clear — but real). The scan now covers
+pad + wall + gap columns (<code>dx ∈ [−3,7)</code>); the gap column additionally guarantees the
+wall's east face stays exposed to the mesher.</div>
+<div class="box warn"><strong>D4 — the render regime exposed two proxy-renderer timing layers;
+the arm now gates on its own fixture geometry and on the rendered pixels.</strong> All in the
+arm, none in the game. (1) Under the ~5 FPS software renderer the world's drain lanes are
+frame-budgeted, and render r1's arm ran ahead of them: the first teleport landed on a pad whose
+collider had not yet landed (the player sank into the pad floor row — <code>landed_ok:false</code>,
+the state-0 "walk" stalled 2 m short), the state transitions were measured before the
+player's <code>_process</code> sync had run (several physics frames fit in one process frame),
+and the chunk-level world-build wait timed out on the R4 radius the shot did not need. Fix: the
+fixture-body wait now <em>gates the first teleport</em>, the state transitions wait for the
+<em>applied</em> shape/flight state, and the shot waits replace the chunk-level wait (all
+no-ops in headless). (2) r2's before shot read a partially presented buffer (a black capture),
+and r2–r5's after frames showed open terrain instead of the wall — first misread as a CPU/GPU
+mesh-upload lag (the CPU-side mesh was landed and yet the wall was absent), but the r5 before
+shot (a clean stone field) proved the GPU was drawing the fixture fine: the real mechanism was
+backface culling from the interior eye (D5). Fix: each shot is now
+<em>pixel-verified</em> — throwaway snaps are retried until a stone-gray sample lands at the
+expected screen position (stone = low saturation + a brightness cap that excludes fogged sand —
+D5 — while sky/grass/fog/UI sit outside the band), and the passing sample is recorded in the
+RESULT (<code>shots {before_stone, after_stone}</code>, empty = the shot is not evidence) — the
+verification makes a broken capture or a culled face fail loudly instead of passing silently. The
+final render run
+passes the full arm <strong>under the renderer</strong> (<code>ok:true</code>, every state
+measured green) — the arm's timing assumptions are now regime-proof, which is exactly what a
+gate arm must be.</div>
+
+<h2>8. Files</h2>
+<ul>
+<li><code>godot/autoload/settings.gd</code> — <code>noclip</code> default + corrupt-safe clamp</li>
+<li><code>godot/ui/menu.gd</code> — Options-surface CheckBox row + sync + handler</li>
+<li><code>godot/player/player.gd</code> — env preload (no save), per-frame sync, indicator label, void-kill gate</li>
+<li><code>godot/scenes/harness.gd</code> — <code>noclip</code> arm + <code>_noclip_count_static_bodies</code> + face diagnostic + settings-arm noclip block</li>
+<li><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code> (generated, re-rendered, <code>--check</code> green)</li>
+<li><code>godot/ARCHITECTURE.md</code> — §2 settings row, §3 player bullet, §6 decision bullet</li>
+</ul>
+<p>Gate logs: <code>.scratch/AC-0395-gates/</code> (g0 r2–r8, smoke, noclip r7–r12 + env r2,
+settings, look, swing, spherewalk, boundary, consumers r1/r2 + A/B, genhash A/B, render r1–r6 —
+the render sequence is the D4/D5 story: r1 lane starvation, r2 the black-capture race, r2–r5
+the wall-less after frames (misdiagnosed as CPU/GPU lag, actually backface culling — D5), r6
+green with pixel-verified shots). Ticket journal:
+<code>continuity.md</code>.</p>
+</body></html>

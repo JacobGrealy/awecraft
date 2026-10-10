@@ -23,10 +23,14 @@ owes, and the traps that cost the most.
   `carved_top_pass`) so the H is the full path's CARVED top and the top row is the post-carve top
   block; the `farab` gate re-pointed at the `carved_tops` binding (the full path's own heff — an
   independent C++ path, not a re-derivation the far lane shares) and is negative-tested (it fails
-  on the un-carved build — h_mismatch 3 / 217 bad columns on the 45-column battery). The skip=1
-  band-A fill stays un-carved (solid 0..surface_h) — a pre-existing, documented demote/promote
-  seam, out of AC-0387's scope. Never re-derive or round a value another lane computes independently
-  — compare and assert equality, the way the arms do.
+  on the un-carved build — h_mismatch 3 / 217 bad columns on the 45-column battery). AC-0397 made
+  the skip=1 band-A fill stand on the same carved top: `generate_resl` takes the column's 1024-byte
+  far payload (the mat entry hands it over) and the fill is solid 0..PAYLOAD H with the payload top
+  row and the far emit's water rule — the band-A surface IS the far emit's surface (pre-fix the
+  fill stood on the un-carved heightmap: up to 91 blocks proud of the carved ground on the
+  user-settings ring). The no-payload call keeps the un-carved fill bit-for-bit (the farab A/B
+  reference + the data lane's offscreen interior). Never re-derive or round a value another lane
+  computes independently — compare and assert equality, the way the arms do.
 - **A far column is never seeded as all air**, and a far→full promotion re-seeds the **whole**
   column top-down. A stale all-air seam mis-carries sky (a real bug the probe found). The promotion
   contract lives in `../ARCHITECTURE.md` §6 — read it before touching promotion.

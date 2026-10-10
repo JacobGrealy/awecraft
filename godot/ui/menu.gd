@@ -67,6 +67,10 @@ var cloud_vol_check: CheckBox
 # AC-0394: the held-item occlusion toggle (Settings page, default OFF -
 # conservative: the user reported the SIZE, not the occlusion).
 var vm_occ_check: CheckBox
+# AC-0395: the noclip toggle (Settings page, default OFF - the shipped
+# state is exactly today's behaviour; the indicator + this row make an
+# ON state obvious, a debug tool must not be left on by accident).
+var noclip_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -373,6 +377,22 @@ func _ready() -> void:
 	opt_vbox.add_child(vm_occ_check)
 	if hi + 13 < opt_vbox.get_child_count():
 		opt_vbox.move_child(vm_occ_check, hi + 14)
+	# AC-0395: the noclip toggle (the user's own request — a switch that
+	# disables the player's collision so they can fly through blocks and
+	# inspect geometry). Same seam as every other player-facing switch:
+	# persisted like every other setting (Settings "noclip", default OFF —
+	# the shipped state is exactly today's behaviour, and a debug tool
+	# must not be left on by accident), the row re-syncs from
+	# _sync_controls, no apply step owed (player.gd reads the live value
+	# and applies on change — the viewmodel_occlude pattern).
+	noclip_check = CheckBox.new()
+	noclip_check.name = "NoclipCheck"
+	noclip_check.text = "Noclip — fly through blocks"
+	noclip_check.add_theme_font_size_override("font_size", 15)
+	noclip_check.toggled.connect(_on_noclip_toggled)
+	opt_vbox.add_child(noclip_check)
+	if hi + 14 < opt_vbox.get_child_count():
+		opt_vbox.move_child(noclip_check, hi + 15)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -855,6 +875,8 @@ func _sync_controls() -> void:
 	cloud_vol_check.button_pressed = bool(Settings.values.get("cloud_volume", true))
 	# AC-0394: the held-item occlusion toggle (default OFF).
 	vm_occ_check.button_pressed = bool(Settings.values.get("viewmodel_occlude", false))
+	# AC-0395: the noclip toggle (default OFF).
+	noclip_check.button_pressed = bool(Settings.values.get("noclip", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1262,6 +1284,16 @@ func _on_vm_occ_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("viewmodel_occlude", on)
+
+
+# AC-0395: the noclip toggle — persisted like every other setting.
+# Player-side apply is owed (player.gd _noclip_sync reads the live value
+# every frame and applies on change — the shape disable + the free
+# flight + the indicator; no Settings apply step).
+func _on_noclip_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("noclip", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab
