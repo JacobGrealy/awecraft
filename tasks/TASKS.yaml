@@ -1,10 +1,14 @@
 meta:
-  updated_at: 2026-10-09T20:38
+  updated_at: 2026-10-09T22:19
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0395
+- AC-0414
+- AC-0415
+- AC-0416
+- AC-0417
 - AC-0186
 - AC-0130
 - AC-0294
@@ -26061,4 +26065,525 @@ intake:
     a finding recorded from frames taken before a structural fix can describe the fix''s absence rather
     than a defect of its own. Re-measuring on the current tree before bisecting is what turned this into
     a five-render answer instead of a round of work on a symptom that no longer existed.'
+  comments: []
+- id: AC-0414
+  title: satellite-bake-before-load-and-multithreaded
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T21:25
+  updated_at: 2026-10-09T21:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a player, the planet should already be there when I enter a world and fly\
+    \ up - not minutes later, and not only if I happen to stand still long enough for the background work\
+    \ to get a turn. Today a world whose seed is not the one shipped with the game bakes its whole-planet\
+    \ texture while I am playing, on one background thread that the streaming work outranks, so the satellite\
+    \ planet reads as \"lod not loading at any height\" until it eventually appears (user report 2026-10-09,\
+    \ live Windows build 222b1d6, seed 5432: it did finally load, but only after waiting / moving around).\
+    \ It should bake BEFORE the world is handed over, on all the cores, with the loading screen saying\
+    \ what it is doing.\n\n2) Technical Details:\n\nCURRENT BEHAVIOUR (all in godot/world/satellite_body.gd):\n\
+    - configure() (L313) picks the source: the (1) user:// cache `user://satellite/p{pid}_r{R}_s{seed}_h`\
+    \ (_cache_dir L363), else (2) the shipped res:// textures which exist for CANONICAL_SEED 44 ONLY (L110,\
+    \ the seed==CANONICAL_SEED guard L330), else (3) _start_bake() (L419).\n- The bake is ONE WorkerThreadPool\
+    \ task: `Engine.get_singleton(\"WorkerThreadPool\").add_task(_bake_worker.bind(g), false)` (L444).\
+    \ The `false` is high_priority=false, and the line above it states the intent: \"LOW priority so the\
+    \ streaming HIGH tasks are never starved\". The consequence is the reported symptom: the low-priority\
+    \ lane only gets a worker when the high-priority queue is empty, and the streaming lanes keep that\
+    \ queue busy whenever the player is moving, so the bake waits for the world to go quiet. VERIFY this\
+    \ pool-priority claim against the engine source before relying on it; the observed timing (appears\
+    \ only after idling, never while flying) is what the ticket reports either way.\n- Main-thread cost\
+    \ is NOT the problem: _bake_main_step (L471) is a poll in WORK phase and one face per frame in LOAD\
+    \ phase; AC-0382 already moved the pipeline off the main thread. The problem is WHEN the worker runs\
+    \ and how LONG it takes.\n- The work, measured: 196,196 generate_far calls (HOME_CHUNKS 155,236 +\
+    \ 10 x FACE_CHUNKS 4,096, L105-109) at the standing ~92 us/column (AC-0284b) = ~18 s of pure generation;\
+    \ then the per-face colour pass over 12 x 1024^2 = 12,582,912 texels of per-texel GDScript (_step_face\
+    \ L814 / _pixel L892 / _l2s L919 / _byte L927); then 12 PNG deflates + writes; then the read-back\
+    \ + variance guard (_guard_check L983) and the 12 geometries (_geom_for_face L1032). AC-0384 r2 measured\
+    \ ~13 min of worker wall for seed 5432 on the dsh-web box (HARNESS.md section 2, the AWECRAFT_SNAPSHOT\
+    \ row). All of it single-threaded.\n\nWHAT IT SHOULD DO:\n1. START THE BAKE AT BOOT and await it inside\
+    \ the existing loading window, before the player is handed the world. The window already exists and\
+    \ is quiet: the world activates on the sim taxi diamond being mesh_built (_await_sim_band, world.gd;\
+    \ AC-0313), which is a deliberate wait already. Kick the bake from satellite configure() (or boot)\
+    \ and gate the release on the body's phase, instead of racing it against a live streaming world. A\
+    \ bounded timeout with a LOUD line is acceptable only if it is measured and stated; silently releasing\
+    \ the player to a late planet is what this ticket removes.\n2. MULTI-THREAD IT. Both halves are independent\
+    \ and both already have worker-thread precedent:\n   - the payload census: 196,196 independent generate_far\
+    \ calls, and the file's own header (L57-61) records that generate_far is \"a pure const C++ call the\
+    \ thread-gen pool already runs from worker threads\" (world.gd _threadgen_worker) - so sharding it\
+    \ across the pool needs no new C++ and no new task type;\n   - the 12 faces: independent per face,\
+    \ each with its own H grid and texture; _geom_for_face is documented \"pure SphereMath, thread-safe\"\
+    \ (L635).\n   Keep the single-writer discipline the class header states: pay/_out/_h2/_t2/guard/_geom\
+    \ are written only by the worker side before bake_done and read by the main thread only after - so\
+    \ shard into per-shard buffers and merge once at bake_done, never into shared arrays.\n3. SAY WHAT\
+    \ IT IS DOING: one progress line (seed, face k/12, or payload x/N) on the loading screen / console,\
+    \ so this class of report (\"the planet is missing\") is self-answering.\n\nACCEPTANCE (what proves\
+    \ it):\n- Cold start on a NON-canonical seed (the user's 5432): the bake completes before the player\
+    \ is released, and the measured wall is reported before/after in the results page (the field is the\
+    \ worker wall plus the frame the body lands on). The bake must not be starved by streaming in the\
+    \ same run.\n- genhash 25/25 byte-identical - this ticket is scheduling and threading only; the far\
+    \ payloads and the baked pixels must come out BIT-IDENTICAL to today's single-thread path (the shipped\
+    \ 12 face PNGs are the reference: the satellite arm's AWECRAFT_SATELLITE_REBAKE=1 pixel compare, max_abs_diff\
+    \ <= 1 / diff_px <= 1%).\n- The `satellite` arm stays green (12/12 faces, the variance guard, the\
+    \ derived h_first/h_full thresholds, the 0.25 angular ratio), G0 zero SCRIPT/SHADER ERROR, the boundary\
+    \ r4 one-shot for the loading-window interaction (the bake must not move the documented walk p50/p95\
+    \ bands), and the cache path still short-circuits the bake on a second launch of the same seed.\n\
+    - The result must be stated in the units the user feels: seconds from launch to \"the planet is there\"\
+    , for a cold (uncached) non-canonical seed.\n\nSWITCH (decided here, per the filing rule): the user\
+    \ asked for the bake to happen before the world loads, so that IS the default. It trades load time\
+    \ for a later-appearing planet, which is a real player choice, so it ships as a player-facing setting\
+    \ in Options > Settings, persisted like the others, plus an env override for the arms; OFF reproduces\
+    \ today's behaviour exactly (the world is released first and the body may appear late). The arm asserts\
+    \ both states and that OFF is the pre-change path.\n\nOUT OF SCOPE / DEFERRED:\n- The bake's visual\
+    \ quality - the 16 m faceting and the vertical streaks are AC-0412, a separate ticket, and must not\
+    \ be folded in here.\n- Shipping or pre-generating texture packs for more seeds (the other way to\
+    \ make a cold start cheap). Worth recording as an option in the results page; not this ticket's acceptance.\n\
+    - Any change to the ladder thresholds or to the fog-wall/haze contract (the open question about the\
+    \ far world at play altitudes is separate).\n\n\n\nADDENDUM (filed from the same session's frames,\
+    \ 2026-10-09 21:2x):\n\nEVIDENCE THAT NAMES THE FAILURE MODE THIS TICKET REMOVES. In the pre-load\
+    \ window the user does\nnot see \"no planet\" - they see a CONVINCING FAKE ONE, and the tell is the\
+    \ sun sitting inside it.\nFrom orbit (live build 222b1d6, first-person, seed 5432) the frame is a\
+    \ smooth blue ball with a\nsoft glowing rim and the sky's sun disc floating INSIDE the ball. Both\
+    \ are the sky pass:\n\n- the sun is a term in the sky shader, not an object: aero_sky_gradient.gdshader\
+    \ (shader_type sky)\n  L123-128, `sd = dot(dir, sun_dir)`, `disc = smoothstep(0.99894, 0.99985, sd)\
+    \ * sun_amount`, plus\n  the scattering glow that dies with `(1.0 - u_space)`. A sky term is BACKGROUND:\
+    \ it is visible\n  only where no geometry covers the pixel. So a visible sun disc inside the ball\
+    \ is PROOF that\n  nothing is drawn there - the body is not in the frame. (With the body LOADED and\
+    \ opaque the sun\n  is hidden: the body's material writes ALPHA, so it draws in the transparent pass\
+    \ over the sky,\n  and `op = 1` at orbital distance.)\n- the ball itself is the same shader's atmospheric\
+    \ limb: `b = length(cross(u_limb_center, dir))`,\n  `limb = exp(-(b - u_limb_radius)/300.0)` with\
+    \ the explicit `if (limb > 1.0) limb = 1.0;` clamp\n  (L104-121). The clamp makes the term a FLAT\
+    \ 1.0 everywhere inside the planet's tangent direction\n  - a FILLED DISC, not a rim - and `sun_side\
+    \ = 0.55 + 0.45 * pow(dot(dir, sun_dir), 2.0)` gives it\n  exactly the brighter-toward-the-sun gradient\
+    \ the frame shows. `mix(1.0, u_space, u_limb_gate)`\n  with the AC-0401 gate DEFAULT ON evaluates\
+    \ to `u_space`, so the disc is at FULL strength from\n  orbit by design (\"the rim is an orbit instrument\"\
+    ). Its silhouette has the same angular size as\n  the body, so with the body absent the result is\
+    \ a fake planet that reads as a real one.\n\nSECOND CLAUSE (in scope here because it is the same window):\
+    \ WHILE THE BODY IS NOT LOADED, THE SKY\nMUST NOT PRESENT A PLANET. Gate the limb term on the body's\
+    \ own state (the LOADED phase / the\nvisible flag that satellite_body.gd already computes, pushed\
+    \ like the other limb uniforms) so the\norbit view during a bake is honest - either a rim with no\
+    \ body under it, or nothing - instead of a\nsmooth blue ball. A fake planet is worse than a missing\
+    \ one: it cost this project a full\ninvestigation cycle (the \"pale ball\" family) and, in this frame,\
+    \ it hides the very failure the\nfirst clause fixes. This does NOT change the gate's altitude behaviour\
+    \ (AC-0401): at ground level\n`u_space = 0` keeps the term off in both states.\n\nREJECTED, with the\
+    \ reason recorded: a ticket for \"the sun is drawn over the planet\". The sun needs\nno occlusion\
+    \ test - being a sky term it is occluded by geometry by construction (unlike the stars,\nwhich AC-0386\
+    \ had to give an explicit ray-sphere test at R+SEA precisely because they are\ncamera-anchored geometry\
+    \ in a 320 m shell drawn in front of everything). If a sun disc is ever\nobserved over a LOADED body,\
+    \ that is a different defect and needs its own frame and ticket.\n\n\nCORRECTION to the addendum above\
+    \ (same session, minutes later): its central deduction is WITHDRAWN.\n\nThe addendum claimed \"a visible\
+    \ sun disc inside the ball is PROOF that nothing is drawn there - the\nbody is not in the frame\"\
+    . The user, looking at the live frame, reports the opposite: the satellite\nIS rendering, and the\
+    \ blue ball is around the sun. Do not treat the sun's visibility as evidence\nabout the body's presence.\n\
+    \nWHAT SURVIVES, and it is still the useful half: the ball's SHAPE and COLOUR are the sky's\natmospheric\
+    \ limb term, not a planet. aero_sky_gradient.gdshader L104-121 computes\n`b = length(cross(u_limb_center,\
+    \ dir))` (an impact parameter in METRES: u_limb_center is the\nplanet-centre position relative to\
+    \ the camera, u_limb_radius is the R+SEA star-occlusion radius,\nboth pushed by main.gd _update_sky),\
+    \ then `limb = exp(-(b - u_limb_radius)/300.0)` with\n`if (limb > 1.0) limb = 1.0;` - so the term\
+    \ is a FLAT 1.0 everywhere inside the planet's tangent\ndirection (a FILLED DISC, not a rim) with\
+    \ only ~300 m of impact parameter of falloff outside the\nlimb, which at orbital distance is a thin\
+    \ bright rim. `limb_col = horizon_color*0.5 +\nmid_color*0.5` is blue, and `sun_side = 0.55 + 0.45*pow(clamp(dot(dir,\
+    \ sun_dir),0,1), 2.0)` puts\nthe disc's brightest side toward the sun - which is why a backlit geometry\
+    \ (sun behind the planet)\nmakes the disc read as \"a glow around the sun\". The colour also rules\
+    \ OUT the obvious alternative:\nthe sun's own terms are white/warm (`sun_core` vec3(1,1,1), `sun_halo`\
+    \ (1.0, 0.9647, 0.8706)) and\nits scattering glow is explicitly killed in space by `(1.0 - u_space)`,\
+    \ so a bloom around the sun\nwould be white, not saturated blue.\n\nTHE NEW OPEN QUESTION, which belongs\
+    \ with this ticket's second clause: if the body IS rendering\nunder that disc, then something is painting\
+    \ the limb term OVER an opaque body, which the sky pass\nshould not be able to do (a sky term is background\
+    \ and is occluded by geometry; the sun's sky disc\nhas no occlusion test because it does not need\
+    \ one). Candidate painters that ignore depth: the\nEnvironment bloom (`env.glow_enabled = GLOW_ENABLED`,\
+    \ aero.gd:131-134), and camera-anchored\ngeometry such as the aero wash quad (main.gd:1148-1160) -\
+    \ the same class as the 320 m star shell\nthat AC-0386 had to give an explicit ray-sphere test. Name\
+    \ the painter with a one-launch A/B\nbefore writing any fix: AWECRAFT_LIMB=0 kills the limb term (AeroLib.limb_amount,\
+    \ default 0.55),\nAWECRAFT_GRADE_GLOW=0 / AWECRAFT_GRADE_BLOOM=0 / AWECRAFT_GRADE_GLOWTHRESH kill\
+    \ the bloom, F7 /\nAWECRAFT_SAT_BODY=0 removes the body. Acceptance for the second clause is unchanged\
+    \ - while the\nbody is not LOADED no planet may be faked - but the mechanism above must be identified\
+    \ first;\n\"the sky painted over a rendered body\" would be a THIRD clause with its own evidence."
+  comments: []
+- id: AC-0415
+  title: far-tier-use-engine-fog-delete-the-duplicate
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T21:51
+  updated_at: 2026-10-09T21:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: As a player I can turn fog off and expect the world to look unfogged. Today the
+    middle-distance terrain keeps fading to the fog colour anyway: with fog disabled the low/medium LOD
+    tiles render as flat pale-blue blocky plateaus while the near tiles are correctly coloured, so one
+    frame shows two different looks at once (user report 2026-10-09, live Windows build 222b1d6, "I have
+    fog disabled"). With fog ON everything reads correctly, which is why this has gone unnoticed. The
+    switch should govern the whole render ladder, not the near tiers only.
+
+
+    2) Technical Details:
+
+
+    SYMPTOM: with `fog_enabled` off (Settings, main.gd:92-97) or `AWECRAFT_NO_FOG=1` (main.gd:1482-1485),
+    the med/low average-colour tiers render as flat `u_air` (the pale sky-horizon blue of AeroLib.fog_display)
+    beyond the fog window, while the high tiers (world/chunk_lit_*.gdshader, which have no manual haze)
+    show clear terrain.
+
+
+    CAUSE: godot/core/lod_avg.gdshader is `render_mode fog_disabled` and implements the engine''s depth
+    fog itself - `uniform vec3 u_air`, `uniform float u_fog_near`, `u_fog_far`; `if (d >= u_fog_far) {
+    discard; }` (the AC-0401 partition); `float fog_f = clamp((d - u_fog_near) / max(u_fog_far - u_fog_near,
+    1.0), 0.0, 1.0);` `ALBEDO = mix(ALBEDO, u_air, fog_f);`. Those uniforms are pushed every frame in
+    main.gd:1474-1479 from `env.fog_depth_begin` / `env.fog_depth_end` / `env.fog_light_color` - and `_update_sky`
+    STILL assigns `env.fog_depth_begin`/`env.fog_depth_end` (main.gd:1487-1493) in the same function that
+    just set `env.fog_enabled = false` (main.gd:1482-1485). Nothing tells this material that the switch
+    moved, so the engine fog stops and the hand-rolled copy keeps going.
+
+
+    WHY THE MATERIAL IS OFF THE ENGINE FOG AT ALL (history, so nobody re-derives it as intentional): AC-0384
+    r8 (commit ecc5285) took it off DELIBERATELY, because it then had to fade in two directions - inward
+    matching the factor band A receives at the same view distance (band A/annulus continuity by construction),
+    outward matching the satellite body''s own haz at the rim - and the engine fog gives exactly one factor
+    and one mix colour per pixel. AC-0399 (71115ad) and AC-0400 (63e298c) retargeted the outer end; AC-0404
+    (bce6053) DELETED the bridge - "the limb belongs to the satellite lod''s material alone" - which left
+    `haz = fog_f`, i.e. the engine''s own linear depth ramp reimplemented, plus a `fog_disabled` flag
+    that now buys nothing.
+
+
+    FOSSIL EVIDENCE (in the file today): `u_render_edge` and `u_center` are declared and pushed every
+    frame (main.gd:1478-1479) and are NEVER READ - one occurrence each in the file, the declaration itself.
+    They are the deleted bridge''s (and the view-weighted fill''s) leftovers.
+
+
+    THE FIX SHAPE, DECIDED HERE - DELETE THE DUPLICATE, DO NOT FLAG IT: re-enable the engine fog on this
+    material (drop `render_mode fog_disabled`), delete the manual haze (the `u_air` mix, `u_fog_near`,
+    and their per-frame pushes), delete the two dead uniform pushes, and KEEP the AC-0401 `discard` -
+    it is the partition, not fog, and it still needs `u_fog_far` (keep that one uniform, or read the value
+    from the push that already exists for the partition). A `u_fog_on` flag was considered and rejected:
+    it would preserve a second fog model to serve one setting, when the whole reason the second model
+    exists is gone.
+
+
+    WHY THE CONTINUITY SURVIVES (this is what AC-0384 r8 hand-rolled, re-checked against the engine path):
+
+    - band A <-> annulus: both take the SAME engine factor at the same view distance - the r8 argument
+    now works FOR the engine path instead of against it;
+
+    - annulus <-> body rim at the wall: at `d == u_fog_far` the engine factor is exactly 1.0, which is
+    `u_air`, which is the body''s `haz_d` value at the same wall - the AC-0400 single-source seam holds;
+
+    - direct precedent on the SAME instances: the water surfaces inside the same ring batches are drawn
+    with the fluid materials (core/fluid_anim{,_bf}.gdshader), which carry no `fog_disabled` and already
+    take the engine fog. Today one MeshInstance3D carries two fog models, one of which is correct.
+
+
+    WHAT MUST NOT CHANGE: the AC-0404 contract (no limb term on any near tier), the AC-0401 partition
+    (the near tiers stop at the wall and the body''s rim is the seam), the ring-batch geometry and draw
+    state (AC-0338), and the geometry itself - this is a material/uniform change only, so genhash 25/25
+    must stay byte-identical and meshprobe/ladder/halo/lightstate are untouched.
+
+
+    EVIDENCE OWED (fog-OFF is the subject, fog-ON is the control):
+
+    - fog-OFF frames before/after: the pale-blue plateaus get their vertex colours back at the same tile
+    layout, with no new seam where the haze used to be;
+
+    - fog-ON frames before/after: the manual ramp was authored to MATCH the engine''s, so these should
+    be near-identical - any visible difference IS the drift between the two models and must be reported
+    as a finding, measured at the band A/annulus boundary and at the annulus/body rim;
+
+    - one frame from altitude for the annulus/body rim seam (the AC-0400 target), and the standing set
+    (G0 zero SCRIPT/SHADER ERROR, genhash 25/25, meshprobe, ladder, halo, lightstate).
+
+
+    FENCE NOTE: `godot/scenes/main.gd` is DIRTY with another session''s uncommitted work at the time of
+    filing (the AC-0411 note fences main.gd/game.gd/drop.gd/debug.gd), and settings.gd/menu.gd/player.gd/harness.gd/ARCHITECTURE.md/HARNESS.md
+    are dirty too. The push deletions live in main.gd `_update_sky` - coordinate with that session or
+    land the shader-side deletion plus the push deletions in ONE commit once the fence lifts; do not edit
+    main.gd while its owner is mid-task.
+
+
+    SWITCH: no new player-facing switch - this ticket makes an EXISTING setting (`fog_enabled`, DEFAULT
+    ON) govern the whole ladder instead of the near tiers only. The conservative default is unchanged;
+    only the OFF state changes, and it changes to what the player already asked for.
+
+
+    OUT OF SCOPE: re-characterising the fog model itself (depth curve, light energy, aerial perspective,
+    the `fog_start_pct` value), the cloud deck''s own fog behaviour, and the satellite body''s fog/haze
+    contract.
+
+    '
+  comments: []
+- id: AC-0416
+  title: far-tier-stands-above-the-high-surface
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T21:57
+  updated_at: 2026-10-09T22:13
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a player, the middle-distance terrain should be the same ground I am standing\
+    \ on, just coarser. Today the low/medium tiles stand visibly ABOVE the real surface - they read as\
+    \ raised plateaus/mesas, \"way too high\" (user report 2026-10-09, live build 222b1d6, the same frame\
+    \ that shows the far tiers painted pale blue). The carved valleys the near tiers show are also missing\
+    \ at that distance. Whatever the cause, a far tier that stands proud of the ground it represents is\
+    \ wrong, and it must not be possible for the two representations to disagree without a gate going\
+    \ red.\n\n2) Technical Details:\n\nWHAT IS OBSERVED: in the same frame, the near (high) tiles show\
+    \ correctly coloured, correctly shaped terrain with carved valleys; the med/low tiles are (a) pale\
+    \ blue (that is AC-0415 - the manual fog on core/lod_avg.gdshader - SEPARATE, already filed) and (b)\
+    \ standing well ABOVE the near terrain's surface, as stepped plateaus. Two defects in one frame; this\
+    \ ticket owns (b) and the missing valleys.\n\nTHE REPRESENTATION, and the mechanisms that can produce\
+    \ a too-high surface (HYPOTHESES, to be separated by measurement, not assumed):\n- H1 - THE CELL ENVELOPE.\
+    \ gdext/src/mesh.cpp h_avg_emit_impl builds the far grid from the payload's per-column H (mesh.cpp:3015-3024:\
+    \ St = max(H, sea)) and marks a cell solid unless MORE THAN HALF its sub-blocks are air (`if (pc ==\
+    \ 0 || (TOT - pc) * 2 > TOT)`, mesh.cpp:3087). Cells are 2 blocks at the med tier (G=8) and 4 blocks\
+    \ at the low tier (G=4) - CELLB = 16/G, mesh.cpp:3007-3010 (the \"8x8x8\"/\"4x4x4\" names count cells\
+    \ per chunk, NOT metres). A cell that survives is drawn as a full box up to its top, so the emitted\
+    \ surface is the UPPER ENVELOPE of the cell - up to one cell proud - and any feature occupying less\
+    \ than half of a cell is bridged over. This predicts bounded error (<=4 blocks at low) and valley\
+    \ LOSS, but not \"way too high\".\n- H2 - INDEX / MIRROR DISAGREEMENT between the payload and the\
+    \ consumer. The payload's layout is (y<<8)|(z<<4)|x, i.e. i = z*16 + x (gen.cpp gen_flat/gen_far,\
+    \ and h_avg_emit_impl's own `lz * 16 + (cx*CELLB+px)`), and faces 2-11 carry a chart mirror (sphere_math\
+    \ face_mirror_x / face_local_x). If any consumer - the far emit, the band-A materialization, or a\
+    \ face-chart path - reads the column map with x and z swapped or the mirror applied on one side only,\
+    \ the far tier draws a NEIGHBOURING (mirrored) column's height: arbitrary disagreement in BOTH directions,\
+    \ valleys appearing at the wrong place, and large errors on slopes. This fits \"way too high\" and\
+    \ the missing valleys better than H1.\n- H3 - THE H CONTRACT ITSELF (AC-0387 / AC-0397). The far payload's\
+    \ H is supposed to be the full path's CARVED top; AC-0397 fixed band A's fill to stand on the payload\
+    \ H rather than the un-carved heightmap (the 91-block plateau class), and AC-0387 made gen_far run\
+    \ the carved_top_pass (gen.cpp:2811+ - the 8 cave-lattice fields, the aquifer table, build_carver_plan,\
+    \ the dens_at scan and the carver, op-for-op with gen_flat per the comments at gen.cpp:2884). If any\
+    \ one of those steps drifted, this class returns. Note the farab gate DOES compare the far H against\
+    \ the full path's own heff on a 45-column battery (h_mismatch 0 standing), so a whole-lane drift should\
+    \ be caught - which is evidence AGAINST H3 and FOR H2.\n\nWHY EVERY EXISTING GATE CAN BE GREEN THROUGH\
+    \ THIS (the important structural point, stated in HARNESS.md's own seamcensus row): farab compares\
+    \ the far EMIT to a reference built the same way, meshprobe/ladder/lightstate compare emitted geometry\
+    \ to a same-way reference, and the h_avg_emit vs low_emit_avg identity is the same-way byte check.\
+    \ Nothing in the standing set compares THE FAR TIER'S OUTPUT AGAINST THE LIVE HIGH MESH FOR THE SAME\
+    \ COLUMN. A mis-indexed or wrongly-mirrored far grid is bit-identical to its own re-emit, so it passes\
+    \ everything, while being wrong in the frame. That missing comparison is the acceptance instrument\
+    \ for this ticket.\n\nWHAT TO DO (in order):\n1. MEASURE FIRST, at a column the user can point at:\
+    \ take the live HIGH mesh for a column (the near band) and the far emit for the SAME column and compare\
+    \ their surfaces per (x,z) - the ground truth is the high mesh, not another far reference. Do it on\
+    \ the home face AND on a face >= 2 (the mirror path), and on a slope (where H1 and H2 separate cleanly:\
+    \ H1 gives a bounded upper envelope, H2 gives an arbitrary, often large, error that changes sign between\
+    \ neighbours).\n2. Then fix what the measurement names: H1 wants a representation decision (finer\
+    \ low cells, or emit the far surface from the payload's own 1 m H field instead of majority boxes\
+    \ - the data is finer than the mesh; the cost is vertices, ~17k far slabs at R50), H2 wants an index/mirror\
+    \ fix plus a same-column parity check in the arm, H3 wants the farab battery extended with the offending\
+    \ column.\n3. Whatever the cause, add the standing instrument: a same-column far-vs-high comparison\
+    \ (a new arm, or a widening of farab) so this class cannot be green again.\n\nEVIDENCE OWED: the before/after\
+    \ same-column numbers on the named fixture (per (x,z): high surface vs far surface, max and mean error,\
+    \ on the home face and a <=2 face), the fixture's frame before/after, and the standing gates unchanged\
+    \ (genhash 25/25 if no generation change; if the fix touches generation, the new hashes are the intentional\
+    \ change and must be stated as such).\n\nFENCE NOTE: main.gd / settings.gd / menu.gd / player.gd /\
+    \ harness.gd / ARCHITECTURE.md / HARNESS.md were dirty with another session's uncommitted work at\
+    \ filing time - coordinate before touching them; the likely fix lands in gdext/src/mesh.cpp and/or\
+    \ gdext/src/gen.cpp (rebuild the .so, see gdext/AGENTS.md).\n\nRELATED BUT SEPARATE: AC-0415 (the\
+    \ far tiers ignore the fog switch - the pale blue), AC-0412 (the orbital bake's faceting), AC-0397/AC-0387\
+    \ (the carved-top contract this ticket must not break).\n\n\n\nFOUND - the mechanism, with the numbers\
+    \ (added the same session the user reported \"as if the entire chunk is one chunk higher than it should\
+    \ be\"):\n\nTHE RING BATCH LAYS THE FAR TIERS OUT ON THE FLAT PLANE, NOT ON THE SPHERE. `_ring_rebuild_sector`\n\
+    (world.gd:1762) merges each far slab's slab-LOCAL arrays into a world-space mesh by adding a FLAT\n\
+    offset: `var ox := float(int(c.cx) * 16)`, `var oz := float(int(c.cz) * 16)` (world.gd:1793-1794)\
+    \ and\n`var off := Vector3(ox, float(si * 16), oz)` (world.gd:1808). The ring MeshInstance3Ds get\
+    \ NO\ntransform at all (`_ring_mi_for`, world.gd:1686-1693: `add_child(mi)` and nothing else), so\
+    \ the merged\ngeometry is placed in the GLOBAL FLAT frame. The high tier's slabs are not: they are\
+    \ children of the\nchunk node, which carries `SphereMath.column_transform(cx, cz, R)` (the ONLY place\
+    \ the transform is\napplied - world.gd:14120-14127; `flat_to_world` at :14130 is the pointwise twin).\
+    \ The world is a\npolyhedron of tangent facets since the planet epic (AC-0306/AC-0308/AC-0311), so\
+    \ the true surface at\nin-plane distance d from the face centre sits ~d^2/(2R) BELOW the flat plane.\n\
+    \nTherefore the far band floats ABOVE the near band by exactly that sagitta, growing quadratically\
+    \ with\ndistance from the FACE CENTRE (not from the camera):\n  d = 100 m -> 1.3 m; d = 200 m -> 5.0\
+    \ m; d = 358 m -> 16.0 m (ONE CHUNK); d = 500 m -> 31 m;\n  d = 1000 m -> 125 m; d = 2000 m -> 500\
+    \ m; d = 3141 m (the home face edge) -> 1233 m.\nThis matches every observation: \"the entire chunk\
+    \ is one chunk higher than it should be\" (the tier\nboundary a few hundred metres out is where the\
+    \ far tier first draws), \"way too high\", the raised\nshelf reading above the horizon, the near tiles\
+    \ looking correct, why travelling makes it worse, and\nwhy the lateral positions do not line up either\
+    \ (the flat x,z is the orthographic projection, so\nfeatures drift sideways as well - the \"valleys\
+    \ are missing / do not line up\" impression).\n\nWHY EVERY GATE IS GREEN: nothing in the standing\
+    \ set reads PLACEMENT. farab/meshprobe/ladder/\nlightstate compare the emitted ARRAYS against same-way\
+    \ references, the h_avg_emit vs low_emit_avg\nidentity is a byte check on the arrays, and the AC-0338\
+    \ ring census counts MIs/slabs/rebuild ms. The\nslot meshes are untouched and the merged mesh is a\
+    \ faithful copy of them - in the WRONG FRAME. The\nregression came in with AC-0338 (the ring batch)\
+    \ and with the sphere-domain world: on the flat world\nthe flat offset WAS the correct placement.\n\
+    \nFIX SHAPE (one home, keep the batching): bake the column transform into the merge where `off` is\n\
+    added today - `SphereMath.flat_to_world(x, y, z, R)` per vertex (world.gd:14130's twin of\ncolumn_transform),\
+    \ which keeps ONE merged mesh per (tier, sector). Two consequences to handle in the\nsame edit: (a)\
+    \ the NORMALS are currently copied unrotated (world.gd:1826-1828) and must be rotated by\nthe same\
+    \ column basis once the vertices move; (b) the WATER surfaces take the same `off`\n(world.gd:1832-1841)\
+    \ and must take the same transform. A per-vertex call at merge time is the cost -\nacceptable, it\
+    \ runs on the ring rebuild path (331 rebuilds / 420 ms total at R16, 5,092 / 63.0 s over\nthe R50\
+    \ fill per AC-0338's census), but it MUST be measured, not assumed.\n\nACCEPTANCE (the instrument\
+    \ this ticket wanted, now with a named cause):\n1. THE SAME-COLUMN COMPARISON (the missing gate):\
+    \ for a column at a known in-plane distance d from\n   the face centre, the far emit's world surface\
+    \ must equal the live HIGH mesh's surface for the same\n   (x,z) within the emit's own cell quantization\
+    \ (<= 1 cell: 2 m at med / 4 m at low) - measured at\n   d = 100, 358, 1000 and 2000 m, on the home\
+    \ face AND on a face >= 2 (the mirror path).\n2. The pre-fix numbers at those columns are the regression's\
+    \ proof and the after numbers are its fix;\n   the expected pre-fix error is the sagitta column above\
+    \ (16 m at d = 358).\n3. Standing set unchanged: geometry/emit byte-gates (farab, meshprobe, ladder,\
+    \ halo, lightstate) must\n   stay green - this is a PLACEMENT fix, so the arrays must not move; genhash\
+    \ 25/25 (no generation);\n   G0 zero SCRIPT/SHADER ERROR; the ring census (MI count, slabs, rebuild\
+    \ ms) re-measured with the\n   per-vertex transform in place.\n4. A frame at the tier boundary before/after,\
+    \ from a stated in-plane distance - the user's own view\n   (a raised far shelf) is the before."
+  comments: []
+- id: AC-0417
+  title: sky-local-zenith-and-atmosphere-height
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-09T22:14
+  updated_at: 2026-10-09T22:19
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: As a player standing anywhere on the planet, the sky should behave like sky -\
+    \ the horizon should be level and the blue should thin out and give way to space at a believable height\
+    \ above my head, not three kilometres up. Today the day sky is painted as if the world were still\
+    \ flat: its gradient, its haze band and its blue-to-space blend are all keyed to the WORLD's up axis,\
+    \ which is only the local up at the one spot the flat world used to be centred on. Walk a few kilometres\
+    \ and the painted horizon tilts away from the real one; climb and the sky stays blue far longer than\
+    \ it should. The user's words: replace the day skybox with something that does not have a fake horizon\
+    \ since we are on a sphere now - possibly not a skybox at all, just a solid colour or a gradient -\
+    \ and make the blue-to-space transition happen closer to the planet.\n\n2) Technical Details:\n\n\
+    A) THE FAKE HORIZON - ONE LINE, AND IT IS THE WHOLE DAY SKY. godot/core/aero_sky_gradient.gdshader\
+    \ parameterises everything by the WORLD Y of the ray:\n  - L90 `float h = dir.y;` (dir = normalize(EYEDIR),\
+    \ world space),\n  - L91-101 the day gradient `mix(horizon_color, mid_color, smoothstep(0,0.30,u))`\
+    \ -> zenith, the below-horizon branch `if (h < 0.0) col = mix(col, horizon_color*0.5, clamp(-h*2,0,1))`,\
+    \ and the haze band `hz = exp(-abs(h)*9.0)*haze_amount`,\n  - L102-107 the space blend `u = clamp(h,0,1)`\
+    \ and `ws = mix(mix(u_space^2, u_space, u), mix(u_space_sky^2, u_space_sky, u), u_sky_alt)`.\n  World\
+    \ Y is the FACE-CENTRE radial. The world is a polyhedron of tangent facets (AC-0306/AC-0308/AC-0311),\
+    \ so the local zenith differs from world Y by the surface tilt asin(d/R) at in-plane distance d from\
+    \ the face centre: 5.5 deg at 384 m, 22 deg at 1.5 km, 51.7 deg at the home face edge (3141 m at R\
+    \ = 4000). The painted horizon, the haze band (+-11 deg wide) and the space blend are therefore correct\
+    \ only at the face centre and progressively wrong everywhere else.\n  THE FIX IS A SUBSTITUTION, NOT\
+    \ A NEW MODEL: `h` becomes the LOCAL zenith - `dot(dir, normalize(cam_pos - planet_centre))` - and\
+    \ the shader ALREADY receives that direction: main.gd pushes `u_limb_center` = the planet centre RELATIVE\
+    \ TO THE CAMERA (main.gd:1412-1430), so `up_local = normalize(-u_limb_center)`. Everything keyed on\
+    \ `h` becomes locally correct on every face at once. The horizon DIP from altitude needs no new term:\
+    \ the limb term already owns the tangent geometry - L112 `b = length(cross(u_limb_center, dir))` with\
+    \ `u_limb_radius` = R+SEA and the `limb > 1.0 -> 1.0` clamp is the impact-parameter (tangent-cone)\
+    \ test, and it is already sphere-aware.\n\nB) THE BLUE-TO-SPACE TRANSITION MUST HAPPEN CLOSER TO THE\
+    \ PLANET. Today the background's window is the AC-0402 stretch: BAND_WALK_MAX .. BAND_FLY_MIN*1.6\
+    \ = 500 .. 3200 m (`u_space_sky`, pushed per frame by world.gd `_ac0401_push`), measured at ~0.04\
+    \ / 0.44 / 0.92 at the 700 / 1600 / 2600 m frames - i.e. effectively black only around 3 km up. The\
+    \ user wants space reached much lower. DECISION TO MAKE IN THIS TICKET: define ONE atmosphere height\
+    \ A (a gameplay constant, not a physical one - R = 4000 with an Earth-like ratio would put space at\
+    \ ~60 km, far outside the flight range, which is why the current numbers are gameplay-shaped) and\
+    \ derive every consumer from it, so the visual and the control transitions agree (the AC-0386 principle):\n\
+    \  - the sky's space blend runs over roughly [0.25A, A] (curve to be stated);\n  - the star field\
+    \ reaches full opacity by A, and the sun's glow (which already dies with the air under AC-0386/AC-0402)\
+    \ with it;\n  - the satellite body's `h_first` / `h_full` (satellite_body.gd:560-561, today `sqrt((R+SEA)^2\
+    \ + fog_far^2) - R` = 139 m and `SEA + render_edge` = 526 m at R24) are re-derived against A, so \"\
+    the planet is fully established\" and \"the sky is space\" land together instead of 700 m apart;\n\
+    \  - the fog wall stays where it is (it is a render-distance artifact: `fog_far = (render_edge)*pct/100`),\
+    \ but the ticket must SAY that, so nobody re-couples the atmosphere to the render distance again.\n\
+    \  Proposed starting point for the user to confirm or move: A ~ 1200 m - blue to ~300 m, transition\
+    \ 300-1200 m, black above.\n\nC) DO WE STILL NEED A SKY? YES, BUT A MINIMAL ONE. Recommendation: keep\
+    \ a sky pass, drop the fake gradient. The minimal honest model is TWO COLOURS AND ONE CONE: below\
+    \ the LOCAL tangent cone, the single-source air colour (the AC-0400 identity - `AeroLib.fog_display`,\
+    \ the same value main.gd puts on `env.fog_light_color` and satellite_body.gd puts on the body's `u_air`);\
+    \ above it, the space colour (`AeroLib.SPACE_SKY`, AC-0386); the cone itself keeps the existing limb\
+    \ term. Reasons not to delete the sky pass outright: (1) it is the background wherever the near tiers\
+    \ draw nothing - the user's own coverage-gap frames are exactly that case, and a black or arbitrary\
+    \ background there would turn a haze gap into a hole; (2) the SUN's disc lives in it (L123-128) -\
+    \ the sun is a sky term, not an object, which is why its visibility was diagnostic at AC-0411; (3)\
+    \ the stars are already geometry (main.gd's 320 m shell + core/star.gdshader with its own R+SEA occlusion\
+    \ test), so they do not need the sky. If the user wants a gradient rather than a flat air colour below\
+    \ the horizon, it should be keyed on the LOCAL zenith with 1-2 stops (zenith -> horizon); the flat\
+    \ colour is the degenerate case of the same expression, so this is a parameter, not a second code\
+    \ path.\n\nD) WHAT MUST NOT CHANGE: the AC-0400 single-source air colour (fog colour = the body's\
+    \ `u_air` = the sky's horizon), the AC-0401 limb gate (`u_limb_gate * u_space`: no rim below the flight\
+    \ band), the AC-0386 contract that the space gradient touches the BACKGROUND only (no double darkening\
+    \ of the ground seen from orbit), and the body's own `haz_a`/`haz_d` model.\n\nE) SWITCH (decided\
+    \ at filing, per the house rule): this DOES change how the game looks, so it ships behind the EXISTING\
+    \ `sky_altitude` setting (AC-0402's, DEFAULT ON) rather than a new one - ON = the new local-zenith\
+    \ sky with atmosphere height A, OFF = the pre-AC-0402 expression bit-for-bit - plus the env override\
+    \ the arms already use. The user asked for the new behaviour, so the default is the new one. Add a\
+    \ second env knob for A so the arms and renders can sweep the height without a save file.\n\nF) EVIDENCE\
+    \ OWED: (1) a render pair at the SAME altitude at the FACE CENTRE and at ~2 km in-plane distance on\
+    \ the same face - the painted horizon must be level in both (today it is tilted by the surface angle:\
+    \ 22 deg at 1.5 km); (2) the space blend measured against altitude on the new curve, reported at 4-5\
+    \ altitudes up to A, and the star opacity and the body's `op_nadir` on the SAME ladder to show the\
+    \ three agree; (3) the background seen through a coverage gap at the haze colour, not black; (4) G0\
+    \ zero SCRIPT/SHADER ERROR, shaderforce 12/12 (this touches a shader), and no change to generation\
+    \ (genhash 25/25).\n\nRELATED: AC-0386 (the space transition), AC-0401 (the limb gate = an orbit instrument),\
+    \ AC-0402 (the stretched background window this replaces), AC-0400 (the single-source air colour),\
+    \ AC-0416 (the far tier's placement - unrelated mechanism, same session's finding).\n\n\n\nADDENDUM\
+    \ - CLAUSE D: THE LIMB MUST EXTEND FAR ENOUGH TO CONTAIN THE CLOUDS (user, same session, with a No\
+    \ Man's Sky reference frame: a ship above a planet where the blue atmospheric band wraps around the\
+    \ horizon and the cloud deck sits INSIDE it, the glow reaching well above the clouds, space above\
+    \ that).\n\nWHAT IS WRONG TODAY, IN NUMBERS. The limb term's vertical extent is not an atmosphere\
+    \ - it is a fixed falloff on the ray's impact parameter: `limb = exp(-(b - u_limb_radius)/300.0)`\
+    \ with `u_limb_radius` = R+SEA (aero_sky_gradient.gdshader:111-113, the radius main.gd pushes as the\
+    \ star-occlusion radius). So the glow's outer edge is ~300 m of impact parameter beyond the tangent\
+    \ at SEA level, while the cloud deck occupies R+275 .. R+400 - i.e. 149 .. 274 m ABOVE sea level (main.gd's\
+    \ shells 4275/4330/4400, and the AC-0405 raymarched annulus [R+275, R+400]). The atmosphere therefore\
+    \ ends BELOW the cloud tops: from orbit the clouds stick out ABOVE the blue band, which is the opposite\
+    \ of the reference, where the clouds are inside it. The slab is drawn from the same limb term, so\
+    \ it is the same 300 m everywhere and is not a function of any altitude.\n\nTHE FIX IS THE SAME ONE\
+    \ ATMOSPHERE HEIGHT (clause B), USED FOR THE LIMB'S GEOMETRY:\n- `u_limb_radius` (the clamp radius,\
+    \ today R+SEA) becomes the TANGENT CONE AT THE ATMOSPHERE TOP A - i.e. the impact parameter of the\
+    \ tangent ray at radius R+A - so the atmosphere's silhouette is legitimately LARGER than the planet's\
+    \ terrain silhouette, which is what makes the reference read as an atmosphere rather than a rim;\n\
+    - the outer falloff scale is derived from A (a stated fraction of the tangent geometry at A), not\
+    \ the hard-coded 300 m;\n- the INVARIANT to record: cloud tops (R+400 today) must be strictly inside\
+    \ A. Keep the cloud radii where they are unless the user asks to move them - derive the ATMOSPHERE\
+    \ from A, and ASSERT the ordering, do not silently re-derive the clouds from A (moving A must not\
+    \ move the weather).\n- the AC-0401 limb gate (`u_limb_gate * u_space`) still keeps the band off below\
+    \ the flight band; this clause is about the orbit/altitude look.\n\nINTERACTION TO FLAG (it makes\
+    \ AC-0414's second clause more important, not less): today the limb's `if (limb > 1.0) limb = 1.0;`\
+    \ clamp fills the whole disc INSIDE the tangent cone - that is what produces the convincing fake planet\
+    \ when the body is not drawn (AC-0414's addendum). Moving the clamp out to the TANGENT AT A makes\
+    \ that filled disc BIGGER than the planet's own silhouette, so the fake-planet window gets worse unless\
+    \ the limb is gated on the body's own LOADED/visible state as AC-0414 requires. The two tickets must\
+    \ land together or the gate must come first.\n\nEVIDENCE OWED FOR THIS CLAUSE: a render at a STATED\
+    \ altitude from outside the atmosphere, with the numbers alongside - the angular half-width of the\
+    \ glow's outer edge vs the angular half-width of the cloud deck's top at the horizon, so \"the clouds\
+    \ are inside the limb\" is a measurement and not an impression; and the same frame before/after. A\
+    \ second frame from inside the deck looking out (the user's landing half) to show the band does not\
+    \ become a wall at close range.\n\n\nADDENDUM 2 - CLAUSE D, SECOND HALF: THE ATMOSPHERE MUST ALSO\
+    \ BE APPLIED TO THE CLOUDS, not just reach above them. In the reference frame the deck at the limb\
+    \ is TINTED and low-contrast - it is seen THROUGH the atmosphere. In AweCraft the cloud materials\
+    \ carry `fog_disabled` (core/cloud_layer.gdshader, the AC-0384 r3 flag, and the AC-0405 volume path)\
+    \ and take no limb term at all, so a taller limb would put the glow's edge above the clouds while\
+    \ the clouds themselves stayed crisp white in front of it - the deck would read as a solid band floating\
+    \ in the atmosphere rather than inside it. The clause: the cloud materials take the SAME air colour\
+    \ and the SAME impact-parameter haze factor the limb term uses (one home, the values main.gd already\
+    \ pushes), so the deck's contrast falls off toward the limb exactly as the terrain's does. This is\
+    \ the one part of clause D that touches the cloud shaders, and it must not become a fourth fog model:\
+    \ it is the limb/air model applied to one more material, with the engine fog still off for them.\n\
+    \n\nDECISIONS CONFIRMED BY THE USER (2026-10-09, same session - \"your recommendations seem right\"\
+    ). Recorded here so the builder does not re-litigate them:\n\n1. ATMOSPHERE HEIGHT A ~ 1200 m is ACCEPTED\
+    \ as the starting point - blue sky to ~300 m, the transition running to 1200 m, black above. This\
+    \ is the single home clause B introduces: the sky's space blend, the star opacity, the sun's glow\
+    \ fade and the satellite body's `h_first`/`h_full` all derive from it. If the renders say the curve\
+    \ reads wrong at the 700/1600/2600 m frames, the builder MAY move A, but must state the new value\
+    \ and re-derive every consumer in the same edit - never leave one rider on the old window.\n2. CLAUSE\
+    \ D: THE DECK IS TO BE WASHED BY THE LIMB - the reference behaviour, not the crisp alternative. The\
+    \ cloud materials take the same air colour and the same impact-parameter haze factor the limb term\
+    \ uses (one home, the values main.gd already pushes), with the engine fog still off for them.\n3.\
+    \ ORDERING: AC-0414's \"while the body is not LOADED no planet may be faked\" gate must land WITH\
+    \ or BEFORE clause D's enlarged clamp radius (moving the clamp to the tangent at A enlarges the filled\
+    \ disc, which is what fakes the planet). If the two cannot be worked together, the gate goes first.\n\
+    4. THE STANDING RENDER CONSTRAINT (recorded because this ticket is visual): this box cannot render\
+    \ the shipped path cheaply - ONE render per visual ticket, the Forward+ recipe in HARNESS.md section\
+    \ 2 (lavapipe + Xvfb + the fwdshot/planet hooks), with the numbers alongside every frame. Renders\
+    \ are the user's to judge; the builder reports numbers."
   comments: []

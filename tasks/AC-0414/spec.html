@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0414 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0414 — satellite-bake-before-load-and-multithreaded</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0414</code> · <b>status:</b> <code>open</code> · <b>priority:</b> 2 · <b>source:</b> user · <b>created:</b> 2026-10-09T21:25 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>1) User Story: As a player, the planet should already be there when I enter a world and fly up - not minutes later, and not only if I happen to stand still long enough for the background work to get a turn. Today a world whose seed is not the one shipped with the game bakes its whole-planet texture while I am playing, on one background thread that the streaming work outranks, so the satellite planet reads as &quot;lod not loading at any height&quot; until it eventually appears (user report 2026-10-09, live Windows build 222b1d6, seed 5432: it did finally load, but only after waiting / moving around). It should bake BEFORE the world is handed over, on all the cores, with the loading screen saying what it is doing.
+
+2) Technical Details:
+
+CURRENT BEHAVIOUR (all in godot/world/satellite_body.gd):
+- configure() (L313) picks the source: the (1) user:// cache `user://satellite/p{pid}_r{R}_s{seed}_h` (_cache_dir L363), else (2) the shipped res:// textures which exist for CANONICAL_SEED 44 ONLY (L110, the seed==CANONICAL_SEED guard L330), else (3) _start_bake() (L419).
+- The bake is ONE WorkerThreadPool task: `Engine.get_singleton(&quot;WorkerThreadPool&quot;).add_task(_bake_worker.bind(g), false)` (L444). The `false` is high_priority=false, and the line above it states the intent: &quot;LOW priority so the streaming HIGH tasks are never starved&quot;. The consequence is the reported symptom: the low-priority lane only gets a worker when the high-priority queue is empty, and the streaming lanes keep that queue busy whenever the player is moving, so the bake waits for the world to go quiet. VERIFY this pool-priority claim against the engine source before relying on it; the observed timing (appears only after idling, never while flying) is what the ticket reports either way.
+- Main-thread cost is NOT the problem: _bake_main_step (L471) is a poll in WORK phase and one face per frame in LOAD phase; AC-0382 already moved the pipeline off the main thread. The problem is WHEN the worker runs and how LONG it takes.
+- The work, measured: 196,196 generate_far calls (HOME_CHUNKS 155,236 + 10 x FACE_CHUNKS 4,096, L105-109) at the standing ~92 us/column (AC-0284b) = ~18 s of pure generation; then the per-face colour pass over 12 x 1024^2 = 12,582,912 texels of per-texel GDScript (_step_face L814 / _pixel L892 / _l2s L919 / _byte L927); then 12 PNG deflates + writes; then the read-back + variance guard (_guard_check L983) and the 12 geometries (_geom_for_face L1032). AC-0384 r2 measured ~13 min of worker wall for seed 5432 on the dsh-web box (HARNESS.md section 2, the AWECRAFT_SNAPSHOT row). All of it single-threaded.
+
+WHAT IT SHOULD DO:
+1. START THE BAKE AT BOOT and await it inside the existing loading window, before the player is handed the world. The window already exists and is quiet: the world activates on the sim taxi diamond being mesh_built (_await_sim_band, world.gd; AC-0313), which is a deliberate wait already. Kick the bake from satellite configure() (or boot) and gate the release on the body&#x27;s phase, instead of racing it against a live streaming world. A bounded timeout with a LOUD line is acceptable only if it is measured and stated; silently releasing the player to a late planet is what this ticket removes.
+2. MULTI-THREAD IT. Both halves are independent and both already have worker-thread precedent:
+   - the payload census: 196,196 independent generate_far calls, and the file&#x27;s own header (L57-61) records that generate_far is &quot;a pure const C++ call the thread-gen pool already runs from worker threads&quot; (world.gd _threadgen_worker) - so sharding it across the pool needs no new C++ and no new task type;
+   - the 12 faces: independent per face, each with its own H grid and texture; _geom_for_face is documented &quot;pure SphereMath, thread-safe&quot; (L635).
+   Keep the single-writer discipline the class header states: pay/_out/_h2/_t2/guard/_geom are written only by the worker side before bake_done and read by the main thread only after - so shard into per-shard buffers and merge once at bake_done, never into shared arrays.
+3. SAY WHAT IT IS DOING: one progress line (seed, face k/12, or payload x/N) on the loading screen / console, so this class of report (&quot;the planet is missing&quot;) is self-answering.
+
+ACCEPTANCE (what proves it):
+- Cold start on a NON-canonical seed (the user&#x27;s 5432): the bake completes before the player is released, and the measured wall is reported before/after in the results page (the field is the worker wall plus the frame the body lands on). The bake must not be starved by streaming in the same run.
+- genhash 25/25 byte-identical - this ticket is scheduling and threading only; the far payloads and the baked pixels must come out BIT-IDENTICAL to today&#x27;s single-thread path (the shipped 12 face PNGs are the reference: the satellite arm&#x27;s AWECRAFT_SATELLITE_REBAKE=1 pixel compare, max_abs_diff &lt;= 1 / diff_px &lt;= 1%).
+- The `satellite` arm stays green (12/12 faces, the variance guard, the derived h_first/h_full thresholds, the 0.25 angular ratio), G0 zero SCRIPT/SHADER ERROR, the boundary r4 one-shot for the loading-window interaction (the bake must not move the documented walk p50/p95 bands), and the cache path still short-circuits the bake on a second launch of the same seed.
+- The result must be stated in the units the user feels: seconds from launch to &quot;the planet is there&quot;, for a cold (uncached) non-canonical seed.
+
+SWITCH (decided here, per the filing rule): the user asked for the bake to happen before the world loads, so that IS the default. It trades load time for a later-appearing planet, which is a real player choice, so it ships as a player-facing setting in Options &gt; Settings, persisted like the others, plus an env override for the arms; OFF reproduces today&#x27;s behaviour exactly (the world is released first and the body may appear late). The arm asserts both states and that OFF is the pre-change path.
+
+OUT OF SCOPE / DEFERRED:
+- The bake&#x27;s visual quality - the 16 m faceting and the vertical streaks are AC-0412, a separate ticket, and must not be folded in here.
+- Shipping or pre-generating texture packs for more seeds (the other way to make a cold start cheap). Worth recording as an option in the results page; not this ticket&#x27;s acceptance.
+- Any change to the ladder thresholds or to the fog-wall/haze contract (the open question about the far world at play altitudes is separate).
+
+
+
+ADDENDUM (filed from the same session&#x27;s frames, 2026-10-09 21:2x):
+
+EVIDENCE THAT NAMES THE FAILURE MODE THIS TICKET REMOVES. In the pre-load window the user does
+not see &quot;no planet&quot; - they see a CONVINCING FAKE ONE, and the tell is the sun sitting inside it.
+From orbit (live build 222b1d6, first-person, seed 5432) the frame is a smooth blue ball with a
+soft glowing rim and the sky&#x27;s sun disc floating INSIDE the ball. Both are the sky pass:
+
+- the sun is a term in the sky shader, not an object: aero_sky_gradient.gdshader (shader_type sky)
+  L123-128, `sd = dot(dir, sun_dir)`, `disc = smoothstep(0.99894, 0.99985, sd) * sun_amount`, plus
+  the scattering glow that dies with `(1.0 - u_space)`. A sky term is BACKGROUND: it is visible
+  only where no geometry covers the pixel. So a visible sun disc inside the ball is PROOF that
+  nothing is drawn there - the body is not in the frame. (With the body LOADED and opaque the sun
+  is hidden: the body&#x27;s material writes ALPHA, so it draws in the transparent pass over the sky,
+  and `op = 1` at orbital distance.)
+- the ball itself is the same shader&#x27;s atmospheric limb: `b = length(cross(u_limb_center, dir))`,
+  `limb = exp(-(b - u_limb_radius)/300.0)` with the explicit `if (limb &gt; 1.0) limb = 1.0;` clamp
+  (L104-121). The clamp makes the term a FLAT 1.0 everywhere inside the planet&#x27;s tangent direction
+  - a FILLED DISC, not a rim - and `sun_side = 0.55 + 0.45 * pow(dot(dir, sun_dir), 2.0)` gives it
+  exactly the brighter-toward-the-sun gradient the frame shows. `mix(1.0, u_space, u_limb_gate)`
+  with the AC-0401 gate DEFAULT ON evaluates to `u_space`, so the disc is at FULL strength from
+  orbit by design (&quot;the rim is an orbit instrument&quot;). Its silhouette has the same angular size as
+  the body, so with the body absent the result is a fake planet that reads as a real one.
+
+SECOND CLAUSE (in scope here because it is the same window): WHILE THE BODY IS NOT LOADED, THE SKY
+MUST NOT PRESENT A PLANET. Gate the limb term on the body&#x27;s own state (the LOADED phase / the
+visible flag that satellite_body.gd already computes, pushed like the other limb uniforms) so the
+orbit view during a bake is honest - either a rim with no body under it, or nothing - instead of a
+smooth blue ball. A fake planet is worse than a missing one: it cost this project a full
+investigation cycle (the &quot;pale ball&quot; family) and, in this frame, it hides the very failure the
+first clause fixes. This does NOT change the gate&#x27;s altitude behaviour (AC-0401): at ground level
+`u_space = 0` keeps the term off in both states.
+
+REJECTED, with the reason recorded: a ticket for &quot;the sun is drawn over the planet&quot;. The sun needs
+no occlusion test - being a sky term it is occluded by geometry by construction (unlike the stars,
+which AC-0386 had to give an explicit ray-sphere test at R+SEA precisely because they are
+camera-anchored geometry in a 320 m shell drawn in front of everything). If a sun disc is ever
+observed over a LOADED body, that is a different defect and needs its own frame and ticket.</pre></blockquote>
+<h2>Goal</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
+<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
+<p><em>REVIEW — draft from notes: 1) User Story: As a player, the planet should already be there when I enter a world and fly up - not minutes later, and not only if I happen to stand still long enough for the background work to get a turn.</em></p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is a FROZEN historical artifact — do NOT modify. <b>User 2026-08-29: the web spec is no longer referenced</b> — never cite it as the justification for behavior or values. Source of truth = the in-repo Godot code + user directives.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (paths only — regenerate with <code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to inline the tables; values are parsed fresh at run time)</b></div>
+<ul>
+<li><code>godot/autoload/data.gd</code> — all <code>Data.B_*</code> block ids, items, tools, SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>
+<li><code>godot/world/generator.gd</code> — biome constants + <code>T_G_*</code> tool ids; biome thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>
+</ul>
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>AUTO (tiered per godot/HARNESS.md §3 — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; ~30 s total. The task-specific probe mode (if this spec defines one, env-gated, headless ≤ 60 s) runs here too.</div>
+<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> (xvfb, gl_compatibility — a PROXY renderer that cannot show Forward+-only features such as DOF; see <code>godot/HARNESS.md</code> §2), PNG under <code>tasks/AC-NNNN/</code>.</div>
+<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder writes results + continuity and EXITS. The heavy gates below are the coordinator&#39;s background job — the builder never runs them.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>
+<div class="auto"><b>AUTO (the coordinator's heavy stage — the <code>awecraft-heavy-gates</code> skill owns the protocol; the coordinator runs these as a background job (no LLM slot) after the builder exits; the builder NEVER runs them; commit/push only after they pass — do not hand-edit)</b></div>
+<ul>
+<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches <code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>
+<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/<code>data.gd</code> touched.</li>
+<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>
+<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per task; was per-task).</li>
+<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>
+<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + 8080/5180 curls — every task.</li>
+</ul>
+<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker <code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: the <code>awecraft-heavy-gates</code> skill (the prompt template itself is <code>tasks/templates/two-phase.md</code>).</p>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (paths only — the RESULT shapes live in <code>godot/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>
+<ul>
+<li>Battery arms: <code>player</code> / <code>interact</code> / <code>light</code> / <code>fluids</code> / <code>buckets</code> / <code>genhash</code> / <code>settings</code> / <code>controls</code> — key fields + ok-conditions per mode in <code>godot/HARNESS.md</code> §1.</li>
+<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, <code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>
+</ul>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (paths only — the anchor table lives in <code>godot/HARNESS.md</code> §3, generated from <code>tasks/harness_data.yaml</code>; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
+<h2>Task-specific requirements</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
+<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<h2>Task-specific gates</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
+<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
+<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<h2>Fences</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
+<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>
