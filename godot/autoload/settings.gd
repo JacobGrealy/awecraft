@@ -109,6 +109,23 @@ const DEFAULTS := {
 	# centre (verified geometry, the outer shell carries the march).
 	# Env-overridable (AWECRAFT_CLOUDVOL=0|1 at boot, world.gd).
 	"cloud_volume": true,
+	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
+	# ("after a recent build the level of detail was not showing at all,
+	# and when they looked into it the world 'was still baking'": the
+	# satellite's baked terrain was not ready when the player arrived).
+	# ON: a non-canonical-seed world bakes its 12-face planet texture
+	# BEFORE the player is handed the world — the bake runs multithreaded
+	# (14 payload shards + 12 per-face tasks, HIGH priority), the
+	# loading window holds the release (the sim taxi diamond) on the
+	# body's phase with a LOUD 42 s bounded budget (main.gd's 3000-frame
+	# release cap is 50 s wall), and the sky's limb term is gated on the
+	# body's LOADED phase (no fake planet while it is not). OFF: the
+	# pre-AC-0414 behaviour literally — the single low-priority bake
+	# task, no hold, the ungated limb (the world is released first, the
+	# planet may appear minutes later). Env-overridable
+	# (AWECRAFT_SATPRELOAD=0|1 at boot, world.gd — the AWECRAFT_RAMPS
+	# pattern).
+	"sat_preload": true,
 	# AC-0394: the held-item occlusion switch (the 2026-10-03 report's
 	# residual H2: every viewmodel material sets no_depth_test, so the
 	# hand draws OVER terrain and reads as floating at the correct
@@ -346,6 +363,8 @@ func _clamp(k: String, v) -> void:
 		"sky_altitude":  # AC-0402: bool (the sky's altitude-aware space blend).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"cloud_volume":  # AC-0405: bool (the raymarched cloud volume).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"sat_preload":  # AC-0414: bool (the bake-before-load switch).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"viewmodel_occlude":  # AC-0394: bool (the held-item occlusion switch).
 			values[k] = AnalogTune.sanitize_bool(v)

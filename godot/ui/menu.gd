@@ -71,6 +71,9 @@ var vm_occ_check: CheckBox
 # state is exactly today's behaviour; the indicator + this row make an
 # ON state obvious, a debug tool must not be left on by accident).
 var noclip_check: CheckBox
+# AC-0414: the bake-before-load toggle (Settings page, default ON — the
+# user asked for the planet to be ready when they arrive).
+var sat_preload_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -393,6 +396,25 @@ func _ready() -> void:
 	opt_vbox.add_child(noclip_check)
 	if hi + 14 < opt_vbox.get_child_count():
 		opt_vbox.move_child(noclip_check, hi + 15)
+	# AC-0414: the bake-before-load toggle — the user's own words after the
+	# "still baking" report: the world's planet texture should be baked
+	# BEFORE the player is handed the world (default ON, they asked). ON
+	# = the multithreaded bake + the loading window holds the release on
+	# the body's phase (loud 42 s bounded budget) + the sky's limb term
+	# gated on the body's LOADED phase; OFF = today's behaviour exactly
+	# (the single low-priority bake task, the world released first, the
+	# planet may appear late). Same seam as cloud_deck/limb_space: no
+	# apply step owed — satellite_body.configure/force_rebake, world.gd
+	# _ac0401_push and _ac0414_hold_tick read the live value (env-
+	# overridable: AWECRAFT_SATPRELOAD=0|1 at boot, world.gd).
+	sat_preload_check = CheckBox.new()
+	sat_preload_check.name = "SatPreloadCheck"
+	sat_preload_check.text = "Planet: bake before the world loads (recommended)"
+	sat_preload_check.add_theme_font_size_override("font_size", 15)
+	sat_preload_check.toggled.connect(_on_sat_preload_toggled)
+	opt_vbox.add_child(sat_preload_check)
+	if hi + 15 < opt_vbox.get_child_count():
+		opt_vbox.move_child(sat_preload_check, hi + 16)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -877,6 +899,8 @@ func _sync_controls() -> void:
 	vm_occ_check.button_pressed = bool(Settings.values.get("viewmodel_occlude", false))
 	# AC-0395: the noclip toggle (default OFF).
 	noclip_check.button_pressed = bool(Settings.values.get("noclip", false))
+	# AC-0414: the bake-before-load toggle (default ON).
+	sat_preload_check.button_pressed = bool(Settings.values.get("sat_preload", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1294,6 +1318,18 @@ func _on_noclip_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("noclip", on)
+
+
+# AC-0414: the bake-before-load toggle — persisted like every other
+# setting (set_value does the clamp chain + the save). No apply step is
+# owed: the satellite's configure/force_rebake, world.gd _ac0401_push
+# (the limb gate) and _ac0414_hold_tick read the live value. Takes
+# effect at the NEXT new world (the bake decision is configure-time);
+# the limb gate and the hold react live.
+func _on_sat_preload_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("sat_preload", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

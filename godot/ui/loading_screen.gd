@@ -56,5 +56,14 @@ func update_progress(meshed: int, total: int, disk: int, gen: int) -> void:
 	_bar.value = float(mini(meshed, maxi(total, 1)))
 	_stats.text = "%d%%  —  %d / %d cols   (disk %d · gen %d)" % [int(100.0 * mini(float(meshed), float(maxi(total, 1))) / float(maxi(total, 1))), meshed, maxi(total, 1), disk, gen]
 
+# AC-0414: the bake progress line (world.gd pushes it while the
+# bake-before-load hold is active — the bar cannot move while the
+# release diamond is held, so the stats label says what the bake is
+# doing instead). The bar itself is left as-is.
+func set_note(note: String) -> void:
+	if not visible:
+		return
+	_stats.text = note
+
 func hide_screen() -> void:
 	visible = false

@@ -65,6 +65,18 @@ uniform float u_limb_amount : hint_range(0.0, 4.0) = 0.55;
 // orbit (the full r4 rim). 0.0 (the shader default - no push) is the
 // pre-AC-0401 behaviour, the glow at every altitude.
 uniform float u_limb_gate : hint_range(0.0, 1.0) = 0.0;
+// AC-0414 clause 2: while the body is not LOADED, the sky must not
+// fake-present a planet. The limb term's clamped impact parameter is a
+// FILLED disc (limb = 1.0 inside the tangent - the "pale ball" the user
+// saw while the bake was still running), so the term is multiplied by
+// u_body_loaded: 0.0 while the body is WORK/LOAD (no fake planet), 1.0
+// once it is LOADED (the signature rim around the real planet). Both
+// uniforms are pushed from world.gd _ac0401_push (like u_limb_gate).
+// u_limb_loaded is the switch (Settings "sat_preload", default ON):
+// mix(1.0, x, 0.0) = 1.0, so the shader default (0.0, no push yet) is
+// exactly the pre-AC-0414 limb — OFF is bit-identical.
+uniform float u_limb_loaded : hint_range(0.0, 1.0) = 0.0;
+uniform float u_body_loaded : hint_range(0.0, 1.0) = 0.0;
 
 // AC-0402: the sky's OWN space-blend window (the "leaving a planet" half of
 // the objective). u_space (above) is the physics flight-band S (500-2000 m
@@ -118,7 +130,11 @@ void sky() {
 		float sun_side = 0.55 + 0.45 * pow(clamp(dot(dir, sun_dir), 0.0, 1.0), 2.0);
 		// AC-0401: gate on u_space when u_limb_gate is ON (the mix is
 		// exactly 1.0 with the default u_limb_gate = 0.0 - the old path).
-		col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space, u_limb_gate));
+		// AC-0414 clause 2: multiply by the body-loaded gate (see the
+		// u_limb_loaded/u_body_loaded note) - the fake-planet disc is
+		// gone while the body is not LOADED, exactly 1.0 when the switch
+		// is OFF or the body is loaded.
+		col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space, u_limb_gate) * mix(1.0, u_body_loaded, u_limb_loaded));
 	}
 	float sd = dot(dir, sun_dir);
 	float up = clamp(sd, 0.0, 1.0);
