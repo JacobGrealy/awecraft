@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0413 plan — cloud deck flattens at distance</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.4em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.1em; margin-top: 1.4em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0413 plan — the cloud deck flattens to a tinted ring at distance</h1>
+
+<h2>Goal</h2>
+<p>Re-confirm the D-26-2 finding (deck = rim ring + tint, no internal depth, at 1600&ndash;2600 m)
+<strong>on the current tree first</strong> &mdash; the frames that recorded it came from a tree whose
+satellite body had inverted mesh winding, so the planet beneath the clouds was a flat air-coloured
+wash (that was AC-0411, fixed in commit <code>2196943</code>). If the finding no longer reproduces,
+report that the ticket shrinks or disappears &mdash; do not manufacture a fix. If it does reproduce,
+test the proposed cause (fixed 24 view steps through a chord that grows with distance) and, only
+then, change the sampling with a measured cost. The near field (120 m / inside the annulus) must not
+regress: that volume read is user-verified by eye.</p>
+
+<h2>Re-confirmation design (phase 1, before any change)</h2>
+<ul>
+<li><strong>Frames (current tree, standing user config R24/F83, T=0.5 frozen, CLOUD_T0=411200,
+seed 44, 1280&times;720 Forward+/lavapipe, planet preset, 1200-frame drain + 600 mid-drain step):</strong>
+  <code>b-2600.on</code>, <code>b-2600.off</code> (<code>AWECRAFT_CLOUDS=0</code>),
+  <code>b-1600.on</code>, <code>b-1600.off</code>, <code>b-200.on</code> (inside the annulus, the
+  near-field reference frame).</li>
+<li><strong>Instrument:</strong> the AC-0384 <code>analyze2.py</code> band statistics plus the DECK
+MASK (pixels where ON-minus-OFF max-channel diff &ge; 8 = the layer&rsquo;s own pixels; the ON
+luminance std inside that mask = the layer&rsquo;s brightness spread, the same concept as the 700 m
+<code>lower_mid</code> lum_std that ran 16.9 / 32.4 / 68.9 / 44.9). The disc-centre ON-vs-OFF delta
+separately tests the &ldquo;flat film over the disc&rdquo; mechanism.</li>
+<li><strong>Cause test:</strong> (a) the r19/r21 finding frames vs the AC-0411 after frames attribute
+the disc wash to the body (r19: wash byte-identical clouds on/off, gone with <code>SAT_BODY=0</code>)
+&mdash; so the recorded &ldquo;tinted ring&rdquo; reading is re-measured on the fixed tree; (b) the
+step-density hypothesis is checked against the measured deck-mask spread at the shipped 24
+steps &mdash; if the ring/masses already resolve at altitude with a spread comparable to the 700 m
+instrument values, step count is not the cause and no sampling change is owed.</li>
+</ul>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th><th>condition</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td>
+<td>ONLY if the defect reproduces: distance-adaptive view-step count in the volume branch
+(<code>u_vol_steps</code> becomes a floor, not a fixed count: <code>steps = clamp(ceil(len/step_max),
+u_vol_steps, 64)</code> with <code>step_max</code> ~40&ndash;50 m), in the <code>u_vol &gt; 0.5</code>
+branch only &mdash; the three-shell OFF path stays byte-identical.</td>
+<td>defect re-confirmed on the current tree</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>only if the shader change needs a pushed uniform; otherwise untouched.</td>
+<td>defect re-confirmed</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>the CloudLayer bullet (the sampling rule) only if a change ships.</td>
+<td>defect re-confirmed</td></tr>
+</table>
+<p><strong>Expected outcome (honest prior, from the AC-0411 after frames):</strong> the disc wash is
+gone, the ring already carries puffy structure, the deck&rsquo;s over-disc contribution in the T0.5
+state is near-transparent &mdash; i.e. the ticket shrinks or disappears and the change set is empty
+plus the measurements.</p>
+
+<h2>Phase 2 (only if the defect reproduces)</h2>
+<ol>
+<li>A/B the step hypothesis on the rendered frames (deck-mask spread at 24 vs raised step count,
+same frames) before touching code.</li>
+<li>Implement the smallest sampling change that adds structure at altitude without touching the
+near-field sampling density (the near-field chord is &le; ~175 m, where 24 steps already give
+&le; 8 m &mdash; any change must leave those chords at their current density).</li>
+<li>Re-render the acceptance set (1600 on/off, 2600 on/off, inside-annulus) and give before/after
+spreads at both altitudes plus the near-field proof.</li>
+</ol>
+
+<h2>Sampling change cost (stated up front, the ticket&rsquo;s constraint)</h2>
+<p>Standing cost: the volume render walls run ~823&ndash;976 s against the 1200 s budget (AC-0407).
+The view march is ~430 noise taps worst-case per pixel (2 seg &times; 24 &times; (3 view + 5 light +
+1 edge) octaves); the altitude frames (1600/2600) pay the long limb chords, the near frames pay
+full-sky chords. If a change is needed it trades <strong>step count at altitude only</strong> (the
+near field keeps 24 steps exactly &mdash; that is the user-verified volume), estimated +5&ndash;10 %
+wall on the altitude frames (more view steps, same taps/step), which stays inside the 1200 s budget
+with &ge; 15 % headroom; if the budget is breached the trade is the light-march tap again
+(<code>u_vol_lsteps</code> 5 &rarr; 4, the reach is already &gt; 2&times; the layer), not the
+view-step structure.</p>
+
+<h2>Harness gates (light set, this ticket &mdash; the heavy set is the coordinator&rsquo;s)</h2>
+<table>
+<tr><th>gate</th><th>recipe</th><th>pass</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot --quit</code> +
+<code>tasks/scripts/gate_census.py</code> + <strong>process exit status</strong> (the stochastic
+signal-11 UAF leaves a clean log)</td><td>rc=0, SCRIPT ERROR 0, SHADER ERROR 0</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td>ok:true, census 0/0</td></tr>
+<tr><td>PROBE</td><td colspan="2">N/A &mdash; the spec defines no probe arm (the AC-0407 precedent);
+the renders are the acceptance.</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code> (standalone, clean log) + the battery
+arm</td><td>25/25 byte-identical to the standing set</td></tr>
+<tr><td>shaderforce</td><td>the <code>AWECRAFT_LOGIC=shaderforce</code> arm under the Forward+
+recipe</td><td>ok, 12/12, zero SHADER ERROR</td></tr>
+<tr><td>RENDERS (the acceptance)</td><td>5 frames, fwdshot recipe, 1200 s budget each, Forward+
+boot line asserted, <code>SNAP</code> line + file existence checked</td><td>rc=0 &times;5, the
+before/after spreads at 1600 and 2600 m + the inside-annulus frame</td></tr>
+</table>
+
+<h2>Constraints carried</h2>
+<ul>
+<li>Shell radii/centre stay 4275/4330/4400 about (0,&minus;R,0); the <code>cloud_volume</code> OFF
+path byte-identical; the fog-wall partition, skyline, ambient/MS lighting and the body&rsquo;s
+winding fix (AC-0411) untouched.</li>
+<li>No commits, no pushes, no TASKS.yaml edits; fence files
+(<code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>) untouched.
+One godot at a time, <code>pgrep</code> before every call, logs to repo-root <code>.scratch/AC-0413/</code>.</li>
+<li>No <code>AWECRAFT_LOGIC</code> arm on any render; <code>AWECRAFT_SIZE=1280,720</code> comma form;
+<code>SNAP_DRAIN</code> counts frames.</li>
+</ul>
+
+</body>
+</html>

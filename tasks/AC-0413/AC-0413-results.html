@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0413 results — the cloud deck at distance, re-measured on the fixed tree</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #1a1a1a; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.15em; margin-top: 1.6em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; }
+code, pre { font-family: ui-monospace, monospace; font-size: .92em; }
+pre { background: #f4f4f4; padding: .8em; overflow-x: auto; border: 1px solid #ddd; }
+.ok { color: #14611e; font-weight: 600; }
+.bad { color: #8b1a1a; font-weight: 600; }
+.note { background: #fff8e1; border-left: 4px solid #e6a817; padding: .6em 1em; margin: 1em 0; }
+.good { background: #e8f5e9; border-left: 4px solid #2e7d32; padding: .6em 1em; margin: 1em 0; }
+img.cap { max-width: 100%; border: 1px solid #999; margin: .8em 0; }
+</style>
+</head>
+<body>
+
+<h1>AC-0413 — results: the cloud deck at distance, re-measured on the tree that ships</h1>
+<p><b>Status: the defect does NOT reproduce as recorded &mdash; the ticket shrinks to nothing fixable.
+No code was changed, nothing ships behind a switch.</b> Date 2026-10-09. Tree: HEAD
+<code>7eceb74</code> (game tree byte-identical to the AC-0411 winding fix <code>2196943</code>;
+the two commits since touch <code>tasks/TASKS.yaml</code> only). Engine 4.7.1, seed 44, standing user
+config R24/F83 (fog_far=332.0 asserted per log), T=0.5 frozen, CLOUD_T0=411200 (the sustained-deck
+state of every cloud round), 1280&times;720 Forward+ via lavapipe, <code>planet</code> preset,
+1200-frame drain + 600 mid-drain step. Plan: <a href="plan.html">plan.html</a>.</p>
+
+<div class="good"><b>Verdict in one paragraph.</b> The D-26-2 finding (&ldquo;from a distance the cloud
+layer shows only a rim ring and a tint, with no visible internal depth&rdquo;) was recorded on frames
+from the inverted-winding tree, in which the planet beneath the clouds rendered as a flat air-coloured
+wash. That wash was the body&rsquo;s own underside (AC-0411, fixed in <code>2196943</code>), and the
+r19 assessment had already measured the attribution: the disc wash was byte-identical with clouds on
+or off and vanished with <code>SAT_BODY=0</code>. On the current tree the disc shows the baked terrain,
+the deck&rsquo;s over-disc contribution in the sustained-deck state measures <b>zero</b> (not a flat
+film &mdash; transparent, with the surface visible through the gaps, which is the No Man&rsquo;s Sky
+orbital read the assessment itself cites: &ldquo;the clouds thin to scattered masses and gaps
+revealing the surface below&rdquo;), and the rim ring that remains carries real structure inside its own
+pixels: a luminance spread of <b>68.0 at 2600 m</b> and <b>35.5 at 1600 m</b> &mdash; on the same
+instrument ladder as the 700 m reference values (old flat deck 16.9, NMS reference 32.4, the volume
+68.9 &rarr; 44.9 after lighting) &mdash; with bright masses and dark gaps (23 % of the 2600 m deck
+pixels below luminance 60). The proposed cause (a fixed 24 view steps through a chord that grows with
+distance) is not the cause of the recorded finding: at the shipped 24 steps the ring already resolves
+mass structure from orbit, and the flat component of the recorded frames was the body. The near field
+is untouched and re-verified (inside-annulus frame, &sect;4).</div>
+
+<h2>1. Re-confirmation on the current tree (fresh renders, the standing recipe)</h2>
+<p>Five fresh renders on HEAD, all <code>rc=0</code> inside the 1200 s budget, Forward+ boot line
+asserted in every log, <code>SNAP</code> lines + file existence checked, no <code>SNAP FAIL</code>
+(never <code>AWECRAFT_LOGIC</code> on any render). The three cloud-on frames are <b>byte-identical
+(sha256) to the AC-0411 after-frames</b> rendered on the same game tree
+(<code>ac0413-before-2600.png</code> = <code>tasks/AC-0411/ac0411-final-2600-t050.png</code>,
+<code>...-2600-cloudsoff.png</code> = its clouds-off twin, <code>...-1600.png</code> =
+<code>ac0411-final-1600-t050.png</code>) &mdash; the recipe reproduces the shipped state exactly, and
+the settle check holds (the 2600 m <code>_s600</code> companion differs from the final in zero pixels
+at the &ge;8 level: settled by frame 600, as r19 recorded).</p>
+<table>
+<tr><th>frame</th><th>wall</th><th>budget</th><th>exit</th><th>note</th></tr>
+<tr><td><code>ac0413-before-2600.png</code></td><td>879 s</td><td>1200 s</td><td class="ok">0</td><td>sha256 = AC-0411 after frame</td></tr>
+<tr><td><code>ac0413-before-2600-cloudsoff.png</code></td><td>502 s</td><td>1200 s</td><td class="ok">0</td><td>sha256 = AC-0411 clouds-off twin</td></tr>
+<tr><td><code>ac0413-before-1600.png</code></td><td>773 s</td><td>1200 s</td><td class="ok">0</td><td>sha256 = AC-0411 1600 m frame</td></tr>
+<tr><td><code>ac0413-before-1600-cloudsoff.png</code></td><td>406 s</td><td>1200 s</td><td class="ok">0</td><td>fresh pair (none existed from that round)</td></tr>
+<tr><td><code>ac0413-before-inside-200.png</code></td><td>1191 s</td><td>1200 s</td><td class="ok">0</td><td>inside the annulus (camera radial 4341 &isin; [4275, 4450]) &mdash; <b>new wall-high, see &sect;6</b></td></tr>
+</table>
+
+<h2>2. The acceptance numbers — the layer&rsquo;s own structure from altitude</h2>
+<p>Instrument: the AC-0384 <code>analyze2.py</code> band statistics, extended with the <b>DECK MASK</b>
+&mdash; the pixels where ON-minus-OFF max-channel diff &ge; 8, i.e. the pixels the layer owns &mdash;
+and the ON luminance spread inside that mask (<code>analyze_ac0413.py</code>, pure stdlib, re-runnable).
+At 1600&ndash;2600 m the deck owns only 3&ndash;6 % of the frame (the rim band), so a fixed
+horizontal-band std like the 700 m <code>lower_mid</code> one would be contaminated by terrain and sky;
+the mask is the honest equivalent &mdash; the same quantity (the luminance spread across the
+layer&rsquo;s own pixels), the comparable number.</p>
+<table>
+<tr><th></th><th>deck coverage</th><th>spread (lum std of the layer&rsquo;s own pixels)</th><th>p10 / p50 / p90</th><th>min / max</th><th>dark (&lt;60 lum) share</th><th>disc-centre ON vs OFF</th></tr>
+<tr><td><b>2600 m</b> (before = shipped state)</td><td>3.09 % of frame (the rim ring)</td><td><b>68.0</b></td><td>35.5 / 121.2 / 225.8</td><td>13.9 / 255.0</td><td>22.95 %</td><td>byte-identical: mean RGB (117.2, 190.6, 118.3), std 43.5 both</td></tr>
+<tr><td><b>1600 m</b> (before = shipped state)</td><td>5.79 % of frame (ring + the band crossing the disc)</td><td><b>35.5</b></td><td>110.5 / 137.4 / 201.9</td><td>95.9 / 253.3</td><td>0 %</td><td>byte-identical: mean RGB (124.3, 197.0, 135.1), std 39.6 both</td></tr>
+<tr><td colspan="7" style="background:#f7f7f7">Reference ladder on the same instrument, 700 m (the deck-band band): old flat deck 16.9 &mdash; NMS reference 32.4 &mdash; the volume first built 68.9 &mdash; settled 44.9 after the lighting pass (AC-0405/AC-0406/AC-0407).</td></tr>
+</table>
+<p><b>Before and after at 1600 and 2600 m:</b> <b>before = after</b>, because no change was made &mdash;
+the numbers above are the state that ships, and they are not the recorded defect: the spread at 2600 m
+(68.0) sits at the TOP of the recorded ladder (the 68.9 the volume reached on first build), and the
+1600 m value (35.5) is above the NMS reference (32.4) and double the old flat deck (16.9). A flat
+tinted ring would show a narrow spread over its own pixels; these masks span 13.9&ndash;255 and
+95.9&ndash;253 with a p10:p90 ratio &asymp; 1:4. The disc-centre delta being exactly nil (not
+&ldquo;nearly invisible&rdquo; but nil) in the sustained-deck state means the layer there is
+<b>transparent</b> &mdash; partly-cloudy weather with the surface visible through the gaps &mdash; not a
+saturated uniform in-scatter film, which is the mechanism D-26-2 described (&ldquo;the base saturates
+the raymarch into a uniform in-scatter&rdquo;). That mechanism is not present in the current tree.</p>
+<table>
+<tr><td><img class="cap" src="ac0413-before-2600.png" alt="2600 m, clouds on, current tree"></td>
+<td><img class="cap" src="ac0413-before-2600-cloudsoff.png" alt="2600 m, clouds off"></td></tr>
+<tr><td>2600 m &mdash; clouds ON: the puffy rim ring with masses and dark gaps over the baked-terrain disc</td>
+<td>2600 m &mdash; clouds OFF: the limb halo; the disc is identical (the deck owns nothing over it in this state)</td></tr>
+</table>
+<table>
+<tr><td><img class="cap" src="ac0413-before-1600.png" alt="1600 m, clouds on"></td>
+<td><img class="cap" src="ac0413-before-1600-cloudsoff.png" alt="1600 m, clouds off"></td></tr>
+<tr><td>1600 m &mdash; clouds ON: the ring plus the cloud band crossing in front of the disc&rsquo;s lower-left limb</td>
+<td>1600 m &mdash; clouds OFF: the same view without the deck (the fresh pair for this ticket)</td></tr>
+</table>
+
+<h2>3. What the recorded reading actually was (the cause question, answered)</h2>
+<p>The ticket&rsquo;s caution turned out to be the ticket. The finding frames (r19, r21) came from the
+inverted-winding tree; the r19 assessment had already separated the components, and this round
+re-measures the fixed side of that separation:</p>
+<ul>
+<li><b>The flat wash over the disc was the body&rsquo;s underside, not the deck.</b> r19: the wash was
+byte-identical with clouds on or off (so not the deck) and gone with <code>SAT_BODY=0</code> (so the
+body). AC-0411 fixed the winding; the disc now shows the baked terrain (the green continent, snow,
+water in &sect;2&rsquo;s frames).</li>
+<li><b>The &ldquo;nearly invisible tint&rdquo; over the disc is now measured nil</b> (&sect;2): in the
+sustained-deck state the columns over the disc are partly cloudy &mdash; masses in the ring band, gaps
+over the disc showing the surface. The user story&rsquo;s ask &mdash; &ldquo;masses, gaps, depth&rdquo;
+rather than a flat ring &mdash; is exactly what the current frames show: lumpy masses with lit tops and
+dark gaps in the ring (23 % of the 2600 m deck pixels below luminance 60 = the gaps reading as black
+sky), the band crossing the disc at 1600 m, and the full internal structure inside the layer (&sect;4).</li>
+<li><b>The step-density hypothesis is not the cause.</b> Tested against the measurement rather than
+assumed: at the shipped 24 view steps/segment the ring already resolves mass structure from orbit
+(spread 68.0, real gaps &mdash; the 791 m deck period is ~8&times; oversampled even on the longest
+~2400 m limb chord, and the in-scatter is dominated by the near side of the chord where the chord is
+short). And the region the hypothesis would have flattened &mdash; the over-disc film &mdash; is not a
+saturated uniform in-scatter in this state but transparent (nil ON/OFF delta): there is no flat
+accumulation for coarser steps to have smoothed. If a weather state existed in which the over-disc
+deck read as a flat film, that would be the defect to bisect; the sustained-deck state &mdash; the
+one every cloud round uses as the canonical dense state &mdash; does not show it.</li>
+</ul>
+<table>
+<tr><td><img class="cap" src="../AC-0384/ac0384-r21-descent-2600.png" alt="2600 m on the inverted-winding tree"></td>
+<td><img class="cap" src="ac0413-before-2600.png" alt="2600 m on the current tree"></td></tr>
+<tr><td>r21 (inverted winding): the flat air-coloured disc wash &mdash; the body&rsquo;s underside under the deck</td>
+<td>current tree: baked terrain over the disc, the deck&rsquo;s structured rim ring</td></tr>
+</table>
+
+<h2>4. The near field did not regress (inside the annulus, 200 m)</h2>
+<p><code>ac0413-before-inside-200.png</code> (camera 200 m above the spawn surface, inside the virtual
+annulus [4275, 4450] &mdash; 66 m above the cloud base): the layer fills the view as a bright opaque
+volume with soft internal structure (lit masses, darker gaps), the sky above reads as the cyan
+layer-top, and the terrain below is visible through the translucent layer &mdash; the same character as
+the r19 inside-200 reference (<code>tasks/AC-0384/ac0384-r19-inside-200.png</code>) and the AC-0407
+r300 ticket frame, with the fog-wall partition (AC-0401) making the terrain band read slightly cleaner
+than in the r19 reference (a shipped improvement, not a regression). Band statistics on the same
+instrument: the top band is the bright layer/sky (lum mean 198.0), the cloud-interior bands run
+183&ndash;210 with spread 30&ndash;50 &mdash; a soft filled volume, not a flat sheet. The
+user-verified near-field property (120 m / inside / ground) is untouched: <b>no code was changed at
+all</b> &mdash; the three-shell OFF path, the volume branch, the skyline profile, the lighting, the
+fog-wall partition and the body&rsquo;s winding are all byte-identical to HEAD.</p>
+<p><img class="cap" src="ac0413-before-inside-200.png" alt="inside the annulus at 200 m"></p>
+
+<h2>5. Gates (light set; the heavy set is the coordinator&rsquo;s)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>exit status</th></tr>
+<tr><td>G0 (<code>--headless --quit</code> + <code>gate_census.py</code>)</td><td>SCRIPT ERROR 0, SHADER ERROR 0</td><td class="ok">rc=0 (no signal-11; the clean-log UAF trap checked)</td></tr>
+<tr><td>SMOKE battery (<code>player;interact;light;fluids;genhash</code>)</td><td><code>ok:true</code> &mdash; player 142.42/0, interact ok, light 15/0/14/0&rarr;9, fluids 1719/320 &amp; 25/9, total 281 s; census 0/0</td><td class="ok">rc=0</td></tr>
+<tr><td>PROBE</td><td>N/A &mdash; the spec defines no probe arm (the AC-0407 precedent); the renders are the acceptance</td><td>&mdash;</td></tr>
+<tr><td>genhash (battery arm + the 25 <code>GENHASH</code> lines diffed)</td><td><b>25/25 byte-identical</b> to the AC-0405/AC-0406 standing references (the AC-0403-era set; no generation code has moved since)</td><td class="ok">inside rc=0 battery</td></tr>
+<tr><td>shaderforce (every shipped shader forced through the live Forward+ renderer)</td><td>ok, 12/12, <code>cloud_layer.gdshader</code> 32/32 params, census 0/0, Forward+ boot line present</td><td class="ok">rc=0</td></tr>
+<tr><td>RENDERS (the acceptance)</td><td>5/5 frames, walls in &sect;1, Forward+ boot line + <code>SNAP</code> + file existence per run; the 2600 m settle check (&ge;8 diff: 0 pixels between the 600-frame and 1200-frame captures)</td><td class="ok">rc=0 &times; 5</td></tr>
+</table>
+<p>All runs: one godot at a time (<code>pgrep</code> before every call), <code>HOME=/tmp/dsh_home</code>,
+absolute engine path, 20 GB address-space cap, logs in <code>.scratch/AC-0413/</code>
+(<code>g0.log</code>, <code>smoke.log</code>, <code>shaderforce.log</code>,
+<code>frames/*.log</code>, <code>before_driver.log</code>). The tree&rsquo;s dirty fence files
+(<code>main.gd</code>, <code>game.gd</code>, <code>debug.gd</code>, <code>drop.gd</code> &mdash; another
+session&rsquo;s particle-pool/snap-diagnostic work) were left untouched and present in every run; the
+SMOKE battery passes with them in place.</p>
+
+<h2>6. Cost and what was traded</h2>
+<p><b>Zero added cost &mdash; no change ships.</b> The ticket&rsquo;s cost constraint (walls
+830&ndash;980 s against the 1200 s budget) is reported as measured by this round: 502&ndash;879 s for
+the altitude pair, and <b>1191 s for the inside-annulus 200 m frame</b> &mdash; the new wall-high,
+inside the budget with only ~1 % headroom. For the coordinator: any future ticket that re-shoots the
+inside-annulus frame at 200 m should plan the full 1200 s (the 300 m frame ran 976 s in AC-0407; the
+lower camera pays in full-sky chords). Nothing was traded &mdash; no step count, no light tap, no
+resolution, no structure.</p>
+
+<h2>7. What was deliberately NOT done</h2>
+<ul>
+<li><b>No code change.</b> The defect does not reproduce on the tree that ships; manufacturing a
+sampling change to fix a body-winding artifact would be exactly what the ticket&rsquo;s caution
+forbids. If a later round finds a weather state in which the over-disc deck reads as a saturated flat
+film, the step-density hypothesis (24 fixed view steps/segment, <code>u_vol_steps</code> in
+<code>cloud_layer.gdshader</code> <code>vmarchseg</code>) is the one to test there &mdash; the plan
+for that case is preserved in <a href="plan.html">plan.html</a>.</li>
+<li><b>No step-count A/B renders:</b> with the defect absent, an A/B would measure the same thing
+twice. The before renders ARE the test of the hypothesis (&sect;3).</li>
+<li><b>No 700 m re-render:</b> the 44.9/44.0 reference values are the AC-0406/AC-0407-era numbers for
+the deck band; the cloud path has not moved since (genhash 25/25, the cloud shader byte-identical to
+HEAD). Re-rendering it would burn ~15 min to confirm an unchanged number.</li>
+<li><b>No heavy gates</b> (farab/ladder/meshprobe/halo/lightstate/r16/boundary r50/full battery):
+the coordinator&rsquo;s lane, per the ticket. No commit, no push, no <code>TASKS.yaml</code> edit
+(fences); no fence-file edits.</li>
+</ul>
+
+<h2>8. Artifacts</h2>
+<p>Captures in this folder: <code>ac0413-before-2600.png</code> (+ <code>-cloudsoff</code>,
+<code>_s600</code>), <code>ac0413-before-1600.png</code> (+ <code>-cloudsoff</code>,
+<code>_s600</code>), <code>ac0413-before-inside-200.png</code> (+ <code>_s600</code>).
+Logs and the instrument: <code>.scratch/AC-0413/</code> (<code>analyze_ac0413.py</code> re-runs the
+&sect;2 table; <code>an2600.json</code>, <code>an1600.json</code>, <code>an200.json</code> are the raw
+outputs; <code>genhash_new.txt</code> vs <code>genhash_ref_0405/0406.txt</code> are the 25/25 diff).
+Continuity: <code>tasks/AC-0413/continuity.md</code>.</p>
+
+</body>
+</html>

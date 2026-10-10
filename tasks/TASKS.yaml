@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-09T18:43
+  updated_at: 2026-10-09T20:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,7 +28,6 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
-- AC-0413
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -25960,11 +25959,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-09T18:43
-  updated_at: 2026-10-09T18:43
-  completed_at: null
+  updated_at: 2026-10-09T20:38
+  completed_at: 2026-10-09T20:38
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Looking down at the cloud layer from orbit or from high in the atmosphere, it
@@ -26023,5 +26022,43 @@ intake:
     - it was inverted for the entire life of the objective and is the reason the planet now renders as
     a world.
 
-    '
+
+
+    CLOSED AS A PHANTOM - THE DEFECT DOES NOT REPRODUCE ON THE CURRENT TREE, THE CAUSE WAS ANOTHER TICKET''S,
+    AND NOTHING WAS CHANGED. THE RE-CONFIRMATION CAME FIRST, exactly as the ticket''s caution required,
+    and it is what settled the question: five fresh renders on the current commit came back BYTE-IDENTICAL
+    BY SHA256 to the after-frames of the round that fixed the body mesh, so the "rim ring plus tint" the
+    assessments recorded was not the cloud layer at all. It was the satellite body''s own underside showing
+    through - the inverted mesh winding that rendered the planet as a flat air-coloured wash, fixed in
+    the previous round and recorded as this project''s oldest surviving defect. An earlier assessment
+    had in fact already demonstrated that the wash was not the deck, by showing the pixels were byte-identical
+    with clouds on and off and vanished entirely with the body switched off; the finding was still filed
+    as a separate cloud defect because nobody had yet established what the body''s own contribution was.
+    THE PROPOSED CAUSE WAS TESTED RATHER THAN ASSUMED, and it was wrong: the step-density hypothesis predicted
+    that a fixed twenty-four samples through a segment that grows with distance would smear the layer
+    into a uniform film, but measurement shows the ring already resolves mass structure from orbit at
+    the shipped step count, and the region over the disc is fully transparent in the sustained-deck state
+    - the disc-centre difference between clouds on and off is exactly nil - so there is no flat accumulation
+    for a finer sampling to recover. The plan for the step-density case is preserved in the plan page
+    in case the symptom ever appears for real. NO CODE WAS CHANGED AND NO SWITCH WAS ADDED, which is the
+    correct outcome here and the one the ticket asked for: manufacturing a fix for an artifact belonging
+    to another defect would have added a knob, cost frames, and hidden the real cause. THE LAYER WAS MEASURED
+    ANYWAY, on the same instrument the earlier cloud rounds used, and the numbers are better than anything
+    previously recorded for the orbital view: the brightness spread at 2600 metres is 68.0, which is the
+    top of the entire ladder this project has measured - 16.9 for the flat deck, 32.4 for the reference
+    look, 68.9 when the volume was first built and 44.9 after the lighting pass - with a p10 of 35.5,
+    a median of 121.2 and a p90 of 225.8, twenty-three per cent of the layer in dark gaps, and the layer
+    occupying 3.09 per cent of the frame. At 1600 metres the spread is 35.5, above the 32.4 reference
+    and double the old flat deck. THE NEAR FIELD DID NOT REGRESS because nothing changed, and the inside-annulus
+    frame at 200 metres still shows a bright opaque volume with internal masses and terrain visible through
+    it; the run notes the terrain reads slightly cleaner there because of the fog-wall partition, which
+    is an improvement rather than a regression. COST: zero added, nothing traded. One concern was flagged
+    rather than buried - the inside-annulus wall ran 1191 seconds against a 1200 second budget, a new
+    high with about one per cent of headroom, which is worth watching before any future round adds work
+    to this layer. GATES: G0 exiting zero with a clean census and the exit status checked for the signal-eleven
+    trap, smoke ok, genhash 25 of 25 byte-identical, shaderforce 12 of 12, and five renders exiting zero
+    on the shipped path. THE LESSON WORTH KEEPING, since it is the second time this pattern has appeared:
+    a finding recorded from frames taken before a structural fix can describe the fix''s absence rather
+    than a defect of its own. Re-measuring on the current tree before bisecting is what turned this into
+    a five-render answer instead of a round of work on a symptom that no longer existed.'
   comments: []
