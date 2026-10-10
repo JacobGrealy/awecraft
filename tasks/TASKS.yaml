@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-10T03:11
+  updated_at: 2026-10-10T09:35
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0414
 - AC-0415
 - AC-0416
 - AC-0417
@@ -31,6 +30,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0418
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -26072,11 +26072,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-09T21:25
-  updated_at: 2026-10-09T21:29
-  completed_at: null
+  updated_at: 2026-10-10T09:35
+  completed_at: 2026-10-10T09:35
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a player, the planet should already be there when I enter a world and fly\
@@ -26202,7 +26202,45 @@ intake:
     \ default 0.55),\nAWECRAFT_GRADE_GLOW=0 / AWECRAFT_GRADE_BLOOM=0 / AWECRAFT_GRADE_GLOWTHRESH kill\
     \ the bloom, F7 /\nAWECRAFT_SAT_BODY=0 removes the body. Acceptance for the second clause is unchanged\
     \ - while the\nbody is not LOADED no planet may be faked - but the mechanism above must be identified\
-    \ first;\n\"the sky painted over a rendered body\" would be a THIRD clause with its own evidence."
+    \ first;\n\"the sky painted over a rendered body\" would be a THIRD clause with its own evidence.\n\
+    \nCLOSED - THE BAKE FINISHES BEFORE THE WORLD IS PRESENTED, IT IS 4.7 TIMES FASTER, AND IT MEASURED\
+    \ A USE-AFTER-FREE THAT IS PROBABLY THE CRASH TWO EARLIER TICKETS COULD NOT REPRODUCE. WHAT WAS BUILT,\
+    \ following the plan the user and another agent wrote in the ticket: the bake is split into ninety-eight\
+    \ streamed shards of two thousand and two records, dispatched across the worker pool at core-count\
+    \ width with twelve face tasks alongside, and the merge and assemble stay on the main thread over\
+    \ single-writer buffers. The world is now held until the bake completes, so the planet is whole at\
+    \ the moment the player can first see it, which was the user's actual complaint - they reported no\
+    \ detail and a bake still running. A live progress line reports the seed, the shard, the record and\
+    \ the face, so a long bake looks like work rather than a hang. A sky gate scales the limb term down\
+    \ while the body is not yet loaded, so the sky cannot draw a halo around a planet that is not there.\
+    \ The whole thing sits behind a sat_preload switch defaulting ON whose OFF state is the previous path\
+    \ byte for byte. MEASURED ON THIS BOX, which is about forty times slower per record than the target\
+    \ hardware: seven hundred and ninety-eight seconds becomes one hundred and sixty-nine, and the planet\
+    \ is loaded one hundred and sixty-nine seconds after boot. The world is released to the player at\
+    \ forty-eight seconds - the budget plus at most one shard slice, by construction - and the run records\
+    \ why that bound exists: a version that yielded without one measured one hundred and nine seconds.\
+    \ RE-BAKE FIDELITY IS EXACT rather than approximate: identical, zero differing pixels, maximum absolute\
+    \ difference zero, across five hundred and eighty-nine thousand samples. The generator hash is unchanged,\
+    \ the boundary probe reports zero deferred columns inside the footprint, and five renders plus a mid-bake\
+    \ A/B all exit zero on the shipped path. A FINDING FILED SEPARATELY RATHER THAN FOLDED IN, and probably\
+    \ the most valuable thing this run produced: PROCESS EXIT DURING A BAKE SEGFAULTS because a worker\
+    \ holds the node's script instance. It was MEASURED, it predates this ticket - the single-task bake\
+    \ had the same race - and the multithreaded bake makes it far more reachable. The run shipped a mitigation\
+    \ and said plainly that it is not a close: the proper fix is workers that hold no reference to the\
+    \ node. The coordinator has filed that as its own ticket and linked it to the stochastic crash an\
+    \ earlier ticket recorded but could never reproduce, since a freed script instance is exactly the\
+    \ shape of a defect with no stable reproducer. ALSO RECORDED HONESTLY: the multithreaded failure path\
+    \ never set the completion flag, which would have hung a failed bake, and that is fixed; and one render\
+    \ overlapped a re-bake against the project's one-godot-at-a-time rule, which both passed their own\
+    \ gates with no corruption observed but which is reported rather than omitted. GATES: G0 clean after\
+    \ the temporary arms were removed, the smoke battery green with an identical generator hash, the probes\
+    \ green in both switch states, the re-bake A/B exact, the boundary probe in band, and every render\
+    \ exiting zero with the renderer verified. A STAGING FAILURE OF THE COORDINATOR'S OWN is recorded\
+    \ in the commit history for this ticket and is worth carrying forward: the first commit staged a hand-written\
+    \ list of files and missed five of the seven that the fix actually needs, including the bake itself,\
+    \ because the list came from the builder's summary rather than from the working tree. Staging by scanning\
+    \ the dirty files for the ticket reference is the rule, it was already written once in this session,\
+    \ and it was not applied here. That is the difference between knowing a rule and using it."
   comments: []
 - id: AC-0415
   title: far-tier-use-engine-fog-delete-the-duplicate
@@ -26597,4 +26635,73 @@ intake:
     \ the shipped path cheaply - ONE render per visual ticket, the Forward+ recipe in HARNESS.md section\
     \ 2 (lavapipe + Xvfb + the fwdshot/planet hooks), with the numbers alongside every frame. Renders\
     \ are the user's to judge; the builder reports numbers."
+  comments: []
+- id: AC-0418
+  title: bake-exit-use-after-free-likely-the-stochastic-crash
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-10T09:34
+  updated_at: 2026-10-10T09:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Closing the game while the world is still loading should not crash it. More importantly,
+    this is very likely the stochastic crash that has resisted reproduction for two tickets - the one
+    that segfaults in the chunk lookup from the player''s own physics step and from the mob tick - and
+    finding its cause is worth more than the symptom it was found through.
+
+
+    2) Technical Details:
+
+    MEASURED, NOT INFERRED, BY THE AC-0414 RUN: tearing down the process while a bake is in flight is
+    a USE-AFTER-FREE. A worker thread holds the node''s script instance, so when the engine exits with
+    the pool still live, a worker can dereference a script instance belonging to a node that is being
+    freed. The segfault was reproduced. THE RUN ALSO ESTABLISHED THE LINEAGE: this is NOT introduced by
+    the multithreaded bake - the previous single-task bake had the same race - but the new bake makes
+    it far more reachable, because the window in which a worker holds that reference is now much wider
+    and the bake now runs before the world is presented rather than after.
+
+    WHY THIS IS PROBABLY THE CRASH AN EARLIER TICKET COULD NOT REPRODUCE, and why that ticket should be
+    read alongside this one: the earlier ticket recorded a stochastic signal-eleven crash whose stack
+    ran through the chunk lookup from the PLAYER''S PHYSICS STEP and, separately, from the mob tick -
+    two unrelated callers converging on one line - and it could not reproduce it in fourteen attempts,
+    nor in three valgrind passes the coordinator ran afterwards, nor in the many clean runs since. A freed
+    script instance being called from a worker, or a node being torn down while something still holds
+    it, is exactly the shape of a defect that produces rare crashes with no stable reproducer, and the
+    fact that the two tickets describe the same failure CLASS in the same engine is the reason to treat
+    them as one investigation rather than two. That link is a HYPOTHESIS and should be tested: if closing
+    the fix makes the other crash go away, the link is confirmed; if the other crash recurs afterwards,
+    they are separate and both need their own answer.
+
+    WHAT TO DO: replace the reference-holding workers with workers that hold no reference to the node
+    - the run''s own recommended direction - rather than relying on the mitigation it shipped. That mitigation
+    is a file-scope abort guard plus an exit-tree hook, which is enough to make the common case safe and
+    is NOT enough to close the race, and saying so is part of the ticket''s value. Then verify by attempting
+    the crash deliberately: exit the process mid-bake repeatedly, enough times that a race would show,
+    and report the count. A fix that cannot be shown to prevent a crash that was reliably reproducible
+    before it is not a fix.
+
+    ACCEPTANCE: the mid-bake process exit attempted many times with no crash across the whole attempt,
+    the mitigation''s guard exercised rather than bypassed, and the bake itself unchanged in its output
+    - the re-bake comparison the previous ticket established, which demands an exact match rather than
+    a close one. Also confirm normal shutdown and shutdown during the load hold are both clean.
+
+    CONSTRAINTS: genhash byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked on every run, since this defect class leaves a completely clean
+    log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); the
+    bake must keep finishing before the world is presented and must keep its measured speed; and the sat_preload
+    switch''s off state must stay byte-identical to its pre-ticket path.
+
+    CONTEXT: read tasks/AC-0414/AC-0414-results.html section 6 for the measurement and the mitigation,
+    and tasks/AC-0403/AC-0403-results.html for the unreproducible crash this may explain - including the
+    argument, made there, that a read-site bounds guard cannot catch a use-after-free because the object
+    is already gone.
+
+    '
   comments: []
