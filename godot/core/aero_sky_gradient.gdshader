@@ -175,18 +175,49 @@ vec3 sky_off(vec3 dir) {
 	return col;
 }
 
-// AC-0417: the ON path - the local-zenith sky. hl = dot(dir, local up)
-// with local up = the radial through the camera = -u_limb_center / r
-// (u_limb_center is the planet centre RELATIVE TO THE CAMERA - the same
-// uniform the limb term uses, one home); fallback dir.y when the camera
-// is at the centre (no world yet). The background is TWO COLOURS AND ONE
-// CONE (clause C): below the local tangent cone of the R + SEA disc the
-// single-source AIR colour (u_air - the value the fog wall and the body
-// dissolve to, so a coverage gap reads haze, not a hole), above it
-// SPACE; the cone's own glow is the existing limb term, now at the A
-// shell (clause D). The A window (u_space_sky) thins the air to space
-// and gates the rim / sun glow - "the sky is space" lands at A, with
-// the body's h_full (satellite_body.gd) at the same A.
+// AC-0417 (local-zenith re-key) / AC-0419 (the day sky + the limb
+// boundary removed). hl = dot(dir, local up) with local up = the radial
+// through the camera = -u_limb_center / r (u_limb_center is the planet
+// centre RELATIVE TO THE CAMERA - the same uniform the limb term uses,
+// one home); fallback dir.y when the camera is at the centre (no world
+// yet).
+// AC-0419: the background above the local horizon is the day/night/dusk
+// GRADIENT keyed to the local zenith (the sky_off expression re-keyed
+// from world Y to hl) - the AC-0417 ON path painted space_color across
+// the whole upper hemisphere at every altitude (the gradient uniforms
+// were pushed but never read here: "the sky is dark during the day",
+// the user's 2026-10-11 report 1). The A window (u_space_sky = w)
+// thins the gradient to space SMOOTHLY: the zenith by w, the horizon
+// by w*w (the grazing ray sweeps a longer air column, so the horizon
+// holds the sky blue longest); at w = 1 the mix is space exactly, so
+// "the sky is space" still lands at A with the body's h_full
+// (satellite_body.gd) at the same A. Below the local tangent cone of
+// the R + SEA disc the single-source AIR colour is UNCHANGED (clause C
+// / AC-0417 F3: mix(space, u_air, 1 - w) - a coverage gap reads haze,
+// not a hole).
+// The limb term keeps the AC-0417 clause-D geometry (the A shell:
+// u_atmo_radius = R + A) but the CLAMPED EXPONENTIAL is gone - it
+// filled the whole annulus inside the A-shell tangent to a flat 1.0
+// (a hard boundary circle in space: report 2 "a large blue circle
+// above and below you") and its 0.25 A tail sat a hard 750 m past the
+// cloud tops (report 3 "the edge ... does not extend past clouds").
+// The new term is the FORWARD AIR COLUMN through the shell's outer
+// tail (rout = u_atmo_radius + u_atmo_falloff = R + A + 0.25A),
+// normalized by the full chord at the R + SEA disc tangent (cm). The
+// ray crosses the rout sphere at s = -r*hl +/- half (half =
+// sqrt(rout^2 - b^2); hl = the ray's radial component, the same local
+// zenith elevation the background uses): if the near crossing is ahead
+// of the camera (s_enter > 0 - the camera is OUTSIDE the shell, ray
+// heading in) the visible air is the full chord 2*half (1.0 at the
+// terrain limb, 0.89 at the deck top R + 450, 0.49 at the old
+// A-shell tangent, 0.0 at the tail); if the camera is INSIDE the
+// shell or the ray points AWAY (upper hemisphere), the visible air is
+// the near exit max(0, s_exit) - 300 m straight up at A (0.04), and
+// EXACTLY ZERO everywhere above the horizon from outside the shell
+// (looking up in space is space - the AC-0419 r1 chord formula
+// painted the upper hemisphere from outside as if the ray grazed the
+// shell, a visible circle in the upward view, caught in a08). Bounded
+// by 1.0 (clamped), smooth, no tangent edge anywhere.
 vec3 sky_on(vec3 dir) {
 	vec3 upc = -u_limb_center;
 	float r = length(upc);
@@ -195,26 +226,56 @@ vec3 sky_on(vec3 dir) {
 	// camera is inside the R + SEA disc (r <= u_limb_radius - no horizon
 	// exists, everything is air).
 	float below = clamp(step(0.0, -hl) + (1.0 - step(u_limb_radius, r)), 0.0, 1.0);
-	vec3 col = mix(space_color, u_air, below * (1.0 - u_space_sky));
-	// the limb term - the atmosphere's edge. AC-0417 clause D: the
-	// tangent cone at the A shell (u_atmo_radius = R + A, the falloff
-	// 0.25 A) so the atmosphere's silhouette is larger than the terrain's
-	// and the cloud tops (R + 400) sit inside it; a 0.0 (no push yet)
-	// falls back to the pre-AC-0417 R + SEA / 300 m rim. The rim's
-	// altitude gate rides the A window (the sky is space at A, so the rim
-	// is too) - the OFF path keeps the AC-0401 physics-S contract.
-	if (u_limb_amount > 0.0) {
+	float w = u_space_sky;
+	// the local-zenith gradient (the sky_off expression, re-keyed):
+	// horizon -> mid over the lower third, -> zenith over the top.
+	float u = clamp(hl, 0.0, 1.0);
+	vec3 grad = mix(horizon_color, mid_color, smoothstep(0.0, 0.30, u));
+	grad = mix(grad, zenith_color, smoothstep(0.25, 0.90, u));
+	// above the horizon: the gradient thinned to space by the A window
+	// (zenith by w, grazing by w*w - the longer air column); w = 1 is
+	// space exactly (the AC-0417 contract). Below: the unchanged F3
+	// single-source haze mix.
+	vec3 above = mix(grad, space_color, mix(w * w, w, u));
+	vec3 belowc = mix(space_color, u_air, 1.0 - w);
+	vec3 col = mix(above, belowc, below);
+	// the horizon haze band (the sky_off term) hugs the local horizon
+	// from both sides and dies with the air (it is low-atmosphere
+	// scatter - at w = 1 there is no air left to haze).
+	float hz = exp(-abs(hl) * 9.0) * haze_amount * (1.0 - w);
+	col = mix(col, haze_color, hz);
+	// the limb term - the atmosphere's edge (the normalized air column,
+	// see the function header). u_limb_radius = 0 (no world yet) turns
+	// the term off with the pre-AC-0419 guard shape (b - 0 > 0 always,
+	// exp ~ 0 - now: the chord is 0 outside the disc and the disc
+	// radius is 0, so the block gate does it).
+	if (u_limb_amount > 0.0 && u_limb_radius > 0.0) {
 		float lr = (u_atmo_radius > 0.0) ? u_atmo_radius : u_limb_radius;
 		if (lr > 0.0) {
 			float lf = (u_atmo_falloff > 0.0) ? u_atmo_falloff : 300.0;
+			float rout = lr + lf;
 			float b = length(cross(u_limb_center, dir));
-			float limb = exp(-(b - lr) / lf);
-			if (limb > 1.0) {
-				limb = 1.0; // inside the tangent: clamped, not amplified
-			}
+			// AC-0419 r2: the FORWARD air column through the shell,
+			// camera-aware (see the function header). The ray crosses the
+			// rout sphere at s = -r*hl + half (half = sqrt(rout^2-b^2),
+			// hl = the ray's radial component = the local zenith
+			// elevation, +1 straight up). Inside the shell or pointing
+			// away, the visible air is that near exit; outside the
+			// shell heading in, it is the full chord 2*half. min(2*half,
+			// ...) keeps the b >= rout case at 0 (a ray tangent to the
+			// tail sweeps no air).
+			float half = sqrt(max(0.0, rout * rout - b * b));
+			float s_exit = -r * hl + half;
+			float air = min(2.0 * half, max(0.0, s_exit));
+			float cm = 2.0 * sqrt(max(0.0, rout * rout - u_limb_radius * u_limb_radius));
+			float limb = (cm > 0.0) ? min(1.0, air / cm) : 0.0;
 			vec3 limb_col = horizon_color * 0.5 + mid_color * 0.5;
 			float sun_side = 0.55 + 0.45 * pow(clamp(dot(dir, sun_dir), 0.0, 1.0), 2.0);
-			col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space_sky, u_limb_gate) * mix(1.0, u_body_loaded, u_limb_loaded));
+			// AC-0401: the rim's altitude gate rides the A window (the
+			// sky is space at A, so the rim is too) - the OFF path keeps
+			// the AC-0401 physics-S contract. AC-0414 clause 2: the body
+			// gate (no fake planet while the body is not LOADED).
+			col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, w, u_limb_gate) * mix(1.0, u_body_loaded, u_limb_loaded));
 		}
 	}
 	float sd = dot(dir, sun_dir);

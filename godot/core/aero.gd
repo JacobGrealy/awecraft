@@ -52,13 +52,15 @@ static func sky_space(alt_rad: float) -> float:
 	var a := atmosphere_height()
 	return smoothstep(0.25 * a, a, alt_rad)
 
-# AC-0417 clause D: the sky's limb geometry at A. The visible-tangent
-# convention the pre-AC-0417 limb used (impact parameter b = R+SEA = the
-# tangent ray's impact parameter exactly) extends to the A shell:
-# u_atmo_radius = R + A, and the outer falloff is a stated fraction of A
-# (0.25A - which is 300 m at the default A, i.e. today's hard-coded
-# value, so the default look's falloff is unchanged and only the
-# silhouette moves out).
+# AC-0417 clause D / AC-0419: the sky's limb geometry at A.
+# u_atmo_radius = R + A, and the falloff is a stated fraction of A
+# (0.25A = 300 m at the default A). AC-0419 redefines its meaning: it is
+# the shell's OUTER TAIL REACH - the limb term is the normalized air
+# column (aero_sky_gradient sky_on) swept between the R+SEA disc and
+# rout = R + A + falloff (5500 m at the default A): 1.0 at the terrain
+# limb, 0.0 at the tail, smooth and bounded (the AC-0417 clamped
+# exponential - a flat filled annulus with a hard edge at R+A - is gone;
+# it was the "large blue circle in space" the user reported 2026-10-11).
 static func atmo_limb_radius(planet_r: float) -> float:
 	return planet_r + atmosphere_height()
 

@@ -137,9 +137,26 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         default A: today's hard-coded value, now a stated
 │                         fraction), pushed by world.gd _ac0401_push to the sky
 │                         material AND the cloud materials (one home); the ON
-│                         path's decay reads exp(-(b - u_atmo_radius)/
-│                         u_atmo_falloff) with a 0.0-uniform fallback to
-│                         u_limb_radius/300 (the OFF path is unchanged), so the
+│                         path's term is the NORMALIZED AIR COLUMN (AC-0419 — the pre-fix
+│                         clamped exp(-(b - u_atmo_radius)/u_atmo_falloff)
+│                         filled the annulus inside the A-shell tangent to
+│                         a flat 1.0: a hard boundary circle in space, the
+│                         2026-10-11 "large blue circle" report): the FORWARD air
+│                         column through the shell's tail (rout =
+│                         u_atmo_radius + u_atmo_falloff), CAMERA-AWARE — the
+│                         ray crosses the rout sphere at s = -r*hl ±
+│                         sqrt(rout²-b²) (hl = the ray's radial component):
+│                         outside the shell, heading in, the visible air is
+│                         the full chord (1.0 at the terrain limb, 0.89 at
+│                         the deck top, 0.49 at the old A-shell tangent, 0.0
+│                         at the tail); inside the shell or pointing away it
+│                         is the near exit (0.04 straight up at A; exactly
+│                         0 everywhere above the horizon from outside —
+│                         looking up in space is space), normalized by the
+│                         chord at the R+SEA disc tangent, clamped to 1.0,
+│                         smooth, no edge. A 0.0-uniform
+│                         fallback keeps rout = u_limb_radius + 300 (the OFF
+│                         path is unchanged), so the
 │                         glow reaches PAST THE CLOUDS (the cloud tops, R+400 +
 │                         the AC-0407 virtual extend 50 = R+450, sit strictly
 │                         inside A — asserted once in _ac0401_push with a loud
@@ -176,12 +193,21 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         elevation about the radial through the camera —
 │                         the fake-horizon fix: the same altitude at two
 │                         positions on the sphere paints the same sky), the
-│                         background is TWO COLOURS + ONE CONE (below the
-│                         local tangent cone of the R+SEA disc = the
-│                         single-source AIR colour `u_air` — the 8-bit
-│                         display value of `Aero.fog_display(t)`, the exact
-│                         colour the env fog and the body dissolve to; above
-│                         it = SPACE_SKY), and ONE atmosphere height
+│                         background is the day/night/dusk GRADIENT (horizon→mid→zenith,
+│                         the sky_off expression re-keyed from world Y to hl)
+│                         above the local horizon, thinned to SPACE smoothly
+│                         by the A window (zenith by w, grazing by w² — the
+│                         grazing ray's longer air column; w = 1 = space
+│                         exactly), plus the horizon haze band (|hl|-keyed,
+│                         dies with the air); BELOW the local tangent cone
+│                         of the R+SEA disc the single-source AIR colour
+│                         `u_air` (the 8-bit display value of
+│                         `Aero.fog_display(t)`, the exact colour the env
+│                         fog and the body dissolve to) is unchanged
+│                         (AC-0419: the pre-fix ON path painted SPACE_SKY
+│                         across the whole upper hemisphere — the
+│                         2026-10-11 "the sky is dark during the day"
+│                         report), and ONE atmosphere height
 │                         `Aero.atmosphere_height()` (A, default 1200 m, env
 │                         AWECRAFT_ATMO — one number, one home) drives every
 │                         "how far up is space" consumer: the sky's space

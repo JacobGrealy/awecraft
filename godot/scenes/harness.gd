@@ -1265,6 +1265,14 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			pl_spn = pl_pt
 			pl_up = (pl_spn - pl_cen).normalized()
 		var pl_nadir := OS.get_environment("AWECRAFT_CAM_NADIR") == "1"
+		# AC-0419 (additive, env-gated — unset = the original behaviour,
+		# byte-identical): AWECRAFT_CAM_ZENITH=1 aims straight UP the local
+		# radial (the dome view — the sky a player looking up actually sees;
+		# the AC-0419 "no boundary surface above the player" acceptance needs
+		# the upward view, which the limb/nadir aims cannot produce). The up
+		# hint is horizontal (pl_hd), the same look_at degeneracy the nadir
+		# aim handles.
+		var pl_zenith := OS.get_environment("AWECRAFT_CAM_ZENITH") == "1"
 		var pl_pos := pl_spn + pl_up * pl_alt
 		player = main._spawn_player()
 		player.set_physics_process(false)
@@ -1312,13 +1320,17 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var pl_hd := pl_ref.cross(pl_a).normalized()
 		var pl_tan := pl_cen + pl_a * (pl_R * pl_cg / pl_alen) + pl_hd * (pl_R * pl_sg)
 		var pl_dir := (pl_tan - camera.position).normalized()
-		# the nadir aim (AC-0417) replaces both the direction (straight
-		# down the radial) and the up hint (horizontal, or look_at
-		# degenerates with dir ∥ up); the limb aim is the original pair.
+		# the nadir aim (AC-0417) and the zenith aim (AC-0419) replace both
+		# the direction (straight down / up the radial) and the up hint
+		# (horizontal, or look_at degenerates with dir ∥ up); the limb aim
+		# is the original pair.
 		var pl_aim_dir: Vector3 = pl_dir
 		var pl_aim_up: Vector3 = pl_up
 		if pl_nadir:
 			pl_aim_dir = -pl_up
+			pl_aim_up = pl_hd
+		elif pl_zenith:
+			pl_aim_dir = pl_up
 			pl_aim_up = pl_hd
 		camera.look_at(camera.position + pl_aim_dir, pl_aim_up)
 		camera.current = true
@@ -1394,6 +1406,7 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 				"body_phase": pl_phase, "drain": pl_drain,
 				"steps": pl_snapped,
 				"cam_off": [pl_off_val.x, pl_off_val.y], "nadir": pl_nadir,
+				"zenith": pl_zenith,
 				# AC-0417: the ORIGINAL spawn (pre in-plane offset) - the
 				# measurement side (tasks/AC-0417/measure.py camera_basis)
 				# re-applies the offset projection itself, so it needs the

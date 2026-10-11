@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0419 results — sky: dark day, boundary circle in space, edge past the clouds</title>
+<style>
+  body { font-family: "Segoe UI", system-ui, sans-serif; margin: 2em auto; max-width: 1080px;
+         color: #1a2330; line-height: 1.5; padding: 0 1em; }
+  h1 { border-bottom: 3px solid #2b6cb0; padding-bottom: .3em; }
+  h2 { color: #2b6cb0; margin-top: 2em; border-bottom: 1px solid #cbd5e0; padding-bottom: .2em; }
+  h3 { color: #2c5282; }
+  table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid #cbd5e0; padding: .35em .6em; text-align: left; vertical-align: top; }
+  th { background: #edf2f7; }
+  .pair { display: flex; gap: 12px; flex-wrap: wrap; margin: 1em 0; }
+  .pair figure { margin: 0; flex: 1 1 420px; }
+  .pair img { width: 100%; border: 1px solid #4a5568; image-rendering: auto; }
+  figcaption { font-size: .85em; color: #4a5568; margin-top: .3em; }
+  .bad { border-top: 4px solid #c53030; }
+  .good { border-top: 4px solid #2f855a; }
+  code { background: #edf2f7; padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+  .note { background: #fffaf0; border-left: 4px solid #dd6b20; padding: .6em 1em; margin: 1em 0; font-size: .95em; }
+  .verdict { background: #f0fff4; border-left: 4px solid #2f855a; padding: .6em 1em; margin: 1em 0; }
+  .mono { font-family: Consolas, monospace; font-size: .88em; white-space: pre; }
+  .ok { color: #2f855a; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>AC-0419 — results</h1>
+<p><strong>Reports (user, 2026-10-11, AC-0417 build):</strong> (1) “The sky is dark during the day.”
+(2) “When you do into space, there is a large blue circle above and below you creating a horizon of
+sorts… there should not be a horizon in space.” (3) “Outer edge of the atmosphere is visible now but
+does not extend past clouds.”</p>
+<p><strong>Files changed (4):</strong> <code>godot/core/aero_sky_gradient.gdshader</code> (the fix),
+<code>godot/core/aero.gd</code> (comment), <code>godot/ARCHITECTURE.md</code> (sync),
+<code>godot/scenes/harness.gd</code> (additive env-gated <code>AWECRAFT_CAM_ZENITH</code> aim; the
+temporary measurement probe was reverted at closeout). <code>godot/world/</code> untouched — genhash
+25/25 byte-identical. No commits/pushes (fenced to the coordinator).</p>
+
+<div class="verdict"><strong>Verdict:</strong> all three reports fixed in one shader rewrite
+(<code>sky_on()</code> only; <code>sky_off()</code> bit-for-bit). The notes’ shell diagnosis was
+<strong>partially right</strong>: the “blue circle” <em>is</em> the A-shell tangent (report 2), but
+report 1 has a separate root cause (the day/night/dusk gradient was pushed to the shader and never
+read on the ON path — the ground dome rendered pure black), and report 3’s “edge” is the clamp +
+0.25 A tail of the same limb term. Daytime sky: ground-zenith dome median luminance
+<strong>0.0 → 85.6</strong>. No boundary surface above or below the player, tested inside/at/outside
+the shell; the atmosphere now reads as a smooth air-column glow wrapping the world, brighter at the
+rim, extending ~1050 m past the cloud tops with no hard edge.</div>
+
+<h2>1. Per-report findings and evidence</h2>
+
+<h3>Report 1 — “the sky is dark during the day”</h3>
+<p><strong>Root cause (confirmed in frames, not assumed):</strong> <code>sky_on()</code> painted
+<code>mix(space_color, u_air, below*(1-w))</code> — a flat dark “air” fill for everything under the
+local horizon and pure space above it. The day/night/dusk gradient uniforms
+(<code>horizon/mid/zenith_color</code>, pushed per frame by <code>game.gd</code>) were declared and
+fed but <strong>never read on the ON path</strong>. Frame <code>b02</code> (ground, looking straight
+up): the entire dome is RGB (0,0,0) except the sun disc — a pure-black sky at 12:30. The ground
+forward view <code>b01</code> shows the same black dome over the horizon (only the haze band and the
+sun break it up).</p>
+<div class="pair">
+  <figure class="bad"><img src="captures/b02-ground-zenith.png" alt="BEFORE ground zenith: black dome">
+  <figcaption><strong>BEFORE</strong> b02 — ground, zenith. Dome = pure black (0,0,0); median L = 0.0. The
+  day palette was being pushed and ignored.</figcaption></figure>
+  <figure class="good"><img src="captures/a02-ground-zenith.png" alt="AFTER ground zenith: bright blue day sky">
+  <figcaption><strong>AFTER</strong> a02 — ground, zenith. Bright blue dome (0,72,254) deepening to the
+  zenith, warm around the sun (223,247,255); median L = <strong>85.6</strong>, p10 = 55, p90 = 178.</figcaption></figure>
+</div>
+<table>
+<tr><th>Ground zenith dome (L = 0.2126R+0.7152G+0.0722B, 0–255)</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>median</td><td>0.0</td><td><strong>85.6</strong></td></tr>
+<tr><td>p10 / p90</td><td>0.0 / 101.7</td><td>55.0 / 178.0</td></tr>
+</table>
+<p>The gradient is keyed to the <em>local zenith elevation</em> <code>u = clamp(dot(dir, up),0,1)</code>
+— horizon → <code>horizon_color</code> (223,246,251), 30 % → mid (95,198,234), zenith →
+<code>zenith_color</code> (46,134,216) — and fades to space through the AC-0417 A window
+(<code>w = smoothstep(0.25A, A, alt)</code>), so the day sky thins continuously into space as you
+climb. The forward ground view <a href="captures/a01-ground-limb.png">a01</a> shows the user’s actual
+viewpoint: bright day sky, pale horizon haze band, cloud deck below the horizon — no black dome.</p>
+
+<h3>Report 2 — “a large blue circle above and below you” in space</h3>
+<p><strong>Root cause (confirmed in frames):</strong> the limb term was
+<code>min(exp(-(b - u_atmo_radius)/u_atmo_falloff), 1.0)</code> — for every ray inside the A-shell
+tangent (<code>b &lt; 5200</code>) it evaluates to the flat maximum 1.0, and it drops to ~0 over just
+300 m past 5200. Seen from outside the shell that paints a <strong>flat full-strength annulus with a
+hard circular outer edge at the A-shell tangent</strong> — exactly the “large blue circle”. Measured
+in <code>b07</code> (2141 m): a flat L = 28.4 plateau from b = 5194 down to the disc, with a 0 → 28.4
+jump compressed into b ∈ [5406, 5194]; <code>b09</code> (3141 m): the flat 28.4 starts at exactly
+b = 5200. “Above and below” = the annulus surrounds the disc in all azimuths (it is a function of b
+only), and the same term lit the whole upward hemisphere from outside the shell
+(<code>b08</code>: a uniform full-strength dome looking straight up, median L = 74.5).</p>
+<div class="pair">
+  <figure class="bad"><img src="captures/b08-alt2000-zenith.png" alt="BEFORE 2141m zenith: uniform blue dome">
+  <figcaption><strong>BEFORE</strong> b08 — 2141 m (outside the shell), zenith. A uniform full-limb dome
+  (median L = 74.5): the “circle above you”, its edge outside the frame.</figcaption></figure>
+  <figure class="good"><img src="captures/a08-alt2000-zenith.png" alt="AFTER 2141m zenith: pure space">
+  <figcaption><strong>AFTER</strong> a08 — 2141 m, zenith. Pure space + stars + sun disc; median L = 0.0.
+  Looking up from outside the atmosphere is space — no dome, no circle.</figcaption></figure>
+</div>
+<div class="pair">
+  <figure class="bad"><img src="captures/b07-alt2000-limb.png" alt="BEFORE 2141m limb: flat annulus with hard edge">
+  <figcaption><strong>BEFORE</strong> b07 — 2141 m, limb. Flat blue annulus (L = 28.4 from b = 5194 down)
+  with a hard circular edge at the A-shell tangent.</figcaption></figure>
+  <figure class="good"><img src="captures/a07-alt2000-limb.png" alt="AFTER 2141m limb: smooth rim glow">
+  <figcaption><strong>AFTER</strong> a07 — 2141 m, limb. Smooth glow brightest at the rim, decaying
+  continuously into black — no flat annulus, no edge. Deck ring wrapped inside it.</figcaption></figure>
+</div>
+<p><strong>“No boundary surface” matrix</strong> (frames + measured dome/edge metrics):</p>
+<table>
+<tr><th>Position vs. shell</th><th>Above the player (zenith)</th><th>Below / around (limb + nadir)</th></tr>
+<tr><td><strong>INSIDE</strong> — 1041 m (a03, a04)</td>
+<td>Space-ward dome (92 % of the way to A ⇒ 92 % space, median L = 0.0, w = 0.917); no edge in frame.</td>
+<td>Smooth glow from the disc out to the tail; no plateau, no tangent edge; max |ΔL| per 3 rows is the
+deck ring itself (b ≈ 4300), not a sky boundary.</td></tr>
+<tr><td><strong>AT</strong> — 1200 m = A (a05, a06)</td>
+<td>Space (median L = 0.0, w = 1 — the AC-0417 “sky is space at A” contract, kept).</td>
+<td>Smooth halo wrapping the disc; fade 0.0 → 0.89 between tail and disc is a continuous gradient
+(rows sampled every 6 px show monotone values).</td></tr>
+<tr><td><strong>OUTSIDE</strong> — 2141 m (a07, a08, a07n)</td>
+<td>Pure space (median L = 0.0).</td>
+<td>Smooth rim glow 1.0 → 0; nadir frame a07n is unchanged planet + deck (no new boundary below).</td></tr>
+<tr><td><strong>FAR OUTSIDE</strong> — 3141 m (a09)</td>
+<td>— (same as a08)</td>
+<td>Same smooth halo at the far view (before: b09’s hard-edged flat disc).</td></tr>
+</table>
+<p><strong>The old-edge region, side by side</strong> (centre column, b around the old tangent 5200):</p>
+<div class="mono">alt 2000 (2141 m):
+  BEFORE: 0.0@5438  0.2@5406  3.9@5339  8.8@5304  14.5@5268  21.9@5232  <u>28.4@5194  28.4@5155 … 28.4@4902</u>
+  AFTER : 0.0@5438  0.0@5406  0.0@5339  0.1@5194  0.4@5155  0.6@5115  0.7@5075  2.4@5033  4.0@4990  6.5@4902
+          └ flat 28.4 plateau + 0→28.4 jump over ~210 m of b ┘        └ smooth monotone gradient, no plateau, no edge ┘
+alt 3000 (3141 m):
+  BEFORE: 0.3@5402  3.2@5345  11.4@5288  22.8@5229  <u>28.4@5170  28.4@5109 … 28.4@4921</u>
+  AFTER : 0.0@5402  0.0@5345  0.0@5288  0.0@5229  0.3@5170  0.6@5109  1.6@5047  4.0@4985  6.5@4921</div>
+<p><strong>Wraps the world, all directions:</strong> the glow is a function of impact parameter b
+(angle from nadir) only. Measured left/right symmetry of the sky annulus in a07/a09/a05: mean
+|ΔL| = 0.0–0.7 over 312 sample pairs per frame (quantisation level) ⇒ the halo seen in the frame
+continues unchanged around the azimuths not in it, including straight behind/below the player.</p>
+
+<h3>Report 3 — “the edge … does not extend past clouds”</h3>
+<p><strong>Root cause:</strong> the same limb term. The cloud deck tops sit at R+450 (b ≈ 4450 at
+these views) but the flat annulus ran out to b = 5200 with a 300 m tail — the visible “edge”
+(<em>and</em> the whole 28.4 plateau) floated ~750 m past the cloud tops, so the atmosphere’s edge
+read as a separate surface sitting above the clouds, not as the clouds’ own envelope.</p>
+<div class="pair">
+  <figure class="bad"><img src="captures/b05-alt1059-limb.png" alt="BEFORE at A: flat annulus floating past the deck">
+  <figcaption><strong>BEFORE</strong> b05 — at A (1200 m). The flat annulus extends ~750 m past the deck
+  tops, then a hard 300 m tail; the edge is a surface floating above the clouds.</figcaption></figure>
+  <figure class="good"><img src="captures/a05-alt1059-limb.png" alt="AFTER at A: glow hugging the deck and fading smoothly">
+  <figcaption><strong>AFTER</strong> a05 — at A. The glow is strongest right at the deck (L = 0.89 of full
+  at the deck top) and fades smoothly outward; the atmosphere visibly extends past the clouds with no
+  edge anywhere.</figcaption></figure>
+</div>
+
+<h2>2. What was changed (per report)</h2>
+<p>All in <code>aero_sky_gradient.gdshader</code>, <code>sky_on()</code> only (the OFF path is
+bit-for-bit; genhash 25/25):</p>
+<table>
+<tr><th>Report</th><th>Change</th></tr>
+<tr><td>1</td><td>The day/night/dusk gradient is now <strong>read on the ON path</strong>: keyed to
+local zenith elevation <code>u</code> (horizon → mid at 30 % → zenith at 90 %), then thinned to space
+through the A window: <code>mix(grad, space, mix(w*w, w, u))</code> — zenith by w, grazing rays by
+w², so the horizon band lingers a little longer (the AC-0417 w = 1 → space contract holds exactly at
+and above A). A horizon haze band (<code>exp(-|hl|*9)</code>, gated by 1−w) restores the pale
+day-horizon the AC-0401 wash used to give. Below the local cone the unchanged F3 mix applies.</td></tr>
+<tr><td>2+3</td><td>The limb term is now the <strong>forward air column through the shell’s outer
+tail</strong> (rout = R + A + 0.25A = 5500), camera-aware: the ray crosses the rout sphere at
+<code>s = −r·hl ± √(rout²−b²)</code>; outside the shell, heading in, the visible air is the full
+chord (1.0 at the terrain limb, 0.89 at the deck top, 0.49 at the old A-shell tangent, 0.0 at the
+tail); inside the shell or pointing away it is the near exit (0.04 straight up at A; exactly 0
+above the horizon from outside). Normalised by the full chord at the R+SEA disc tangent, clamped to
+1.0 — smooth, bounded, no clamp-edge, no tail discontinuity. Same colour (horizon/mid mix), same
+sun-side boost, same AC-0401/AC-0417 gates.</td></tr>
+</table>
+<p class="note"><strong>Round-2 catch (why “r2”):</strong> the first limb revision used the plain
+2-D chord formula, which painted the <em>upper</em> hemisphere from <em>outside</em> the shell as if
+the ray grazed it — a visible circular glow in the upward view (caught in a08-round-1, a variant of
+the very report-2 complaint). The camera-aware crossing (r2) removes it: a08 is now pure space.</p>
+
+<h2>3. Deck-vs-tangent-cone verdict (protected property)</h2>
+<div class="verdict"><strong>VERIFIED in frames (not assumed):</strong> the cloud deck remains inside
+the planet’s tangent cone. At 2141 m the deck ring (measured b ≈ 4275–4450, top edge row 318 →
+b = 4403) sits strictly inside the shell tangent (b = 5200): 46.4° vs 57.9° from nadir. AFTER, the
+deck ring is wrapped by the glow (glow = 0.89 at the deck top vs 1.0 at the rim) and the glow
+extends to b = 5500 — 1050 m past the deck tops — so the deck is never the outer edge of the
+atmosphere again. The a07/a05 annulus frames show the deck ring inside the halo in both rounds.</div>
+
+<h2>4. Notes’ shell diagnosis — right or wrong?</h2>
+<p><strong>Partially right.</strong> The notes hypothesised the “circle” was the atmosphere shell
+surfacing as a visible boundary: <em>correct for report 2</em> — the circle is exactly the A-shell
+tangent of the clamped limb term (edge measured at b = 5194–5200 in b07/b09, the shell is at 5200).
+But report 1 is a <strong>separate</strong> root cause (gradient uniforms pushed, never read — the
+dome was black even at ground level, where the shell geometry plays no part), and report 3 is the
+same limb term’s clamp + 300 m tail geometry rather than a second surface. One shader rewrite covers
+all three.</p>
+
+<h2>5. Gates (light gates only, then exit — all PASS)</h2>
+<table>
+<tr><th>Gate</th><th>Command (essence)</th><th>rc</th><th>Result</th></tr>
+<tr><td>Pre-fix baseline</td><td>11 BEFORE renders (b01–b09 + nadir + probe)</td><td>0 ×11</td>
+<td class="ok">all rc = 0, PNG written, 0 script errors per log; genhash baseline captured (10:40)</td></tr>
+<tr><td>G0 (after r1 fix)</td><td><code>godot --headless --path godot --quit</code> + <code>gate_census.py</code></td>
+<td>0</td><td class="ok">SCRIPT ERROR 0, SHADER ERROR 0, census ok (g0-after.log)</td></tr>
+<tr><td>SMOKE battery (after r1)</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids;genhash"</code></td>
+<td>0</td><td class="ok">ok:true, 260 s, 0 script errors (smoke-after.log)</td></tr>
+<tr><td>genhash (after r1)</td><td>via battery</td><td>0</td><td class="ok">25/25 byte-identical to pre-fix baseline</td></tr>
+<tr><td>PROBE meshprobe (after r1)</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td>0</td>
+<td class="ok">ok:true, match_rate 1.0, verts_gd = verts_cpp = 255628</td></tr>
+<tr><td>shaderforce (after r1)</td><td><code>AWECRAFT_LOGIC=shaderforce</code> (lavapipe)</td><td>0</td>
+<td class="ok">ok:true, count 12, failed [] (aero_sky_gradient: declared 23 = params 23, ok)</td></tr>
+<tr><td>G0 (after r2)</td><td>as G0 above</td><td>0</td><td class="ok">0 / 0, census ok (g0-r2.log)</td></tr>
+<tr><td>SMOKE battery (final)</td><td>as above</td><td>0</td><td class="ok">ok:true, 0 script errors (smoke-r2.log)</td></tr>
+<tr><td>genhash (final)</td><td>via battery</td><td>0</td><td class="ok">25/25 byte-identical</td></tr>
+<tr><td>PROBE meshprobe (final)</td><td>as above</td><td>0</td><td class="ok">ok:true, match_rate 1.0</td></tr>
+<tr><td>shaderforce (final)</td><td>as above</td><td>0</td><td class="ok">ok:true, count 12, failed []</td></tr>
+<tr><td>G0 (after probe revert)</td><td>as G0 above</td><td>0</td><td class="ok">0 / 0, census ok (g0-final.log)</td></tr>
+</table>
+<p>Renders: 11 BEFORE + 10 AFTER frames (the 5 r2-affected AFTER frames re-rendered after the
+camera-aware limb), all rc = 0 with PNG written (no SNAP FAIL). Logs in
+<code>.scratch/AC-0419/</code> (g0-*, smoke-*, meshprobe-*, shaderforce-*, b*/a* logs, genhash
+before/after lines).</p>
+
+<div class="note"><strong>Renderer caveat (HARNESS.md §2 / OPS.md §6, AC-0391):</strong> these
+frames run the <em>shipped</em> Forward+ (Vulkan) path on the lavapipe <em>software</em> driver —
+valid evidence for the Forward+ path (shader compilation, feature availability, layout, colour).
+One software-driver deviation was measured and isolated this ticket: the sky pass output does not
+match the pushed uniforms’ single-source colour (b07p probe: live uniforms at snap exactly as
+designed — day palette, u_atmo_radius 5200, falloff 300, gates 1/1/1 — while the rendered dome had
+R crushed toward 0 and B boosted; the scene pipeline itself was validated by the fog-wall test:
+measured (207,251,255) ≈ single-source (208,241,251)). That is a software-driver colour difference,
+not a shader defect — the authoritative look is the user’s Windows GPU build (AC-0241). Geometry,
+edges, structure, luminance ordering and symmetry — the evidence this ticket hinges on — hold on
+the Forward+ path either way.</div>
+
+<h2>6. Deliberately not done</h2>
+<ul>
+<li>No commits, no pushes, no <code>tasks/TASKS.yaml</code> edits — fenced to the coordinator.</li>
+<li>Fenced WIP files untouched (<code>godot/scenes/main.gd</code>, <code>godot/autoload/game.gd</code>,
+<code>godot/entities/drop.gd</code>, <code>godot/autoload/debug.gd</code>, AC-0067/AC-0384 files) —
+still modified by another session in the working tree, left exactly as found.</li>
+<li><code>sky_off()</code> and the OFF path untouched (bit-for-bit) — the report frames are all ON-path;
+the OFF path has its own AC-0417 contract.</li>
+<li>Pushed-uniform / uniform-only tests deliberately rejected as evidence per the ticket — every
+finding above is from user-comparable frames (same seed 44, size 1280×720, time 0.5, R24 preset,
+xvfb + lavapipe) plus pixel measurements on those frames.</li>
+<li>The temporary harness measurement probe (live limb uniforms + palette colours in the planet
+RESULT) was <strong>reverted at closeout</strong> (pristine rule); the env-gated zenith aim was
+kept, as it is the only way to produce the “above the player” acceptance views (unset = the original
+behaviour, byte-identical).</li>
+<li>No new arms in <code>tasks/harness_data.yaml</code>: the zenith aim is an option on the existing
+planet cam, not a new arm; no doc row needed (the nadir aim from AC-0417 set the precedent).</li>
+<li>Star field / sun disc untouched (report-2’s “circle” was the limb term, verified by b-scan: the
+edge sat at the shell tangent, not at any star/sun geometry).</li>
+</ul>
+
+<h2>7. Captures</h2>
+<p>BEFORE (AC-0417 build, pre-fix): b01 ground-limb, b02 ground-zenith, b03/b05/b07/b09 limb at
+1041/1200/2141/3141 m, b04/b06/b08 zenith at 1041/1200/2141 m, b07n nadir 2141 m, b07p probe
+re-render. AFTER (post-fix): a01–a09 + a07n (same grid; a03/a04/a05/a06/a08 are r2 renders, the
+camera-aware limb). All in <code>captures/</code>.</p>
+
+</body>
+</html>
