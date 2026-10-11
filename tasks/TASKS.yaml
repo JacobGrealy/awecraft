@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-11T08:13
+  updated_at: 2026-10-11T10:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26699,6 +26699,146 @@ intake:
     and tasks/AC-0403/AC-0403-results.html for the unreproducible crash this may explain - including the
     argument, made there, that a read-site bounds guard cannot catch a use-after-free because the object
     is already gone.
+
+    '
+  comments: []
+- id: AC-0419
+  title: sky-dark-by-day-visible-shell-in-space-atmosphere-too-short
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-11T10:04
+  updated_at: 2026-10-11T10:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The sky should be bright blue on a clear day. In space there should be no horizon
+    at all - just the planet, stars and black. And the atmosphere should visibly wrap around the planet,
+    extending past the cloud layer rather than stopping inside it.
+
+
+    2) Technical Details:
+
+    THREE REPORTS FROM THE USER 2026-10-11, flying the build that contains AC-0417, in their words: "The
+    sky is dark during the day." / "When you do into space, there is a large blue circle above and below
+    you creating a horizon of sorts, what is this? - there should not be a horizon in space." / "Outer
+    edge of the atmosphere is visible now but does not extend past clouds."
+
+    THE PRIME SUSPECT IS AC-0417 ITSELF, which landed immediately before these reports and rewrote how
+    the sky is built: it replaced a world-axis zenith with a local radial one, introduced a named atmosphere
+    height of one thousand two hundred metres, placed the limb on a shell at the sea radius plus that
+    height with a falloff of a quarter of it, and gated the sky''s terms on that height. Its own report
+    recorded deviations it chose rather than resolved - the first-height value left fog-derived, the nadir
+    opacity left fog-driven - and it verified itself with pushed-uniform tests at fixed altitudes rather
+    than by looking at the sky a player sees. It also reported the deck moving INSIDE the planet''s tangent
+    cone, which is the opposite of what the third report describes. THE FIRST JOB IS TO ESTABLISH WHAT
+    THE USER IS ACTUALLY SEEING, not to assume the run''s model of it is right.
+
+    THE MIDDLE REPORT IS THE MOST INFORMATIVE AND DESERVES ITS OWN DIAGNOSIS: a large blue circle visible
+    BOTH above and below the player in space is the signature of a SHELL - a sphere being drawn at a radius
+    close to the player''s position, so the player sees its inside below them and its outside above them
+    at the same time. A shell one thousand two hundred metres above a four thousand metre planet is exactly
+    that radius, and a shell drawn as a visible surface rather than as an inward-looking gradient reads
+    as a horizon where there is no air to have one. That is the defect: something that should be a smooth
+    integral is being rendered as a bounded object. Note that this also explains the third report - an
+    outer edge that is VISIBLE is the same surface being seen from outside - and that "does not extend
+    past clouds" may mean the shell''s radius is smaller than the cloud annulus, or that the cloud deck
+    occludes it, or that the falloff is too tight to read at distance. Establish which.
+
+    WHAT TO DO: capture the sky and the space view on the CURRENT tree at the user''s configuration, across
+    altitudes either side of the shell radius and at several times of day, LOOK at the frames, and name
+    what each of the three reports corresponds to in the render. Then fix so that: the daytime sky is
+    the colour a clear day should be; nothing that is not the planet or its air is visible as an object
+    in space, with no boundary or circle above or below the player; and the atmosphere reads as air wrapping
+    the world, extending beyond the weather rather than stopping inside it. The cloud deck sitting inside
+    the tangent cone - the property AC-0417 says it established - must remain true, since the user''s
+    third report suggests it is not.
+
+    ACCEPTANCE IS FRAMES THE USER CAN COMPARE plus measurements of the sky''s luminance on a clear day,
+    the presence or absence of any boundary surface at and around the atmosphere shell from inside it,
+    at it and outside it, and the relationship between the shell radius and the cloud annulus. Do not
+    accept a pushed-uniform test as evidence that the sky looks right; that is the mistake that produced
+    these three reports.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and
+    the recent work must keep holding - the far tier''s curvature placement, the engine-fog single source,
+    the carved-top fill, the volumetric cloud layer, and the satellite body''s mesh winding.
+
+    '
+  comments: []
+- id: AC-0420
+  title: chunk-cracks-idle-slide-and-tier-order
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-11T10:04
+  updated_at: 2026-10-11T10:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The world should be seamless - no visible cracks between chunks - and the player
+    should stand still when they are not pressing anything. The fine level of detail should also disappear
+    at the same distance as the coarser ones when flying up, rather than vanishing first.
+
+
+    2) Technical Details:
+
+    THREE REPORTS FROM THE USER 2026-10-11, in their words: "There are still visible cracks between all
+    of the chunks" / "The player slides on the chunks without pressing any buttons, I assume this is gravity
+    related" / "high lods disappear much sooner than medium and low as you fly to orbit, why?"
+
+    CRACKS: a long-standing complaint that has survived several rounds of adjacent work. Note what was
+    recently fixed and is therefore NOT this: the band-A fill that stood on an un-carved heightmap, and
+    the far tier''s slabs that were placed on a flat plane over a curved world instead of following the
+    column transform. Both were measured to zero and both are about WHERE terrain is, whereas a visible
+    crack between chunks is about a GAP - adjacent chunks disagreeing by a fraction of a block at their
+    shared boundary, or a seam in the mesh, or a lighting discontinuity along the join. Those are different
+    mechanisms and the already-fixed ones should not be re-investigated. Measure the gap directly at a
+    chunk boundary: the vertex positions on both sides of a shared edge, the normals and lighting across
+    it, and whether the crack appears in the mesh, in the shading, or in the depth. Render a boundary
+    closely.
+
+    SLIDING: the user''s own hypothesis is gravity, and it is worth checking first because this world''s
+    gravity is radial - the acceleration points toward the planet''s centre rather than down a world axis
+    - and the player stands on a curved surface whose tangent plane changes with every step. A radial
+    gravity vector that is not perfectly cancelled by the contact normal, or a tangent-plane projection
+    that leaves a residual component, would produce exactly a slow slide with no input. Establish whether
+    the player moves while idle, measure the drift rate and its direction relative to the local tangent
+    plane and to the nearest slope, and check whether it happens on flat ground, on a slope, or both.
+
+    THE TIER ORDER IS A DIRECT QUESTION AND DESERVES A DIRECT ANSWER. A recent ticket made every near-field
+    material discard beyond a single fog-wall distance, specifically so that the tiers hand over at one
+    threshold, and its acceptance claimed all six near shaders discard at the same distance - yet the
+    user reports the finest tier vanishing much sooner than the middle and coarse ones. Either the materials
+    do not in fact share the threshold, or a tier has a second and earlier limit on top of it, or the
+    draw distance for the finest tier is set elsewhere and was never brought into line. Find the actual
+    per-tier behaviour by measurement across altitude: for each of the three tiers, the altitude at which
+    it stops being drawn. That table is the answer the user is asking for.
+
+    ACCEPTANCE: a measured gap or its absence at chunk boundaries with a close render; an idle drift measurement
+    with its direction and the terrain it happens on; and a per-tier altitude table showing at which altitude
+    each tier stops drawing. Each of the three should be reported as numbers before any fix is attempted,
+    because two of them have been reported before and answered with work that addressed a neighbouring
+    mechanism.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and
+    the recent work must keep holding.
 
     '
   comments: []
