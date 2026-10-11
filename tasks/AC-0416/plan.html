@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0416 plan — the far tier's placement (flat plane vs column facet)</title>
+<style>body{font:15px/1.5 ui-monospace,monospace;max-width:1000px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}.note{background:#fff8e6;border-left:4px solid #e0a800;padding:.5rem .8rem}</style>
+</head><body>
+<h1>AC-0416 — plan: far-tier-stands-above-the-high-surface</h1>
+<p>Builder: subagent. 2026-10-10. Tree at <code>44d53c3</code> (AC-0415 closed) + the four fenced WIP
+files (main.gd / game.gd / drop.gd / debug.gd — untouched, read-only). No commits.</p>
+
+<h2>Goal</h2>
+<p>Measure FIRST, on the current tree, whether the far tier still stands above the high surface (the
+instruction that already paid for itself twice on this project). The ticket's FOUND mechanism,
+verified against the code by reading: the near tiers (real band + band A) are children of the chunk
+node, which carries <code>SphereMath.column_transform(cx, cz, R)</code> (world.gd:10444 — the only
+place the transform is applied); the far tiers (band B/C) are merged by <code>_ring_rebuild_sector</code>
+(world.gd:1762) with a <b>flat</b> offset <code>Vector3(cx*16, si*16, cz*16)</code> (world.gd:1793-1794/1808/1822)
+and the ring MIs get no transform (world.gd:1686-1693). On a sphere of R=4000 the flat plane stands
+above the true surface by the sagitta <code>d&sup2;/2R</code>: <b>1.25 m at 100 m, 16 m at 358 m,
+125 m at 1000 m, 500 m at 2000 m</b> — the "one chunk higher / raised plateaus" report. Normals are
+copied unrotated (world.gd:1826-1828) and the water surface takes the same flat offset
+(world.gd:1835-1854). If the re-measurement shows the defect is <i>not</i> live, this ticket closes
+with the evidence and stops.</p>
+
+<h2>What I measured first (filled after the pre-fix runs)</h2>
+<pre>
+farhigh pre-fix (RC 0, 0 SCRIPT ERROR, census ok) — the defect is LIVE:
+  Leg 1 (home battery, 12 cols x grids G8/G4, 960 cells):
+    env_bad 0 (the emit St rule — no emit regression), h_ident_cells 0 (H identity exact)
+    flat_max 519.38 m  facet_max 7.0 m
+    per-column FLAT delta tracks the analytic sagitta d^2/2R at every distance:
+      d=104  flat 8.3 / 2.6   (sagitta 1.4)     d=360  flat 20.9 / 18.7  (sagitta 16.2)  &lt;-- the ticket's "16 m @ 358"
+      d=340  flat 20.8 / 16.3 (sagitta 14.4)    d=1000 flat 131.6 / 129.2 (sagitta 125)
+      d=1990-2008 flat 480-519 (sagitta 495-504)
+  Leg 2 (LIVE ring mesh as drawn, R16) — the defect on the on-screen geometry:
+    ran true, cols 3, FACET 0, FLAT 3, verts 360, max_dev 0.0, proud_max 2.698 m (col -9,0)
+    =&gt; every one of the 360 ring-merged vertices sits at the FLAT offset, none on the facet
+  Leg 3 (faces 4-mirror / 6-plain x 4 distances):
+    h_ident_cells 0, body_verts 528, body_fit_max 0.197 m, body_excess 0.0, body_max 2.80
+  ring census (pre-fix): mi 29, sectors 32, slabs 9, rebuilds 29, ms 17.612, max_ms 0.769
+  ok=False — driven ONLY by leg 2 (the ring must classify FACET); legs 1 and 3 are green
+  (the flat_* fields read the counterfactual sagitta by design — the arm is valid pre- and post-fix)
+
+planet-300 render before — tasks/AC-0416/captures/ac0416-before.png
+  (Vulkan Forward+ llvmpipe, body LOADED, alt 300, R24, FOG 83, time 0.30, seed 44, 1280x720)
+  the ring-merged far tier is the ground at the NADIR (the hazy upper band is the satellite
+  body, a separate spherical surface — not the ring); the far-tier slab there reads proud.
+</pre>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/scenes/harness.gd</code> — new permanent arm <code>farhigh</code> (the ticket's standing
+instrument: same-column far-vs-high comparison; three legs below). Arm goes in, stays in — it is the
+gate the ticket owes, not a probe.</li>
+<li><code>tasks/harness_data.yaml</code> — the <code>farhigh</code> row; <code>harness_doc.py --render</code>
+regenerates <code>godot/HARNESS.md</code> §1 (the GENERATED block only).</li>
+<li><code>godot/world/world.gd</code> — <code>_ring_rebuild_sector</code>: per column
+<code>T = SphereMath.column_transform(cx, cz, R)</code> (R = <code>Game.planet_R</code>); vertex
+<code>bv.append(T * Vector3(v.x, si*16+v.y, v.z))</code>; normals rotated by the normal matrix
+(<code>T.basis.inverse().transposed()</code>, the same matrix Godot applies to the high-tier chunk
+node — the basis carries the 1+SEAM_FILL in-plane scale, so the raw basis would skew the normals by
+0.01%); water vertices the same T. Deviation from the ticket's suggested
+<code>flat_to_world(x,y,z,R)</code> form, stated: <code>flat_to_world</code> picks
+<code>floor(x/16)</code> as the facet column, so a slab's <code>v.x == 16</code> boundary vertex would
+land on the NEIGHBOUR column's facet — while the high tier draws that same edge on its OWN column's
+facet (local x in [0,16]). The fix follows the high-tier convention (the slab's own column), which is
+what keeps the far/high edges coincident.</li>
+<li><code>godot/ARCHITECTURE.md</code> — the AC-0338 ring bullet: placement convention flat → column
+facet (invariant 2: a changed convention is documented in the same task).</li>
+<li><code>tasks/AC-0416/</code> — this plan, continuity.md, results page, captures.</li>
+</ul>
+<p>No C++ change (the emit arrays are byte-gated by farab and are untouched — only their PLACEMENT
+moves). No <code>.so</code> rebuild.</p>
+
+<h2>The farhigh arm (the standing instrument)</h2>
+<p>Pure C++ + <code>SphereMath</code>, no streaming wait, seed 44, R 4000,
+<code>Data.HEIGHT</code>/<code>Data.SEA</code>, <code>world._lod_fcc_get()</code> (the same inputs
+farab feeds its emits). Runs headless in the game tree.</p>
+<ul>
+<li><b>Leg 1 — home battery (the defect itself).</b> 12 home-pair columns at stated in-plane
+distances from the face centre (flat origin), both faces of the home pair, several bearings:
+d≈100 (6,0) 104.3 / (0,6) 104.3 / (−4,4) 91.2 [face 1]; d≈358 (22,0) 352.1 / (0,22) 352.1 /
+(−15,15) 340.3 [face 1]; d≈1000 (62,0) 992.0 / (0,62) 992.0 / (−44,44) 995.3 [face 1]; d≈2000
+(125,0) 2008.0 / (−108,62) 1990.6 [face 1] / (88,88) 2002.5. Per column, both grids (G=8 med /
+G=4 low): far surface = the <code>h_avg_emit</code> arrays (the exact slot arrays, farab-byte-gated)
+placed (a) <b>flat</b> the way the ring merge draws today and (b) on the column facet the way the
+fix draws; high reference = the full column's topmost non-air block top per (x,z)
+(<code>generate_resl</code> skip=0 → <code>slabs_flat</code> scan — the surface the player sees:
+land H, water at sea, treetops) placed on the facet. Report per column: Δflat (drawn − high — the
+defect number; expected +sagitta pre-fix), Δfacet (the fix's contract), the H1 envelope stats
+(cell upper-envelope − reference, the documented coarse-tier residual, report-only).
+<b>Gate:</b> the drawn placement must equal the facet placement — enforced by leg 2; leg 1's Δfacet
+must be within the emit's cell quantization (≤ 1 cell: 2 m med / 4 m low on smooth terrain; cliffs
+reported, not gated — the envelope is H1, the ticket owns the placement).</li>
+<li><b>Leg 2 — live (runs iff <code>AWECRAFT_RADIUS</code> ≥ 9, the standing run uses 16).</b> Waits
+for far slabs + the ring merge, then reads the ring MIs' mesh (the geometry that actually hits the
+screen) and, for a sample of resident far columns, classifies each emitted vertex's drawn position
+against the two candidates (flat vs <code>T*local</code>, 0.05 m resolution): reports
+<b>placement_class per column</b> (facet = fixed / flat = the defect), the sagitta magnitude
+(|flat − facet|), the per-(x,z) drawn-surface Δ vs the high reference, and the ring census
+(<code>ring_stats()</code> — mi/slabs/rebuilds/ms/max_ms — the per-vertex-transform cost the ticket
+says must be measured, not assumed). <b>Gate:</b> every sampled column <code>facet</code>,
+max |drawn − T·local| ≤ 0.05 m. Pre-fix this leg is red by the sagitta (≥ ~1.5 m at R16).</li>
+<li><b>Leg 3 — face ≥ 2 (the mirror path).</b> Face 4 (mirror class) + face 6 (plain), face chunks at
+stated in-plane distances from the face centre: (33,31) 196 m / (35,31) 393 m / (41,31) 981 m /
+(51,31) 1963 m. (a) H identity: payload H vs <code>carved_tops</code> H, both in data-slot order
+(the full path's own carved top — an independent C++ path): must be EXACT (the promotion contract
+extended off-home; any one-sided mirror application here is the H2 class). (b) placement: the
+satellite body's H (the only face ≥ 2 far consumer; its mapping = <code>_face_build_block</code>'s
+un-mirror + bilinear <code>_hgrid_sample</code>, replicated here) vs the high face-chunk surface
+(full data top placed by <code>face_chunk_transform</code>, radial − R): must sit within quantization
+(~3 m — 1.5 m alpha channel + 6.135 m lattice pooling + 0.4 m LSQ fit), no systematic offset.</li>
+</ul>
+<p>BATTSKIP (leg 2 needs R16 + a streaming settle — out of battery scope; leg 1/3 pure C++ run in
+the standing farhigh call).</p>
+
+<h2>Boundary property to preserve (AC-0415)</h2>
+<p>The near/far handover has no visible seam: the wall band is byte-stable because both sides take
+their colour from the single source air value and the engine's fog factor is 1.0 at the wall
+(<code>u_fog_far</code>), and the AC-0401 partition (<code>d ≥ u_fog_far → discard</code>) is in
+VIEW distance. The fix moves the far surface DOWN onto the sphere (it becomes closer to the ground,
+its view distance grows by up to the sagitta's view component), but the wall is still at
+332 m of VIEW distance and both sides are still full air colour there. Verified by the A/B pair:
+planet-300 frames before/after (R24, FOG_PCT 87, TIME 0.30, 1280,720, drain 600 — the AC-0415
+recipe) + a pixel diff: the change must trace the far tier's surface (it moves down); the sky,
+body, cloud deck and the wall band's colour must be unchanged.</p>
+
+<h2>Harness gates (light, mine — the heavy set is the coordinator's)</h2>
+<ul>
+<li><b>G0 ×2</b> (pre-fix post-arm-add, post-fix): <code>--headless --quit</code> +
+<code>gate_census.py</code> zero SCRIPT/SHADER ERROR <b>and</b> the process exit status checked
+(the stochastic UAF leaves a clean log and rc 134).</li>
+<li><b>farhigh</b> pre-fix (the measurement — expected RED) and post-fix (expected GREEN, all legs).</li>
+<li><b>genhash</b> pre-fix (baseline) + post-fix: 25/25 byte-identical (world/* changed; the fix is
+placement-only so identity is expected — drift would be a finding).</li>
+<li><b>SMOKE</b>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> post-fix.</li>
+<li><b>PROBE / standing emit gates</b>: <code>meshprobe</code>, <code>farab</code>, <code>ladder</code>
+post-fix (the arms covering the emit + the band ladder — must stay green; the slot arrays do not
+move).</li>
+<li><b>boundary r4</b> — the one builder self-check (world/* touched; world/AGENTS.md).</li>
+<li><b>RENDER</b>: planet-300 A/B pair (the ticket's acceptance frames at the tier boundary, the
+user's settings) + diff + wall-band strip check.</li>
+</ul>
+
+<h2>Deliberately NOT doing</h2>
+<ul>
+<li>No re-baseline of any standing value without attribution; no <code>TASKS.yaml</code> edits;
+no commit; no touch of the four fenced WIP files or the harness.gd arm STRUCTURE outside the
+additive farhigh branch (the arms stay pristine otherwise — scenes/AGENTS.md).</li>
+<li>No C++ change (the emit bytes are farab-gated; the defect is placement). No satellite-body
+change (its placement is already spherical — leg 3 only measures it). No fog/shader change
+(AC-0415's one-source-of-truth property is preserved, not re-touched).</li>
+<li>Leg 1/3 run at production R=4000/seed-44 defaults — the arm is deterministic C++ + pure math,
+so no streaming-world boot is needed for them; leg 2 is the only live-tree leg and it reads the
+actual ring mesh, not a re-derivation.</li>
+</ul>
+</body></html>

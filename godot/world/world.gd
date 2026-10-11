@@ -1790,8 +1790,17 @@ func _ring_rebuild_sector(i: int) -> void:
 		# column per sector (~0.1 ms at the R50 scale).
 		if _ring_sector_of(int(c.cx), int(c.cz)) != sec:
 			continue
-		var ox := float(int(c.cx) * 16)
-		var oz := float(int(c.cz) * 16)
+		# AC-0416: the column's FACET placement — the SAME transform the
+		# high tier's chunk node carries (the c.transform = column_transform
+		# at the high build). The ring slab's local (x, si*16 + y, z) maps to
+		# world through it; the old flat `off` (cx*16, si*16, cz*16) is what
+		# stood the far tier above the curved high surface by the sagitta
+		# d^2/2R. The normal rides the basis's inverse-transpose (the SEAM_
+		# FILL scale is not a pure rotation) and is renormalised, matching
+		# what the renderer does to the high tier's node-transformed normals.
+		# T and Mn depend only on (cx, cz) — computed once per column.
+		var T: Transform3D = SphereMath.column_transform(int(c.cx), int(c.cz), Game.planet_R)
+		var Mn: Basis = T.basis.inverse().transposed()
 		for j in range(c.low_slabs.size()):
 			var si: int = int(c.low_slabs[j])
 			# classified by the STORED tier stamp (the AC-0257
@@ -1805,7 +1814,7 @@ func _ring_rebuild_sector(i: int) -> void:
 			if mi == null or not mi.visible or not (mi.mesh is ArrayMesh):
 				continue
 			var am: ArrayMesh = mi.mesh
-			var off := Vector3(ox, float(si * 16), oz)
+			var yb := float(si * 16)
 			# surface_get_arrays returns an ARRAY_MAX Array of Variants
 			# (null where the slot surface has no such array) — the
 			# `as`-cast + null check keeps a degenerate surface from
@@ -1819,13 +1828,14 @@ func _ring_rebuild_sector(i: int) -> void:
 			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX] as PackedInt32Array
 			var base := bv.size()
 			for k in range(v.size()):
-				bv.append(v[k] + off)
+				bv.append(T * Vector3(v[k].x, yb + v[k].y, v[k].z))
 			if idx != null:
 				for k in range(idx.size()):
 					bi.append(idx[k] + base)
 			var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
 			if nrm != null and not nrm.is_empty():
-				bn.append_array(nrm)
+				for k in range(nrm.size()):
+					bn.append((Mn * nrm[k]).normalized())
 			var col: PackedColorArray = arrs[Mesh.ARRAY_COLOR] as PackedColorArray
 			if col != null and not col.is_empty():
 				bc.append_array(col)
@@ -1838,14 +1848,15 @@ func _ring_rebuild_sector(i: int) -> void:
 				if w2 != null and not w2.is_empty():
 					var wbase := wv.size()
 					for k in range(w2.size()):
-						wv.append(w2[k] + off)
+						wv.append(T * Vector3(w2[k].x, yb + w2[k].y, w2[k].z))
 					var widx: PackedInt32Array = warrs[Mesh.ARRAY_INDEX] as PackedInt32Array
 					if widx != null:
 						for k in range(widx.size()):
 							wi.append(widx[k] + wbase)
 					var wnm: PackedVector3Array = warrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
 					if wnm != null and not wnm.is_empty():
-						wn.append_array(wnm)
+						for k in range(wnm.size()):
+							wn.append((Mn * wnm[k]).normalized())
 					var wcm: PackedColorArray = warrs[Mesh.ARRAY_COLOR] as PackedColorArray
 					if wcm != null and not wcm.is_empty():
 						wc.append_array(wcm)

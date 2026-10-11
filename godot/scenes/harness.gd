@@ -611,6 +611,40 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _farab_test()
 			get_tree().quit()
 			return
+		if logic == "farhigh":
+			# AC-0416: the FAR-HIGH same-column comparison (the standing
+			# instrument for the tier boundary — the ticket's owed gate,
+			# not a probe): the far tier's world surface vs the high
+			# surface of the SAME column, the way the user sees it.
+			# Leg 1 — the home battery (pure C++ + SphereMath, no
+			# streaming wait): 12 columns at d ≈ 100 / 358 / 1000 /
+			# 2000 m (both home-pair halves, several bearings), both
+			# draw grids (G=8 med / G=4 low): the far surface
+			# (h_avg_emit — the exact slot arrays, farab-gated) placed
+			# FLAT (the ring merge's drawing before AC-0416) and on the
+			# column FACET (the AC-0416 contract) vs the full column's
+			# surface (topmost non-air per (x,z) — the player-visible
+			# surface) on the facet; + the H identity on the battery
+			# columns (the promotion contract at distance, not just
+			# farab's ~13-chunk battery); + the emit's envelope
+			# contract (every drawn cell top == max(St over the cell,
+			# the veg tops in the cell) — the St = max(H, sea) rule).
+			# Leg 2 — LIVE (radius ≥ 9; the standing run uses 16): the
+			# ring mesh AS DRAWN — per-vertex flat-vs-facet
+			# classification against both candidates, the per-vertex
+			# world-Y pride of the drawn geometry over the facet, the
+			# per-(x,z) drawn-surface Δ vs the high reference, and the
+			# ring census (the per-vertex-transform cost — measured,
+			# not assumed). Leg 3 — face ≥ 2 (the mirror path): the
+			# payload H vs carved_tops H EXACT (a one-sided mirror
+			# application is the H2 class) on face 4 (mirror) + face 6
+			# (plain), + the satellite body's 16 m grid surface vs the
+			# face-chunk high surface (the face_chunk_transform radial).
+			# BATTSKIP (leg 2 needs a streaming settle).
+			world.collision_enabled = false
+			await _farhigh_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "satellite":
 			# AC-0310 P2: the SATELLITE BODY tier arm (the task gate): the
 			# 12-face body at R+SEA with the runtime variance guard, the
@@ -14861,6 +14895,709 @@ func _farab_emit_eq(a: Dictionary, b: Dictionary) -> bool:
 			or a.get("wc") != b.get("wc") or a.get("wu") != b.get("wu"):
 		return false
 	return absf(float(a.get("mh", -1.0)) - float(b.get("mh", -1.0))) < 0.0001
+
+
+# AC-0416: the FAR-HIGH same-column comparison (the ticket's standing
+# instrument — the gate that must go red if the far tier ever stands
+# above the high surface again). See the `farhigh` dispatch for the
+# legs. Leg 1 is pure C++ + SphereMath (no streaming world state), so
+# it is deterministic per seed and cheap; leg 2 is the only live leg
+# (radius ≥ 9) and reads the ring mesh AS DRAWN (the geometry that
+# hits the screen), never a re-derivation; leg 3 covers the face ≥ 2
+# mirror path (payload → satellite body mapping) against the
+# face-chunk high surface.
+func _farhigh_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var H := int(Data.HEIGHT)
+	var sea := int(Data.SEA)
+	var seed := int(Game.world_seed)
+	var R: float = float(Game.planet_R)
+	var g: Variant = WorldGen.gen_cpp()
+	var io: Variant = ChunkIO.io_cpp()
+	var mc: Variant = _ChunkScriptM.mesh_cpp()
+	var fcc: PackedFloat32Array = world._lod_fcc_get()
+	var wr: Vector2i = Data.block_rect(5, "top")
+	var wtlx := wr.x
+	var wtly := wr.y
+	var wpx := float(Data.ATLAS_PX)
+	var out: Dictionary = {
+		"ok": false, "seed": seed, "R": R, "hmax": H, "sea": sea,
+		"leg1": {}, "leg2": {}, "leg3": {}, "note": "", "ms": 0,
+	}
+	# The home battery — 12 columns at stated in-plane distances (m)
+	# from the face centre (the flat origin), both halves of the home
+	# pair (face 0: x ≥ 0 / face 1: x < 0), several bearings.
+	var cols: Array = [
+		[6, 0], [0, 6], [-4, 4],
+		[22, 0], [0, 22], [-15, 15],
+		[62, 0], [0, 62], [-44, 44],
+		[125, 0], [-108, 62], [88, 88],
+	]
+
+	# ---- Leg 1 — the home battery (the defect itself, pure C++).
+	var l1: Dictionary = {
+		"cols": 0, "h_ident_bad_cols": 0, "h_ident_cells": 0, "h_first": "",
+		"envelope_cells": 0, "envelope_bad": 0, "envelope_first": "",
+		"cells": 0, "cells_missing": 0,
+		"flat_max": 0.0, "flat_mean": 0.0,
+		"facet_max": 0.0, "facet_mean": 0.0,
+		"per_col": [],
+	}
+	var flat_sum := 0.0
+	var facet_sum := 0.0
+	var flat_n := 0
+	var facet_n := 0
+	for cxy in cols:
+		var cx: int = int(cxy[0])
+		var cz: int = int(cxy[1])
+		var face: int = 1 if cx < 0 else 0
+		var dcx: float = float(cx) * 16.0 + 8.0
+		var dcz: float = float(cz) * 16.0 + 8.0
+		var dcol: float = sqrt(dcx * dcx + dcz * dcz)
+		var pay: PackedByteArray = g.generate_far(cx, cz, seed, H, sea)
+		if int(pay.size()) != 1024:
+			out["note"] += "leg1 payload size %d at %d,%d; " % [int(pay.size()), cx, cz]
+			continue
+		var ct: PackedByteArray = g.carved_tops(cx, cz, seed, H, sea)
+		var veg: PackedByteArray = g.veg_cells(cx, cz, seed, H, sea)
+		var T: Transform3D = SphereMath.column_transform(cx, cz, R)
+		# (a) the H identity on the battery columns — the promotion
+		# contract at distance (farab's battery reaches ~13 chunks;
+		# this reaches 125).
+		var hmis := 0
+		for i in range(256):
+			var ph := int(pay[2 * i]) | (int(pay[2 * i + 1]) << 8)
+			var th := int(ct[3 * i]) | (int(ct[3 * i + 1]) << 8)
+			if ph != th:
+				hmis += 1
+				if l1["h_first"] == "":
+					l1["h_first"] = "c%d,%d x%d,z%d pay=%d full=%d" % [cx, cz, i % 16, i / 16, ph, th]
+		if hmis > 0:
+			l1["h_ident_bad_cols"] += 1
+			l1["h_ident_cells"] += hmis
+		# (b) the high reference — the full column's topmost non-air
+		# block TOP per (x,z) (the player-visible surface: land H,
+		# water at sea, treetops).
+		var resl: Array = g.generate_resl(cx, cz, seed, H, sea, 0, PackedByteArray())
+		var ff: PackedByteArray = io.slabs_flat(resl[0])
+		var top := PackedInt32Array()
+		top.resize(256)
+		for i in range(256):
+			var lx := i % 16
+			var lz := i / 16
+			var tf := -1
+			for y in range(H - 1, -1, -1):
+				if ff[y * 256 + lz * 16 + lx] != 0:
+					tf = y + 1
+					break
+			top[i] = tf
+		# the payload H (u16 LE) per (x,z) — the St rule's input.
+		var ph_arr := PackedInt32Array()
+		ph_arr.resize(256)
+		for i in range(256):
+			ph_arr[i] = int(pay[2 * i]) | (int(pay[2 * i + 1]) << 8)
+		# the tree cells (veg_cells 4-byte cells: id<<24 | y<<8 | z<<4 |
+		# x) as a (y, z, x) set — they count SOLID in the emit's >half
+		# test (the slab path's bs bitset includes them).
+		var tree_set := {}
+		for vk in range(int(veg.size()) / 4):
+			var v4 := int(veg[4 * vk]) | (int(veg[4 * vk + 1]) << 8) \
+					| (int(veg[4 * vk + 2]) << 16) | (int(veg[4 * vk + 3]) << 24)
+			var tx := v4 & 0xF
+			var tz := (v4 >> 4) & 0xF
+			var ty := (v4 >> 8) & 0x3FF
+			tree_set[ty * 256 + tz * 16 + tx] = true
+		# (c) per draw grid: the far emit (the slot's exact arrays) and
+		# the cell-by-cell comparison.
+		var per_col: Dictionary = {"col": [cx, cz], "d": dcol, "face": face, "sagitta": dcol * dcol / (2.0 * R)}
+		for gridn in [8, 4]:
+			var gn: int = int(gridn)
+			var cellb: int = 16 / gn
+			# the drawn cell tops, read from the emit's own top faces:
+			# a top face = a horizontal (normal +Y) triangle; its 3
+			# corners are 3 of the cell quad's 4 corners, so (min x,
+			# min z) is the quad's own min corner (x0, z0) — exact, no
+			# neighbour conflation (a corner-max map would lift a cell
+			# to its taller neighbour's top). The water surface (the
+			# water exception's top face at sea) rides the same map.
+			var celltop := {}      # lowest-slab (first) drawn top per cell
+			var celltop_last := {}  # highest-slab (last) drawn top per cell
+			for si in range(H / 16):
+				var sky: PackedByteArray = _farab_sky8(pay, si) if gn == 8 else _farab_sky(pay, si)
+				var ore := PackedByteArray()
+				if si <= 3:
+					ore = g.stone_ore_slab(cx, cz, seed, H, si)
+				var em: Dictionary = mc.h_avg_emit(pay.slice(0, 512), pay.slice(512, 768),
+						pay.slice(768, 1024), ore, veg, si, gn, fcc, sky, sea, H, wtlx, wtly, wpx, sea)
+				var yb := float(si * 16)
+				for pair in [["v", "n", "i"], ["wv", "wn", "wi"]]:
+					var vv: PackedVector3Array = em.get(pair[0], PackedVector3Array()) as PackedVector3Array
+					var nn: PackedVector3Array = em.get(pair[1], PackedVector3Array()) as PackedVector3Array
+					var ii: PackedInt32Array = em.get(pair[2], PackedInt32Array()) as PackedInt32Array
+					if vv == null or nn == null or ii == null or ii.is_empty() \
+							or ii.size() % 3 != 0 or nn.size() < vv.size():
+						continue
+					for t3 in range(ii.size() / 3):
+						var a := int(ii[3 * t3])
+						var b := int(ii[3 * t3 + 1])
+						var c2 := int(ii[3 * t3 + 2])
+						if a >= vv.size() or b >= vv.size() or c2 >= vv.size():
+							continue
+						var na: Vector3 = nn[a]
+						var nb: Vector3 = nn[b]
+						var nc2: Vector3 = nn[c2]
+						if not (na.is_equal_approx(Vector3.UP) and nb.is_equal_approx(Vector3.UP) \
+								and nc2.is_equal_approx(Vector3.UP)):
+							continue
+						var pa: Vector3 = vv[a]
+						var pb: Vector3 = vv[b]
+						var pc: Vector3 = vv[c2]
+						if absf(pb.y - pa.y) > 0.01 or absf(pc.y - pa.y) > 0.01:
+							continue
+						# The emit greedily MERGES adjacent same-plane,
+						# same-colour top faces into one quad (extending
+						# in +x/+z from the origin cell). The merged
+						# quad's geometry is attributed, in the raw
+						# arrays, only via its corners — so a face that
+						# was merged into a lower-indexed neighbour's
+						# quad must be credited to EVERY cell the quad
+						# covers, not just the min corner (the min
+						# corner alone conflates the cell with its
+						# taller neighbour AND drops the face for the
+						# merged-into cells).
+						var qminx := int(roundf(minf(minf(pa.x, pb.x), pc.x)))
+						var qmaxx := int(roundf(maxf(maxf(pa.x, pb.x), pc.x)))
+						var qminz := int(roundf(minf(minf(pa.z, pb.z), pc.z)))
+						var qmaxz := int(roundf(maxf(maxf(pa.z, pb.z), pc.z)))
+						var ytop: float = yb + pa.y
+						for qx in range(qminx, qmaxx, cellb):
+							for qz in range(qminz, qmaxz, cellb):
+								var kcell := Vector2i(qx, qz)
+								if not celltop.has(kcell):
+									celltop[kcell] = ytop
+								celltop_last[kcell] = ytop  # last writer wins
+			var gcells := 0
+			var gmiss := 0
+			var genvbad := 0
+			var gflat_max := 0.0
+			var gfacet_max := 0.0
+			for ix in range(gn):
+				for iz in range(gn):
+					var x0 := ix * cellb
+					var z0 := iz * cellb
+					var kcell := Vector2i(x0, z0)
+					if not celltop.has(kcell):
+						gmiss += 1
+						continue
+					var yfar: float = float(celltop[kcell])
+					var yfarsi: float = float(celltop_last[kcell])
+					gcells += 1
+					# (d) the emit's own envelope (the mesh.cpp
+					# h_avg_emit_impl contract, EXACT): a grid row is
+					# solid iff pc > 0 and (TOT - pc) * 2 <= TOT
+					# (TOT = CELLB^3), pc = the solid subblocks
+					# (y <= St, St = max(H, sea) per subcolumn — the
+					# water fill makes the water-topped cell solid to
+					# sea) PLUS the tree cells (they count solid in
+					# the >half test); rows entirely at/below yfloor
+					# (sea) are zeroed first. The +Y face scan, per
+					# (x, z) column, scans the slab top-down and draws
+					# the top face of the TOPMOST solid row of that
+					# slab, iff that row's +Y neighbour (the next row,
+					# or — across the slab boundary — the next slab's
+					# row 0) is non-solid. The extractor's
+					# first-in-slab-order top face is therefore the top
+					# of the topmost solid row of the LOWEST slab whose
+					# topmost solid row is exposed.
+					var TOT: int = cellb * cellb * cellb
+					var nsl := H / 16
+					var sol := []  # sol[s][cy] = solid state of the row
+					for s in range(nsl):
+						var row_s: Array = []
+						for cy in range(gn):
+							var ylo: int = s * 16 + cy * cellb
+							var pc := 0
+							for sz in range(cellb):
+								for sx in range(cellb):
+									var ci: int = (z0 + sz) * 16 + (x0 + sx)
+									var S1: int = maxi(int(ph_arr[ci]), sea)
+									var hi: int = mini(ylo + cellb, S1 + 1)
+									var lo: int = maxi(ylo, 0)
+									if hi > lo:
+										pc += hi - lo
+									for py in range(cellb):
+										if tree_set.has((ylo + py) * 256 + (z0 + sz) * 16 + (x0 + sx)):
+											pc += 1
+							var solid: bool = (ylo + cellb - 1 > sea) \
+									and pc > 0 and (TOT - pc) * 2 <= TOT
+							row_s.append(solid)
+						sol.append(row_s)
+					var St := -1.0
+					for s in range(nsl):
+						var top_cy := -1
+						for cy in range(gn - 1, -1, -1):
+							if bool(sol[s][cy]):
+								top_cy = cy
+								break
+						if top_cy < 0:
+							continue
+						var n_solid: bool
+						if top_cy < gn - 1:
+							n_solid = bool(sol[s][top_cy + 1])
+						else:
+							n_solid = (s + 1 < nsl) and bool(sol[s + 1][0])
+						if not n_solid:
+							St = float(s * 16 + (top_cy + 1) * cellb)
+							break
+					if absf(yfar - St) > 0.01:
+						genvbad += 1
+						if l1["envelope_first"] == "":
+							l1["envelope_first"] = "c%d,%d g%d cell %d,%d yfar=%.2f St=%.2f" % [cx, cz, gridn, x0, z0, yfar, St]
+					# (e) the two placements vs the high reference at
+					# the cell's centre column. The FLAT number is the
+					# defect (the pre-AC-0416 ring merge's world Y of
+					# the drawn surface minus the facet-placed high
+					# surface's world Y ≈ the envelope + the sagitta);
+					# the FACET number is the representation residual
+					# (H1 — the cell upper envelope over the centre
+					# column; the ticket's "≤ 1 cell" on smooth
+					# terrain). Both use the HIGHEST-slab drawn top
+					# (yfarsi): the high reference is the topmost
+					# non-air (treetops included), so the comparison
+					# must be like-with-like — the far tier's canopy
+					# top at tree cells, its terrain top elsewhere.
+					var lxc := x0 + cellb / 2
+					var lzc := z0 + cellb / 2
+					var yhigh: float = float(int(top[lzc * 16 + lxc]))
+					var dflat: float = yfarsi - (T * Vector3(float(lxc), yhigh, float(lzc))).y
+					var dfacet: float = yfarsi - yhigh
+					gflat_max = maxf(gflat_max, dflat)
+					gfacet_max = maxf(gfacet_max, dfacet)
+					flat_sum += dflat
+					facet_sum += dfacet
+					flat_n += 1
+					facet_n += 1
+					l1["envelope_cells"] += 1
+					if genvbad > 0:
+						l1["envelope_bad"] += 0  # per-cell count below
+			l1["envelope_cells"] = int(l1["envelope_cells"])  # (kept as a count)
+			if genvbad > 0:
+				l1["envelope_bad"] = int(l1["envelope_bad"]) + genvbad
+			l1["cells"] = int(l1["cells"]) + gcells
+			l1["cells_missing"] = int(l1["cells_missing"]) + gmiss
+			l1["flat_max"] = maxf(float(l1["flat_max"]), gflat_max)
+			l1["facet_max"] = maxf(float(l1["facet_max"]), gfacet_max)
+			per_col["g%d" % gn] = {
+				"cells": gcells, "missing": gmiss, "env_bad": genvbad,
+				"flat_max": gflat_max, "facet_max": gfacet_max,
+			}
+		l1["cols"] += 1
+		l1["per_col"].append(per_col)
+	l1["flat_mean"] = flat_sum / float(maxi(flat_n, 1))
+	l1["facet_mean"] = facet_sum / float(maxi(facet_n, 1))
+
+	# ---- Leg 2 — the live ring mesh (radius ≥ 9 only).
+	var l2: Dictionary = {
+		"ran": false, "radius": int(world.render_radius),
+		"wait_ms": 0, "cols": 0, "facet_cols": 0, "flat_cols": 0,
+		"verts": 0, "verts_facet": 0, "verts_flat": 0, "verts_missing": 0,
+		"max_dev": 0.0, "proud_max": 0.0, "proud_col": "",
+		"d_max": 0.0, "above_cells": 0, "above_max": 0.0,
+		"ring": {}, "per_col": [], "note": "",
+	}
+	if int(world.render_radius) >= 9 and R > 0.0:
+		l2["ran"] = true
+		# Recenter to the spawn so the world STREAMS around the
+		# player's view (like the ladder/r16 arms) — without it the
+		# far band never fills and the wait spins empty.
+		world.recenter(float(spawn.x), float(spawn.z), true)
+		world._ring_ready()
+		# The candidates are ONLY ring-stamped columns: a slab is in
+		# the ring merge iff its STORED tier stamp is 2 (band B, 8x8)
+		# or 3 (band C, 4x4) and its sector's merged slab count is
+		# non-empty. Band A (materialized) and the real band draw on
+		# the chunk node itself — never in the ring mesh.
+		var t_wait := Time.get_ticks_msec()
+		var last_rebuilds := -1
+		var hsh := {}
+		var finals := {}  # key -> the per-column result (fully classified)
+		while true:
+			await get_tree().process_frame
+			var wait_ms: int = Time.get_ticks_msec() - t_wait
+			l2["wait_ms"] = wait_ms
+			var st: Dictionary = world.ring_stats()
+			if int(st["rebuilds"]) == last_rebuilds:
+				if finals.size() >= 3 or wait_ms >= 240000:
+					break
+				continue
+			last_rebuilds = int(st["rebuilds"])
+			# The ring mesh vertex hash (0.05 m resolution, all ring
+			# MIs, all surfaces) — the geometry as drawn.
+			hsh = {}
+			for i2 in range(world._ring_mi.size()):
+				var mi: MeshInstance3D = world._ring_mi[i2]
+				if mi == null or mi.mesh == null:
+					continue
+				var am: ArrayMesh = mi.mesh
+				for s in range(am.get_surface_count()):
+					var arrs: Array = am.surface_get_arrays(s)
+					var vv: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX] as PackedVector3Array
+					if vv == null:
+						continue
+					for k in range(vv.size()):
+						var p: Vector3 = vv[k]
+						var kk := Vector3i(int(roundf(p.x * 20.0)), int(roundf(p.y * 20.0)), int(roundf(p.z * 20.0)))
+						var arr: Array = hsh.get(kk, [])
+						if arr.size() < 8:
+							arr.append(p)
+							hsh[kk] = arr
+			var cand_keys: Array = []
+			for key in world.chunks:
+				var c: Node3D = world.chunks[key]
+				if int(c.face) > 1:
+					continue
+				var sec: int = world._ring_sector_of(int(c.cx), int(c.cz))
+				var in_ring := false
+				for j in range(c.low_slabs.size()):
+					var si: int = int(c.low_slabs[j])
+					var tstamp: int = int(c.low_tiers.get(si, -1))
+					if (tstamp == 2 or tstamp == 3) \
+							and int(world._ring_slab_n[(tstamp - 2) * 32 + sec]) > 0:
+						in_ring = true
+						break
+				if in_ring and not finals.has(key):
+					cand_keys.append(key)
+			cand_keys.sort()
+			for key in cand_keys:
+				if finals.size() >= 8:
+					break
+				var c: Node3D = world.chunks[key]
+				var ccx := int(c.cx)
+				var ccz := int(c.cz)
+				var T: Transform3D = SphereMath.column_transform(ccx, ccz, R)
+				var ox := float(ccx) * 16.0
+				var oz := float(ccz) * 16.0
+				var cls: Dictionary = {"facet": 0, "flat": 0, "missing": 0}
+				var maxdev := 0.0
+				var proud := 0.0
+				var nvert := 0
+				var drawn_top := {}
+				for j in range(c.low_slabs.size()):
+					var si: int = int(c.low_slabs[j])
+					var tstamp: int = int(c.low_tiers.get(si, -1))
+					if tstamp != 2 and tstamp != 3:
+						continue  # only the ring-merged slabs
+					var smi: MeshInstance3D = c.low_instances[j]
+					if smi == null or not (smi.mesh is ArrayMesh):
+						continue
+					var sam: ArrayMesh = smi.mesh
+					var yb := float(si * 16)
+					var sarrs: Array = sam.surface_get_arrays(0)
+					var sv: PackedVector3Array = sarrs[Mesh.ARRAY_VERTEX] as PackedVector3Array
+					if sv == null or sv.is_empty():
+						continue
+					for k in range(sv.size()):
+						var v: Vector3 = sv[k]
+						var fac: Vector3 = T * Vector3(v.x, yb + v.y, v.z)
+						var fla: Vector3 = Vector3(ox + v.x, yb + v.y, oz + v.z)
+						var hitf: Variant = _farhigh_hash_hit(hsh, fac, 0.06)
+						var hitl: Variant = null
+						if hitf == null:
+							hitl = _farhigh_hash_hit(hsh, fla, 0.06)
+						nvert += 1
+						if hitf != null:
+							cls["facet"] += 1
+							maxdev = maxf(maxdev, (fac - hitf).length())
+							proud = maxf(proud, fla.y - fac.y)
+						elif hitl != null:
+							cls["flat"] += 1
+							maxdev = maxf(maxdev, (fla - hitl).length())
+							proud = maxf(proud, fla.y - fac.y)
+						else:
+							cls["missing"] += 1
+						var dk := Vector2i(int(roundf(v.x)), int(roundf(v.z)))
+						var dy: float = yb + v.y
+						if not drawn_top.has(dk) or drawn_top[dk] < dy:
+							drawn_top[dk] = dy
+					if sam.get_surface_count() > 1:
+						var warrs: Array = sam.surface_get_arrays(1)
+						var w2: PackedVector3Array = warrs[Mesh.ARRAY_VERTEX] as PackedVector3Array
+						if w2 != null:
+							for k in range(w2.size()):
+								var v: Vector3 = w2[k]
+								var dk := Vector2i(int(roundf(v.x)), int(roundf(v.z)))
+								var dy: float = yb + v.y
+								if not drawn_top.has(dk) or drawn_top[dk] < dy:
+									drawn_top[dk] = dy
+				if nvert == 0 or int(cls["missing"]) != 0:
+					continue  # not fully merged yet — retry next rebuild
+				# the per-(x, z) Δ vs the high reference (this
+				# column's full data — the promotion contract; the
+				# local frame, so the placement does not enter).
+				var resl2: Array = g.generate_resl(ccx, ccz, seed, H, sea, 0, PackedByteArray())
+				var ff2: PackedByteArray = io.slabs_flat(resl2[0])
+				var top2 := PackedInt32Array()
+				top2.resize(256)
+				for i in range(256):
+					var lx := i % 16
+					var lz := i / 16
+					var tf := -1
+					for y in range(H - 1, -1, -1):
+						if ff2[y * 256 + lz * 16 + lx] != 0:
+							tf = y + 1
+							break
+					top2[i] = tf
+				var dmax := 0.0
+				var above := 0
+				var abovemax := 0.0
+				for dk in drawn_top:
+					var i2: int = int(dk.y) * 16 + int(dk.x)
+					if i2 >= 0 and i2 < 256 and int(top2[i2]) >= 0:
+						var dd: float = float(drawn_top[dk]) - float(int(top2[i2]))
+						dmax = maxf(dmax, absf(dd))
+						if dd > 0.5:
+							above += 1
+							abovemax = maxf(abovemax, dd)
+				var dcx2: float = float(ccx) * 16.0 + 8.0
+				var dcz2: float = float(ccz) * 16.0 + 8.0
+				var dcol: float = sqrt(dcx2 * dcx2 + dcz2 * dcz2)
+				finals[key] = {
+					"col": [ccx, ccz], "d": dcol, "cls": cls,
+					"max_dev": maxdev, "proud": proud,
+					"dmax_vs_high": dmax, "above": above, "above_max": abovemax,
+				}
+			if finals.size() >= 3 or wait_ms >= 240000:
+				break
+		for key in finals:
+			var fr: Dictionary = finals[key]
+			l2["cols"] += 1
+			l2["verts"] = int(l2["verts"]) + int(fr["cls"]["facet"]) + int(fr["cls"]["flat"]) + int(fr["cls"]["missing"])
+			l2["verts_facet"] = int(l2["verts_facet"]) + int(fr["cls"]["facet"])
+			l2["verts_flat"] = int(l2["verts_flat"]) + int(fr["cls"]["flat"])
+			l2["verts_missing"] = int(l2["verts_missing"]) + int(fr["cls"]["missing"])
+			l2["max_dev"] = maxf(float(l2["max_dev"]), float(fr["max_dev"]))
+			l2["proud_max"] = maxf(float(l2["proud_max"]), float(fr["proud"]))
+			if float(fr["proud"]) > 0.5 and float(fr["proud"]) >= float(l2["proud_max"]) - 0.001:
+				l2["proud_col"] = "%d,%d" % [int(fr["col"][0]), int(fr["col"][1])]
+			l2["d_max"] = maxf(float(l2["d_max"]), float(fr["d"]))
+			l2["above_cells"] = int(l2["above_cells"]) + int(fr["above"])
+			l2["above_max"] = maxf(float(l2["above_max"]), float(fr["above_max"]))
+			if int(fr["cls"]["flat"]) == 0:
+				l2["facet_cols"] += 1
+			else:
+				l2["flat_cols"] += 1
+			l2["per_col"].append(fr)
+		if int(l2["cols"]) < 1:
+			l2["note"] = "no fully-merged ring column (tier stamp 2/3) within the wait budget"
+		l2["ring"] = world.ring_stats()
+
+	# ---- Leg 3 — face ≥ 2 (the mirror path).
+	var l3: Dictionary = {
+		"cols": 0, "h_ident_cells": 0, "h_first": "",
+		"body_verts": 0, "body_max": 0.0, "body_mean": 0.0,
+		"body_fit_max": 0.0, "body_excess": 0.0, "note": "",
+	}
+	var mstep := 16.0
+	var sat: Variant = world.satellite
+	if sat != null:
+		mstep = float(sat.mesh_step)
+	var nu: int = int(roundf(SphereMath.face_width(R) / mstep))
+	var tcache := {}  # "face ncx ncz" -> face_chunk_transform (the LSQ fit
+	# is a 256-cell computation — cache it across the shared neighbours)
+	# face 4 = the mirror class (face_mirror_x), face 6 = plain; the
+	# +u run from the face-centre chunk (31, 31) at chunk offsets 2 /
+	# 4 / 10 / 20 (≈ 196 / 393 / 982 / 1963 m at R = 4000).
+	var fcols: Array = [[33, 31], [35, 31], [41, 31], [51, 31]]
+	var fdefs: Array = [[4, fcols], [6, fcols]]
+	for fdef in fdefs:
+		var face: int = int(fdef[0])
+		var mirrored: bool = bool(SphereMath.face_mirror_x(face))
+		for cxy in fdef[1]:
+			var ccx: int = int(cxy[0])
+			var ccz: int = int(cxy[1])
+			# The 3x3 chunk neighbourhood: the body's bilinear H at a
+			# vertex one texel inside the box samples the neighbour
+			# chunk's payload (the real body does — no clamping inside
+			# the face).
+			var h2 := {}
+			var topn: Dictionary = {}  # (ncx, ncz) -> PackedInt32Array(256)
+			var hmis := 0
+			var hfirst := ""
+			for dcx in [-1, 0, 1]:
+				for dcz in [-1, 0, 1]:
+					var ncx: int = ccx + dcx
+					var ncz: int = ccz + dcz
+					var npay: PackedByteArray = g.generate_far(ncx, ncz, seed, H, sea, face, R)
+					for nz in range(16):
+						for nx in range(16):
+							var slot := nz * 16 + nx
+							var iu: int = ncx * 16 + (15 - nx if mirrored else nx)
+							var iv: int = ncz * 16 + nz
+							h2[iv * 1024 + iu] = int(npay[2 * slot]) | (int(npay[2 * slot + 1]) << 8)
+					if dcx == 0 and dcz == 0:
+						var nct: PackedByteArray = g.carved_tops(ncx, ncz, seed, H, sea, face, R)
+						for i in range(256):
+							var pvv := int(npay[2 * i]) | (int(npay[2 * i + 1]) << 8)
+							var th := int(nct[3 * i]) | (int(nct[3 * i + 1]) << 8)
+							if pvv != th:
+								hmis += 1
+								if hfirst == "":
+									hfirst = "f%d c%d,%d slot%d pay=%d full=%d" % [face, ncx, ncz, i, pvv, th]
+					# the TERRAIN top per data slot — topmost non-air,
+					# non-water (id 5), non-veg (tree) cell. The body's H
+					# is terrain only (no trees, no water-surface raise —
+					# over ocean it is the seafloor), so the reference
+					# must be too (a tree-inclusive reference reads the
+					# body as BELOW the treetops; the far tier does not
+					# carry trees by design — the H1 feature-loss class).
+					var nveg: PackedByteArray = g.veg_cells(ncx, ncz, seed, H, sea, face, R)
+					var vegset := {}
+					for vk in range(int(nveg.size()) / 4):
+						var v4 := int(nveg[4 * vk]) | (int(nveg[4 * vk + 1]) << 8) \
+								| (int(nveg[4 * vk + 2]) << 16) | (int(nveg[4 * vk + 3]) << 24)
+						var vx := v4 & 0xF
+						var vz := (v4 >> 4) & 0xF
+						var vy := (v4 >> 8) & 0x3FF
+						vegset[vy * 256 + vz * 16 + vx] = true
+					var resl: Array = g.generate_resl(ncx, ncz, seed, H, sea, 0, PackedByteArray(), face, R)
+					var nf: PackedByteArray = io.slabs_flat(resl[0])
+					var nt := PackedInt32Array()
+					nt.resize(256)
+					for i in range(256):
+						var lx := i % 16
+						var lz := i / 16
+						var tf := -1
+						for y in range(H - 1, -1, -1):
+							var idc: int = int(nf[y * 256 + lz * 16 + lx])
+							if idc != 0 and idc != 5 and not vegset.has(y * 256 + lz * 16 + lx):
+								tf = y + 1
+								break
+						nt[i] = tf
+					topn["%d,%d" % [ncx, ncz]] = nt
+			l3["cols"] += 1
+			l3["h_ident_cells"] = int(l3["h_ident_cells"]) + hmis
+			if hmis > 0 and l3["h_first"] == "":
+				l3["h_first"] = hfirst
+			# the body's 16 m grid vertices inside this chunk's box.
+			var iu0 := ccx * 16
+			var iv0 := ccz * 16
+			var n0i: int = maxi(0, int(floorf(float(iu0) / 1024.0 * float(nu))))
+			var n1i: int = mini(nu, int(ceilf(float(iu0 + 16) / 1024.0 * float(nu))))
+			var n0j: int = maxi(0, int(floorf(float(iv0) / 1024.0 * float(nu))))
+			var n1j: int = mini(nu, int(ceilf(float(iv0 + 16) / 1024.0 * float(nu))))
+			var cen := Vector3(0.0, -R, 0.0)
+			var n := 0
+			var ssum := 0.0
+			var bmax := 0.0
+			var bfit := 0.0
+			var bexc := 0.0
+			for i in range(n0i, n1i + 1):
+				for j in range(n0j, n1j + 1):
+					var u: float = float(i) / float(nu)
+					var v: float = float(j) / float(nu)
+					# the body's bilinear H at (u, v) (the
+					# _hgrid_sample formula, the 4 texels).
+					var fx: float = clampf(u * 1024.0 - 0.5, 0.0, 1023.0)
+					var fy: float = clampf(v * 1024.0 - 0.5, 0.0, 1023.0)
+					var x0: int = int(fx)
+					var y0: int = int(fy)
+					var x1: int = mini(x0 + 1, 1023)
+					var y1: int = mini(y0 + 1, 1023)
+					var tx: float = fx - float(x0)
+					var ty: float = fy - float(y0)
+					var h00: float = float(h2.get(y0 * 1024 + x0, 0))
+					var h10: float = float(h2.get(y0 * 1024 + x1, 0))
+					var h01: float = float(h2.get(y1 * 1024 + x0, 0))
+					var h11: float = float(h2.get(y1 * 1024 + x1, 0))
+					var hb: float = lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
+					# the reference at the same (u, v): the terrain top of
+					# the texel whose CENTRE is nearest the vertex.
+					var iu_ref: int = clampi(int(roundf(fx)), 0, 1023)
+					var iv_ref: int = clampi(int(roundf(fy)), 0, 1023)
+					var ncx2: int = iu_ref / 16
+					var ncz2: int = iv_ref / 16
+					if not topn.has("%d,%d" % [ncx2, ncz2]):
+						continue
+					var nt: PackedInt32Array = topn["%d,%d" % [ncx2, ncz2]]
+					var sx: int = (15 - (iu_ref % 16)) if mirrored else (iu_ref % 16)
+					var sy: int = iv_ref % 16
+					var tt: int = int(nt[sy * 16 + sx])
+					if tt < 0:
+						continue
+					var tkey := "%d %d %d" % [face, ncx2, ncz2]
+					var T: Transform3D
+					if tcache.has(tkey):
+						T = tcache[tkey]
+					else:
+						T = SphereMath.face_chunk_transform(face, ncx2, ncz2, R)
+						tcache[tkey] = T
+					# (b) the transform's height fidelity: the body's OWN H
+					# placed by the face-chunk transform — the radial vs
+					# R + hb (the LSQ fit class, ~0.4 m by construction; a
+					# wrong R / centre / unit error is >> 1 m).
+					var p: Vector3 = T * Vector3(float(sx) + 0.5, float(hb), float(sy) + 0.5)
+					var fitd: float = (p - cen).length() - (R + hb)
+					# (c) the body's H vs the terrain top at the vertex's
+					# cell — the mirror guard (a one-sided mirror reads the
+					# NEIGHBOUR cell's terrain: on smooth ground a small
+					# shift, at a cliff/valley edge a large one). The 16 m
+					# grid's bilinear pooling smooths cliffs (a vertex H is
+					# a blend of 4 texels) — allow the 4-texel spread.
+					var spread: float = maxf(maxf(h00, h01), maxf(h10, h11)) - minf(minf(h00, h01), minf(h10, h11))
+					var dd: float = hb - float(tt)
+					var allow: float = maxf(3.5, spread) + 1.5
+					n += 1
+					ssum += dd
+					bmax = maxf(bmax, absf(dd))
+					bfit = maxf(bfit, absf(fitd))
+					bexc = maxf(bexc, absf(dd) - allow)
+			l3["body_verts"] = int(l3["body_verts"]) + n
+			l3["body_max"] = maxf(float(l3["body_max"]), bmax)
+			l3["body_fit_max"] = maxf(float(l3["body_fit_max"]), bfit)
+			l3["body_excess"] = maxf(float(l3["body_excess"]), bexc)
+			l3["body_mean"] += ssum
+
+	# ---- The gates.
+	var ok1: bool = int(l1["h_ident_cells"]) == 0 and int(l1["envelope_bad"]) == 0 \
+			and int(l1["envelope_cells"]) > 0
+	var ok2: bool = (not bool(l2["ran"])) or (int(l2["cols"]) >= 3 \
+			and int(l2["facet_cols"]) == int(l2["cols"]) and float(l2["max_dev"]) <= 0.05)
+	# leg 3 gates: the H identity EXACT (the H2 mirror guard at the
+	# payload level) + the transform's height fidelity ≤ 1.5 m (the
+	# LSQ fit class) + the body-vs-terrain EXCESS ≤ 0 (the mirror
+	# guard at the surface level, the cliff-smoothing allowance
+	# inside). `body_max` is the raw |Δ| (reported — the representation
+	# residual the allowance covers).
+	var ok3: bool = int(l3["h_ident_cells"]) == 0 and int(l3["body_verts"]) > 0 \
+			and float(l3["body_excess"]) <= 0.0 and float(l3["body_fit_max"]) <= 1.5
+	if int(l3["body_verts"]) > 0:
+		l3["body_mean"] = float(l3["body_mean"]) / float(int(l3["body_verts"]))
+	out["leg1"] = l1
+	out["leg2"] = l2
+	out["leg3"] = l3
+	out["ok"] = ok1 and ok2 and ok3
+	out["ms"] = Time.get_ticks_msec() - t0
+	Debug.result(out)
+
+
+# AC-0416: the nearest ring-mesh vertex to p within tol (the 27-
+# neighbour lookup on the 0.05 m hash); null if none.
+func _farhigh_hash_hit(hsh: Dictionary, p: Vector3, tol: float) -> Variant:
+	var k0 := Vector3i(int(floorf(p.x * 20.0)), int(floorf(p.y * 20.0)), int(floorf(p.z * 20.0)))
+	var best := -1.0
+	var bp: Variant = null
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			for dz in [-1, 0, 1]:
+				var arr: Array = hsh.get(k0 + Vector3i(dx, dy, dz), [])
+				for q in arr:
+					var d: float = (p - q).length()
+					if best < 0.0 or d < best:
+						best = d
+						bp = q
+	if bp != null and best <= tol:
+		return bp
+	return null
 
 
 func _starlight_test(spawn: Vector3) -> void:

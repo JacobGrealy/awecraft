@@ -1356,7 +1356,17 @@ Match these; do not improvise a different approach in a task.
   one `MeshInstance3D` per (avg tier, world-space 1/32-angle sector) — 32 sectors ×
   2 tiers = up to 64 children of `World` (`_ring_*` in `world.gd`), each wearing a
   merged `ArrayMesh` of every visible slab of that tier in that sector, in world
-  coordinates (surface 0 = the opaque avg in the shared `_lod_avg_mat()`; surfaces
+  coordinates on the column FACET (AC-0416: each slab's local `(x, si*16+y, z)` is
+   mapped through `SphereMath.column_transform(cx, cz, R)` — the SAME transform
+   the high tier's chunk node carries — and the normals ride the basis's
+   inverse-transpose, renormalised, the water-exception surfaces included; the
+   ring MI sits at the identity, so the baked vertices/normals are already world
+   space. Pre-AC-0416 the merge used a FLAT offset `Vector3(cx*16, si*16, cz*16)`
+   with unrotated normals, which stood the far tier above the curved high surface
+   by the sagitta d²/2R (1.25 m @100, 16 m @358, 125 m @1000, 500 m @2000 — the
+   user's "raised plateaus"); the `farhigh` standing instrument (HARNESS.md §1)
+   is the gate — leg 2 classifies the live ring mesh facet-vs-flat, leg 1 reads
+   the counterfactual sagitta on the battery columns) (surface 0 = the opaque avg in the shared `_lod_avg_mat()`; surfaces
   1/2 = the WATER EXCEPTION faces in the shared fluid materials — the two-pass
   camera-side cull is per surface and survives the merge). AC-0384 r8: the
   `_lod_avg_mat()` material (core/lod_avg.gdshader) took the far tier OFF the

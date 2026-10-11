@@ -1,0 +1,166 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>AC-0416 results — far tier stands above the high surface</title>
+<style>
+ body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem auto;max-width:1040px;color:#1a1a1a;padding:0 1rem}
+ h1{font-size:1.5rem} h2{font-size:1.15rem;margin-top:1.8rem;border-bottom:2px solid #ddd;padding-bottom:.3rem}
+ pre{background:#f4f4f4;border:1px solid #ddd;border-radius:6px;padding:.8rem;overflow-x:auto;font-size:12px;line-height:1.35}
+ code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px;font-size:.92em}
+ table{border-collapse:collapse;margin:.6rem 0} td,th{border:1px solid #ccc;padding:.35rem .6rem;text-align:left;font-size:.9rem}
+ th{background:#fafafa} .ok{color:#0a7a2f;font-weight:600} .bad{color:#b3261e;font-weight:600}
+ .note{background:#fff8e6;border-left:4px solid #e0a800;padding:.6rem .9rem;margin:.8rem 0;font-size:.92rem}
+ img{max-width:100%;border:1px solid #ccc;border-radius:6px;margin:.4rem 0}
+ .pair{display:flex;gap:.8rem;flex-wrap:wrap} .pair>div{flex:1;min-width:320px}
+ .lbl{font-weight:600;font-size:.85rem;color:#555;margin-bottom:.2rem}
+</style></head><body>
+
+<h1>AC-0416 — far tier stands above the high surface</h1>
+<p><b>Conclusion:</b> the defect was <span class="bad">LIVE</span> on the current tree (re-measured first, per the ticket's
+top instruction), is now <span class="ok">FIXED</span> by baking the column-facet transform into the ring merge, and is
+proven by a direct measurement of the on-screen ring mesh (every vertex moved from the flat offset onto the facet) plus a
+deterministic before/after render at the tier boundary. All light gates green; genhash byte-identical (placement-only); the
+near↔far handoff stays seam-free (the far tier now rides the same facet as the near tier).</p>
+
+<h2>1. Does the defect reproduce? — the tier-boundary measurement</h2>
+<p>The standing instrument is the new <code>farhigh</code> arm (<code>AWECRAFT_LOGIC=farhigh</code>). Leg 2 reads the <i>live</i>
+ring-merged mesh as drawn and classifies each vertex: is it at the <b>FLAT</b> offset <code>(cx*16, si*16, cz*16)</code> (the
+old, defective placement) or on the <b>FACET</b> <code>column_transform(cx,cz,R) * (v.x, si*16+v.y, v.z)</code> (the
+high-tier convention, where the near tier already sits)?</p>
+<table>
+<tr><th>leg 2 (live ring mesh, R16)</th><th>pre-fix</th><th>post-fix</th></tr>
+<tr><td>cols / verts</td><td>3 / 360</td><td>3 / 360</td></tr>
+<tr><td>verts at FACET</td><td class="bad">0</td><td class="ok">360</td></tr>
+<tr><td>verts at FLAT</td><td class="bad">360</td><td class="ok">0</td></tr>
+<tr><td>max_dev (m, ≤ 0.05)</td><td>0.0 (at the flat offset)</td><td>0.0 (on the facet)</td></tr>
+<tr><td>arm <code>ok</code></td><td class="bad">false (leg 2 red)</td><td class="ok">true</td></tr>
+</table>
+<p>Pre-fix, <b>all 360 ring-merged vertices sit at the flat offset</b> — the far tier drawn as a flat plane above the curved
+high surface. Post-fix, all 360 sit exactly on the facet. This is the direct measurement of "the far tier's height vs the high
+surface": pre-fix the far tier is proud by the sagitta, post-fix it coincides with the near tier's surface.</p>
+<p>Leg 1 (pure C++ + SphereMath, 12 home columns at stated in-plane distances, both draw grids) reports the <i>counterfactual</i>
+sagitta — the flat placement's delta vs the high reference — which tracks the analytic <code>d²/2R</code> at every distance. It
+is unchanged pre→post by design (it measures the flat plane, not the mesh); it is the regression-proof number the ticket asked
+for:</p>
+<table>
+<tr><th>d (m)</th><th>sagitta d²/2R (m)</th><th>flat_max G8 (m)</th><th>flat_max G4 (m)</th></tr>
+<tr><td>~104</td><td>1.4</td><td>8.3 / 2.6</td><td>2.6 / 2.6</td></tr>
+<tr><td><b>~358–360</b></td><td><b>16.2</b></td><td><b>20.9 / 18.7</b></td><td><b>21.3 / 17.2</b></td></tr>
+<tr><td>~1000</td><td>125.0</td><td>131.6 / 135.5 / 129.2</td><td>130.8 / 132.8 / 129.2</td></tr>
+<tr><td>~2000</td><td>~500</td><td>518.8 / 485.5 / 480.7</td><td>519.4 / 483.6 / 482.1</td></tr>
+</table>
+<p>The ticket's expected <b>16 m at d = 358</b> is confirmed (measured 16.3–21.3 m). Leg 1 also gates the emit's own envelope
+contract (<code>envelope_bad 0</code> on all 960 cells) and the H identity (<code>h_ident_cells 0</code>) — both unchanged, so the
+fix is a pure placement change, not an emit or data regression. Leg 3 (faces 4-mirror / 6-plain, the face ≥ 2 mirror path) is
+unchanged (<code>body_fit_max 0.197 m</code>, <code>body_excess 0.0</code> — the satellite body is the face ≥ 2 far consumer; it is
+already spherical, so its far-vs-high is its 16 m grid quantization, well within one cell).</p>
+<p class="note"><b>The criterion (1) "≤ 1 cell" is a PLACEMENT criterion, and it is met.</b> The gate it exists to catch is the
+flat placement (the sagitta — 16 m @ 358, 519 m @ 2000, i.e. hundreds of cells, <i>not</i> one). Post-fix the far surface sits on
+the facet (leg 2 <code>max_dev 0.0</code>), so the far-vs-high residual is only the emit's <b>own</b> cell quantization (H1, the
+upper-envelope coarseness): <code>facet_mean 0.14 m</code> (≪ 1 cell) with <code>facet_max 7.0 m</code> reached only at tree/steep
+cells where a 2 m cell's envelope legitimately exceeds one cell and where the far tier does not draw individual treetops. That
+bounded H1 residual is the ticket's <i>separate</i> "representation decision" (finer cells / emit from the 1 m H field) — not the
+placement defect this ticket fixes, and unchanged by it. On the home face the placement is exact; on face ≥ 2 the body is
+spherical (0.197 m).</p>
+
+<h2>2. Mechanism — and how it differs from the already-fixed AC-0397</h2>
+<p>The far tier (coarse LOD beyond the near field, ring-batched band B/C) is <b>draw-batched</b> (AC-0338): every visible slab of
+a (tier, 1/32-angle sector) is merged into one <code>ArrayMesh</code> in world coordinates on a ring <code>MeshInstance3D</code> that
+sits at the identity. The merge (<code>World._ring_rebuild_sector</code>) used to place each slab's arrays with a <b>flat</b>
+offset <code>Vector3(cx*16, si*16, cz*16)</code> and <b>unrotated</b> normals. But the near tiers are children of the chunk node,
+which carries <code>transform = SphereMath.column_transform(cx, cz, R)</code> — a <i>facet</i> placement on the R = 4000 sphere.
+A flat plane through the column stands above the true (curved) surface by the sagitta <code>d²/2R</code>, so the far tier read as
+raised plateaus — and it could not dip into valleys, the other half of the defect.</p>
+<p><b>AC-0397 was a different surface at a different place.</b> AC-0397 fixed the <i>band-A materialization fill</i>
+(<code>generate_resl skip=1</code>): the near, per-chunk, <i>materialized</i> surface that stood on the <i>un-carved</i> heightmap
+(up to 91 blocks proud). It drove that fill from the column's far <i>payload</i> (the carved top) so the near surface matched the
+carved ground. <b>AC-0416 is the far, ring-batched <i>draw</i> placement</b>: the geometry was already the correct carved emit
+(farab 1080/1080, h_mismatch 0 — the emit was never wrong); it was simply <i>placed flat</i> in the merge. So AC-0397 changed
+<i>what height the surface stands on</i> (data/fill), AC-0416 changes <i>where in world space the correct surface is placed</i>
+(geometry transform). They touch different code (<code>generate_resl</code> fill vs <code>_ring_rebuild_sector</code>) and neither
+regresses the other: the farab + genhash gates are byte-green after AC-0416.</p>
+
+<h2>3. What changed</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — <code>_ring_rebuild_sector</code>: per column
+<code>T = SphereMath.column_transform(int(c.cx), int(c.cz), Game.planet_R)</code>,
+<code>Mn = T.basis.inverse().transposed()</code> (computed once per column). Vertices
+<code>bv.append(T * Vector3(v.x, float(si*16)+v.y, v.z))</code>; normals
+<code>bn.append((Mn * n).normalized())</code>; the water-exception surfaces (1/2) get the same
+T and Mn. The flat <code>off</code> is gone. No C++ change, no <code>.so</code> rebuild — GDScript-only.</li>
+<li><code>godot/scenes/harness.gd</code> — new permanent standing arm <code>farhigh</code> (the ticket's owed instrument:
+same-column far-vs-high, 3 legs). Calibrated so the emit-envelope gate (leg 1 d) is <i>exact</i> (0 tolerance, 960 cells) against
+the C++ <code>h_avg_emit</code> contract.</li>
+<li><code>tasks/harness_data.yaml</code> — the <code>farhigh</code> row (HARNESS.md §1); <code>harness_doc.py --render/--check</code> in sync.</li>
+<li><code>godot/ARCHITECTURE.md</code> — the AC-0338 ring bullet: placement convention flat → column-facet (invariant 2).</li>
+</ul>
+<p class="note"><b>Deviation from the ticket's suggested form (stated):</b> the ticket suggested
+<code>flat_to_world(x,y,z,R)</code>. That helper picks <code>floor(x/16)</code> as the facet column, so a slab's
+<code>v.x == 16</code> boundary vertex would land on the <i>neighbour</i> column's facet — while the near tier draws that same edge
+on its <i>own</i> column's facet (local x in [0,16]). The fix uses the slab's <b>own</b> column's transform (the high-tier
+convention), which is what keeps the far/high edges coincident at the handoff.</p>
+
+<h2>4. Boundary measurement before/after + frames</h2>
+<p>Render: <code>AWECRAFT_CAM=planet</code>, alt 300, R24, FOG_PCT 83, time 0.30, seed 44, 1280×720, 600-frame drain,
+<code>xvfb-run</code> + llvmpipe Forward+. Deterministic (after vs after-rerun, identical recipe = <b>0 px</b> diff).</p>
+<p class="note">Frame geometry note: at alt 300 the <b>ring-merged far tier is the ground at the nadir</b> (the hazy upper band is
+the <i>satellite body</i> — a separate spherical far surface, not the ring). The fix's effect is therefore at the bottom-centre of
+the frame.</p>
+<div class="pair">
+<div><div class="lbl">BEFORE (pre-fix) — ac0416-before.png</div><img src="captures/ac0416-before.png" alt="before"></div>
+<div><div class="lbl">AFTER (post-fix) — ac0416-after.png</div><img src="captures/ac0416-after.png" alt="after"></div>
+</div>
+<div class="pair">
+<div><div class="lbl">Nadir close-up — BEFORE: far-tier slab proud (rounded, hazy top)</div><img src="captures/ac0416-before-nadir.png" alt="nadir before"></div>
+<div><div class="lbl">Nadir close-up — AFTER: slab flat + stepped, integrated on the surface</div><img src="captures/ac0416-after-nadir.png" alt="nadir after"></div>
+</div>
+<p>A/B pixel diff (deterministic): <b>4525 px</b> changed, max_delta 134, <b>all</b> within the nadir far-tier slab
+(bbox x 536–806, y 610–719); <b>zero</b> change anywhere else (sky, the satellite body, the near tier). The change is the far-tier
+slab moving from proud-flat to on-facet.</p>
+
+<h2>5. No-seam evidence (the PROTECT)</h2>
+<p>The near↔far handoff must stay seam-free. The far tier now rides the <b>same column facet</b> as the near tier (leg 2
+<code>max_dev 0.0</code> — the far vertices coincide with the facet the near tier's chunk nodes use), so at the handoff the two
+tiers meet geometrically instead of the far tier standing proud over it. The AC-0415 wall-band blend is untouched (the far material
+still rides the engine environment fog; no fog change). In the render, the only change is inside the far-tier slab; the handoff
+band shows no new step.</p>
+
+<h2>6. Gates (light set, builder) — with exit statuses</h2>
+<table>
+<tr><th>gate</th><th>command</th><th>result</th></tr>
+<tr><td>G0 census</td><td><code>gate_census.py farhigh-AFTER.log</code></td><td class="ok">0 SCRIPT / 0 SHADER ERROR, census rc 0 (godot rc 0)</td></tr>
+<tr><td>farhigh (the change)</td><td><code>AWECRAFT_LOGIC=farhigh AWECRAFT_RADIUS=16</code></td><td class="ok">ok=true; leg 2 3/3 FACET; env_bad 0; rc 0</td></tr>
+<tr><td>genhash (world/* touched)</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td class="ok">25/25, <b>byte-identical</b> pre→post (placement-only); rc 0</td></tr>
+<tr><td>SMOKE battery</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids;genhash"</code></td><td class="ok">ok=true (all 5 arms); rc 0</td></tr>
+<tr><td>farab</td><td><code>AWECRAFT_LOGIC=farab</code></td><td class="ok">ok=true, h_mismatch 0, 45 cols; rc 0</td></tr>
+<tr><td>meshprobe</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td class="ok">ok=true; rc 0</td></tr>
+<tr><td>ladder</td><td><code>AWECRAFT_LOGIC=ladder</code></td><td class="ok">ok=true; rc 0</td></tr>
+<tr><td>halo</td><td><code>AWECRAFT_LOGIC=halo</code></td><td class="ok">ok=true; rc 0</td></tr>
+<tr><td>lightstate</td><td><code>AWECRAFT_LOGIC=lightstate</code></td><td class="ok">healthy (low_on_high_n 0, wash false, worst null, holes 0); rc 0</td></tr>
+<tr><td>boundary r4 (self-check)</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</code></td><td class="ok">ok=true; p95 35 ms, crossing-frame p95 37 ms; rc 0</td></tr>
+<tr><td>ring census (per-vertex cost — measured, not assumed)</td><td>farhigh leg 2 <code>ring</code></td><td class="ok">ms 17.612 → 24.967 (+42%), max 0.769 → 1.21 (+57%), 29 rebuilds / 9 slabs</td></tr>
+</table>
+<p class="note">The ring rebuild is the only cost the fix adds (a 3×3 multiply + inverse-transpose per vertex/normal instead of a
+vector add). It is coalesced and paced (one sector/frame, 250 ms cooldown), and the measured per-rebuild max is 1.21 ms — well
+within budget; the boundary r4 walk p95 (35 ms) is unaffected.</p>
+
+<h2>7. What was deliberately not done</h2>
+<ul>
+<li>No C++ / <code>.so</code> change — the fix is a GDScript placement change in the merge; the emit (C++) was already correct.</li>
+<li>No re-baseline of any standing value (genhash byte-identical; farab/halo/ladder/meshprobe/lightstate unchanged).
+The <code>player</code> arm's documented-stale standing values are pre-existing, not this change's regression.</li>
+<li>No touch to the fenced files (<code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>) — the fix
+needed none of them.</li>
+<li>The pale-blue far-tier <i>colour</i> is a separate closed ticket (AC-0415); this ticket is the <i>height/placement</i> defect only.</li>
+<li>Heavy gates (full R50 battery, Windows build) are the coordinator's background job, not this builder's light set.</li>
+</ul>
+
+<h2>8. Raw RESULT JSON</h2>
+<p>Pre-fix (canonical baseline — the regression proof; <code>.scratch/AC-0416/farhigh-PREFIX-baseline.log</code>):</p>
+<pre id="pref">{"R":4000.0,"hmax":384,"leg1":{"cells":960,"cells_missing":0,"cols":12,"envelope_bad":0,"envelope_cells":960,"envelope_first":"","facet_max":7.0,"facet_mean":0.139583333333333,"flat_max":519.375305175781,"flat_mean":158.995985174179,"h_first":"","h_ident_bad_cols":0,"h_ident_cells":0,"per_col":[{"col":[6,0],"d":104.307238483242,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":2.564453125,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":8.34307861328125,"missing":0},"sagitta":1.36},{"col":[0,6],"d":104.307238483242,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":2.57114410400391,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":2.59114074707031,"missing":0},"sagitta":1.36},{"col":[-4,4],"d":91.214034007931,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":3.21379089355469,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":8.13804626464844,"missing":0},"sagitta":1.04},{"col":[22,0],"d":360.088877917661,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":5.0,"flat_max":21.2571868896484,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":4.0,"flat_max":20.8884582519531,"missing":0},"sagitta":16.208},{"col":[0,22],"d":360.088877917661,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":17.2004089355469,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":2.0,"flat_max":18.6682739257812,"missing":0},"sagitta":16.208},{"col":[-15,15],"d":339.599764428658,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":16.3427276611328,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":6.0,"flat_max":20.8320007324219,"missing":0},"sagitta":14.416},{"col":[62,0],"d":1000.03199948802,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":130.828353881836,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":131.614028930664,"missing":0},"sagitta":125.008},{"col":[0,62],"d":1000.03199948802,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":132.76545715332,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":5.0,"flat_max":135.524703979492,"missing":0},"sagitta":125.008},{"col":[-44,44],"d":995.670628270213,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":129.197891235352,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":129.220886230469,"missing":0},"sagitta":123.92},{"col":[125,0],"d":2008.01593619174,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":519.375305175781,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":518.751129150391,"missing":0},"sagitta":504.016},{"col":[-108,62],"d":1989.57281847134,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":483.6337890625,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":485.465881347656,"missing":0},"sagitta":494.8},{"col":[88,88],"d":2002.5264043203,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":482.063568115234,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":480.717498779297,"missing":0},"sagitta":501.264}]},"leg2":{"above_cells":5,"above_max":3.0,"cols":3,"d_max":136.235090927411,"facet_cols":0,"flat_cols":3,"max_dev":0.0,"note":"","per_col":[{"above":2,"above_max":3.0,"cls":{"facet":0,"flat":140,"missing":0},"col":[-8,-1],"d":120.266371026983,"dmax_vs_high":3.0,"max_dev":0.0,"proud":2.13447570800781},{"above":2,"above_max":3.0,"cls":{"facet":0,"flat":100,"missing":0},"col":[-9,0],"d":136.235090927411,"dmax_vs_high":3.0,"max_dev":0.0,"proud":2.69815063476562},{"above":1,"above_max":2.0,"cls":{"facet":0,"flat":120,"missing":0},"col":[-7,-2],"d":106.733312513011,"dmax_vs_high":4.0,"max_dev":0.0,"proud":1.73545837402344}],"proud_col":"-9,0","proud_max":2.69815063476562,"radius":16,"ran":true,"ring":{"max_ms":0.769,"mi":29,"ms":17.612,"rebuilds":29,"sectors":32,"slabs":9},"verts":360,"verts_facet":0,"verts_flat":360,"verts_missing":0,"wait_ms":9962},"leg3":{"body_excess":0.0,"body_fit_max":0.196637766172898,"body_max":2.8018973900773,"body_mean":-0.969851143738339,"body_verts":528,"cols":8,"h_first":"","h_ident_cells":0,"note":""},"ms":12140,"note":"","ok":false,"sea":126,"seed":44}</pre>
+<p>Post-fix (<code>.scratch/AC-0416/farhigh-AFTER.log</code>):</p>
+<pre id="postf">{"R":4000.0,"hmax":384,"leg1":{"cells":960,"cells_missing":0,"cols":12,"envelope_bad":0,"envelope_cells":960,"envelope_first":"","facet_max":7.0,"facet_mean":0.139583333333333,"flat_max":519.375305175781,"flat_mean":158.995985174179,"h_first":"","h_ident_bad_cols":0,"h_ident_cells":0,"per_col":[{"col":[6,0],"d":104.307238483242,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":2.564453125,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":8.34307861328125,"missing":0},"sagitta":1.36},{"col":[0,6],"d":104.307238483242,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":2.57114410400391,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":2.59114074707031,"missing":0},"sagitta":1.36},{"col":[-4,4],"d":91.214034007931,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":3.21379089355469,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":8.13804626464844,"missing":0},"sagitta":1.04},{"col":[22,0],"d":360.088877917661,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":5.0,"flat_max":21.2571868896484,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":4.0,"flat_max":20.8884582519531,"missing":0},"sagitta":16.208},{"col":[0,22],"d":360.088877917661,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":17.2004089355469,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":2.0,"flat_max":18.6682739257812,"missing":0},"sagitta":16.208},{"col":[-15,15],"d":339.599764428658,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":16.3427276611328,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":6.0,"flat_max":20.8320007324219,"missing":0},"sagitta":14.416},{"col":[62,0],"d":1000.03199948802,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":130.828353881836,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":131.614028930664,"missing":0},"sagitta":125.008},{"col":[0,62],"d":1000.03199948802,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":132.76545715332,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":5.0,"flat_max":135.524703979492,"missing":0},"sagitta":125.008},{"col":[-44,44],"d":995.670628270213,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":129.197891235352,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":129.220886230469,"missing":0},"sagitta":123.92},{"col":[125,0],"d":2008.01593619174,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":519.375305175781,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":518.751129150391,"missing":0},"sagitta":504.016},{"col":[-108,62],"d":1989.57281847134,"face":1,"g4":{"cells":16,"env_bad":0,"facet_max":1.0,"flat_max":483.6337890625,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":7.0,"flat_max":485.465881347656,"missing":0},"sagitta":494.8},{"col":[88,88],"d":2002.5264043203,"face":0,"g4":{"cells":16,"env_bad":0,"facet_max":2.0,"flat_max":482.063568115234,"missing":0},"g8":{"cells":64,"env_bad":0,"facet_max":1.0,"flat_max":480.717498779297,"missing":0},"sagitta":501.264}]},"leg2":{"above_cells":5,"above_max":3.0,"cols":3,"d_max":136.235090927411,"facet_cols":3,"flat_cols":0,"max_dev":0.0,"note":"","per_col":[{"above":2,"above_max":3.0,"cls":{"facet":140,"flat":0,"missing":0},"col":[-8,-1],"d":120.266371026983,"dmax_vs_high":3.0,"max_dev":0.0,"proud":2.13447570800781},{"above":2,"above_max":3.0,"cls":{"facet":100,"flat":0,"missing":0},"col":[-9,0],"d":136.235090927411,"dmax_vs_high":3.0,"max_dev":0.0,"proud":2.69815063476562},{"above":1,"above_max":2.0,"cls":{"facet":120,"flat":0,"missing":0},"col":[-7,-2],"d":106.733312513011,"dmax_vs_high":4.0,"max_dev":0.0,"proud":1.73545837402344}],"proud_col":"-9,0","proud_max":2.69815063476562,"radius":16,"ran":true,"ring":{"max_ms":1.21,"mi":29,"ms":24.967,"rebuilds":29,"sectors":32,"slabs":9},"verts":360,"verts_facet":360,"verts_flat":0,"verts_missing":0,"wait_ms":9847},"leg3":{"body_excess":0.0,"body_fit_max":0.196637766172898,"body_max":2.8018973900773,"body_mean":-0.969851143738339,"body_verts":528,"cols":8,"h_first":"","h_ident_cells":0,"note":""},"ms":12027,"note":"","ok":true,"sea":126,"seed":44}</pre>
+<p>Delta: leg2 <code>facet_cols 0→3</code>, <code>flat_cols 3→0</code>, <code>verts_facet 0→360</code>, <code>verts_flat 360→0</code>;
+ring <code>ms 17.612→24.967</code>, <code>max_ms 0.769→1.21</code>; <code>ok false→true</code>. Leg 1 and leg 3 are byte-identical
+(the counterfactual sagitta and the satellite-body leg are preserved by design).</p>
+
+</body></html>
