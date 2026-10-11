@@ -128,7 +128,26 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (= R + SEA, the star-occlusion pair — one home),
 │                         `u_limb_amount` (AeroLib.limb_amount(), default 0.55,
 │                         AWECRAFT_LIMB env A/B; the term is off when radius = 0,
-│                         i.e. no player/world yet). Pre-AC-0401 the term was NOT gated by S
+│                         i.e. no player/world yet). AC-0417 CLAUSE D: the limb's
+│                         EXTENT is driven by the one atmosphere height A — two
+│                         more change-gated uniforms, `u_atmo_radius`
+│                         (`Aero.atmo_limb_radius(R)` = R + A, the tangent cone
+│                         at the A shell) and `u_atmo_falloff`
+│                         (`Aero.atmo_limb_falloff()` = 0.25A — 300 m at the
+│                         default A: today's hard-coded value, now a stated
+│                         fraction), pushed by world.gd _ac0401_push to the sky
+│                         material AND the cloud materials (one home); the ON
+│                         path's decay reads exp(-(b - u_atmo_radius)/
+│                         u_atmo_falloff) with a 0.0-uniform fallback to
+│                         u_limb_radius/300 (the OFF path is unchanged), so the
+│                         glow reaches PAST THE CLOUDS (the cloud tops, R+400 +
+│                         the AC-0407 virtual extend 50 = R+450, sit strictly
+│                         inside A — asserted once in _ac0401_push with a loud
+│                         push_warning if A is ever lowered past the deck)
+│                         instead of ending below them (pre-AC-0417 the fixed
+│                         300 m falloff on R+SEA put the rim 5.85° INSIDE the
+│                         deck-top tangent at 1341 m; post, the A-shell rim is
+│                         20.38° outside it). Pre-AC-0401 the term was NOT gated by S
 │                         (the rim existed at every altitude, reading as the
 │                         horizon glow at ground level). AC-0401: ALTITUDE-GATED on
 │                         u_space behind
@@ -142,19 +161,43 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         the flight band, where the low LOD's fog fade alone
 │                         is the horizon read; full rim from orbit); the
 │                         shader default u_limb_gate = 0.0 is the pre-AC-0401
-│                         behaviour (rim at every altitude). AC-0402: the
-│                         BACKGROUND blend alone gets its own stretched space
-│                         window — `ws = mix(mix(S², S, u), mix(Ss², Ss, u),
-│                         u_sky_alt)` where Ss = `u_space_sky` (pushed per frame
-│                         by world.gd _ac0401_push, smoothstep over the SAME
-│                         radial altitude but the window BAND_WALK_MAX ..
-│                         BAND_FLY_MIN×1.6 read off the live player — the blue
-│                         thins over the whole climb instead of going black by
-│                         ~1600 m) and `u_sky_alt` is the switch (Settings
-│                         "sky_altitude", DEFAULT ON, env AWECRAFT_SKYALT): 0.0
-│                         (also the shader default) makes ws exactly the
-│                         pre-AC-0402 expression. The gate/stars/sun-glow keep
-│                         riding the physics S (the AC-0386 contracts). AC-0414
+│                         behaviour (rim at every altitude). AC-0402 (SUPERSEDED
+│                         by AC-0417): had given the BACKGROUND blend its own
+│                         stretched space window (Ss = `u_space_sky`, the
+│                         BAND_WALK_MAX .. BAND_FLY_MIN×1.6 band) behind the
+│                         `sky_altitude` switch. AC-0417 REDEFINES the whole
+│                         switch — `sky_altitude` (Settings, DEFAULT ON, env
+│                         AWECRAFT_SKYALT) now selects between two sky BODIES,
+│                         not two windows: OFF (u_sky_alt < 0.5) = the
+│                         pre-AC-0402 expression VERBATIM (world-Y gradient,
+│                         the S²/S window, the rim at R+SEA/300 gated on S —
+│                         bit-for-bit, `sky_off()`); ON = `sky_on()`: the
+│                         gradient is keyed to the LOCAL zenith (hl = the ray's
+│                         elevation about the radial through the camera —
+│                         the fake-horizon fix: the same altitude at two
+│                         positions on the sphere paints the same sky), the
+│                         background is TWO COLOURS + ONE CONE (below the
+│                         local tangent cone of the R+SEA disc = the
+│                         single-source AIR colour `u_air` — the 8-bit
+│                         display value of `Aero.fog_display(t)`, the exact
+│                         colour the env fog and the body dissolve to; above
+│                         it = SPACE_SKY), and ONE atmosphere height
+│                         `Aero.atmosphere_height()` (A, default 1200 m, env
+│                         AWECRAFT_ATMO — one number, one home) drives every
+│                         "how far up is space" consumer: the sky's space
+│                         blend `u_space_sky = Aero.sky_space(alt)` =
+│                         smoothstep(0.25A, A, alt) (the AC-0402 band is
+│                         gone), the star field's full-opacity point (star.gdshader
+│                         ALPHA = shape·mix(u_opacity, mix(u_night, 1.0,
+│                         u_space_sky), u_sky_alt)·occl — ON, the stars are
+│                         full exactly when the sky is space; at night
+│                         mix(u_night,1,·) = 1.0 exactly as before; OFF keeps
+│                         the u_opacity contract verbatim), the sun-glow fade
+│                         ×(1−u_space_sky), the body's `h_full` (diagnostic —
+│                         see the SatelliteBody bullet) and the limb's
+│                         geometry (clause D below). The gate/stars/sun-glow
+│                         keep riding the physics S on the OFF path (the
+│                         AC-0386 contracts). AC-0414
 │                         clause 2: the limb term is ADDITIONALLY LOADED-GATED
 │                         (the user's 2026-10-09 report — the "planet" was a
 │                         pale disc while the body was still baking): two more
@@ -401,6 +444,30 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         u_vol_sigma class — no new Settings toggle;
 │                         u_vol < 0.5 still short-circuits to the
 │                         byte-identical three-shell path).
+│                         AC-0417 (addendum 2): the deck is WASHED BY THE
+│                         LIMB — two more change-gated uniforms, u_atmo_radius
+│                         / u_atmo_falloff (the SAME values the sky material
+│                         takes — one home, Aero.atmo_limb_radius/falloff,
+│                         pushed by _ac0401_push to all three layer
+│                         materials) + u_limb_wash (the sky_altitude switch,
+│                         0.0 = the pre-AC-0417 material bit-for-bit), and
+│                         ac0417_wash() in the fragment: the impact-parameter
+│                         haze 1 - exp(-b / u_atmo_falloff) about the same
+│                         centre, the same scale, the same centre source as
+│                         the sky's limb term, blending ALBEDO toward the
+│                         material's OWN single-source air colour u_vol_air
+│                         (no new colour), gated by an
+│                         outside = smoothstep(u_atmo_radius - 0.4·falloff,
+│                         u_atmo_radius + 0.4·falloff, d) so the wash is
+│                         exactly zero from inside the atmosphere (ground and
+│                         deck-below views are bit-identical to before — the
+│                         wash only kicks in for cameras at/above the A
+│                         shell) and the deck's contrast drops toward its
+│                         limb exactly like the terrain's fog fade (the 1341 m
+│                         deck band measured (98,151,160) → (82,199,227) —
+│                         toward u_air). The engine fog stays off on the
+│                         clouds (fog_disabled) — the wash is the only new
+│                         atmospheric term.
 ├─ Stars                  core/star.gdshader — the star field (main.gd
 │                         `_build_star_mesh`): a 320-unit shell re-centered on the
 │                         camera POSITION each frame, rotation never set — fixed in
@@ -415,7 +482,17 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         front of the disc, so without it the dots painted on top of
 │                         the planet. `u_cam_pos` is an explicit uniform (the headless
 │                         dummy renderer rejects the CAMERA_POSITION builtin, the
-│                         AC-0036 precedent).
+│                         AC-0036 precedent). AC-0417: the field's altitude blend
+│                         follows the one atmosphere height — three change-gated
+│                         uniforms (u_sky_alt / u_space_sky / u_night, pushed by
+│                         world.gd _ac0401_push — the main.gd u_opacity push
+│                         stays verbatim for the OFF path) and
+│                         ALPHA = shape·mix(u_opacity, mix(u_night, 1.0,
+│                         u_space_sky), u_sky_alt)·occl: OFF = the AC-0386
+│                         contract bit-for-bit; ON, the stars are full exactly
+│                         when the SKY is space (u_space_sky = the A window —
+│                         the same number the sky blends with), and at night
+│                         mix(u_night, 1.0, ·) = 1.0 exactly as before.
 ├─ AeroWash               core/aero_wash.gdshader — the screen air-tint: a
 │                         camera-following additive quad 0.12 m in front of the eye
 │                         (WASH_AMOUNT 0.03). AC-0386: `wash_amount ×(1 - u_space)`
@@ -448,6 +525,27 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │  │                      stays R + hmin and the shell meshes are
 │  │                      unchanged — see the AC-0407 note in the
 │  │                      CloudLayer bullet, §3)
+│  │                      AC-0417: the same seam becomes the ONE-HOME seam
+│  │                      for the atmosphere height A (Aero.atmosphere_height,
+│  │                      env AWECRAFT_ATMO): u_space_sky is now
+│  │                      Aero.sky_space(alt_rad) = smoothstep(0.25A, A, alt)
+│  │                      (the AC-0402 band constants are gone from here —
+│  │                      see the AC-0417 bullet in §4), + the A-shell limb
+│  │                      pair u_atmo_radius/u_atmo_falloff (change-gated on
+│  │                      R and A; pushed to the sky material AND the three
+│  │                      cloud-layer materials — clause D + addendum 2), +
+│  │                      u_limb_wash (the sky_altitude switch to the clouds)
+│  │                      + the star uniforms (u_sky_alt change-gated;
+│  │                      u_space_sky/u_night value-gated when ON, the night
+│  │                      factor = 1 - DayNight.day(Game.time_of_day)) via
+│  │                      the Main-owned Stars material_override (get_node_or_null
+│  │                      "Stars") + u_air = Aero.fog_display_srgb(t) (the
+│  │                      8-bit DISPLAY value — the sky pass's native space —
+│  │                      under the same 1/255-linear change gate as the
+│  │                      existing linear air push) + the once-asserted
+│  │                      invariant that the cloud tops (live hmax + the
+│  │                      AC-0407 extend) sit strictly inside A (a loud
+│  │                      push_warning if A is ever lowered past the deck)
 │  ├─ drops (Node)        entities/drop.gd instances
 │  ├─ entities (Node)     entities/mob.gd, arrow.gd, banana.gd
 │  └─ SatelliteBody       world/satellite_body.gd — the satellite body tier (AC-0310 P2):
@@ -1349,6 +1447,60 @@ Match these; do not improvise a different approach in a task.
   cloud deck's r9-character overcast phase (cloud_amount 0.75 at noon ×
   u_boost 2.2 = an opaque neutral veil), already addressed by AC-0401's
   default-ON deck re-characterisation — reported, no deck change.
+- **AC-0417 — sky-local-zenith-and-atmosphere-height (SUPERSEDES the
+  AC-0402 window and REDEFINES its switch)**: the user's three reports,
+  one root cause: the sky was painted against WORLD Y (the face-centre
+  radial), so the "horizon" sat at a different place for every position
+  on the sphere (measured at 841 m true altitude: face-centre top-20 rows
+  (210,250,255) pale vs a 5600 m in-plane offset position (0,67,252)
+  saturated — same altitude, Δ up to 210/255 per channel); the blue-to-
+  space transition ran to 3200 m while the body's full-establishment
+  threshold was 526 m (the ~700 m gap); and the coverage gap behind the
+  body's dissolve read the dark below-horizon branch, not haze. The fix:
+  the sky's `sky()` splits on `u_sky_alt` into `sky_off()` (the
+  pre-AC-0402 body VERBATIM — h = dir.y, the S²/S window, the rim at
+  u_limb_radius/300 gated on u_space: OFF is bit-for-bit pre-AC-0402, not
+  pre-AC-0417, per the ticket) and `sky_on()`: the gradient is keyed to
+  the LOCAL zenith (hl = dot(dir, normalize(-u_limb_center)) — the
+  substitution the ticket names; below the local tangent cone of the
+  R+SEA disc the background is the single-source AIR colour `u_air`,
+  above it SPACE_SKY — two colours + one cone, the cone keeping the limb
+  term), and ONE atmosphere height A (`Aero.atmosphere_height()`,
+  default 1200 m, env AWECRAFT_ATMO — one number, one home, the
+  AC-0386 contract applied to the sky itself) drives every consumer: the
+  sky's space blend (`Aero.sky_space(alt)` = smoothstep(0.25A, A, alt) —
+  measured on the pushed uniform: 0.006/0.322/0.650/0.917/1.000 at
+  341/641/841/1041/1341 m), the star field's full-opacity point (the A
+  window — at day the stars are visible exactly when the sky is space;
+  night unchanged), the sun-glow fade, the body's `h_full` (DIAGNOSTIC
+  ONLY — the per-fragment opacity stays fog-distance driven and the fog
+  wall stays render-distance-coupled, the AC-0415 contract; op_nadir
+  reaches 1.0 at 526 m, stated) and the limb's geometry (clause D:
+  `Aero.atmo_limb_radius(R)` = R + A tangent cone +
+  `Aero.atmo_limb_falloff()` = 0.25A — the fixed 300 m becomes a stated
+  fraction of A; the glow now reaches 20.38° PAST the cloud-top tangent
+  at 1341 m instead of ending 5.85° short of it; the AC-0414
+  LOADED-gate already in the tree is the fake-planet gate any
+  limb-radius work rides on; the cloud-tops-inside-A invariant is
+  asserted once in `_ac0401_push` — 450 < 1200, loud push_warning if
+  violated). Addendum 2: the deck is washed by the limb — the cloud
+  material takes the same air colour it already has (u_vol_air) and the
+  same impact-parameter haze factor the limb term uses (ac0417_wash(),
+  one home, gated to cameras at/above the A shell — ground views
+  bit-identical; the engine fog stays off). `u_air` is the 8-bit DISPLAY
+  value of `Aero.fog_display(t)` in the sky pass (the pass pre-decodes
+  under Forward+, AC-0242); every other consumer takes the
+  srgb_to_linear of the SAME 8-bit source (`Aero.fog_display()`
+  refactored to `fog_display_srgb()` — bit-identical output). Stated
+  deviations: h_first STAYS fog-derived (re-deriving it against A gives
+  sqrt((R+A)² + fog_far²) − R ≈ 1211 m > A — the rim would pop in at full
+  opacity past the space transition); the star's day opacity = the A
+  window (the stars are an orbit instrument). Render evidence (lavapipe
+  proxy): tasks/AC-0417/AC-0417-results.html (F1 position pair, the A
+  ladder on pushed uniforms, the F3 gap, the clause-D before/after pair
+  at 1341 m; gates: genhash 25/25 byte-identical, shaderforce 12/12,
+  farab h_mismatch 0, satellite ok (h_full 1200 diagnostic), farhigh
+  leg2 3/3 all-FACET, SMOKE ok, G0 0/0).
 - **AC-0338 — the ring-level far batch (how bands B/C DRAW)**: the avg tiers'
   per-slab geometry is a DRAW-batched, not an emit-batched, thing. The emit is
   still the per-slab C++ avg emit (byte-identical — farab 1080/1080 + h_mismatch 0,

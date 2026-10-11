@@ -1242,6 +1242,29 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var pl_cen := Vector3(0.0, -pl_R, 0.0)
 		var pl_spn := Vector3(spawn.x, spawn.y, spawn.z)
 		var pl_up := (pl_spn - pl_cen).normalized()
+		# AC-0417 (additive, env-gated — unset = the original behaviour,
+		# byte-identical): AWECRAFT_CAM_OFF=<dx>,<dz> moves the camera along
+		# the in-plane tangent at the spawn (projected off the radial, then
+		# the point is projected ONTO THE R SPHERE so the stated altitude
+		# rides the new radial — the surface point is what the face-boundary
+		# geometry refers to). AWECRAFT_CAM_NADIR=1 aims the camera at the
+		# local nadir (the body's disc / the gap annulus, not the limb); the
+		# look-at up hint must be horizontal there (dir ∥ pl_up degenerates
+		# look_at), so pl_hd (the horizontal tangent reference below) is the
+		# hint for the nadir aim.
+		var pl_off_env := OS.get_environment("AWECRAFT_CAM_OFF")
+		var pl_off_val: Vector2 = Vector2.ZERO
+		if pl_off_env != "":
+			var pl_oparts := pl_off_env.split(",")
+			pl_off_val = Vector2(pl_oparts[0].to_float(),
+					(pl_oparts[1].to_float() if pl_oparts.size() > 1 else 0.0))
+			var pl_off := Vector3(pl_off_val.x, 0.0, pl_off_val.y)
+			var pl_prj := pl_off - pl_up * pl_off.dot(pl_up)
+			var pl_pt: Vector3 = pl_spn + pl_prj
+			pl_pt = pl_cen + (pl_pt - pl_cen).normalized() * pl_R
+			pl_spn = pl_pt
+			pl_up = (pl_spn - pl_cen).normalized()
+		var pl_nadir := OS.get_environment("AWECRAFT_CAM_NADIR") == "1"
 		var pl_pos := pl_spn + pl_up * pl_alt
 		player = main._spawn_player()
 		player.set_physics_process(false)
@@ -1289,7 +1312,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var pl_hd := pl_ref.cross(pl_a).normalized()
 		var pl_tan := pl_cen + pl_a * (pl_R * pl_cg / pl_alen) + pl_hd * (pl_R * pl_sg)
 		var pl_dir := (pl_tan - camera.position).normalized()
-		camera.look_at(camera.position + pl_dir, pl_up)
+		# the nadir aim (AC-0417) replaces both the direction (straight
+		# down the radial) and the up hint (horizontal, or look_at
+		# degenerates with dir ∥ up); the limb aim is the original pair.
+		var pl_aim_dir: Vector3 = pl_dir
+		var pl_aim_up: Vector3 = pl_up
+		if pl_nadir:
+			pl_aim_dir = -pl_up
+			pl_aim_up = pl_hd
+		camera.look_at(camera.position + pl_aim_dir, pl_aim_up)
 		camera.current = true
 		# AC-0399: the frozen stand-in player is the OBSERVER for the
 		# world's view-biased fill order (world.gd samples
@@ -1298,7 +1329,7 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		# so aim IS the view. Without this the fresh player's identity
 		# basis aims down world -Z, ~90 deg off the tangent limb at this
 		# spawn (the bias would fill the wrong wedge).
-		player.look_at(pl_pos + pl_dir, pl_up)
+		player.look_at(pl_pos + pl_aim_dir, pl_aim_up)
 		# settle (AWECRAFT_SNAP_DRAIN counts FRAMES; the Forward+ path
 		# runs at ~5 FPS, so the recipe's 600 is ~2 min).
 		# AC-0399 (additive, env-gated — the time-to-visible ladder
@@ -1333,9 +1364,42 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		var pl_phase := -1
 		if world.satellite != null:
 			pl_phase = int(world.satellite.phase)
+		# AC-0417: the sky's LIVE pushed uniforms are the ground truth for
+		# the measurement side (the measure script re-derives the altitude
+		# window from these, not from its own copy of the formula). Read
+		# whatever the tree actually pushed at the snap moment. u_air does
+		# not exist before AC-0417 — the presence probe is the new Aero
+		# method (a get_shader_parameter on a missing name would print a
+		# runtime error line, and 4.7.1's ShaderMaterial has no
+		# has_shader_parameter).
+		var pl_sky: Dictionary = {}
+		var psm := main.sky_mat
+		if psm is ShaderMaterial:
+			for sk in ["u_space", "u_space_sky", "u_sky_alt"]:
+				pl_sky[sk] = psm.get_shader_parameter(sk)
+			if "atmosphere_height" in AeroLib:
+				# u_air is pushed as a Color (Aero.fog_display_srgb), so the
+				# stored parameter comes back as a Color even though the
+				# uniform is a vec3 (a vec3 push would return a Vector3).
+				var pav = psm.get_shader_parameter("u_air")
+				var pa: Vector3
+				if pav is Color:
+					pa = Vector3((pav as Color).r, (pav as Color).g, (pav as Color).b)
+				else:
+					pa = pav as Vector3
+				pl_sky["u_air"] = [int(round(clampf(pa.x, 0.0, 1.0) * 255.0)),
+						int(round(clampf(pa.y, 0.0, 1.0) * 255.0)),
+						int(round(clampf(pa.z, 0.0, 1.0) * 255.0))]
 		Debug.result({"planet": true, "cam": "planet", "alt": pl_alt, "R": pl_R,
 				"body_phase": pl_phase, "drain": pl_drain,
 				"steps": pl_snapped,
+				"cam_off": [pl_off_val.x, pl_off_val.y], "nadir": pl_nadir,
+				# AC-0417: the ORIGINAL spawn (pre in-plane offset) - the
+				# measurement side (tasks/AC-0417/measure.py camera_basis)
+				# re-applies the offset projection itself, so it needs the
+				# unprojected point.
+				"spawn": [spawn.x, spawn.y, spawn.z],
+				"sky": pl_sky,
 				"w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
 		await Debug.snap(snapshot_path)
 		get_tree().quit()

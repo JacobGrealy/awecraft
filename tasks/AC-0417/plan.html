@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AC-0417 plan</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:940px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:21px}h2{font-size:16px;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}
+code,pre{font:13px/1.45 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
+table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}</style></head>
+<body>
+<h1>AC-0417 plan — sky-local-zenith-and-atmosphere-height</h1>
+<p>Builder: delegated subagent. Tree: HEAD <code>d3f07c1</code> (AC-0416 closed — both protected fixes committed) + the 4 fenced WIP files of the parallel session (main.gd, game.gd, drop.gd, debug.gd) — measured on the current tree, fenced files read-only. Config for all renders: R24 / FOG 83 (fog_far 332, render edge 400), seed 44, T 0.5, 1280×720, Forward+ lavapipe, clouds off.</p>
+
+<h2>Goal</h2>
+<ol>
+<li><b>Local zenith.</b> Re-key the day sky off the LOCAL zenith (radial away from the planet centre) instead of the world's up axis — horizon level, haze band, space blend correct on every face, not just the face centre.</li>
+<li><b>Atmosphere height A.</b> One gameplay constant (starting 1200 m, the ticket's proposed point) every consumer derives from: sky's blue-to-space over [0.25A, A], stars full by A, sun glow dies with it, body's "fully established" (h_full) lands with "sky is space". The fog wall stays a render-distance artifact — said, not re-coupled.</li>
+<li><b>Minimal honest sky (spec C).</b> Keep the sky pass, drop the fake gradient: two colours + one cone — below the local tangent cone (the R+SEA disc) the single-source air colour (<code>Aero.fog_display</code>, the value <code>env.fog_light_color</code> and the body's <code>u_air</code> take); above it <code>SPACE_SKY</code>; the cone keeps the existing limb term. Coverage gaps read as haze, not black.</li>
+<li><b>Switch (spec E).</b> Reuses the existing <code>sky_altitude</code> setting (default ON): ON = the AC-0417 sky; OFF = the pre-AC-0402 expression bit-for-bit (incl. stars on the physics S, glow on the physics S). New env knob <code>AWECRAFT_ATMO</code> sweeps A without a save file. No new settings row.</li>
+</ol>
+
+<h2>What the sky currently uses (read from code — re-measured before change)</h2>
+<table>
+<tr><th>Quantity</th><th>Current tree</th><th>Where</th></tr>
+<tr><td>Zenith</td><td><b>WORLD Y</b> — <code>h = dir.y</code>; the whole day gradient, below-horizon branch, haze band (±11°) and the space-blend weight <code>ws = mix(mix(S²,S,u), mix(Ss²,Ss,u), u_sky_alt)</code> are keyed on it. The shader already receives the local radial: <code>u_limb_center</code> = planet centre relative to the camera (pushed per frame by main.gd:1431), so <code>up_local = normalize(-u_limb_center)</code> costs nothing.</td><td><code>aero_sky_gradient.gdshader</code> L101–119</td></tr>
+<tr><td>Atmosphere extent (background)</td><td>AC-0402 stretched window <code>smoothstep(BAND_WALK_MAX, BAND_FLY_MIN×1.6)</code> = <b>500…3200 m</b>, pushed per frame as <code>u_space_sky</code> — blue until ~3 km, the user's complaint. Re-measured values from the live pushes: 700/1600/2600 m below.</td><td><code>world.gd</code> <code>_ac0401_push</code> (3)</td></tr>
+<tr><td>Stars / sun glow</td><td>Both ride the physics flight-band S (500–2000 m): stars full by ~2000 m, glow dead by 2000 m — 800–1200 m later than the new A.</td><td><code>main.gd</code> <code>_update_sky</code> (fenced), <code>star.gdshader</code>, sky shader L143</td></tr>
+<tr><td>Body thresholds</td><td><code>h_first = sqrt((R+SEA)²+fog_far²)−R</code> (139 m at R24), <code>h_full = SEA+render_edge</code> (526 m at R24) — "fully established" lands 674 m before the new A (the ticket's "700 m apart").</td><td><code>satellite_body.gd</code> <code>_tick_view</code></td></tr>
+</table>
+<p>Tilt scale (face centre vs in-plane d, R = 4000): the painted (world-axis) horizon sits <code>asin(d/R)</code> off the true local horizon — 0.12° at the face centre (spawn), 58.2° at 3400 m (159 m PAST the home-face edge at 3141 m). The BEFORE pair render makes this a pixel number.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/aero.gd</code></td><td><code>ATMOSPHERE_HEIGHT := 1200.0</code> + <code>atmosphere_height()</code> (env <code>AWECRAFT_ATMO</code>, the <code>_envf</code> pattern) + <code>sky_space(alt)</code> = <code>smoothstep(0.25A, A, alt)</code> (the stated curve) + <code>fog_display_srgb(t)</code> (the 8-bit sRGB source; <code>fog_display</code> refactored onto it — one source, two spaces).</td></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td><td><code>u_sky_alt &lt; 0.5</code> → the pre-AC-0402 expression VERBATIM (bit-for-bit). Else: <code>hl = dot(dir, normalize(-u_limb_center))</code>; the forward-ray tangent-cone mask (<code>hl &lt; 0</code> or <code>r ≤ u_limb_radius</code> — the camera inside the disc sphere); <code>col = mix(space_color, u_air, below·(1−u_space_sky))</code>; new uniform <code>u_air</code> (the single-source air colour, display space); sun glow rides <code>1−u_space_sky</code> (OFF path keeps <code>1−u_space</code>). Limb term untouched in both paths.</td></tr>
+<tr><td><code>godot/core/star.gdshader</code></td><td>Three uniforms (<code>u_sky_alt</code>/<code>u_space_sky</code>/<code>u_night</code>, defaults short-circuit): <code>op = mix(u_opacity, mix(u_night, 1, u_space_sky), u_sky_alt)</code> — full by A when ON, <code>u_opacity</code> exactly when OFF.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_ac0401_push</code> only: (3) <code>u_space_sky</code> window → <code>Aero.sky_space(alt_rad)</code>; (3b) new — push <code>u_sky_alt</code>/<code>u_space_sky</code>/<code>u_night</code> to the <code>Stars</code> node's <code>material_override</code> (public interface; main.gd is fenced — the established seam); (5) push <code>u_air</code> (the sRGB source) to the sky material in the same value-gate as <code>u_vol_air</code>. The fog-wall push (1) is untouched — the wall stays where it is.</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code></td><td><code>h_full = Aero.atmosphere_height()</code> (re-derived against A — "fully established" and "sky is space" land together at A). <code>h_first</code> stays the fog-wall crossing (see deviation D1). Header comment updated.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>planet preset, three additive env-gated extensions (unset = byte-identical, the <code>AWECRAFT_SNAP_STEPS</code> precedent): <code>AWECRAFT_CAM_OFF=dx,dz</code> (in-plane offset — the position pair / face-boundary shots), <code>AWECRAFT_CAM_NADIR=1</code> (aim straight down the radial — the coverage-gap view), and the RESULT now carries the run's actual pushed <code>u_space</code>/<code>u_space_sky</code>/<code>u_sky_alt</code>/<code>u_air</code> (the atmosphere extent the frames carry, re-measured not assumed).</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td><td>§2 prose: the planet-preset row gains the three envs (hand-written section, not a generated block).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>AC-0417 bullet (sky re-keyed to the local zenith; A and its consumers; <code>sky_altitude</code> semantics); the AC-0402 bullet's window note corrected to the A window. Same-task rule (invariant 2).</td></tr>
+</table>
+<p><b>Not touched (fences):</b> main.gd, game.gd, drop.gd, debug.gd — read-only. <b>Not touched (protected):</b> the fog-wall push / <code>lod_avg.gdshader</code> (AC-0415 engine fog), <code>_ring_rebuild_sector</code> placement (AC-0416 curvature), the body's per-fragment haz_a/haz_d model (AC-0400/AC-0401/AC-0390), <code>u_limb_gate·u_space</code> (AC-0401).</p>
+
+<h2>Deviations (decided at plan time, to be proven in the results)</h2>
+<ul>
+<li><b>D1 — <code>h_first</code> stays fog-derived (the ticket lists it for re-derivation).</b> The stated pairing in the ticket is "the planet is fully established" (h_full) with "the sky is space" (A) — h_full = A delivers it. h_first is the fog-wall crossing (a render-distance artifact, the same family the ticket says STAYS), and it is the AC-0401/AC-0400 seam: the body emerges exactly where the world fades. Setting h_first = 0.25A would gate the body node off until 300 m, but the per-fragment op is already 1 there (rim tangent distance √((R+0.25A)²−(R+SEA)²) = 1211 m &gt; render edge 400/816 at both R24 and R50) — a full-opacity pop of a ~33°-wide disc patch, replacing the smooth 139–145 m fade-in. Proven by the satellite arm's ladder (unchanged rim case) + the measured op values in the results.</li>
+</ul>
+
+<h2>Harness gates (light set, pre AND post)</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Pass</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot --quit</code> + <code>gate_census.py</code></td><td>0 SCRIPT ERROR, 0 SHADER ERROR, <b>AND exit status checked</b> (the stochastic UAF exits signal 11 with a clean log — a clean log is not the gate, the exit is)</td></tr>
+<tr><td>SMOKE</td><td>battery <code>player;interact;light;fluids;genhash</code></td><td><code>ok: true</code>, standing values (§3) unchanged</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_LOGIC=farab</code></td><td><code>h_mismatch 0</code> (the far/high H identity — the AC-0416 neighbourhood)</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical to the PRE-change run (world.gd touched → owed)</td></tr>
+<tr><td>shaderforce</td><td><code>AWECRAFT_LOGIC=shaderforce</code></td><td>every shipped .gdshader compiles on Forward+ (12/12, incl. the modified ones)</td></tr>
+<tr><td>satellite</td><td><code>AWECRAFT_LOGIC=satellite</code></td><td>ladder hidden/rim/dissolve/full green at the NEW h_full (= A); ac0390 colour fields green; geometry green</td></tr>
+<tr><td>farhigh</td><td><code>AWECRAFT_LOGIC=farhigh AWECRAFT_RADIUS=16</code></td><td>leg 2: sampled cols all FACET (the AC-0416 curvature undisturbed); legs 1+3 green</td></tr>
+</table>
+<p>Heavy gates (boundary r4 etc.) are the coordinator's. Renders (15, ~7 min each): BEFORE ×5 (F1 pair @700 A/B, ladder uniforms @1600/2600, gap @300 nadir) · AFTER ×8 (F1 @700 A/B, F1 @1200 A/B, gap @300/400 nadir, ladder @600/900/1200) · ground A/B ×2 (default cam, the player-facing before/after). All <code>AWECRAFT_CAM=planet</code> + <code>AWECRAFT_SAT_ALT</code> + <code>AWECRAFT_TIME=0.5</code> + <code>AWECRAFT_SNAP_DRAIN=600</code> + <code>AWECRAFT_CLOUDS=0</code> + <code>AWECRAFT_SIZE=1280,720</code>, no <code>AWECRAFT_LOGIC</code> (the arm would own the shot), file-existence checked after every run.</p>
+
+<h2>Acceptance measurements (the numbers, not an impression)</h2>
+<ol>
+<li><b>Position pair (F1).</b> Same altitude (700 m), same time, two well-separated positions — A = face centre (tilt 0.12°), B = +3400 m in-plane (tilt 58.2°, past the face edge): the sky strip at the SAME local elevation (rows above the disc limb, central columns). BEFORE: A bright pale (world-h≈0–0.10: horizon/haze class) vs B dark blue (world-h≈0.85–0.90: zenith class) — the tilt in pixels. AFTER: the two patches equal within noise (the sun-glow Δ computed per direction and subtracted). Repeated at 1200 m.</li>
+<li><b>Altitude ladder (F2), 5 altitudes up to A (300/400/600/900/1200).</b> <code>ws</code> = the pushed <code>u_space_sky</code> (uniform, from the preset RESULT — the value the shader consumes) + the gap-ring pixel: at 300 m the ring (body op → 0) shows the pure air colour; at 400 m the same ring is darkened by (air−space)×0.0858 — the blend measured against altitude; at 1200 m the strip is the space colour (black above A). Star opacity on the same ladder (day 1: off at 300, full at 1200 — strip 99.9th-percentile) and the body's <code>op_nadir</code> (0 at 300, 1 at ≥526 — established by A) show the three land together at A instead of stragglng to 2000/3200 (the BEFORE ladder: pushed <code>u_space_sky</code> 0.016/0.310/0.874 at 700/1600/2600 — re-measured, plus stars on the physics S).</li>
+<li><b>Coverage gap (F3).</b> Nadir-aim ring at 300 m: BEFORE = the old below-horizon branch (horizon×0.5, the dark class); AFTER = the haze air colour — and the ring pixels vs the engine-fog wall-band pixels in the same frame differ by ≤ a few bytes (the single-source air colour through both pipelines).</li>
+<li><b>Protected, undisturbed.</b> genhash 25/25 byte-identical pre/post (the placement/emit unchanged); farhigh leg 2 all FACET; farab <code>h_mismatch 0</code>; the fog-wall push untouched (code) + the wall band in the AFTER frames still on the air colour; the satellite arm's rim/dissolve cases at the unchanged h_first.</li>
+</ol>
+
+<h2>Render traps (from the brief + HARNESS.md §2/§4)</h2>
+<ul>
+<li>NO <code>AWECRAFT_LOGIC</code> arm set (any arm routes main.gd to <code>_run_game</code> and the snapshot never fires); <code>AWECRAFT_SIZE=1280,720</code> with a COMMA; <code>AWECRAFT_SNAP_DRAIN=600</code> counts FRAMES.</li>
+<li><code>xvfb-run -a</code> + <code>VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json</code> + <code>--rendering-driver vulkan</code>; boot line must say <code>Forward+</code>; 1200 s budget per run; CHECK THE FILE EXISTS (<code>Debug.snap</code> prints <code>SNAP FAIL</code>, not success).</li>
+<li>One godot at a time, <code>pgrep -af '[g]odot'</code> first, <code>HOME=/tmp/dsh_home</code> in the same command, from repo root, logs to repo-root <code>.scratch/AC-0417/</code>.</li>
+</ul>
+</body></html>

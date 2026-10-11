@@ -96,9 +96,43 @@ uniform float u_body_loaded : hint_range(0.0, 1.0) = 0.0;
 // material that never sees the push keeps the old look.
 uniform float u_space_sky : hint_range(0.0, 1.0) = 0.0;
 uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
+// AC-0417: u_sky_alt REDEFINED (Settings "sky_altitude", default ON):
+// ON (1.0) = the local-zenith sky below (sky_on) - the atmosphere height
+// A is the single home (Aero.atmosphere_height, env AWECRAFT_ATMO): the
+// background is the two-colour model (air below the local tangent cone,
+// space above), the limb geometry is the tangent cone at the A shell,
+// and the star field / sun glow ride the same A window. OFF (0.0) =
+// sky_off - the pre-AC-0402 expression VERBATIM (h = world Y, the
+// physics-S window mix, the physics-S gates): bit-for-bit. 0.0 is also
+// the shader default, so a material that never sees the push keeps the
+// old look (the OFF contract, as before).
+// AC-0417: the SINGLE-SOURCE air colour in the sky pass's native space
+// (DISPLAY space - the sky pass pre-decodes with u_srgb_pre under
+// Forward+, AC-0242, so the 8-bit sRGB value Aero.fog_display_srgb goes
+// in as-is; the env fog and the body's u_air take srgb_to_linear of the
+// same 8-bit source, world.gd pushes one value to both). One home,
+// three consumers (the AC-0400 identity). The default is the T = 0.5
+// value; world.gd pushes the live day/night value per frame.
+uniform vec3 u_air : source_color = vec3(0.8157, 0.9451, 0.9843);
+// AC-0417 clause D: the limb geometry at the atmosphere top A.
+// u_atmo_radius = R + A (the A shell's radius - the visible-tangent
+// convention u_limb_radius uses for R + SEA extends to A, so the
+// atmosphere's silhouette is legitimately LARGER than the terrain's;
+// the cloud tops at R + 400 sit strictly inside R + A - asserted in
+// world.gd). u_atmo_falloff = 0.25 A (a stated fraction of A, not the
+// hard-coded 300 m - which it equals at the default A = 1200). Both are
+// 0.0 by default and UNREAD on the OFF path (bit-for-bit contract); on
+// the ON path a 0.0 falls back to the pre-AC-0417 value (u_limb_radius /
+// 300) so a material that never sees the push degrades to the old rim.
+uniform float u_atmo_radius : hint_range(0.0, 20000.0) = 0.0;
+uniform float u_atmo_falloff : hint_range(0.0, 5000.0) = 0.0;
 
-void sky() {
-	vec3 dir = normalize(EYEDIR);
+// AC-0417: the OFF path - the pre-AC-0402 sky VERBATIM (h = dir.y, the
+// world axis). Everything keyed on h is the world-Y expression, the ws
+// mix evaluates to the first argument exactly with u_sky_alt = 0, and
+// the limb/sun gates ride the physics S. Do not "clean up" this body -
+// it is the OFF contract, bit-for-bit.
+vec3 sky_off(vec3 dir) {
 	float h = dir.y;
 	float u = clamp(h, 0.0, 1.0);
 	vec3 col = mix(horizon_color, mid_color, smoothstep(0.0, 0.30, u));
@@ -108,13 +142,11 @@ void sky() {
 	}
 	float hz = exp(-abs(h) * 9.0) * haze_amount;
 	col = mix(col, haze_color, hz);
-	// AC-0386: the atmosphere thins with the radial altitude. The zenith
-	// darkens first (weight S), the horizon last (weight S^2 - the grazing
-	// column of air keeps its blue longest). S = 0 is bit-identical to the
-	// pre-AC-0386 sky; S = 1 makes the whole dome space.
-	// AC-0402: with u_sky_alt = 0 this is exactly the pre-AC-0402 ws
-	// (mix(x, y, 0.0) = x); with it ON the background rides the stretched
-	// sky window u_space_sky (see the uniform's note).
+	// AC-0386/AC-0402: the atmosphere thins with the radial altitude.
+	// The zenith darkens first (weight S), the horizon last (weight S^2
+	// - the grazing column of air keeps its blue longest). S = 0 is
+	// bit-identical to the pre-AC-0386 sky; S = 1 makes the whole dome
+	// space. With u_sky_alt = 0 this is exactly the pre-AC-0402 ws.
 	float ws = mix(mix(u_space * u_space, u_space, u), mix(u_space_sky * u_space_sky, u_space_sky, u), u_sky_alt);
 	col = mix(col, space_color, ws);
 	// AC-0384 r4: the atmospheric limb glow (see the uniform block).
@@ -130,10 +162,8 @@ void sky() {
 		float sun_side = 0.55 + 0.45 * pow(clamp(dot(dir, sun_dir), 0.0, 1.0), 2.0);
 		// AC-0401: gate on u_space when u_limb_gate is ON (the mix is
 		// exactly 1.0 with the default u_limb_gate = 0.0 - the old path).
-		// AC-0414 clause 2: multiply by the body-loaded gate (see the
-		// u_limb_loaded/u_body_loaded note) - the fake-planet disc is
-		// gone while the body is not LOADED, exactly 1.0 when the switch
-		// is OFF or the body is loaded.
+		// AC-0414 clause 2: multiply by the body-loaded gate (the fake
+		// planet disc is gone while the body is not LOADED).
 		col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space, u_limb_gate) * mix(1.0, u_body_loaded, u_limb_loaded));
 	}
 	float sd = dot(dir, sun_dir);
@@ -142,6 +172,69 @@ void sky() {
 	// the sun's GLOW is scattering - it dies with the air; the disc stays.
 	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount * (1.0 - u_space);
 	col = col + (sun_core * disc) + (sun_halo * glow);
+	return col;
+}
+
+// AC-0417: the ON path - the local-zenith sky. hl = dot(dir, local up)
+// with local up = the radial through the camera = -u_limb_center / r
+// (u_limb_center is the planet centre RELATIVE TO THE CAMERA - the same
+// uniform the limb term uses, one home); fallback dir.y when the camera
+// is at the centre (no world yet). The background is TWO COLOURS AND ONE
+// CONE (clause C): below the local tangent cone of the R + SEA disc the
+// single-source AIR colour (u_air - the value the fog wall and the body
+// dissolve to, so a coverage gap reads haze, not a hole), above it
+// SPACE; the cone's own glow is the existing limb term, now at the A
+// shell (clause D). The A window (u_space_sky) thins the air to space
+// and gates the rim / sun glow - "the sky is space" lands at A, with
+// the body's h_full (satellite_body.gd) at the same A.
+vec3 sky_on(vec3 dir) {
+	vec3 upc = -u_limb_center;
+	float r = length(upc);
+	float hl = (r > 0.0) ? dot(dir, upc) / r : dir.y;
+	// below the cone: the ray is under the local horizon (hl < 0) or the
+	// camera is inside the R + SEA disc (r <= u_limb_radius - no horizon
+	// exists, everything is air).
+	float below = clamp(step(0.0, -hl) + (1.0 - step(u_limb_radius, r)), 0.0, 1.0);
+	vec3 col = mix(space_color, u_air, below * (1.0 - u_space_sky));
+	// the limb term - the atmosphere's edge. AC-0417 clause D: the
+	// tangent cone at the A shell (u_atmo_radius = R + A, the falloff
+	// 0.25 A) so the atmosphere's silhouette is larger than the terrain's
+	// and the cloud tops (R + 400) sit inside it; a 0.0 (no push yet)
+	// falls back to the pre-AC-0417 R + SEA / 300 m rim. The rim's
+	// altitude gate rides the A window (the sky is space at A, so the rim
+	// is too) - the OFF path keeps the AC-0401 physics-S contract.
+	if (u_limb_amount > 0.0) {
+		float lr = (u_atmo_radius > 0.0) ? u_atmo_radius : u_limb_radius;
+		if (lr > 0.0) {
+			float lf = (u_atmo_falloff > 0.0) ? u_atmo_falloff : 300.0;
+			float b = length(cross(u_limb_center, dir));
+			float limb = exp(-(b - lr) / lf);
+			if (limb > 1.0) {
+				limb = 1.0; // inside the tangent: clamped, not amplified
+			}
+			vec3 limb_col = horizon_color * 0.5 + mid_color * 0.5;
+			float sun_side = 0.55 + 0.45 * pow(clamp(dot(dir, sun_dir), 0.0, 1.0), 2.0);
+			col += limb_col * (limb * u_limb_amount * sun_side * mix(1.0, u_space_sky, u_limb_gate) * mix(1.0, u_body_loaded, u_limb_loaded));
+		}
+	}
+	float sd = dot(dir, sun_dir);
+	float up = clamp(sd, 0.0, 1.0);
+	float disc = smoothstep(0.99894, 0.99985, sd) * sun_amount;
+	// the sun's GLOW is scattering - it dies with the air; the disc stays.
+	// The fade rides the A window on the ON path (the sky is space at A).
+	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount * (1.0 - u_space_sky);
+	col = col + (sun_core * disc) + (sun_halo * glow);
+	return col;
+}
+
+void sky() {
+	vec3 dir = normalize(EYEDIR);
+	vec3 col;
+	if (u_sky_alt < 0.5) {
+		col = sky_off(dir);
+	} else {
+		col = sky_on(dir);
+	}
 	// sky shader COLOR is a vec3 (unlike spatial ALBEDO)
 	COLOR = mix(col, pow(col, vec3(2.2)), u_srgb_pre); // AC-0242
 }

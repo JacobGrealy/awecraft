@@ -27,6 +27,44 @@ const WASH_AMOUNT := 0.03
 const WASH_COLOR := Color8(168, 238, 255)
 const WASH_TOP_GLOW := 0.5
 
+# AC-0417: the ONE atmosphere height A (m above the R sphere) - the
+# single home for "how far up it is space". A gameplay constant (R = 4000
+# with an Earth-like ratio would put space at ~60 km, far outside the
+# flight range). Every consumer derives from it (the AC-0386 principle):
+# the sky's space blend (smoothstep(0.25A, A, alt)), the star field's
+# full-opacity point, the sun-glow fade, the satellite body's h_full
+# (satellite_body.gd - "the planet is fully established" lands with
+# "the sky is space"), and the sky's limb geometry (the tangent cone at
+# the A shell + a falloff of 0.25A - the clause-D addendum: the
+# atmosphere's silhouette is LARGER than the terrain's, and the cloud
+# tops (R+400) must sit strictly inside A). The FOG WALL stays
+# render-distance-coupled (the AC-0415 contract) - A is NOT a render
+# distance; the body's per-fragment opacity ramp rides the fog window
+# and is untouched here.
+const ATMOSPHERE_HEIGHT := 1200.0
+
+static func atmosphere_height() -> float:
+	return _envf("AWECRAFT_ATMO", ATMOSPHERE_HEIGHT)
+
+# AC-0417: the sky's A window - 0.0 at/below 0.25A, 1.0 at/above A.
+# Replaces the AC-0402 stretched band window (500..3200).
+static func sky_space(alt_rad: float) -> float:
+	var a := atmosphere_height()
+	return smoothstep(0.25 * a, a, alt_rad)
+
+# AC-0417 clause D: the sky's limb geometry at A. The visible-tangent
+# convention the pre-AC-0417 limb used (impact parameter b = R+SEA = the
+# tangent ray's impact parameter exactly) extends to the A shell:
+# u_atmo_radius = R + A, and the outer falloff is a stated fraction of A
+# (0.25A - which is 300 m at the default A, i.e. today's hard-coded
+# value, so the default look's falloff is unchanged and only the
+# silhouette moves out).
+static func atmo_limb_radius(planet_r: float) -> float:
+	return planet_r + atmosphere_height()
+
+static func atmo_limb_falloff() -> float:
+	return 0.25 * atmosphere_height()
+
 const DAY_ZENITH := Color8(46, 134, 216)
 const DAY_MID := Color8(95, 198, 234)
 const DAY_HORIZON := Color8(223, 246, 251)
@@ -154,11 +192,20 @@ static func apply_grade(env: Environment) -> void:
 # -> (24,25,23) with the player at S=1). The value keeps the same 8-bit
 # sRGB treatment sky_display used (Color8(...).srgb_to_linear()) so the
 # env fog path sees the same pipeline input as before.
-static func fog_display(t: float) -> Color:
+# AC-0417: the 8-bit sRGB (DISPLAY-space) form of the single-source air
+# colour - the value the SKY pass takes (the sky pass is display-space
+# under Forward+, AC-0242/u_srgb_pre = 1.0: it pushes this 8-bit colour
+# straight in as u_air). The env fog and the body's u_air take the
+# srgb_to_linear() of the SAME 8-bit source (fog_display below), so all
+# three consumers stay one source.
+static func fog_display_srgb(t: float) -> Color:
 	var u := sky_uniforms(t)
 	var col := (u["horizon_color"] as Color).lerp(u["haze_color"] as Color, float(u["haze_amount"]))
 	return Color8(int(roundf(col.r * 255.0)), int(roundf(col.g * 255.0)),
-			int(roundf(col.b * 255.0))).srgb_to_linear()
+			int(roundf(col.b * 255.0)))
+
+static func fog_display(t: float) -> Color:
+	return fog_display_srgb(t).srgb_to_linear()
 
 
 static func sky_uniforms(t: float) -> Dictionary:

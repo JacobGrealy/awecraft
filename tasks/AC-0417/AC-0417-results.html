@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0417 results — sky-local-zenith-and-atmosphere-height</title>
+<style>
+body { font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 1080px; color: #1a202c; }
+h1 { font-size: 1.5rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .3rem; }
+h2 { font-size: 1.15rem; margin-top: 2rem; color: #2b6cb0; }
+table { border-collapse: collapse; margin: 1rem 0; font-size: 13px; }
+th, td { border: 1px solid #cbd5e0; padding: 4px 10px; text-align: left; }
+th { background: #edf2f7; }
+code, pre { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
+pre { background: #1a202c; color: #e2e8f0; padding: 10px; overflow-x: auto; border-radius: 6px; }
+img.cap { max-width: 540px; border: 1px solid #cbd5e0; border-radius: 4px; margin: .5rem .5rem .5rem 0; }
+.pass { color: #276749; font-weight: 600; }
+.fail { color: #9b2c2c; font-weight: 600; }
+.note { background: #fffbea; border-left: 4px solid #d69e2e; padding: .5rem .8rem; margin: 1rem 0; }
+.okbox { background: #f0fff4; border-left: 4px solid #38a169; padding: .5rem .8rem; margin: 1rem 0; }
+.pair { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 1rem 0; }
+.pair .cell { text-align: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>AC-0417 — sky-local-zenith-and-atmosphere-height — results</h1>
+<p><b>Tree:</b> HEAD <code>d3f07c1</code> + 4 fenced WIP files (parallel session, untouched). <b>Renderer:</b> Forward+ lavapipe (llvmpipe, software GL — a proxy for the shipped look; evidence about geometry/layout/numbers, not the shipped forward_plus pixels). <b>Preset:</b> R24 (R=4000, SEA=126, fog_far=332, render_edge=400), seed 44, T=0.5 (day=1.0), 1280×720, drain 60.</p>
+<p><b>The one change, in one sentence:</b> the sky is now keyed to the <i>local</i> zenith (the radial through the camera) instead of world Y, and one atmosphere height <b>A = 1200 m</b> (<code>Aero.atmosphere_height</code>, env <code>AWECRAFT_ATMO</code>) is the single home for "how far up it is space" — the sky's space window <code>smoothstep(0.25A, A, alt)</code>, the star field's full-opacity point, the sun-glow fade, the body's <code>h_full</code>, and the limb's geometry (the tangent cone at the R+A shell, falloff 0.25A) all derive from it.</p>
+<p><b>Switch:</b> the existing <code>sky_altitude</code> setting (default ON) redefined per the ticket: ON = the new local-zenith sky; OFF = the pre-AC-0402 expression <b>bit-for-bit</b> (<code>sky_off</code> is the old body verbatim; the star material keeps its <code>u_opacity</code> contract; the cloud wash and the A-limb uniforms are inert). No new setting row.</p>
+
+<h2>Gates (zero errors, byte-identical, standing values)</h2>
+<p class="pass">ALL GATES GREEN — before and after.</p>
+<table>
+<tr><th>Gate</th><th>Before (pre-change tree)</th><th>After (this change)</th><th>Standing / owed</th></tr>
+<tr><td>G0 (headless parse)</td><td class="pass">exit 0 — SCRIPT 0 / SHADER 0</td><td class="pass">exit 0 — SCRIPT 0 / SHADER 0</td><td>zero SCRIPT/SHADER ERROR lines + clean exit (scenes/AGENTS.md: rc=0 is not the gate)</td></tr>
+<tr><td>genhash</td><td class="pass">25/25</td><td class="pass">25/25 byte-identical to genhash-before.log (GENMS 125→127)</td><td>world/* was touched (world.gd, satellite_body.gd) — byte-identical owed ✓</td></tr>
+<tr><td>shaderforce</td><td class="pass">12/12 ok, failed:[]</td><td class="pass">12/12 ok, failed:[] — sky 20→23 params, star 6→9, cloud 32→35 (the new uniforms are declared AND pushed); 0 real SCRIPT/SHADER ERROR lines</td><td>3 shaders edited (sky, star, cloud)</td></tr>
+<tr><td>farab</td><td class="pass">h_mismatch 0, slab_cmp 1080/1080 ×2, mat_surf_diff 0</td><td class="pass">h_mismatch 0, slab_cmp 1080/1080, mat_surf_diff 0, h_bad_h/top 0, ok:true</td><td>protected AC-0387/AC-0397 far/h-only contract ✓</td></tr>
+<tr><td>satellite (r4)</td><td class="pass">ok — ladder hidden/rim/dissolve/full green, geom ok, ac0390 ok</td><td class="pass">ok — ladder green (the "full" teleport h=1300 → nadir_d 1174 &gt; render edge → op 1.0); h_full now 1200 (diagnostic only); h_first 126.59 unchanged</td><td>protected arm; visibility thresholds still fog-derived ✓</td></tr>
+<tr><td>farhigh (R16)</td><td class="pass">leg1 h_ident 0; leg2 facet_cols 3/3 flat 0 max_dev 0.0; leg3 body_fit_max 0.197</td><td class="pass">leg1 h_ident_bad_cols 0; leg2 facet_cols 3/3 flat 0 max_dev 0.0 (all-FACET); leg3 body_fit_max 0.197 body_excess 0.0; ok:true</td><td>protected AC-0416 far tier follows curvature ✓</td></tr>
+<tr><td>SMOKE battery</td><td class="pass">ok:true (player;interact;light;fluids;genhash, 258 s)</td><td class="pass">ok:true (259 s, 0 error lines)</td><td>no engine env fog / wall-band regression (AC-0415) ✓</td></tr>
+</table>
+
+<h2>F1 — THE FAKE HORIZON: the sky measured at two positions on the sphere</h2>
+<p>Same TRUE altitude at two well-separated positions: <b>A</b> = face centre (spawn radial) at param 700 → true 841.0 m; <b>B</b> = 5600 m in-plane tangent offset (projected onto the R sphere → the surface point is what the face geometry refers to), param 842 → true 842.0 m (the 1 m mismatch is below noise). The strip is the sky region above the disc limb (rows 4–333, central 200 px) — pure sky, no terrain.</p>
+<div class="pair">
+<div class="cell"><img class="cap" src="captures/b1-planetA-700.png"><br><b>BEFORE A</b> (841 m): pale dome (210,250,255)</div>
+<div class="cell"><img class="cap" src="captures/b2-planetB-842.png"><br><b>BEFORE B</b> (842 m): saturated dome (0,67,252) — <b>same altitude, different sky</b></div>
+<div class="cell"><img class="cap" src="captures/a1-planetA-700.png"><br><b>AFTER A</b> (841 m): space band + stars (0,5,17)</div>
+<div class="cell"><img class="cap" src="captures/a2-planetB-842.png"><br><b>AFTER B</b> (842 m): same sky (0,42,63)</div>
+</div>
+<table>
+<tr><th>strip top-20 rows (med, 8-bit)</th><th>BEFORE A</th><th>BEFORE B</th><th>AFTER A</th><th>AFTER B</th></tr>
+<tr><td>RGB</td><td>(210, 250, 255)</td><td>(0, 67, 252)</td><td>(0, 5, 17)</td><td>(0, 42, 63)</td></tr>
+<tr><td>A-vs-B Δ (|A−B| per channel)</td><td colspan="2"><b>(210, 183, 3) — the fake horizon: at the same altitude the sky colour depended on where on the sphere you stood</b> (the dome was shaded against world Y; B's local zenith is ~46° off +Y)</td><td colspan="2">(0, 37, 46)</td></tr>
+<tr><td>strip bottom-20 (near the limb)</td><td>(115, 154, 255)</td><td>(41, 178, 255)</td><td>(81, 138, 255)</td><td>(96, 148, 255)</td></tr>
+</table>
+<p>The residual AFTER A-vs-B difference is <b>not</b> the fake horizon: it is the genuine fixed-sun geometry (the sun-side modulation of the limb glow and the sun's position in the rotated frame). The 1:1 forward model (this page's measurement, <code>tasks/AC-0417/measure.py</code>) predicts an A-vs-B Δ of <b>(29, 45, 46)</b> — i.e. it reproduces the measured (0, 37, 46) from the position-invariant sky model plus the world-fixed sun. Model-vs-pixel median deltas: AFTER A 21/255, AFTER B 16/255 (BEFORE: 16/255, 22/255 — the model's known ACES chromatic band near the limb). The painted horizon is level in both AFTER frames (the disc edge is a clean arc in each local frame).</p>
+
+<h2>F2 — blue-to-space CLOSER: the A ladder (measured on the pushed uniforms — ground truth)</h2>
+<p>One atmosphere height A = 1200 m. Consumers, on the same altitude ladder (true radial altitude; the non-offset preset's param + 141 m spawn radius):</p>
+<table>
+<tr><th>true alt (m)</th><th>BEFORE sky window (AC-0402, 500–3200)</th><th>BEFORE star op (=S, physics 500–2000)</th><th>AFTER sky window (0.25A–A = 300–1200)</th><th>AFTER star op (= A window)</th><th>body op_nadir (fog 332–400)</th></tr>
+<tr><td>341</td><td>0.0000 (B5)</td><td>0.0000</td><td class="pass">0.0060 (A5)</td><td>0.0060</td><td>0.0 (d=215)</td></tr>
+<tr><td>641</td><td>—</td><td>—</td><td class="pass">0.3219 (aL500)</td><td>0.3219</td><td>1.0 (d=515)</td></tr>
+<tr><td>841</td><td>0.0438 (B1)</td><td>0.132 (S)</td><td class="pass">0.6496 (A1)</td><td>0.6496</td><td>1.0 (d=715)</td></tr>
+<tr><td>1041</td><td>—</td><td>—</td><td class="pass">0.9174 (aL900)</td><td>0.9174</td><td>1.0 (d=915)</td></tr>
+<tr><td>1341</td><td>0.2306 (computed, same window)</td><td>0.591 (S)</td><td class="pass">1.0000 (A10) — FULL SPACE AT A</td><td>1.0000 (stars full in the A10 frame — visible at day, because the sky IS space)</td><td>1.0 (d=1215)</td></tr>
+<tr><td>1741 (B3)</td><td>0.4396 — <b>the old window was still 44% air at 1741 m</b></td><td>0.921</td><td>1.0 (stays full above A)</td><td>1.0</td><td>1.0</td></tr>
+</table>
+<p>Every AFTER value is the <b>pushed uniform read back at the snap moment</b> (the RESULT <code>sky</code> block), not a re-derivation. The three quantities "the sky is space" (window top = A), "the stars are full" (same window) and "the planet is fully established" (<code>h_full</code> = A = 1200, the SATDIAG line of every AFTER render) land at the same altitude — pre-AC-0417 the sky window ran to 3200 m while the body's <code>h_full</code> was 526 m (the ~700 m gap from the ticket). <span class="note" style="display:block">Stated, per the ticket: the body's <i>per-fragment</i> opacity (op_nadir) is still fog-distance driven and reaches 1.0 at 526 m — the fog wall stays render-distance-coupled (the AC-0415 contract); <code>h_full</code> = A is the full-establishment <i>threshold</i> (reported, diagnostic-only: it never gates visibility or opacity).</span></p>
+<div class="pair">
+<div class="cell"><img class="cap" src="captures/b3-planetA-1600.png"><br><b>BEFORE</b> 1741 m: still 44% blue dome (151,200,212)</div>
+<div class="cell"><img class="cap" src="captures/a10-planetA-1200-clouds.png"><br><b>AFTER</b> 1341 m: full space + stars + the A-limb band (clause-D frame)</div>
+</div>
+
+<h2>F3 — the coverage gap reads HAZE, not black</h2>
+<p>Nadir view at true 341 m (param 200) — the body's dissolve annulus (op 0.01–0.99, d ∈ [332,400], 3.43°–4.57° = 28.1–37.5 px). <b>Finding (stated):</b> at this altitude the annulus background is the <i>voxel sea</i> — the terrain occludes the sky at nadir (the visible annulus is (131,205,205) before / (132,207,205) after — sea, chunk seams visible in the zoom). So the sky the gap "shows through" is measured as the model sky at those exact pixels (the background where the tiers draw nothing):</p>
+<table>
+<tr><th>the sky behind the gap (8-bit, same pixels)</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>below-cone background</td><td class="fail">(123, 149, 154) — the old dark below-horizon branch (the "hole" the ticket warns about)</td><td class="pass">(211, 228, 232) — the single-source AIR colour (u_air 8-bit = (208,241,251), the value the fog wall and the body dissolve to) — haze, not black</td></tr>
+</table>
+<div class="pair">
+<div class="cell"><img class="cap" src="captures/b5-planetA-200-nadir.png"><br><b>BEFORE</b> nadir 341 m (the sea; the sky behind is the dark branch)</div>
+<div class="cell"><img class="cap" src="captures/a5-planetA-200-nadir.png"><br><b>AFTER</b> nadir 341 m (the sea is invariant — the fog wall is untouched — the sky behind is the air colour)</div>
+</div>
+
+<h2>ADDENDUM — CLAUSE D: the limb reaches past the clouds</h2>
+<p>The pre-AC-0417 limb was a fixed 300 m falloff on the R+SEA impact parameter — it ended <i>below the cloud tops</i> (the deck occupies R+275…R+400, and the volume's virtual top R+450 with the AC-0407 extend). Now the limb geometry is the tangent cone at the <b>A shell</b>: <code>u_atmo_radius = R + A</code> (pushed by world.gd, the same two values on the sky and the cloud materials — one home: <code>Aero.atmo_limb_radius / atmo_limb_falloff</code>) with the falloff <b>0.25A</b> (= 300 m at the default A — today's hard-coded value, now a stated fraction of A). The AC-0414 body-LOADED gate (already in the tree: <code>u_limb_loaded</code>/<code>u_body_loaded</code>) lands with the enlarged clamp, as the ticket's ordering clause requires — the filled-disc (fake planet) only exists while the body is LOADED. Invariant asserted once in <code>_ac0401_push</code>: cloud tops (live shell extent + AC-0407 extend) strictly inside A — 450 &lt; 1200 ✓ (a <code>push_warning</code> fires if A is ever lowered past the deck).</p>
+<p>Angular half-widths from nadir, at the stated altitude 1341 m (camera radius 5341 m):</p>
+<table>
+<tr><th>silhouette</th><th>BEFORE (rim = R+SEA = 4126)</th><th>AFTER (rim = R+A = 5200)</th></tr>
+<tr><td>terrain disc (R)</td><td>48.50°</td><td>48.50°</td></tr>
+<tr><td>cloud deck top (R+450)</td><td>56.43°</td><td>56.43°</td></tr>
+<tr><td>limb (glow clamp edge)</td><td>50.58° — <b>the deck EXCEEDS the rim by 5.85°: the atmosphere ended below the cloud tops</b></td><td>76.81° — <b>the deck is INSIDE the rim by 20.38°: the glow reaches well past the clouds</b> (at the local horizon the glow factor is still 0.625 — the A shell extends past the top of the frame)</td></tr>
+</table>
+<div class="pair">
+<div class="cell"><img class="cap" src="captures/b10-planetA-1200-clouds.png"><br><b>BEFORE</b> 1341 m: pale dome (old window 0.23), half-strength stars (S=0.59), the crisp deck edge standing OUTSIDE the thin rim</div>
+<div class="cell"><img class="cap" src="captures/a10-planetA-1200-clouds.png"><br><b>AFTER</b> 1341 m: full space + full stars; the A-shell band engulfs the deck; the deck is washed to the air colour</div>
+</div>
+<p><b>Addendum 2 — the deck is washed by the limb:</b> the cloud material now takes the same air colour it already takes (<code>u_vol_air</code>, the single source) and the same impact-parameter haze factor the limb term uses (one home: <code>ac0417_wash()</code> in cloud_layer.gdshader — <code>1 − exp(−b/0.25A)</code> about the same centre, gated to cameras at/above the A shell with a ±0.4·falloff smoothstep on camera radius so the deck's contrast drops toward the limb exactly like the terrain's fog fade, and is exactly zero from inside the atmosphere — the ground view of the deck is bit-identical to before). The wash is gated by the same <code>sky_altitude</code> switch (OFF = the exact pre-AC-0417 cloud material). Measured on the deck band (rows 310–352 × x 480–800 of the 1341 m frame, medians): the band moves <b>(98, 151, 160) → (82, 199, 227)</b> — toward <code>u_air</code> (208, 241, 251) — while the dome above it goes (181, 224, 233) pale air → (0, 20, 37) space: the crisp white deck edge against a thin rim becomes a washed cyan band inside the A-shell glow.</p>
+<div class="pair">
+<div class="cell"><img class="cap" src="captures/a11-ground.png"><br><b>AFTER</b> ground level (default spawn, first person): the game is unscathed — day sky at the top edge, no space, no stars at ground altitude (u_space_sky = 0 at 141 m)</div>
+</div>
+
+<h2>Stated deviations and design decisions</h2>
+<ol>
+<li><b>h_first stays fog-derived</b> (deviation D1): the ticket says re-derive h_first/h_full against A. <code>h_full</code> = A is done (diagnostic-only — see F2). <code>h_first</code> gates the body's <i>visibility</i> (<code>visible = h_band &gt; h_first</code>); re-deriving it against A gives <code>sqrt((R+A)² + fog_far²) − R ≈ 1211 m</code> — <i>above</i> the atmosphere top (A = 1200), so the rim would pop in at full opacity past the space transition. Kept at the fog window (139.3 m, unchanged).</li>
+<li><b>The fog wall stays render-distance-coupled</b> (the ticket's own requirement, stated): op_nadir reaches 1.0 at 526 m (fog_far/render_edge = 332/400), not at A. A is a gameplay constant, not a render distance; no one re-couples them.</li>
+<li><b>Star opacity at day = the A window</b>: the ON path uses <code>mix(u_night, 1.0, u_space_sky)</code> — at day (T=0.5) the stars' opacity <i>is</i> the A window (visible once the sky is space, as in the A10 frame); at night it is 1.0 exactly as before (bit-for-bit). The OFF path keeps <code>u_opacity = (1−day)+day·S</code> verbatim.</li>
+<li><b>The cone (clause C)</b> is the R+SEA disc's local tangent cone: below it (hl &lt; 0 or the camera inside the disc) the single-source AIR colour (<code>u_air</code>, display-space 8-bit sRGB in the sky pass's native space — the 8-bit source the env fog / body / clouds take srgb_to_linear of), above it SPACE; the cone keeps the limb term (now at the A shell). The OFF path is the pre-AC-0402 expression verbatim.</li>
+<li><b>u_air spaces:</b> the sky pass takes the 8-bit DISPLAY value (the pass pre-decodes under Forward+, AC-0242); all other consumers take the linear of the same 8-bit source — one home, ≤ ~2–3 byte pipeline Δ between the sky-air and the fog-wall pixels (the pipeline is ACES-graded; not chased, per the ticket).</li>
+</ol>
+
+<h2>Files changed</h2>
+<pre>godot/core/aero.gd                  — ATMOSPHERE_HEIGHT, atmosphere_height() (env AWECRAFT_ATMO),
+                                      sky_space(), atmo_limb_radius/falloff(), fog_display_srgb()
+                                      (fog_display refactored to it — bit-identical output)
+godot/core/aero_sky_gradient.gdshader — u_air, u_atmo_radius, u_atmo_falloff; sky() split into
+                                      sky_off (pre-AC-0402 verbatim) / sky_on (local zenith hl,
+                                      two colours + one cone, limb at the A shell, A-window gates)
+godot/core/star.gdshader            — u_sky_alt / u_space_sky / u_night; ALPHA =
+                                      shape·mix(u_opacity, mix(u_night,1,u_space_sky),u_sky_alt)·occl
+godot/core/cloud_layer.gdshader     — addendum 2: u_atmo_radius/u_atmo_falloff/u_limb_wash +
+                                      ac0417_wash() (the impact-parameter haze, same centre/scale)
+godot/world/world.gd                — _ac0401_push: the A window replaces the AC-0402 band;
+                                      atmo + wash + star pushes; u_air (display) with the linear
+                                      air (one gate); the cloud-tops-inside-A assert
+godot/world/satellite_body.gd       — h_full = Aero.atmosphere_height() (diagnostic); h_first
+                                      comment (deviation D1)
+godot/scenes/harness.gd             — measurement arm extension only (env-gated, unset =
+                                      byte-identical): AWECRAFT_CAM_OFF / AWECRAFT_CAM_NADIR,
+                                      RESULT gains spawn + the live sky uniforms</pre>
+
+<h2>Gate outputs (excerpts)</h2>
+<p id="g0out">G0 after: <code>exit=0</code>, <code>grep -c "SCRIPT ERROR|SHADER ERROR"</code> = <b>0</b> (log <code>.scratch/AC-0417/g0-after.log</code>).</p>
+<p>genhash after: 25/25 GENHASH lines byte-identical to <code>.scratch/AC-0417/genhash-before.log</code> (the world-touching change owed the byte-identical; the change is render-side only — uniform pushes + a diagnostic threshold).</p>
+
+<h2>Measurement method</h2>
+<p><code>tasks/AC-0417/measure.py</code>: a 1:1 Python port of both sky forms (OFF verbatim / ON final, including the A-shell limb and the no-col-clamp-after-limb detail) + the full Forward+ chain (pow 2.2 pre-decode → exposure 0.85 → Narkowicz-ACES → contrast 1.1 → saturation 1.25 → sRGB encode, + the wash quad riding u_space from main.gd — unchanged by this ticket). Camera basis mirrors the harness planet preset (spawn [8.5, 141, 8.5], radius R+141; the in-plane offset re-projected onto the R sphere; nadir aim with the horizontal up hint). Model-vs-pixel medians: 11–22/255 over the sky strips (the known ACES chromatic band near the limb/mid-tones; Godot's ACES ≠ Narkowicz). Pushed uniforms are read back from the RESULT at the snap moment — the measurement never re-derives a value the tree pushed.</p>
+</body>
+</html>

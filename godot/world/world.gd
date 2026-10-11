@@ -4999,6 +4999,18 @@ var _ac0414_limb_loaded := -1.0
 var _ac0414_body_loaded := -1.0
 var _ac0402_skyalt := -1.0
 var _ac0402_skyblend := -1.0
+# AC-0417: the atmosphere-height push state (same seam). The limb
+# geometry (u_atmo_radius = R + A, u_atmo_falloff = 0.25 A) moves only on
+# a planet_R / A change; the star-field A window (u_sky_alt switch,
+# u_space_sky blend, u_night) moves with the switch / altitude /
+# day-night like the sky's own.
+var _ac0417_atmo_r := -1.0
+var _ac0417_atmo_f := -1.0
+var _ac0417_star_alt := -1.0
+var _ac0417_star_blend := -1.0
+var _ac0417_star_night := -1.0
+var _ac0417_wash := -1.0
+var _ac0417_asserted := false
 # AC-0405: the raymarched-volume push state (same seam: _ac0401_push,
 # change-gated — the value only moves on a toggle or a planet_R change).
 var _ac0405_vol := -1.0
@@ -5093,18 +5105,19 @@ func _ac0401_push() -> void:
 			sm2.set_shader_parameter("u_body_loaded", body_load_v)
 		_ac0414_limb_loaded = limb_load_v
 		_ac0414_body_loaded = body_load_v
-	# (3) AC-0402: the sky's altitude-aware space blend (Settings
-	# "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env preload). The
-	# background blend of aero_sky_gradient uses u_space_sky with a
-	# stretched window (BAND_WALK_MAX .. BAND_FLY_MIN*1.6 over the radial
-	# altitude - the constants read off the live player, one number one
-	# home) so the blue thins over the whole climb instead of going black
-	# by 1600 m (the AC-0384 s25/D4 finding). The switch push is
-	# change-gated; the blend push is per-frame (the altitude moves) and
-	# SKIPPED when the switch is OFF (short-circuit before the work - the
-	# shader then never reads u_space_sky, mix(..., 0.0) = the pre-AC-0402
-	# ws). The limb gate, the star opacity and the sun-glow fade stay on
-	# main.gd's physics-band S (the AC-0386/AC-0401 contracts).
+	# (3) AC-0402 -> AC-0417: the sky's altitude-aware space blend
+	# (Settings "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env
+	# preload). AC-0417 REDEFINED this setting: ON now runs the
+	# local-zenith sky (aero_sky_gradient sky_on - the atmosphere height
+	# A is the single home, Aero.atmosphere_height, env AWECRAFT_ATMO),
+	# OFF is the pre-AC-0402 expression VERBATIM (h = world Y, the
+	# physics-S window). The A window (Aero.sky_space =
+	# smoothstep(0.25A, A, alt_rad) - replaces the AC-0402 stretched
+	# BAND_WALK_MAX..BAND_FLY_MIN*1.6 window, which left the dome 44%
+	# blue at 1741 m and 0.044 at 841 m) is the sky's u_space_sky. The
+	# switch push is change-gated; the blend push is per-frame (the
+	# altitude moves) and SKIPPED when the switch is OFF (short-circuit
+	# before the work - the OFF path is bit-for-bit).
 	var skyalt_v := 1.0 if bool(Settings.values.get("sky_altitude", true)) else 0.0
 	if skyalt_v != _ac0402_skyalt:
 		var sma = mn.get("sky_mat")
@@ -5119,10 +5132,93 @@ func _ac0401_push() -> void:
 				var Rf2 := float(Game.planet_R)
 				if Rf2 > 0.0:
 					var alt_rad2: float = (pl.position + Vector3(0.0, Rf2, 0.0)).length() - Rf2
-					var ss2: float = smoothstep(pl.BAND_WALK_MAX, pl.BAND_FLY_MIN * 1.6, alt_rad2)
+					# AC-0417: the A window (one home - Aero.sky_space).
+					var ss2: float = Aero.sky_space(alt_rad2)
 					if absf(ss2 - _ac0402_skyblend) > 0.001:
 						smb.set_shader_parameter("u_space_sky", ss2)
 						_ac0402_skyblend = ss2
+	# (3b) AC-0417: the rest of the A re-key.
+	# - u_atmo_radius / u_atmo_falloff: the limb geometry at the A shell
+	#   (clause D - the atmosphere's silhouette is larger than the
+	#   terrain's; the cloud tops, live shell extent + the AC-0407
+	#   virtual top, sit strictly INSIDE A - asserted once below).
+	#   Change-gated on (planet_R, A); pushed to the SKY (the ON path's
+	#   limb term) and the CLOUD LAYERS (addendum 2's wash) - the same
+	#   two values, one home. Pushing them while the switch is OFF is
+	#   inert: sky_off never reads them and the wash is zeroed by
+	#   u_limb_wash (below).
+	# - u_limb_wash (the cloud layers): addendum 2's switch - the sky
+	#   altitude setting (OFF = the exact pre-AC-0417 cloud material,
+	#   bit-for-bit). Change-gated.
+	# - the star field (the "Stars" node under Main, material_override):
+	#   u_sky_alt (the switch), u_space_sky (the A blend, per-frame),
+	#   u_night (1 - day, per-frame) - the stars fade in with the A
+	#   window instead of the AC-0402 stretched one. main.gd keeps
+	#   pushing u_opacity (the OFF path's contract).
+	# - u_air: the single-source air colour in the sky pass's DISPLAY
+	#   space (Aero.fog_display_srgb) - pushed in block (5) with the
+	#   linear value the clouds take (one gate, one source).
+	var Rf3 := float(Game.planet_R)
+	var A := Aero.atmosphere_height()
+	var ar := Aero.atmo_limb_radius(Rf3)
+	var af := Aero.atmo_limb_falloff()
+	if Rf3 > 0.0 and (ar != _ac0417_atmo_r or af != _ac0417_atmo_f):
+		var smp = mn.get("sky_mat")
+		if smp is ShaderMaterial:
+			smp.set_shader_parameter("u_atmo_radius", ar)
+			smp.set_shader_parameter("u_atmo_falloff", af)
+		var clp = mn.get("cloud_layers")
+		if clp != null and clp.size() > 0:
+			for layer in clp:
+				var cmp = layer.get("mat")
+				if cmp is ShaderMaterial:
+					cmp.set_shader_parameter("u_atmo_radius", ar)
+					cmp.set_shader_parameter("u_atmo_falloff", af)
+		_ac0417_atmo_r = ar
+		_ac0417_atmo_f = af
+	if skyalt_v != _ac0417_wash:
+		var clw = mn.get("cloud_layers")
+		if clw != null and clw.size() > 0:
+			for layer in clw:
+				var cmw = layer.get("mat")
+				if cmw is ShaderMaterial:
+					cmw.set_shader_parameter("u_limb_wash", skyalt_v)
+		_ac0417_wash = skyalt_v
+	var starsn = mn.get_node_or_null("Stars")
+	var star_m = starsn.material_override if starsn != null else null
+	if star_m is ShaderMaterial:
+		if skyalt_v != _ac0417_star_alt:
+			star_m.set_shader_parameter("u_sky_alt", skyalt_v)
+			_ac0417_star_alt = skyalt_v
+		if skyalt_v > 0.5:
+			var pl2 = Game.player
+			var ss3: float = 0.0
+			if pl2 != null:
+				var Rf4 := float(Game.planet_R)
+				if Rf4 > 0.0:
+					ss3 = Aero.sky_space((pl2.position + Vector3(0.0, Rf4, 0.0)).length() - Rf4)
+			if absf(ss3 - _ac0417_star_blend) > 0.001:
+				star_m.set_shader_parameter("u_space_sky", ss3)
+				_ac0417_star_blend = ss3
+			var night: float = 1.0 - DayNight.day(Game.time_of_day)
+			if absf(night - _ac0417_star_night) > 0.001:
+				star_m.set_shader_parameter("u_night", night)
+				_ac0417_star_night = night
+	if not _ac0417_asserted:
+		_ac0417_asserted = true
+		# AC-0417 clause D invariant: the cloud tops sit strictly INSIDE
+		# the atmosphere. The live shell extent + the AC-0407 virtual top
+		# is the honest top (the march's annulus bound), read off
+		# main.gd's own layer table like the rvol block above.
+		var Achk := Aero.atmosphere_height()
+		var clc = mn.get("cloud_layers")
+		if clc != null and clc.size() > 0:
+			var hmaxc := -1.0e9
+			for layer in clc:
+				hmaxc = maxf(hmaxc, float(layer.get("h", 0.0)))
+			var topc := hmaxc + AC0407_VOL_TOP_EXTEND
+			if topc >= Achk:
+				push_warning("AC-0417: the cloud top (R+%d) is NOT strictly inside the atmosphere height A=%d - the clause-D invariant is broken, lower A or the shell extent" % [int(topc), int(Achk)])
 	# (4) AC-0405: the raymarched-volume switch (Settings "cloud_volume",
 	# default ON — the user ordered the rework: "look at how voluminous
 	# clouds are done and implement them, forget how we currently do it").
@@ -5187,7 +5283,11 @@ func _ac0401_push() -> void:
 	# its in-scatter by this colour; the three-shell OFF path never
 	# reads it (the u_vol < 0.5 short-circuit precedes any volume work),
 	# so the OFF state stays byte-identical regardless of the push.
-	# Per-frame (the day/night cycle moves it), value-gated at 1/255.
+	# AC-0417: the SKY's u_air takes the same source's 8-bit DISPLAY
+	# (sRGB) form (Aero.fog_display_srgb - the sky pass pre-decodes
+	# under Forward+, so the 8-bit value goes in as-is); it moves 1:1
+	# with the linear value, so the same gate pushes both. Per-frame
+	# (the day/night cycle moves it), value-gated at 1/255.
 	var air := Aero.fog_display(Game.time_of_day)
 	if (_ac0406_air_invalid or absf(air.r - _ac0406_air.r) > 0.004
 			or absf(air.g - _ac0406_air.g) > 0.004
@@ -5198,6 +5298,9 @@ func _ac0401_push() -> void:
 				var cm9 = layer.get("mat")
 				if cm9 is ShaderMaterial:
 					cm9.set_shader_parameter("u_vol_air", air)
+		var sm9 = mn.get("sky_mat")
+		if sm9 is ShaderMaterial:
+			sm9.set_shader_parameter("u_air", Aero.fog_display_srgb(Game.time_of_day))
 		_ac0406_air = air
 		_ac0406_air_invalid = false
 

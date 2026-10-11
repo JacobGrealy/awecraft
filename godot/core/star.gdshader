@@ -33,6 +33,19 @@ uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 u_planet_center = vec3(0.0, 0.0, 0.0);
 uniform float u_planet_radius = 0.0;
 uniform vec3 u_cam_pos = vec3(0.0, 0.0, 0.0);
+// AC-0417: the sky-altitude re-key (Settings "sky_altitude", the same
+// switch as the sky's - world.gd pushes all three, main.gd keeps
+// pushing u_opacity for the OFF path). OFF (u_sky_alt = 0): u_opacity
+// exactly - the AC-0386 contract bit-for-bit. ON: the field fades in
+// with the A window (Aero.sky_space, the atmosphere height) - u_night
+// (1 - day) at the ground, 1.0 once the sky IS space (u_space_sky = 1
+// at/above A) - the stars are an ORBIT instrument, and the AC-0402
+// stretched window (500..3200) had left the field dark until 2 km up.
+// The planet-disc occlusion above keeps its own R + SEA test (clause C:
+// the star field is geometry, unchanged).
+uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
+uniform float u_space_sky : hint_range(0.0, 1.0) = 0.0;
+uniform float u_night : hint_range(0.0, 1.0) = 1.0;
 
 varying vec3 v_center;  // star center in world space (stable per star)
 
@@ -110,6 +123,8 @@ void fragment() {
 			}
 		}
 	}
-	ALPHA = shape * u_opacity * occl;
+	// AC-0417: the A-window opacity (see the uniform block). The mix is
+	// exactly u_opacity with u_sky_alt = 0 (the OFF contract, bit-for-bit).
+	ALPHA = shape * mix(u_opacity, mix(u_night, 1.0, u_space_sky), u_sky_alt) * occl;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 }

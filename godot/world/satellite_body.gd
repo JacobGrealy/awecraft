@@ -28,9 +28,14 @@
 # res paths rebuild the same displaced mesh without the full payload
 # (a legacy image without an alpha channel falls back to the constant
 # R + SEA sphere, with a loud SATDIAG line - never silent). The
-# h_first/h_full thresholds stay derived from R + SEA (the per-fragment
-# op is the real controller; the rim shift from the displacement is a
-# few metres on a 70 m fade window).
+# AC-0417: h_first stays derived from R + SEA (the fog window - it gates
+# the body's visibility, and re-deriving it against the atmosphere
+# height A would pop the rim in above the space transition: deviation
+# D1, AC-0417-results.html); h_full is the atmosphere height A
+# (Aero.atmosphere_height) so "the planet is fully established" lands
+# with "the sky is space" (diagnostic - the per-fragment op is the real
+# controller; the rim shift from the displacement is a few metres on a
+# 70 m fade window).
 #
 # TEXTURE SOURCE - one of, in order:
 #  (1) the user:// cache, keyed (planet_id, R, seed) - the runtime bake
@@ -1220,8 +1225,21 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 	# Derived thresholds (no constants - spec precision (a)):
 	#  h_first: the rim's tangent distance d_t(h) = sqrt((R+h)^2 - RB^2)
 	#           crosses fog_far - the rim emerges as it passes the fog wall.
-	#  h_full:  the nadir (distance h - SEA) clears the render edge - the
-	#           near region is fully established.
+	#           AC-0417 keeps this FOG-DERIVED (deviation D1, stated in
+	#           tasks/AC-0417/AC-0417-results.html): re-deriving it against
+	#           the atmosphere height A (sqrt((R+A)^2 + fog_far^2) - R =
+	#           ~1211 m at R24) would put the rim's first appearance ABOVE
+	#           the atmosphere top (A = 1200) - a full-opacity rim popping
+	#           in past the space transition. h_first gates the body's
+	#           visibility (L2388), so it stays on the fog window.
+	#  h_full:  AC-0417 - the atmosphere height A (Aero.atmosphere_height,
+	#           the ONE home for "the sky is space", env AWECRAFT_ATMO):
+	#           "the planet is fully established" and "the sky is space"
+	#           land at the SAME altitude (pre-AC-0417: SEA + render_edge
+	#           = 526 m vs the AC-0402 sky window's 3200 m end - ~700 m
+	#           apart from A). DIAGNOSTIC ONLY (reported by _satline; the
+	#           per-fragment op is the real controller - the fog wall
+	#           stays render-distance-coupled, the AC-0415 contract).
 	# AC-0382 (c) - RECORDED, DO NOT IMPLEMENT: an explicit "sub-pixel
 	# disc cull at altitude" is a visual NO-OP. Above the fade band,
 	# every drawn-disc fragment farther than fog_far from the player is
@@ -1232,7 +1250,9 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 	# optimized, it is a draw-cost optimization and must be measured as
 	# one (AC-0310-results §8, this ticket's results page §4).
 	var h_first: float = sqrt(RB * RB + ff * ff) - R
-	var h_full: float = float(SEA) + edge
+	# AC-0417: h_full re-derived against the atmosphere height A (see the
+	# threshold comment above - "fully established" lands with "space").
+	var h_full: float = Aero.atmosphere_height()
 	last_h_band = h_band
 	last_h_first = h_first
 	last_h_full = h_full

@@ -256,6 +256,47 @@ uniform float u_vol_air_lift : hint_range(0.0, 1.0) = 0.10;
 
 varying vec3 v_wp;  // world position (spatial shaders have no WORLD_POSITION builtin)
 
+// AC-0417 addendum 2: the deck is washed by the limb. The clause: the
+// cloud material takes the SAME air colour (u_vol_air - the single
+// source it already takes, the value the env fog and the satellite's
+// u_air share) and the SAME impact-parameter haze factor the sky's limb
+// term uses (one home: the ray's impact parameter about the centre and
+// the A-shell falloff 0.25A, pushed by world.gd like the sky's
+// u_atmo_radius/u_atmo_falloff - no new radii, no new colour). The
+// haze factor 1 - exp(-b/falloff) is 0 at the nadir (short air column,
+// full contrast) and rises to 1 at the limb (the long grazing column),
+// so the deck's contrast drops toward the limb exactly like the
+// terrain's fog fade. It is gated by "outside": the wash only kicks in
+// once the CAMERA is at/above the A shell (smoothstep over +-0.1A about
+// R + A) - from inside the atmosphere the air in front of the deck is
+// the camera's own thin slice, and the deck keeps its pre-AC-0417
+// contrast (the ground view is unchanged). u_limb_wash carries the
+// sky_altitude switch (0.0 = the exact pre-AC-0417 material, bit-for-
+// bit; a 0.0 u_atmo_radius/u_atmo_falloff - no push yet - is also
+// exactly that). Engine fog stays off (fog_fragment is empty, as
+// always).
+uniform float u_atmo_radius : hint_range(0.0, 20000.0) = 0.0;
+uniform float u_atmo_falloff : hint_range(0.0, 5000.0) = 0.0;
+uniform float u_limb_wash : hint_range(0.0, 1.0) = 0.0;
+
+// The camera position is passed in (the star shader's u_cam_pos
+// precedent: the headless dummy renderer resolves the
+// CAMERA_POSITION_WORLD builtin only inside the stage functions, so a
+// top-level helper takes it as a parameter).
+float ac0417_wash(vec3 wp, vec3 cam) {
+	if (u_atmo_radius <= 0.0 || u_atmo_falloff <= 0.0) {
+		return 0.0;
+	}
+	vec3 lc = u_center - cam;  // centre rel. camera (the sky's u_limb_center value)
+	float d = length(lc);
+	vec3 vd = normalize(wp - cam);
+	float b = length(cross(lc, vd));  // the impact parameter, the limb term's own
+	float hw = 0.4 * u_atmo_falloff;  // = 0.1 A: the outside-gate width about R + A
+	float outside = smoothstep(u_atmo_radius - hw, u_atmo_radius + hw, d);
+	float haze = 1.0 - exp(-b / u_atmo_falloff);
+	return haze * outside;
+}
+
 void vertex() {
 	v_wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -729,6 +770,9 @@ void fragment() {
 		ALBEDO = u_cloud_tint * u_day * clamp(
 			2.5 * acc.y + 0.30 * acc.z + u_vol_amb * air_s * acc.w,
 			0.0, 1.25);
+		// AC-0417 addendum 2: the limb wash (see the uniform block) -
+		// the single-source air colour, the limb term's own haze factor.
+		ALBEDO = mix(ALBEDO, u_vol_air, u_limb_wash * ac0417_wash(v_wp, CAMERA_POSITION_WORLD));
 		ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre);
 		ALPHA = Av;
 	} else {
@@ -868,6 +912,9 @@ void fragment() {
 	float puff = 1.0 + 0.14 * vol * (smoothstep(0.35, 0.65, mid) - 0.5);
 	float under = mix(u_under, 0.58, vol);
 	ALBEDO = u_cloud_tint * light * mix(1.0, under, a) * puff;
+	// AC-0417 addendum 2: the limb wash (see the uniform block) - the
+	// single-source air colour, the limb term's own haze factor.
+	ALBEDO = mix(ALBEDO, u_vol_air, u_limb_wash * ac0417_wash(v_wp, CAMERA_POSITION_WORLD));
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
 	}
 }
