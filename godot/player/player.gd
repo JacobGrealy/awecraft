@@ -797,6 +797,25 @@ func _physics_process_impl(dt: float) -> void:
 					if not head_solid:
 						position += b * Vector3(0.0, step_h + 0.02, 0.0)
 	move_and_slide()
+	# AC-0420: idle ground creep. On natural terrain the rigid per-column
+	# facet (up to ~0.8 deg off the local vertical) + the block steps make
+	# the collision resolution bleed a tangential velocity — measured 21-27
+	# mm/s downhill at rest (0 on a flat pad); the walk lerp (k = 12) is too
+	# weak a damper to stop it. Grounded with no movement input and below
+	# the stop threshold: zero the tangential part. Walking (4.3 m/s),
+	# jumps and air are untouched.
+	if is_on_floor() and not flying and not in_water and not in_lava:
+		if absf(tx) < 0.001 and absf(tz) < 0.001:
+			var vt: float = Vector2(vloc.x, vloc.z).length()
+			if vt > 0.0 and vt < 0.2:
+				# zero the tangential part of the POST-slide velocity (the
+				# slide already removed the floor-normal part; vloc still
+				# holds the pre-slide gravity impulse, so do NOT rebuild
+				# from it)
+				var vw: Vector3 = b.transposed() * velocity
+				vw.x = 0.0
+				vw.z = 0.0
+				velocity = b * vw
 	# AC-0039: step SFX — distance cadence: one "step" per STEP_DIST metres
 	# of TANGENT-plane travel. vloc is the local (radial-up) frame, so no
 	# world axis is assumed — sphere-safe by construction.

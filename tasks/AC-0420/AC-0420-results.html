@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0420 — results: cracks, idle slide, LOD die-off</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2.5rem auto; max-width: 1050px; color: #1a2330; padding: 0 1rem; }
+  h1 { font-size: 1.7rem; border-bottom: 3px solid #2b6cb0; padding-bottom: .4rem; }
+  h2 { font-size: 1.3rem; margin-top: 2.2rem; color: #2b6cb0; }
+  h3 { font-size: 1.05rem; margin-top: 1.4rem; }
+  table { border-collapse: collapse; margin: .8rem 0; font-size: .92rem; }
+  th, td { border: 1px solid #cbd5e0; padding: .35rem .6rem; text-align: left; }
+  th { background: #edf2f7; }
+  code, pre { font-family: ui-monospace, monospace; font-size: .88em; }
+  pre { background: #1a202c; color: #e2e8f0; padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; }
+  .pass { color: #22543d; font-weight: 600; }
+  .fail { color: #9b2c2c; font-weight: 600; }
+  .warn { color: #975a16; font-weight: 600; }
+  .quote { background: #fffaf0; border-left: 4px solid #d69e2e; padding: .5rem 1rem; margin: .8rem 0; font-style: italic; }
+  img.shot { max-width: 640px; border: 1px solid #cbd5e0; border-radius: 6px; margin: .5rem 0; }
+  .cap { font-size: .85rem; color: #4a5568; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>AC-0420 — the three user reports, measured</h1>
+<p><b>Scope</b>: three verbatim user reports. Method: measure first (headless probe arm,
+seed 44, user config R24/F83 = wall 332 m, fog window [100, 332] m), state the numbers, fix
+what is a defect, and hand the design decisions back with the evidence. Proxy renders are
+software Vulkan (llvmpipe/Forward+) — they prove geometry, layout, shader compile and colour,
+<b>not</b> the shipped real-GPU look.</p>
+
+<h2>Gates (pristine harness — temp arm removed, then all gates re-run)</h2>
+<table>
+  <tr><th>Gate</th><th>Result</th><th>Exit</th><th>Evidence</th></tr>
+  <tr><td>G0 headless boot</td><td class="pass">0 SCRIPT ERROR / 0 SHADER ERROR</td><td>0</td><td>.scratch/AC-0420/g0-pristine.log</td></tr>
+  <tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td class="pass">all 5 arms ok, genhash 25/25 byte-identical</td><td>0</td><td>.scratch/AC-0420/smoke-pristine.log</td></tr>
+  <tr><td>meshprobe (PROBE)</td><td class="pass">ac0211_ok = true</td><td>0</td><td>.scratch/AC-0420/meshprobe-pristine.log</td></tr>
+  <tr><td>spherewalk</td><td class="pass">ok = true (band peak 1.0, midline crossed, home landing)</td><td>0</td><td>.scratch/AC-0420/spherewalk-pristine.log</td></tr>
+  <tr><td>boundary r4</td><td class="pass">ok = true (built_final 68, burst_p95 6932 ms)</td><td>0</td><td>.scratch/AC-0420/boundary-r4-pristine.log</td></tr>
+</table>
+<p class="cap">One stochastic hit during the task: a post-fix <b>render</b> run died SIGSEGV with a clean
+log at world.gd:5426 (star poll — the known AC-0403 UAF signature); immediate re-run was clean
+(probe-render-r50-postfix2.log, EXIT=0). Unrelated to the AC-0420 changes. No UAF in any
+headless gate run.</p>
+
+<h2>Item 2 — “The player slides on the chunks without pressing any buttons”</h2>
+<p class="quote">“The player slides on the chunks without pressing any buttons, I assume this is gravity related”</p>
+<p><b>Reproduced and fixed.</b> A temporary probe arm (removed at closeout) dropped a frozen
+idle player at five spots and integrated the real physics for 20 s each.</p>
+
+<h3>BEFORE (mm/s, 20 s, no input)</h3>
+<table>
+  <tr><th>Spot</th><th class="num">Rate</th><th class="num">Steady speed</th><th>Direction (flat)</th><th>Floor normal (measured)</th><th class="num">Drift in 20 s</th></tr>
+  <tr><td>natural terrain (35,·,35)</td><td class="num">21.2</td><td class="num">26.7</td><td>(−0.707, −0.707) downhill</td><td>[0.009994, 0.9999, 0.009993] (0.81° off vertical)</td><td class="num">425 mm</td></tr>
+  <tr><td>same cell, centre (35.5,·,35.5)</td><td class="num">21.6</td><td class="num">27.1</td><td>(−0.707, −0.707)</td><td>[0.009994, 0.9999, 0.010008]</td><td class="num">431 mm</td></tr>
+  <tr><td>flat pad (14,·,14), 8.49 m off column centre</td><td class="num">0.0</td><td class="num">0.0</td><td>—</td><td>[0.001999, 0.999996, 0.001999] (0.162°)</td><td class="num">0</td></tr>
+  <tr><td>flat pad (2,·,14)</td><td class="num">0.0</td><td class="num">0.0</td><td>—</td><td>[0.001999, 0.999996, 0.001999]</td><td class="num">0</td></tr>
+  <tr><td>flat pad centre (8.5,·,8.5)</td><td class="num">0.0</td><td class="num">0.0</td><td>—</td><td>[0.001999, 0.999996, 0.001999]</td><td class="num">0</td></tr>
+</table>
+<p><b>Per-frame mechanism (reconstructed from the live velocity trace)</b>: every frame the slide
+removal is <code>(v·n̂)n̂</code> with n̂ the <b>exact radial</b> (0.0000° off — the up-frame is fresh
+and exact); the collision surface under the player is the rigid per-column facet (up to 0.81°
+off local vertical on 1-block steps) plus the per-cell 1 m collision triangles, which are
+down-wound (n.y&lt;0) and double-sided. On stepped terrain gravity’s tangential component
+(G·sinθ) bleeds through the step contacts faster than the walk lerp (k = 12/s) can cancel it:
+steady state v = G·sinθ/k ≈ 27 mm/s, exactly the measured rate, exactly downhill. On a large
+flat pad (no step side-contacts) the bleed is 0 — exactly the measured 0. The player loop has
+no friction and no post-slide velocity handling, so the residual velocity persists forever.</p>
+
+<h3>Fix</h3>
+<pre># godot/player/player.gd — after move_and_slide():
+if is_on_floor() and not flying and not in_water and not in_lava:
+    if absf(tx) &lt; 0.001 and absf(tz) &lt; 0.001:          # no movement input
+        var vt := Vector2(vloc.x, vloc.z).length()
+        if vt > 0.0 and vt < 0.2:                        # idle threshold
+            var vw := b.transposed() * velocity          # POST-slide velocity
+            vw.x = 0.0
+            vw.z = 0.0
+            velocity = b * vw</pre>
+<p>Grounded + no input + below 0.2 m/s: zero the tangential part of the <b>post-slide</b>
+velocity (rebuilding from the pre-slide vloc would re-inject the gravity impulse — caught and
+fixed in a first revision). Walking (4.3 m/s), jumps, flight and water are untouched. Not an
+architectural change (no new autoload/subsystem; local physics-tuning guard).</p>
+
+<h3>AFTER (same five spots, same 20 s runs)</h3>
+<table>
+  <tr><th>Spot</th><th class="num">Rate</th><th class="num">World drift 20 s</th><th class="num">Steady velocity</th></tr>
+  <tr><td>natural (35,·,35)</td><td class="num">0.0</td><td class="num">0.0 mm</td><td class="num">6.8e-5 m/s</td></tr>
+  <tr><td>cell centre</td><td class="num">0.0</td><td class="num">0.0 mm</td><td class="num">1.0e-5 m/s</td></tr>
+  <tr><td>pad (14,·,14)</td><td class="num">0.0</td><td class="num">0.0 mm</td><td class="num">0.0</td></tr>
+  <tr><td>pad (2,·,14)</td><td class="num">0.0</td><td class="num">0.0 mm</td><td class="num">0.0</td></tr>
+  <tr><td>pad centre</td><td class="num">0.0</td><td class="num">0.0 mm</td><td class="num">0.0</td></tr>
+</table>
+<p class="cap">Logs: BEFORE .scratch/AC-0420/probe-r24j.log, AFTER probe-r24w/x.log (RESULT JSON with
+per-frame removal vectors, floor colliders via physics ray, fine 120-frame vloc traces).</p>
+
+<h2>Item 1 — “visible cracks between all of the chunks”</h2>
+<p class="quote">“There are still visible cracks between all of the chunks”</p>
+<p><b>Reproduced (visually) and measured — the cause is a shading/depth artifact, not a geometry
+gap.</b> The probe census compared the vertex data on both sides of four shared chunk edges
+(seed 44, R24):</p>
+<table>
+  <tr><th>Seam (0,0)|(1,0)</th><th class="num">Value</th><th>Reading</th></tr>
+  <tr><td>across-edge gap (radial)</td><td class="num">−1.61 mm</td><td><b>overlap</b>, not a gap — the AC-0398 1.6 mm double coverage is present</td></tr>
+  <tr><td>across-edge gap (along seam)</td><td class="num">0.0 mm</td><td>exact</td></tr>
+  <tr><td>radial V (vertex offset along the radial)</td><td class="num">0.01–0.02 mm</td><td>sub-mm, below any visible threshold on its own</td></tr>
+  <tr><td>vertex normal difference</td><td class="num">89.77° max</td><td>down-wound per-cell triangles (n.y&lt;0) — a winding artifact of the census, physics is double-sided (ray-confirmed)</td></tr>
+  <tr><td><b>vertex-colour Δ (r,g,b) max</b></td><td class="num"><b>0.502 / 0.0 / 0.545</b></td><td><b>the crack</b>: each chunk bakes its per-vertex light/shade independently, so the light channel steps up to ~50% across every seam</td></tr>
+  <tr><td>vertex-colour Δ mean (r)</td><td class="num">0.080</td><td>an average 8% shade step at every 16 m boundary</td></tr>
+</table>
+<h3>Depth precision (measured camera: near 0.05 / far 9109, 24-bit buffer)</h3>
+<table>
+  <tr><th>Distance</th><th class="num">50 m</th><th class="num">100 m</th><th class="num">200 m</th><th class="num">300 m</th><th class="num">400 m</th></tr>
+  <tr><td>Δz (mm)</td><td class="num">3</td><td class="num">12</td><td class="num">48</td><td class="num">107</td><td class="num">191</td></tr>
+</table>
+<p>Δz exceeds the 1.6 mm grout overlap from ~50 m out: the double-covered seam pair is in a
+z-fighting band there, so at range the seam flickers/darkens exactly where the overlap is.
+Up close, the visible line is the <b>baked vertex-colour shade step</b> (0.50 r / 0.55 b) — a
+lighting-continuity problem at the chunk boundary, not missing geometry.</p>
+<h3>Visual evidence (proxy render, R24/F83)</h3>
+<p><img class="shot" src="captures/probe-close2.png" alt="seam close-up"><br>
+<span class="cap">8 m above the (0,1)|(1,1) seam: the thin bright seam line is visible running through the
+frame, and a second seam (horizontal, lower-left) crosses two flat grass fields. Every 16 m
+boundary reads as a line — the user’s “cracks between all of the chunks”.</span></p>
+<p><img class="shot" src="captures/probe-t100.png" alt="100m nadir"><br>
+<span class="cap">100 m nadir, user fog: the full 16 m chunk grid with dark seam lines is visible across the
+frame — the seams read from exactly the altitude the user flies at.</span></p>
+<h3>What the fix is (options for the coordinator)</h3>
+<ul>
+  <li><b>A — lighting continuity at seams (recommended):</b> make the per-vertex light bake agree
+  across chunk edges (shared light samples on boundary vertices / a seam blend in the last
+  meter). This removes the 0.5 shade step, the dominant visible line up close. Architectural
+  (lighting pipeline) — its own ticket.</li>
+  <li><b>B — depth: raise the near plane and/or a polygon offset on the seam band.</b> Kills the
+  long-range z-fight flicker of the 1.6 mm overlap. Near-plane change ripples to all close views —
+  measure first.</li>
+  <li><b>C — cosmetic: a 1-pixel dark grout line is legitimate voxel aesthetic (Minecraft has
+  block AO lines); keep the overlap, kill only the flicker (B) and the shade step (A).</li>
+</ul>
+<p class="warn">No fix applied in this ticket — the measurements above are the decision input
+(the ticket says: state the numbers, let the numbers pick the fix). Nothing in item 1’s
+symptoms is a data or streaming defect: geometry is closed (−1.6 mm overlap, 0.01 mm V).</p>
+
+<h2>Item 3 — “high lods disappear much sooner than medium and low as you fly to orbit”</h2>
+<p class="quote">“high lods disappear much sooner than medium and low as you fly to orbit, why?”</p>
+<p><b>Answer: all tiers share one hard 332 m discard wall (u_fog_far), so the FARTHEST (coarsest)
+tier is the first to cross it as altitude rises — and a real bug (the AC-0401 push gap, below)
+could additionally pin that wall to the shader default 332 m for any config where the live fog
+wall is not 332 m.</b> Per-tier table, measured live (R24/F83, wall 332, low_start clamped 16):</p>
+<table>
+  <tr><th>Tier</th><th class="num">r_in (m)</th><th class="num">r_out (m)</th><th>Material</th><th class="num">90 % fog at altitude (m)</th><th class="num">Fully past wall at altitude (m)</th><th>Outer edge drawn at ground level</th></tr>
+  <tr><td>tier0 (real, taxi 0–4)</td><td class="num">0</td><td class="num">80</td><td>chunk_lit_4kinds</td><td class="num">286.6</td><td class="num">332.0</td><td>yes</td></tr>
+  <tr><td>band A (full LOD, taxi 5–8)</td><td class="num">80</td><td class="num">144</td><td>chunk_lit_4kinds</td><td class="num">274.4</td><td class="num">321.4</td><td>yes</td></tr>
+  <tr><td>band B (8×8 avg, taxi 9–16)</td><td class="num">144</td><td class="num">272</td><td>lod_avg</td><td class="num">245.2</td><td class="num">296.6</td><td>yes</td></tr>
+  <tr><td><b>band C (4×4 avg, taxi 17–24)</b></td><td class="num">272</td><td class="num">400</td><td>lod_avg</td><td class="num"><b>81.6</b></td><td class="num"><b>181.4</b></td><td><b>no — outer 128 m never drawn</b></td></tr>
+</table>
+<p>Read the table from the bottom: the coarsest band (C) is already 90 % fogged at only
+<b>81.6 m</b> altitude and is gone at <b>181.4 m</b>; band B dies at 296.6; A at 321.4; the real
+terrain survives to 332. So “high LOD” (= LOD level 2/3, the coarse distant bands) disappears
+much sooner than medium/low — <b>by construction of the single shared wall</b>, and the user’s
+premise holds exactly. (If “high LOD” meant “high-detail”, the data says the opposite: the
+near high-detail tiers are the last to go.) The band-C outer ring (272–400 m) is never drawn at
+any altitude — at ground level it is already outside the 332 m wall.</p>
+
+<h3>The bug found and fixed: the AC-0401 push gap for late-built materials</h3>
+<p><code>world.gd _ac0401_push()</code> pushed the live fog wall (u_fog_far) to the chunk
+materials only when the <i>wall value</i> changed. The chunk ShaderMaterials are created
+<b>lazily on first mesh build</b> — after the first push had already run against an empty
+material cache — so they were never updated and kept the shader default <b>332.0</b> for the
+life of the session. At the user’s R24/F83 that default happens to equal the live wall (332),
+so the bug was <b>invisible in this exact config</b>; at any other render distance the terrain
+would die off at 332 m regardless of the fog window (e.g. R50 → live wall 714, materials stuck
+at 332 → the whole ring 332–714 missing, “terrain disappears at a fixed distance”).</p>
+<pre># render audit, harness boot (wall 69.6):
+#  BEFORE fix (probe-render-r50.log):
+#    chunk_lit_opaque / cutout / flower : u_fog_far = &lt;never set, shader default 332.0&gt;
+#    fluid + lod mats                    : 69.6 = wall      mats_off_wall: [chunk_lit_opaque, chunk_lit_cutout, chunk_lit_flower]
+#  AFTER fix (probe-render-r50-postfix2.log):
+#    all 6 materials                     : 69.6 = wall      mats_off_wall: []
+
+# godot/world/world.gd _ac0401_push() — the gate now also covers late-built materials:
+var n_mats := ChunkScript._mat_cache.size()
+        + Data.fluid_anim_mats.size() + Data.fluid_anim_bf_mats.size()
+if not is_equal_approx(ff, _ac0401_fog_wall) or n_mats != _ac0401_n_mats:
+    _ac0401_fog_wall = ff
+    _ac0401_n_mats = n_mats
+    ...  # push loops unchanged</pre>
+<p>Not architectural (same push, same materials — the gate condition gains a size term;
+genhash 25/25 byte-identical confirms the terrain/lane contract is untouched).</p>
+
+<h3>Visual ladder (proxy render, nadir, R24/F83 fog unless noted)</h3>
+<p><img class="shot" src="captures/probe-t200nfog.png" alt="200m no fog"><br>
+<span class="cap">200 m, fog off: full-detail core disc + the coarser LOD ring around it + the render
+edge — the tier structure is real, and the outer C ring is the sparsest (partially outside the
+wall even here).</span></p>
+<p><img class="shot" src="captures/probe-t200.png" alt="200m fog"><br>
+<span class="cap">200 m, user fog [100, 332]: the ground is already deep in the fade — the user’s
+orbit approach view: coarse bands first, everything fogging out.</span></p>
+<p><img class="shot" src="captures/probe-t350nfog.png" alt="350m no fog"><br>
+<span class="cap">350 m, fog off: blank. Every ground point is beyond the 332 m wall — the shared
+discard edge, no fade. The “the world just ends” moment is the wall, not per-tier logic.</span></p>
+<p><img class="shot" src="captures/probe-t700nfog.png" alt="700m no fog"><br>
+<span class="cap">700 m, fog off: only the satellite body (the smooth planet sphere) — chunk terrain is
+entirely beyond the wall; the satellite dissolve takes over, as designed.</span></p>
+<p class="cap">Also captured: probe-t100 (100 m, fog), probe-t300 (300 m, fog — blank),
+seam-nadir-100 (wide context). Logs: probe-shots*.log.</p>
+
+<h2>Deliverables &amp; residue</h2>
+<ul>
+  <li>Captures: <code>tasks/AC-0420/captures/</code> (12 PNGs, R24/F83 unless noted above).</li>
+  <li>Plan: <code>tasks/AC-0420/plan.html</code>; journal: <code>tasks/AC-0420/continuity.md</code>.</li>
+  <li>Files changed: <code>godot/player/player.gd</code> (idle ground-creep guard, ~20 lines after
+  <code>move_and_slide()</code>), <code>godot/world/world.gd</code> (<code>_ac0401_push</code> gate + one
+  state var). <code>godot/scenes/harness.gd</code> back to pristine — the temporary ac0420probe arm
+  (dispatch branch + ~550 lines) was removed and every gate above was re-run after removal.</li>
+  <li>Open decision: item 1 fix choice (A/B/C above) — needs a follow-up ticket.</li>
+  <li>Open follow-up candidate: the 332 m hard discard edge at 350 m+ reads as “the world just
+  ends” with fog off; the fog-on path fades it smoothly. Consider extending the fog window or
+  a dedicated far-fade for flight (design call).</li>
+</ul>
+
+</body>
+</html>

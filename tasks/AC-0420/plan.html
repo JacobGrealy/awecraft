@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0420 plan — chunk-cracks, idle slide, tier order</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:1040px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:.3rem .5rem;vertical-align:top;text-align:left}
+.small{font-size:.85em;color:#555}
+</style>
+</head>
+<body>
+<h1>AC-0420 — plan: measure first, then fix</h1>
+<p class="small">The user's three reports, in their words: "visible cracks between all of the chunks" /
+"the player slides without pressing any buttons, I assume gravity" / "high lods disappear much sooner than
+medium and low as you fly to orbit, why?". Two of the three were answered before with work on neighbouring
+mechanisms (AC-0397 band-A fill, AC-0416 far-tier placement — both measured to zero and therefore NOT these),
+so every item gets a number before any fix.</p>
+
+<h2>1. Goal</h2>
+<ol>
+<li><b>CRACKS</b> — measure a high-tier chunk boundary directly: vertex positions on both sides of the shared
+edge (across-seam gap/overlap), the along-seam V depth, the vertex normals and the baked vertex-colour (light /
+AO / face-shade channels) across it. Classify the crack: geometry, shading, or depth. Close render(s) of the
+boundary. The known geometry facts (to be re-measured, not re-derived): AC-0362 grout = 1.6 mm in-plane overlap
+at every seam; the folded-net residual is "almost entirely along-seam/radial" (V-crack class, up to ~5.4 cm in
+band); depth precision at near=0.1 / far=4000 is ≈ 0.06 mm @10 m, 6 mm @100 m, 24 mm @200 m, 95 mm @400 m.</li>
+<li><b>SLIDE</b> — idle drift on a flat pad (away from the column centre) and on the natural spawn slope:
+rate (m/s), direction vs the tangent plane and vs the column-centre radial, terrain. Hypothesis to test
+(the user's own): the radial gravity −_up·26 is applied to the velocity every physics frame while grounded;
+the contact normal (the per-column FACET, up to d/R ≈ 0.002 rad off the exact radial) cancels only its normal
+part, leaving a tangential component g_t = 26·d/R (d = distance from the column centre, up to ~8–11 m) that
+the ground lerp (k=12/s) damps to a steady v_ss = g_t/12 ≈ 4–6 mm/s toward the column centre. Predicted:
+measurable drift on flat ground, direction ≈ toward the column centre; zero in the air.</li>
+<li><b>TIER ORDER</b> — the direct answer: a per-tier altitude table. Runtime facts to measure: the live
+<u_fog_far</u> on EVERY near material (the 4 chunk_lit_*.gdshader kinds in <code>ChunkScript._mat_cache</code>,
+the two fluid_anim_*, and lod_avg pushed by main.gd from env.fog_depth_end) — the AC-0401 claim "all six discard
+at one distance" was verified on shader TEXT; the runtime uniform values (including the change-gated push and
+the 332.0 shader default) are unverified. Plus the user-config tier extents (sim 4 / med 8 / low auto-14 /
+render 24, fog 83 % → wall 332 m, fog window [100, 332], camera far 4000/9000). Then, per tier: the altitude at
+which it stops being drawn (strict, its inner edge crossing the 332 m view-distance sphere) and the altitude at
+which it is ≥90 % fogged (visual). If a tier has a second, earlier limit unconnected to the shared wall, state
+it plainly — that is the answer.</li>
+</ol>
+
+<h2>2. Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>ONE temporary measurement arm <code>ac0420probe</code>
+(seam + idle + tier in a single headless run) — in and out in the same task per <code>scenes/AGENTS.md</code>
+(the <code>rayline</code> precedent). No standing arm is added, so no harness_data.yaml row / doc render is owed.</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>(pending the measurement) the idle-drift fix: while
+grounded, apply only the component of gravity along the contact normal (the collision cancels it; the tangential
+residual is what slides). Walking/jump/air/swim paths untouched.</td></tr>
+<tr><td><code>godot/world/*</code> / shaders</td><td>(pending the measurements) only if a crack or a tier defect
+is measured. If the crack is a depth z-fight of the 1.6 mm grout strip or a shading step, the fix candidate is a
+single-owner seam strip or the lighting-source fix — decided by the numbers, not by the previous tickets'
+mechanisms. If nothing reproducible is found, say so with the evidence.</td></tr>
+<tr><td><code>tasks/AC-0420/</code></td><td>plan.html, continuity.md (journal), captures/, this results page.</td></tr>
+</table>
+<p><b>Not touched (fence):</b> <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code> — another session's uncommitted work (verified
+dirty in git status; the chunk_lit / fluid / satellite shaders are NOT dirty). No commits, no TASKS.yaml edits.</p>
+
+<h2>3. Harness gates (light set, then exit — heavy is the coordinator's)</h2>
+<ul>
+<li><b>G0</b> — <code>--headless --quit</code>: zero SCRIPT ERROR + zero SHADER ERROR via
+<code>tasks/scripts/gate_census.py</code> <b>AND the process exit status checked</b> (the stochastic UAF exits
+11 on a clean log).</li>
+<li><b>SMOKE</b> battery <code>player;interact;light;fluids;genhash</code>; <b>PROBE</b> = <code>meshprobe</code>;
+<b>genhash</b> 25/25 byte-identical (world/* is in play).</li>
+<li><b>player</b>, <b>spherewalk</b>, <b>boundary r4</b> arms — physics (item 2) and streaming (item 3) moved.</li>
+<li><b>shaderforce</b> (Forward+ compile of every shipped shader) — only if a shader was touched; otherwise part
+of the standing state.</li>
+<li>Acceptance = the three measurements BEFORE and AFTER any change + the close boundary render (crack or its
+absence). One godot at a time; <code>pgrep</code> before every call; logs to repo-root <code>.scratch/AC-0420/</code>.</li>
+</ul>
+
+<h2>4. The three measurements (and what they must show)</h2>
+<ol>
+<li><b>Seam census</b> (arm, headless, the two spawn seams (0,0)|(1,0) and (0,0)|(0,1), +2 further-out seams):
+across-seam overlap/gap per matched boundary vertex (mm, expect ≈ −1.6 mm overlap ± float32 transform rounding),
+along-seam V depth (mm–cm), normal angle across (deg), per-channel vertex-colour Δ (expect ~0 if the light/AO
+field is continuous — a non-zero Δ is the shading-crack finding). Plus the depth-precision table. Then the
+renders decide: a line in the mesh (visible at 10 m where precision is sub-mm), a colour step (shading), or a
+mottle only at mid range (depth).</li>
+<li><b>Idle drift</b> (arm): flat pad, player offset ~8.5 m from the (0,0) column centre, no input, 20 s:
+total drift, rate, direction vs the column-centre radial (predicted g_t = 26·d/R, v_ss = g_t/12 ≈ 4.5 mm/s
+toward (8,8)); repeat on the natural spawn slope (drift should gain the downhill component). Post-fix: ≈0 on
+both, walking/jump/spherewalk unchanged.</li>
+<li><b>Tier table</b> (arm): per tier {0, A, B, C}: inner/outer extent (m, from the live knobs), the runtime
+<u_fog_far</u> actually on its materials, the strict stop-altitude <code>sqrt(wall² − inner²)</code>, the
+visual 90 %-fog altitude. User config: wall 332, window [100, 332]; predicted strict table ≈ C 229 / B 299 /
+A 322 / T0 332 m — i.e. the COARSE tiers stop first, the shared wall holds; if that is what the numbers say,
+the "finest vanishes first" perception is the tier EXTENT (128 m vs 368 m) plus the fog window, and the answer
+is that statement with the table — no manufactured fix. A material found at the 332.0 default while the wall is
+elsewhere (or a tier missing where its extent says it should draw) is the defect to fix.</li>
+</ol>
+
+<h2>5. Render budget (proxy = geometry/layout evidence, Forward+ via lavapipe, 1280×720, R24/F83, ≤1200 s each)</h2>
+<pre>seam-nadir-150  AWECRAFT_AIM above the seam, 150 m, pitch -90   (crack: geometry/depth/shading)
+seam-nadir-300  ditto 300 m                                     (depth precision 54 mm here)
+seam-close-10   eye ~10 m from the seam, shallow look           (geometry at sub-mm precision)
+seam-nofog-200  200 m, AWECRAFT_NO_FOG=1                        (line isolated from the haze)
+tier-l150/l250/l350/l700  nadir at 150/250/350/700 m altitude   (the tier disk + the body handover)</pre>
+</body>
+</html>

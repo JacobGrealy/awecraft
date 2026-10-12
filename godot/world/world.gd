@@ -4992,6 +4992,7 @@ func _wprof_recon_raw_pct() -> float:
 # (u_deck < 0.5 runs the exact r9 constants; mix(1.0, u_space, 0.0) is
 # exactly 1.0).
 var _ac0401_fog_wall := -1.0
+var _ac0401_n_mats := -1  # AC-0420: late (lazily built) materials gate
 var _ac0401_deck := -1.0
 var _ac0401_limb := -1.0
 # AC-0414: the clause-2 limb gate push state (same seam, change-gated).
@@ -5049,10 +5050,18 @@ var _ac0414_hold_titled := false
 
 func _ac0401_push() -> void:
 	# (1) the fog wall - change-gated (the value only moves with the
-	# render radius / fog percentage, not per frame).
+	# render radius / fog percentage, not per frame). AC-0420: the chunk
+	# materials are created LAZILY (first mesh build), after the first
+	# push for the boot wall has already run — gate on the material set's
+	# size too, so late materials receive the current wall. Without this
+	# they keep the shader default 332: invisible at R24/F83 (wall == 332),
+	# a hard die-off at 332 m instead of the real wall at any other render
+	# distance (render 50 -> 714 m).
 	var ff := DayNight.fog_far(render_radius, float(Settings.values.get("fog_start_pct", 87.5)))
-	if not is_equal_approx(ff, _ac0401_fog_wall):
+	var n_mats := ChunkScript._mat_cache.size() + Data.fluid_anim_mats.size() + Data.fluid_anim_bf_mats.size()
+	if not is_equal_approx(ff, _ac0401_fog_wall) or n_mats != _ac0401_n_mats:
 		_ac0401_fog_wall = ff
+		_ac0401_n_mats = n_mats
 		for k in ChunkScript._mat_cache:
 			var m = ChunkScript._mat_cache[k]
 			if m is ShaderMaterial:
