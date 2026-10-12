@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T00:10
+  updated_at: 2026-10-12T00:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26918,6 +26918,69 @@ intake:
     12/12); every look change ships behind a switch defaulting conservative; and the recent work must
     keep holding - the local-zenith sky and its air column, the far tier''s curvature placement, the engine-fog
     single source, the carved-top fill, the volumetric cloud layer, and the satellite body''s mesh winding.
+
+    '
+  comments: []
+- id: AC-0422
+  title: hard-horizon-line-at-altitude
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-12T00:11
+  updated_at: 2026-10-12T00:11
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: From altitude there should be air below the player and space above, not a flat
+    sheet with a hard edge across the middle of the screen. The user''s words: "the sky does not look
+    right at this altitude, I said the skybox shouldn''t have a horizon line", with a screenshot showing
+    a flat grey-blue expanse filling the upper frame, terminated by a hard horizontal edge, with terrain
+    and clouds below it.
+
+
+    2) Technical Details:
+
+    REPORTED AGAIN 2026-10-11 WITH A SCREENSHOT. This is a REPEAT of something the user said long ago
+    and it must not be treated as new: they previously said of the same appearance that they did not think
+    the dark blue was a sphere but rather the bottom of the skybox. The current screenshot shows the same
+    thing at a different altitude - a flat expanse with a hard horizontal boundary that reads as a horizon
+    line - so whatever was done in between did not address it.
+
+    WHAT THE FRAME SHOWS, since the evidence is the specification: above the player is a flat blue-grey
+    field filling the upper half of the frame with no gradient and no variation, and it ends at a hard
+    straight edge across the whole width. Below that edge is terrain with cloud. A hard straight edge
+    is the signature of a PLANE seen edge-on, or of a screen-space or world-space boundary being drawn
+    rather than computed - a gradient would not produce it. Candidates to establish between: a fog or
+    haze term evaluated against a fixed height or a world-aligned plane rather than the local radial up,
+    which would be another instance of the flat-world assumption this project has already been bitten
+    by three times; the sky model failing to vary with the local zenith at this altitude and collapsing
+    to a constant; or the far tier or a skybox surface being drawn as a visible object, which is the same
+    mistake the recently fixed atmosphere shell made.
+
+    WHY THIS KEEPS HAPPENING, worth reading before starting: three recent defects were all a curved world
+    being treated as flat - the far tier placed on a flat grid over a sphere, the sky shaded against a
+    world up-axis rather than the local radial one, and the far tier''s normals not rotated with the surface.
+    Each produced a visible artifact that no shader census could see. A hard horizon line at altitude
+    is exactly that shape of symptom.
+
+    ACCEPTANCE: the user''s own frame re-taken at the same altitude and configuration, showing no hard
+    edge and no flat field - air below the player, sky above, varying continuously with the local zenith
+    - plus the measurement of the luminance profile down the frame, which should be monotone or smoothly
+    varying rather than a step. Also confirm the daytime sky is bright and the local-zenith behaviour
+    from the previous sky ticket still holds at this altitude, and that the atmosphere still reads as
+    wrapping the world rather than as a surface.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); any look change ships behind a switch defaulting conservative; and the recent work must keep
+    holding - the volumetric cloud layer, the far tier''s curvature placement, the engine-fog single source,
+    and the satellite body''s mesh winding.
 
     '
   comments: []
