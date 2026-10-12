@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0418 plan — the bake-exit use-after-free</title>
+<style>
+body{font:15px/1.5 ui-monospace,monospace;max-width:1020px;margin:2rem auto;padding:0 1rem}
+h1{font-size:1.3rem}h2{font-size:1.05rem;border-bottom:1px solid #888;padding-bottom:.2rem;margin-top:1.8rem}
+pre{background:#f4f4f4;border:1px solid #ddd;padding:.6rem .8rem;overflow-x:auto;font-size:13px}
+code{background:#eee;padding:0 .25rem}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:.3rem .5rem;vertical-align:top;text-align:left}
+.small{font-size:.85em;color:#555}
+</style>
+</head>
+<body>
+<h1>AC-0418 — plan: workers that hold no reference to the node</h1>
+<p class="small">Builder: subagent. 2026-10-12. Tree at b5b1d5c (AC-0414 + AC-0417 + AC-0421 committed; the
+mitigation from AC-0414 §6 is in the tree). Fenced files untouched: main.gd / game.gd / debug.gd / drop.gd.</p>
+
+<h2>1. Goal</h2>
+<p>Close the mid-bake-exit use-after-free the AC-0414 run measured: a pool thread is <b>inside a call to a
+method of the SatelliteBody node</b> (the worker callables are the node's own methods), so when the process
+exits the scene-tree teardown frees the node's script instance under the running worker. The shipped
+mitigation (file-scope <code>_mt_exit_aborted</code> + the <code>_exit_tree</code> hook) only shrinks the
+window to the function epilogue — the worker is still inside the node's instance until it returns. The fix,
+per the ticket: <b>workers that hold no reference to the node</b>, <b>shown</b> to prevent the crash by
+counting deliberate mid-bake exits before and after (the exit status is the primary signal — the defect
+leaves a clean log), with the bake output proven byte-identical and its speed unchanged. Also: test the link
+to the AC-0403 stochastic slab-read crash and report the verdict with reasoning.</p>
+
+<h2>2. The race, in code (what will change)</h2>
+<pre>today:  pool.add_task(_mt_shard_task.bind(_mt_g, s), true)     # Callable target = the NODE
+        pool.add_task(_mt_face_task.bind(i), true)
+        pool.add_task(_bake_worker.bind(g), false)             # OFF path, same class
+        worker thread: runs the node's GDScriptInstance; node freed at exit  →  UAF (measured:
+        "Bad address index" in _pixel_mt on a pool thread)
+
+fixed:  pool.add_task(SatelliteBakeWorker.shard_task.bind(st, g, s), true)   # target = a plain SCRIPT
+        worker thread: runs static functions, touches only the state Dict (a RefCounted the task's own
+        bound argument keeps alive through the node's teardown), the AweGen C++ handle, and engine
+        singletons. No reference to the node anywhere in the worker's frame  →  nothing to free under it.</pre>
+<ul>
+<li>New file <code>godot/world/satellite_bake_worker.gd</code> (<code>class_name SatelliteBakeWorker</code>,
+plain script, static functions only): <code>shard_task</code>, <code>face_task</code>,
+<code>single_task</code> (the OFF path, which also gets detached — same class, ~13-min single worker), plus
+the moved worker-side logic: <code>gen_one</code>, <code>record_offset</code> / <code>home_rec_offset</code>,
+the per-face row machine (<code>start_face</code> / <code>home_chunk_load</code> /
+<code>face_build_block</code> / <code>step_face</code> — the st-dict machine, verbatim arithmetic),
+<code>pixel_write</code> + <code>l2s</code> / <code>byte</code>, <code>guard_check</code>, <code>load_png</code>,
+<code>face_path</code>, <code>mesh_grid</code> / <code>hgrid_sample</code> / <code>geom_for_face_local</code>,
+<code>ship_faces</code>. Every expression is copied verbatim; only the <em>source</em> of the values changes
+(instance reads → <code>st[&quot;…&quot;]</code>), so the float paths — and the bytes — are identical.</li>
+<li><code>godot/world/satellite_body.gd</code>: builds a per-bake state <code>Dictionary</code>
+(<code>_bake_state()</code>: R/SEA/HMAX/seed/mesh_step/pay_total/cache_dir + the consts NPIX/FACE_GRID/
+HOME_*/FACE_CHUNKS/FCC/LX/LY/LZ + the per-shard and per-face buffers + abort/done flags) and passes it as a
+<b>bound argument</b>. The worker writes only its own slots; the main thread collects into the existing
+instance fields (<code>guard</code> / <code>_worker_images</code> / <code>_geom</code> / stats /
+<code>bake_done</code> last) — the consume loop, <code>_finish_bake</code>, the LOAD phase, the hold and the
+<code>sat_preload</code> OFF path's output all keep their shape. The node's worker-side instance fields are
+deleted (<code>pay</code>, <code>color_row</code>, <code>_h2/_t2/_bld_row/_out/_ch_cx/_ch_cz/_h16/_t16/
+_gx16/_gz16/_hgrid/_first_col</code>, the <code>_mt_shard_*</code>/<code>_mt_face_*</code> worker-visible
+arrays, <code>bake_abort</code>); main-thread bookkeeping stays (<code>_mt_stage</code>, task ids,
+<code>bake_yield</code>, <code>tail_inflight_cap</code>). The shipped mitigation stays and is exercised:
+<code>_exit_tree</code> still sets <code>_mt_exit_aborted</code>, and every worker still reads that static
+first (a belt-and-braces early stand-down; it is readable without touching anything that gets freed).</li>
+</ul>
+
+<h2>3. Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/satellite_body.gd</code></td><td>the fix (above)</td></tr>
+<tr><td><code>godot/world/satellite_bake_worker.gd</code></td><td>new — the detached worker-side script</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>TEMPORARY <code>satexit</code> probe arm (in + out this
+task, the pristine rule; G0 re-verified after removal)</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>same-task sync — the detached worker + state-object pattern</td></tr>
+<tr><td><code>tasks/AC-0418/</code></td><td>plan.html (this), results.html, continuity.md, captures in
+<code>.scratch/AC-0418/</code></td></tr>
+</table>
+<p>Fenced out (other session's uncommitted work): <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code>. <code>world.gd</code> needs no change (its
+AC-0414 hooks — <code>process_frame</code>, <code>bake_yield</code>, <code>tail_inflight_cap</code>,
+<bake_progress_line</code>, <code>seed</code> — keep their shapes).</p>
+
+<h2>4. Reproducing the crash before the fix (on demand, counted)</h2>
+<p>The temporary <code>satexit</code> arm: boots a <b>non-canonical seed</b> (AWECRAFT_SEED=5432 → the bake
+is forced, <code>sat_preload</code> default ON → the sharded path), the AC-0414 hold engages, the sim band
+releases at the capped await (~48-50 s, loud line at 42 s), the player spawns, then — exit mode
+(<code>AWECRAFT_SATEXIT=exit</code>) — the arm waits until the requested stage (1 = a shard in flight,
+2 = a face in flight, read from <code>bake_progress_line()</code>) plus a delay
+(<code>AWECRAFT_SATEXIT_DELAY</code>, default 5 s) and the dispatch quits: the process exits while bake
+workers are in flight. <b>complete mode</b> (<code>AWECRAFT_SATEXIT=complete</code>) instead waits for the
+boot bake to LOADED and reports its walls (the speed A/B + the bake-before-presentation proof) before a
+clean quit. Each attempt is one godot invocation; the <b>exit status is the verdict</b>
+(rc 0 = clean; rc 134/139 or a <code>handle_crash</code> line = crash), logged per attempt.</p>
+<ul>
+<li><b>Pre-mitigation baseline</b> (establishes "reliably reproducible before", the ticket's premise): the
+AC-0414 flag-set is temporarily disabled (one-line scratch edit of <code>_exit_tree</code>, restored before
+any measurement of the fix) — 5 stage-1 exit attempts.</li>
+<li><b>As-shipped baseline</b> (the tree this ticket starts from — mitigation in): 10 stage-1 + 2 stage-2
+attempts.</li>
+<li><b>After the fix</b>: 15 stage-1 + 3 stage-2 attempts, expected 0 crashes. The before number is what
+makes the after number mean anything (the ticket's own clause).</li>
+</ul>
+
+<h2>5. Proving the bake is unchanged (exactly, not approximately)</h2>
+<ul>
+<li><b>Output:</b> the <code>satellite</code> arm with <code>AWECRAFT_SATELLITE_REBAKE=1</code> (canonical
+seed 44) run BEFORE and AFTER: each run's 12 rebaked PNGs are kept
+(<code>.scratch/AC-0418/rebake_before|after/</code>); the acceptance is <code>cmp</code> 12/12 byte-identical
+between the runs AND the arm's standing <code>rebuild_vs_shipped identical=true</code> (diff_px 0) on both.
+After the fix, one more REBAKE with <code>AWECRAFT_SATPRELOAD=0</code> (the OFF path):
+<code>identical=true</code> — with the standing pre-ticket property (OFF output == the shipped seed-44 PNGs)
+this closes the byte-identity of the OFF state by transitivity.</li>
+<li><b>Speed + presentation:</b> <code>satexit</code> complete mode (seed 5432, the boot-time bake under the
+hold) BEFORE and AFTER: the bake's worker walls (bake_stats) and the hold/release/LOADED lines compared
+same-box, same conditions.</li>
+</ul>
+
+<h2>6. Harness gates (light set; HEAVY is the coordinator's)</h2>
+<pre>G0    --headless --quit + gate_census.py: zero SCRIPT ERROR + zero SHADER ERROR, rc 0
+      (before the fix, after the fix, and after the probe arm comes out)
+genhash  25/25 byte-identical vs this run's own BEFORE capture (world/ touched)
+SMOKE    AWECRAFT_BATTERY=player;interact;light;fluids;genhash
+PROBE    lightstate R16 x2 — the AC-0403 crash recipe, also the link-question evidence
+EVERY run: the exit status checked (primary signal for this ticket), census on every log</pre>
+
+<h2>7. The AC-0403 link — pre-registered verdict logic</h2>
+<ul>
+<li>AC-0403's crash ran on the <b>canonical seed</b> (default 44 → the res:// texture path → <b>no bake in
+flight</b>), at t≈27 s of normal play, with the faulting frame a <b>main-thread</b> slab read from the
+player's physics step / mob tick. AC-0418's fault is a <b>pool thread</b> inside a bake worker method at
+process exit. For this defect to be the cause of that one, the worker's VM/instance use would have had to
+corrupt slab memory in a run where no bake worker was running — it was not. <b>Refuted as specific cause.</b></li>
+<li>Same failure class, though: both are use-after-free / data-race shapes around pool threads + the node's
+script instance, with the class's signature (clean log, stochastic, a read site, multiple callers, no
+stable reproducer). The remaining candidates for AC-0403 are the streaming workers' concurrent VM use
+(threadgen/threadmesh run node methods from pool threads the whole time) and the PBA shallow-handle edge
+(AC-0403 §7) — this fix does not touch either (bake scope). Verdict wording decided by the measurements:
+link confirmed / refuted / still open, with the reasoning above either way.</li>
+<li>Noted residual (not this ticket's scope): the streaming workers carry the same exit-race class at a
+much lower in-flight fraction (short calls vs the bake's minutes-long ones) — thousands of clean arm exits
+are the empirical bound; a follow-up ticket is the honest home if it ever surfaces.</li>
+</ul>
+
+</body>
+</html>

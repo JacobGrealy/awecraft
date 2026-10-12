@@ -628,9 +628,15 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (world.gd bake_yield) after the bounded late release until the
 │                         player lands, HIGH-capped after; the main thread merges +
 │                         assembles — single-writer, bit-identical to the pre-AC-0414
-│                         single LOW task, which remains the sat_preload OFF path) —
-│                         gated by the sat_preload setting (ON default; the loading window
-│                         holds on the in-flight bake, bounded + loud, AC-0414)
+│                         single LOW task, which remains the sat_preload OFF path),
+│                         AC-0418 worker-detached: every task is a static of the plain
+│                         script world/satellite_bake_worker.gd — input = the bound per-
+│                         bake state Dict + the AweGen handle + class statics, so the
+│                         node is out of every worker frame and a mid-bake exit frees it
+│                         under workers that hold no reference to it (the UAF close);
+│                         _mt_exit_aborted stays the exit stand-down — gated by the
+│                         sat_preload setting (ON default; the loading window holds on
+│                         the in-flight bake, bounded + loud, AC-0414)
 │     (scenes/test_range.tscn substitutes for World in the AC-0191 test range)
 ├─ Player                 player/player.tscn  →  player/player.gd
 │                         CharacterBody3D + CollisionShape3D + Camera3D
@@ -820,8 +826,25 @@ Build and loading:
   per-face arithmetic) — the standing proof is the satellite arm's REBAKE pixel-compare
   through whichever path the `sat_preload` switch selects. OFF (the setting or
   `AWECRAFT_SATPRELOAD=0`) runs the untouched pre-AC-0414 single LOW task.
+  **AC-0418: the worker side is detached from the node** — every bake task is a STATIC
+  function of the plain script `world/satellite_bake_worker.gd` (`SatelliteBakeWorker`),
+  and its only inputs are the bound per-bake state Dictionary (`_bake_state()`: the
+  AweGen C++ handle, the configure() values by value, and the per-shard / per-face
+  channels), class statics (SphereMath, the exit flag) and engine singletons. A Callable
+  to a static holds no object, and the state is kept alive by the tasks' own bound
+  arguments, so the node's teardown at process exit frees nothing a worker frame
+  references: the mid-bake exit UAF (measured this ticket: 6/6 pre-detach stage-1 exits
+  symptomatic — 2 SIGSEGV + 4 VM-level “Bad address index”; 2/2 as-shipped face-stage
+  exits SIGSEGV in `_pixel_mt`, the AC-0414 crash; 10/10 as-shipped stage-1 clean — the
+  AC-0414 `_mt_exit_aborted` mitigation holds only where its check cadence reaches, and a
+  5 s face slice is past it) is closed. The flag stays and is read FIRST in every task
+  (the exit stand-down, exercised on both paths). The node keeps the main-thread
+  poll/merge/assemble, the consume/load paths, a thin `_bake_main_step_single()` collect
+  for the OFF path, and the `_geom` cache (the build is the single worker-side
+  implementation). Byte-identity stands: same arithmetic, same operation order — the
+  proof is the satellite arm's REBAKE cmp (12/12 PNGs) through both paths.
   **AC-0311 piece 3**: the in-engine bake's per-face SEED SALT was dropped in
-  `world/satellite_body.gd` `_gen_one` (the two far lanes thread (face, R) raw into
+  `world/satellite_bake_worker.gd` `gen_one` (AC-0418: moved out of `satellite_body.gd`; the two far lanes thread (face, R) raw into
   `generate_far`, matching the sphere-domain port — the field is one planet, one seed, so the
   bake must be the SAME field, not a per-face-salted variant). The SHIPPED seed-44 textures are
   re-baked + re-shipped post-port (AC-0311): the in-engine bake is salt-consistent with the

@@ -71,16 +71,30 @@
 # slice; it goes HIGH again (capped) after landing. The
 # single-
 # writer discipline survives: each worker writes only its own shard
-# buffer / its own face-index slot / its own PNG file; the MAIN thread
-# is the only writer of pay/guard/_worker_images/_geom (it merges the
-# shards once, assembles the face results in face order once, and sets
-# bake_done), then does the thin GPU-side consumption (one face's
-# ImageTexture + mesh node per frame). The switch OFF keeps the
-# pre-AC-0414 path literally (the single-task _bake_worker below,
-# low priority, un-sliced). generate_far is a pure const C++ call the
+# buffer / its own face-index slot / its own PNG file (all in the bound
+# state - AC-0418); the MAIN thread is the only writer of the node's
+# guard/_worker_images/_geom (it merges the shards once, assembles the
+# face results in face order once, and sets bake_done), then does the
+# thin GPU-side consumption (one face's ImageTexture + mesh node per
+# frame). The switch OFF keeps the pre-AC-0414 single-task path (now
+# the same detached static, low priority, un-sliced - see the
+# AC-0418 note below). generate_far is a pure const C++ call the
 # thread-gen pool already runs from worker threads (world.gd
 # _threadgen_worker; the AC-0263 prewarm note owns the singleton race),
 # so no new C++ task type was owed - the shards call the same function.
+# AC-0418: the worker side is DETACHED from the node - every task is a
+# STATIC function of the plain script world/satellite_bake_worker.gd
+# (SatelliteBakeWorker), and its only inputs are the bound per-bake state
+# Dictionary (_bake_state), the AweGen C++ handle (alive for the
+# process), class statics and engine singletons. A Callable to a static
+# holds no object, and the state is kept alive by the task's own bound
+# argument, so at process exit the node may be freed under the workers
+# while nothing in their frame is freed with it: the mid-bake exit UAF
+# (reproduced this ticket - 6/6 pre-detach stage-1 exits showed the
+# signature, 2 segfaults + 4 VM-level Bad-address; 2/2 as-shipped face-
+# stage exits segfaulted in _pixel_mt, the AC-0414 crash) is closed.
+# SatelliteBody._mt_exit_aborted (the AC-0414 mitigation) is read FIRST
+# in every task and stays the exit stand-down.
 #
 # SHADING (AC-0382 b) - the moving sun. The bake carries the piece-1
 # fixed-sun lambert in the pixels; the shader re-weights it by the
@@ -111,14 +125,6 @@ const MESH_STEP := 16.0
 var mesh_step := MESH_STEP
 
 
-func _mesh_grid(f: int) -> Vector2i:
-	# (u subdivisions, v subdivisions) of the displaced grid for face f.
-	# The home pair is the half-width face: u spans W/2 (196 steps at
-	# R = 4000), v spans W (393). Faces 2-11 span W x W (393 x 393).
-	var W: float = SphereMath.face_width(R)
-	if f <= 1:
-		return Vector2i(int(roundf(W / 2.0 / mesh_step)), int(roundf(W / mesh_step)))
-	return Vector2i(int(roundf(W / mesh_step)), int(roundf(W / mesh_step)))
 const HOME_HALF := 197  # home chunks per axis: cx, cz in [-197, 196]
 const HOME_N := HOME_HALF * 2  # 394
 const HOME_CHUNKS := HOME_N * HOME_N  # 155,236
@@ -158,22 +164,16 @@ var R := 0.0  # the reference radius (Game.planet_R)
 var SEA := 126
 var HMAX := 384
 
-var pay := PackedByteArray()  # 196,196 x 1024-byte far payloads (worker-owned until bake_done)
 var pay_total := 0
 
 var color_face := 0  # LOAD phase (cache/res): the face index
-var color_row := 0  # the row machine's position (faces 0..11)
 var bake_consume := 0  # WORK-phase consumption: the next face (main thread)
-var _h2 := PackedInt32Array()  # faces 2-11: the 1024^2 H grid (lazy 16-row blocks)
-var _t2 := PackedByteArray()  # faces 2-11: the 1024^2 top grid
-var _bld_row := 0  # next 16-row H2 block to build (faces 2-11)
-var _out := PackedByteArray()  # the current face's RGB output (per-face allocation)
-var _ch_cx := -999  # home pair: the cached chunk
-var _ch_cz := -999
-var _h16 := PackedInt32Array()
-var _t16 := PackedByteArray()
-var _gx16 := PackedFloat32Array()
-var _gz16 := PackedFloat32Array()
+# AC-0418: the row-machine fields (the per-face H grids, the chunk cache,
+# the RGB output) are gone from the instance - they live in the per-face
+# state Dictionaries the worker tasks own (SatelliteBakeWorker), and the
+# merged payload lives in the bake state (_bake_st). The worker-side work
+# is a static function of that plain script: the node is out of every
+# worker's frame (the mid-bake exit UAF close).
 
 var textures: Array = []  # 12 ImageTexture (appended in load order 0..11)
 var face_nodes: Array = []  # 12 MeshInstance3D
@@ -208,7 +208,6 @@ var _frame_sum_ms := 0.0
 var _frame_n := 0
 var _last_bake_tick := 0
 var guard: Array = []  # 12 per-face guard dictionaries (load order)
-var _first_col: PackedByteArray = PackedByteArray()
 # AC-0382: the off-thread bake state. The worker is the single writer of
 # every field below until bake_done (main-thread reads only after).
 var bake_done := false
@@ -216,7 +215,6 @@ var bake_result: Dictionary = {}
 var bake_worker_ms := 0
 var _worker_images: Array = []  # 12 decoded Images (the read-back the guard ran on)
 var _geom: Array = []  # 12 precomputed face geometries {v,u,n,i}
-var _hgrid := PackedInt32Array()  # AC-0384 r2: the current face's 1024^2 height grid (_step_face fills it; _geom_for_face + the PNG alpha consume it)
 var _hgrid_load: Array = []  # AC-0384 r2: face -> height grid derived from the PNG alpha (load path); an empty entry = a legacy image -> constant R + SEA
 # AC-0414: the multithreaded bake state (Settings "sat_preload" ON).
 # BAKE_SHARDS x BAKE_SHARD_LEN == pay_total EXACTLY (196,196 =
@@ -248,7 +246,6 @@ var tail_inflight_cap := 12  # world.gd sets 4 after the hold releases late (str
 # keeps the loud release line honest: it says the player is released at
 # the budget, and the ground build no longer queues behind the bake.
 var bake_yield := false
-var bake_abort := false  # the probe arm's clean-quit handle; the game never aborts
 # AC-0414: a file-scope (not instance) exit flag. The bake workers run on
 # pool threads with the node's script instance in their call stacks; if
 # the process exits while a worker is mid-slice the instance is freed
@@ -257,28 +254,31 @@ var bake_abort := false  # the probe arm's clean-quit handle; the game never abo
 # mid-bake). The static is readable WITHOUT touching the instance, so
 # every abort check below reads it FIRST (short-circuit): at process
 # exit _exit_tree flips it and each worker stands down at the next
-# record / slice boundary with no further instance access. It shrinks
-# the UAF window from a whole slice to the function epilogue - a full
-# close needs the workers detached from the node (their own ticket).
+# record / slice boundary with no further instance access. AC-0418
+# detached the workers (SatelliteBakeWorker statics + the bound state
+# Dict) so the epilogue no longer touches the node either; the flag
+# stays as the exit stand-down (it is exercised on both bake paths).
 static var _mt_exit_aborted := false
 var _mt_stage := 0  # 0 idle, 1 shards in flight, 2 faces in flight
-var _mt_g: Variant = null  # the AweGen reference (fetched on the main thread)
 var _mt_shard_ids: Array = []  # enqueued shard tids (grows as the poller streams them)
-var _mt_shard_bufs: Array = []  # 28 per-shard PackedByteArray (worker-owned each)
-var _mt_shard_err: Array = []  # 28
-var _mt_shard_ms: Array = []  # 28 per-shard worker wall ms (sum = _gen_ms)
 var _mt_shard_next := 0  # the next shard index to stream (the poller owns it)
 var _mt_shard_inflight_cap := 6  # set from OS.get_processor_count() at bake start
 var _mt_face_ids: Array = []  # 12 (assigned at enqueue - the poller may trickle)
 var _mt_face_enq: Array = []  # 12 (enqueued yet)
-var _mt_face_img: Array = []  # 12 (null until the face task is fully done - the done marker)
-var _mt_face_guard: Array = []  # 12
-var _mt_face_geom: Array = []  # 12
-var _mt_face_err: Array = []  # 12 ("" until set)
-var _mt_face_ms: Array = []  # 12 (colour+png+read-back+geom wall)
-var _mt_face_png_ms: Array = []  # 12
-var _mt_face_load_ms: Array = []  # 12 (the read-back + guard)
 var _mt_gen_wall_ms := 0.0  # enqueue -> all shards complete (wall)
+# AC-0418: the worker-visible bake state - a plain RefCounted Dictionary
+# the node fills before enqueue and passes to the worker tasks as a BOUND
+# ARGUMENT (the per-shard / per-face channels, the merged payload, the
+# AweGen handle, the abort + done flags). The worker callables are STATIC
+# functions of SatelliteBakeWorker (a plain script, alive for the
+# process): they hold no node reference, and the state is kept alive by
+# the tasks' own bound arguments, so it outlives the node's teardown.
+# The mid-bake exit UAF close: at process exit the node is freed, this
+# state is not, and every worker frame holds only this state, the C++
+# handle, class statics and engine singletons. Main thread: single
+# writer before enqueue; a worker channel is final once the pool says
+# its task is complete.
+var _bake_st: Dictionary = {}
 
 # the per-frame state the probe arm reads (the shader-side values,
 # mirrored - headless has no GPU, the arm checks the contract numerically)
@@ -449,9 +449,10 @@ func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> vo
 			# preloaded in world.gd _ready, the AWECRAFT_RAMPS pattern). ON =
 			# the sharded HIGH-priority pipeline - world.gd's loading-window
 			# hold gates the release on this bake finishing. OFF = the
-			# pre-AC-0414 single-task LOW-priority bake, literally the same
-			# _bake_worker call as before (the world is released first, the
-			# body may appear late).
+			# pre-AC-0414 single-task LOW-priority bake (AC-0418: the same
+			# detached static as the ON path - SatelliteBakeWorker.
+			# single_task - un-sliced, low priority; the world is released
+			# first, the body may appear late).
 			if bool(Settings.values.get("sat_preload", true)):
 				_start_bake_mt()
 			else:
@@ -523,11 +524,57 @@ func _phase_load(src: String, where: String) -> void:
 	_reset_counters()
 
 
+# AC-0418: the worker-visible bake state - the single builder for both
+# paths (ON: the sharded pipeline; OFF: the single task). The node is
+# the single writer before enqueue; afterwards the worker tasks own
+# their channels (the main thread reads a channel only once the pool
+# says its task is complete - is_task_completed is the synchronisation)
+# and the main thread writes only "abort" (the probe arm's clean-quit
+# handle). The consts travel by VALUE (their single home stays this
+# script); the values are the configure() values, fixed for the bake.
+# The C++ generator reference is fetched on the MAIN thread (the
+# AC-0263 prewarm note owns the lazy-singleton race) and rides in it.
+func _bake_state() -> Dictionary:
+	var st: Dictionary = {}
+	st["g"] = WorldGen.gen_cpp()
+	st["R"] = R
+	st["SEA"] = SEA
+	st["HMAX"] = HMAX
+	st["seed"] = seed
+	st["mesh_step"] = mesh_step
+	st["pay_total"] = pay_total
+	st["cache_dir"] = _cache_dir()
+	st["npix"] = NPIX
+	st["face_grid"] = FACE_GRID
+	st["home_n"] = HOME_N
+	st["home_half"] = HOME_HALF
+	st["home_chunks"] = HOME_CHUNKS
+	st["face_chunks"] = FACE_CHUNKS
+	st["shard_len"] = BAKE_SHARD_LEN
+	st["fcc"] = FCC
+	st["lx"] = LX
+	st["ly"] = LY
+	st["lz"] = LZ
+	st["pay"] = PackedByteArray()
+	st["abort"] = false
+	st["done"] = false
+	st["result"] = {}
+	st["gen_ms"] = 0.0
+	st["color_ms"] = 0.0
+	st["png_ms"] = 0.0
+	st["load_ms"] = 0.0
+	st["worker_ms"] = 0
+	return st
+
+
 func _start_bake() -> void:
 	phase = Phase.WORK
 	bake_active = true
 	bake_stats = {"mode": "baked", "cache": _cache_dir()}
-	pay = PackedByteArray()
+	# AC-0418: the worker-side work is the detached static (the node is
+	# out of the worker's frame); the whole pipeline input travels in
+	# the bound state.
+	_bake_st = _bake_state()
 	guard.clear()
 	textures.clear()
 	_worker_images = []
@@ -541,14 +588,10 @@ func _start_bake() -> void:
 	_bake_wall_t0 = Time.get_ticks_msec()
 	_reset_counters()
 	DirAccess.make_dir_recursive_absolute(_cache_dir())
-	# The C++ generator reference is fetched on the MAIN thread (the
-	# AC-0263 prewarm already closed the lazy-singleton race at
-	# world._ready; passing the reference keeps the pool thread from
-	# being a first caller anyway) and handed to the worker as an arg.
-	var g: Variant = WorldGen.gen_cpp()
 	# .bind (the project convention - world.gd _tm_worker_run.bind(skey)):
-	# the 4.7 add_task takes no args array.
-	Engine.get_singleton("WorkerThreadPool").add_task(_bake_worker.bind(g), false)
+	# the 4.7 add_task takes no args array. The static holds no object;
+	# the state outlives the node (the AC-0418 UAF close).
+	Engine.get_singleton("WorkerThreadPool").add_task(SatelliteBakeWorker.single_task.bind(_bake_st, _bake_st["g"]), false)
 
 
 # AC-0414: the multithreaded bake start (Settings "sat_preload" ON). The
@@ -559,14 +602,28 @@ func _start_bake() -> void:
 # (colour + PNG + read-back + guard + geometry - the row machine,
 # arithmetic untouched, with its per-face state in a task-owned
 # Dictionary). The main thread (via _bake_main_step_mt) is the only
-# writer of pay/guard/_worker_images/_geom: it merges the shards once,
+# writer of the node's guard/_worker_images/_geom: it merges the shards once,
 # assembles the face results in face order once, and sets bake_done.
 func _start_bake_mt() -> void:
 	phase = Phase.WORK
 	bake_active = true
 	bake_mt = true
 	bake_stats = {"mode": "baked", "cache": _cache_dir()}
-	pay = PackedByteArray()
+	# AC-0418: the worker-side work is the detached static (the node is
+	# out of every worker's frame); the per-shard / per-face channels
+	# ride in the bound state.
+	_bake_st = _bake_state()
+	var st: Dictionary = _bake_st
+	st["shard_bufs"] = []
+	st["shard_err"] = []
+	st["shard_ms"] = []
+	st["face_img"] = []
+	st["face_guard"] = []
+	st["face_geom"] = []
+	st["face_err"] = []
+	st["face_ms"] = []
+	st["face_png_ms"] = []
+	st["face_load_ms"] = []
 	guard.clear()
 	textures.clear()
 	_worker_images = []
@@ -577,86 +634,48 @@ func _start_bake_mt() -> void:
 	bake_done = false
 	bake_result = {}
 	bake_worker_ms = 0
-	bake_abort = false
 	# the static is per-SCRIPT (it survives the node): a re-created body in
 	# the same process (world restart / a radius-change window) must not
 	# inherit the previous instance's exit flag.
 	_mt_exit_aborted = false
 	_mt_stage = 1
-	_mt_g = WorldGen.gen_cpp()  # fetched on the MAIN thread (the AC-0263 prewarm note owns the lazy-singleton race)
 	_mt_shard_ids = []
-	_mt_shard_bufs = []
-	_mt_shard_err = []
-	_mt_shard_ms = []
 	_mt_shard_next = 0
 	_mt_shard_inflight_cap = clampi(OS.get_processor_count(), 1, BAKE_SHARDS)
 	_mt_face_ids = []
 	_mt_face_enq = []
-	_mt_face_img = []
-	_mt_face_guard = []
-	_mt_face_geom = []
-	_mt_face_err = []
-	_mt_face_ms = []
-	_mt_face_png_ms = []
-	_mt_face_load_ms = []
 	_mt_gen_wall_ms = 0.0
 	_bake_wall_t0 = Time.get_ticks_msec()
 	_reset_counters()
 	DirAccess.make_dir_recursive_absolute(_cache_dir())
 	var pool = Engine.get_singleton("WorkerThreadPool")
 	for s in BAKE_SHARDS:
-		_mt_shard_bufs.append(PackedByteArray())
-		_mt_shard_err.append("")
-		_mt_shard_ms.append(0.0)
+		st["shard_bufs"].append(PackedByteArray())
+		st["shard_err"].append("")
+		st["shard_ms"].append(0.0)
 	# The first batch fills the pool at HIGH (the pre-AC-0414 low lane ran
 	# on ONE thread - world.gd:6216 measured - and starved behind
 	# streaming); the REST stream through the poller as slots open, at
 	# the yield-aware priority (HIGH under the hold, LOW after the late
 	# release until the player lands - the bounded-release fix).
 	for s in _mt_shard_inflight_cap:
-		_mt_shard_ids.append(pool.add_task(_mt_shard_task.bind(_mt_g, s), true))
+		_mt_shard_ids.append(pool.add_task(SatelliteBakeWorker.shard_task.bind(st, st["g"], s), true))
 		_mt_shard_next = _mt_shard_inflight_cap
 	for f in 12:
 		_mt_face_ids.append(-1)
 		_mt_face_enq.append(false)
-		_mt_face_img.append(null)
-		_mt_face_guard.append(null)
-		_mt_face_geom.append(null)
-		_mt_face_err.append("")
-		_mt_face_ms.append(0.0)
-		_mt_face_png_ms.append(0.0)
-		_mt_face_load_ms.append(0.0)
+		st["face_img"].append(null)
+		st["face_guard"].append(null)
+		st["face_geom"].append(null)
+		st["face_err"].append("")
+		st["face_ms"].append(0.0)
+		st["face_png_ms"].append(0.0)
+		st["face_load_ms"].append(0.0)
 	_satline("bake: multithreaded start (seed %d) - %d shards x %d records + 12 faces, HIGH priority (the pre-AC-0414 single LOW task ran on one thread - world.gd:6216)" % [seed, BAKE_SHARDS, BAKE_SHARD_LEN])
 
 
-# AC-0414: one payload shard (records [s*BAKE_SHARD_LEN, ...+BAKE_SHARD_LEN)
-# in the global bake order - the _gen_one mapping, untouched). The worker
-# writes only its own buffer. The abort check is the probe arm's
-# clean-quit handle (the game never aborts).
-func _mt_shard_task(g: Variant, s: int) -> void:
-	if g == null:
-		_mt_shard_err[s] = "no AweGen (WorldGen.gen_cpp() null)"
-		return
-	var t0 := Time.get_ticks_msec()
-	var b: PackedByteArray = _mt_shard_bufs[s]
-	var i0: int = s * BAKE_SHARD_LEN
-	var i1: int = mini(i0 + BAKE_SHARD_LEN, pay_total)
-	for i in range(i0, i1):
-		# static FIRST: it is readable without touching the instance, so
-		# at process exit the check itself cannot UAF - and the branch
-		# RETURNS WITHOUT WRITING INSTANCE STATE (the main thread is
-		# exiting too; nothing reads it).
-		if _mt_exit_aborted:
-			return
-		if bake_abort:
-			_mt_shard_err[s] = "aborted"
-			return
-		var rec: PackedByteArray = _gen_one(g, i)
-		if rec.size() != 1024:
-			_mt_shard_err[s] = "generate_far payload %d bytes at record %d (want 1024)" % [rec.size(), i]
-			return
-		b.append_array(rec)  # records land in generation order
-	_mt_shard_ms[s] = float(Time.get_ticks_msec() - t0)
+# AC-0418: _mt_shard_task moved to SatelliteBakeWorker.shard_task (the
+# detached worker - same body, the state in a bound argument).
 
 
 # AC-0414: the main-thread half of the sharded bake (the single writer).
@@ -671,6 +690,7 @@ func _mt_shard_task(g: Variant, s: int) -> void:
 # (the shared consume loop then runs unchanged) and set bake_done.
 func _bake_main_step_mt() -> void:
 	var pool = Engine.get_singleton("WorkerThreadPool")
+	var st: Dictionary = _bake_st
 	if _mt_stage == 1:
 		var enq := _mt_shard_next
 		var completed := 0
@@ -684,18 +704,19 @@ func _bake_main_step_mt() -> void:
 		# lands (the diamond build is HIGH and must not queue behind the
 		# bake's remaining payload - the bounded release, the yield).
 		while _mt_shard_next < BAKE_SHARDS and inflight < _mt_shard_inflight_cap:
-			_mt_shard_ids.append(pool.add_task(_mt_shard_task.bind(_mt_g, _mt_shard_next), not bake_yield))
+			# AC-0418: the detached static, the state as the bound arg.
+			_mt_shard_ids.append(pool.add_task(SatelliteBakeWorker.shard_task.bind(st, st["g"], _mt_shard_next), not bake_yield))
 			_mt_shard_next += 1
 			inflight += 1
 		if _mt_shard_next < BAKE_SHARDS or completed < BAKE_SHARDS:
 			return
 		var err := ""
 		for s in BAKE_SHARDS:
-			if _mt_shard_err[s] != "":
-				err = "shard %d: %s" % [s, _mt_shard_err[s]]
+			if st["shard_err"][s] != "":
+				err = "shard %d: %s" % [s, st["shard_err"][s]]
 				break
-			if _mt_shard_bufs[s].size() != BAKE_SHARD_LEN * 1024:
-				err = "shard %d payload %d bytes (want %d)" % [s, _mt_shard_bufs[s].size(), BAKE_SHARD_LEN * 1024]
+			if st["shard_bufs"][s].size() != BAKE_SHARD_LEN * 1024:
+				err = "shard %d payload %d bytes (want %d)" % [s, st["shard_bufs"][s].size(), BAKE_SHARD_LEN * 1024]
 				break
 		if err != "":
 			_fail(err)
@@ -703,17 +724,18 @@ func _bake_main_step_mt() -> void:
 		# Godot 4.7.1's PackedByteArray has no replace() — the merge is
 		# the deterministic append_array concat in shard order (one
 		# reallocation pass; the only added main-thread cost, visible in
-		# step_ms_max).
-		pay = PackedByteArray()
+		# step_ms_max). The merged payload lands in the state (the face
+		# tasks' read-only input - AC-0418).
+		st["pay"] = PackedByteArray()
 		for s in BAKE_SHARDS:
-			pay.append_array(_mt_shard_bufs[s])
-		if pay.size() != pay_total * 1024:
-			_fail("merged payload %d bytes (want %d)" % [pay.size(), pay_total * 1024])
+			st["pay"].append_array(st["shard_bufs"][s])
+		if st["pay"].size() != pay_total * 1024:
+			_fail("merged payload %d bytes (want %d)" % [st["pay"].size(), pay_total * 1024])
 			return
-		_mt_shard_bufs = []  # release the per-shard copies
+		st["shard_bufs"] = []  # release the per-shard copies
 		_gen_ms = 0.0
 		for s in BAKE_SHARDS:
-			_gen_ms += float(_mt_shard_ms[s])
+			_gen_ms += float(st["shard_ms"][s])
 		_mt_gen_wall_ms = float(Time.get_ticks_msec() - _bake_wall_t0)
 		_satline("bake: payload done - %d records merged (%.0f ms shard worker-time, %.0f ms wall)" % [pay_total, _gen_ms, _mt_gen_wall_ms])
 		_mt_stage = 2
@@ -737,7 +759,8 @@ func _bake_main_step_mt() -> void:
 			# Yield-aware, like the shards: LOW while the player is still
 			# waiting on the ground (bake_yield), HIGH once they have
 			# landed (the cap then keeps streaming its 2+ threads).
-			_mt_face_ids[i] = pool.add_task(_mt_face_task.bind(i), not bake_yield)
+			# AC-0418: the detached static, the state as the bound arg.
+			_mt_face_ids[i] = pool.add_task(SatelliteBakeWorker.face_task.bind(st, i), not bake_yield)
 			inflight += 1
 			enq_n += 1
 		if enq_n > 0:
@@ -747,381 +770,27 @@ func _bake_main_step_mt() -> void:
 		# All 12 faces done - assemble in face order (single writer).
 		var ferr := ""
 		for i in 12:
-			if _mt_face_err[i] != "":
-				ferr = _mt_face_err[i]
+			if st["face_err"][i] != "":
+				ferr = st["face_err"][i]
 				break
 		if ferr != "":
 			_fail(ferr)
 			return
-		var ship_msg := _ship_faces()  # the AWECRAFT_SATELLITE_SHIP report (harness-only env)
+		var ship_msg := SatelliteBakeWorker.ship_faces(st)  # the AWECRAFT_SATELLITE_SHIP report (harness-only env)
 		for i in 12:
-			guard.append(_mt_face_guard[i])
-			_worker_images.append(_mt_face_img[i])
-			_geom.append(_mt_face_geom[i])
-			_color_ms += float(_mt_face_ms[i]) - float(_mt_face_png_ms[i])
-			_png_ms += float(_mt_face_png_ms[i])
-			_load_ms += float(_mt_face_load_ms[i])
+			guard.append(st["face_guard"][i])
+			_worker_images.append(st["face_img"][i])
+			_geom.append(st["face_geom"][i])
+			_color_ms += float(st["face_ms"][i]) - float(st["face_png_ms"][i])
+			_png_ms += float(st["face_png_ms"][i])
+			_load_ms += float(st["face_load_ms"][i])
 			color_face += 1
-		pay = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
+		st["pay"] = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
 		bake_worker_ms = int(Time.get_ticks_msec() - _bake_wall_t0)
 		bake_result = {"ok": true, "why": "", "ship": ship_msg}
 		bake_done = true
 		_satline("bake: all 12 faces done - the consumption takes over (one face per frame)")
 
-
-# AC-0414: the AWECRAFT_SATELLITE_SHIP step, main-thread edition (the
-# old worker ran it on its pool thread; the sharded path runs it at
-# assembly). Env unset = no-op (the canonical path).
-func _ship_faces() -> String:
-	var ship_dir := OS.get_environment("AWECRAFT_SATELLITE_SHIP")
-	if ship_dir == "":
-		return ""
-	var err := ""
-	for f in 12:
-		var rf := FileAccess.open(_cache_path(f), FileAccess.READ)
-		if rf == null:
-			err = "ship: cannot read %s" % _cache_path(f)
-			break
-		var wb := rf.get_buffer(rf.get_length())
-		rf.close()
-		var wf := FileAccess.open(ship_dir + "/satellite_face%02d.png" % f, FileAccess.WRITE)
-		if wf == null:
-			err = "ship: cannot write %s" % (ship_dir + "/satellite_face%02d.png" % f)
-			break
-		wf.store_buffer(wb)
-		wf.close()
-	return "shipped 12 height-channel faces to %s" % ship_dir if err == "" else err
-
-
-# AC-0414: one face's whole pipeline on one pool worker: colour rows
-# (the _step_face machine - arithmetic untouched, per-face state in st
-# instead of instance fields), the PNG write, the read-back + variance
-# guard, the geometry. The worker writes only its own face-index slots
-# (_mt_face_*) and its own PNG file; _mt_face_img is set LAST, so the
-# main thread sees a face as done only when all of it is. The 5000 ms
-# slice budget is the resumable row machine (the old worker called it
-# once with 1e9); the re-time preserves the arithmetic.
-func _mt_face_task(f: int) -> void:
-	# static FIRST: readable without touching the instance; the branch
-	# returns before ANY instance state is read or written (at process
-	# exit the instance is being torn down under us - see _mt_exit_aborted).
-	if _mt_exit_aborted:
-		return
-	var t0 := Time.get_ticks_msec()
-	var st: Dictionary = _start_face_mt(f)
-	var errl := ""
-	if _mt_exit_aborted:
-		return
-	if bake_abort:
-		errl = "aborted"
-	if errl == "":
-		var t_slice := Time.get_ticks_usec()
-		while not _step_face_mt(f, st, t_slice, 5000.0):
-			if _mt_exit_aborted:
-				return  # exit - the epilogue's instance writes are skipped too
-			if bake_abort:
-				errl = "aborted"
-				break
-			t_slice = Time.get_ticks_usec()
-	if errl == "":
-		var t_r := Time.get_ticks_usec()
-		var img: Image = _load_png(_cache_path(f))
-		if img == null:
-			errl = "cannot read %s" % _cache_path(f)
-		else:
-			var gd := _guard_check_mt(img)
-			if not gd["ok"]:
-				errl = "variance guard failed on face %d: %s" % [f, str(gd)]
-			else:
-				_mt_face_geom[f] = _geom_for_face_local(f, st["hgrid"])
-				_mt_face_guard[f] = gd
-				_mt_face_load_ms[f] = float(Time.get_ticks_usec() - t_r) / 1000.0
-				_mt_face_img[f] = img  # LAST: the done marker
-	if errl != "":
-		_mt_face_err[f] = errl
-	_mt_face_png_ms[f] = float(st["png_ms"])
-	_mt_face_ms[f] = float(Time.get_ticks_msec() - t0)
-
-
-# AC-0414: _start_face with the per-face state in a task-owned
-# Dictionary (the instance fields are the OFF path's).
-func _start_face_mt(f: int) -> Dictionary:
-	var st: Dictionary = {}
-	st["row"] = 0
-	st["out"] = PackedByteArray()
-	st["out"].resize(NPIX * NPIX * 3)
-	st["hgrid"] = PackedInt32Array()
-	st["hgrid"].resize(NPIX * NPIX)
-	st["png_ms"] = 0.0
-	if f > 1:
-		st["h2"] = PackedInt32Array()
-		st["h2"].resize(NPIX * NPIX)
-		st["t2"] = PackedByteArray()
-		st["t2"].resize(NPIX * NPIX)
-		st["bld_row"] = 0
-	else:
-		st["ch_cx"] = -999
-		st["ch_cz"] = -999
-	return st
-
-
-# AC-0414: _home_chunk_load on the per-face state (reads pay - merged
-# and stable by the time any face task runs; never writes it).
-func _home_chunk_load_mt(f: int, st: Dictionary, cx: int, cz: int) -> void:
-	st["ch_cx"] = cx
-	st["ch_cz"] = cz
-	var o := _home_rec_offset(cx, cz)
-	var h16 := PackedInt32Array()
-	h16.resize(256)
-	var t16 := PackedByteArray()
-	t16.resize(256)
-	for slot in 256:
-		h16[slot] = int(pay[o + 2 * slot]) | (int(pay[o + 2 * slot + 1]) << 8)
-		t16[slot] = int(pay[o + 768 + slot])
-	# clamped central differences (the piece-1 home recipe: the gradient
-	# is computed PER CHUNK - clamped at the chunk edges), 1 m spacing.
-	var gx16 := PackedFloat32Array()
-	gx16.resize(256)
-	var gz16 := PackedFloat32Array()
-	gz16.resize(256)
-	for lz in 16:
-		for lx in 16:
-			var s := lz * 16 + lx
-			gx16[s] = float(h16[lz * 16 + mini(lx + 1, 15)] - h16[lz * 16 + maxi(lx - 1, 0)]) / 2.0
-			gz16[s] = float(h16[mini(lz + 1, 15) * 16 + lx] - h16[maxi(lz - 1, 0) * 16 + lx]) / 2.0
-	st["h16"] = h16
-	st["t16"] = t16
-	st["gx16"] = gx16
-	st["gz16"] = gz16
-
-
-# AC-0414: _face_build_block on the per-face state (reads pay only).
-func _face_build_block_mt(f: int, st: Dictionary, b: int) -> void:
-	# One 16-row H2/T2 block (rows 16b..16b+15) from the payload. The
-	# mirror class stores cell (iu, iv) in local slot (15 - (iu&15), iv&15)
-	# (SphereMath.face_mirror_x, machine-diffed in piece 1).
-	var mirrored: bool = SphereMath.face_mirror_x(f)
-	var h2: PackedInt32Array = st["h2"]
-	var t2: PackedByteArray = st["t2"]
-	for lz in 16:
-		var iv: int = b * 16 + lz
-		for ccx in FACE_GRID:
-			var o := _record_offset(f, ccx, b)
-			for lx in 16:
-				var slot := lz * 16 + lx
-				var iu: int = ccx * 16 + (15 - lx if mirrored else lx)
-				var pidx: int = iv * NPIX + iu
-				h2[pidx] = int(pay[o + 2 * slot]) | (int(pay[o + 2 * slot + 1]) << 8)
-				t2[pidx] = int(pay[o + 768 + slot])
-
-
-# AC-0414: the row machine on the per-face state - _step_face with the
-# instance fields replaced by st; the arithmetic (the row/uv mapping,
-# the chunk cache, the _pixel call, the PNG bytes) is the same, so the
-# MT bake is byte-identical to the single-task bake. Returns true when
-# the face's rows are done AND its PNG is written.
-func _step_face_mt(f: int, st: Dictionary, t0: int, budget_ms: float) -> bool:
-	var s_cell: float = SphereMath.face_cell_size(R)
-	var du_m: float
-	var dv_m: float
-	if f >= 4 and f <= 7:
-		du_m = s_cell
-		dv_m = s_cell * 0.5
-	else:
-		du_m = s_cell * 0.5
-		dv_m = s_cell
-	var hw: float = SphereMath.face_width(R) * 0.5
-	var hgrid: PackedInt32Array = st["hgrid"]
-	while int(st["row"]) < NPIX:
-		var j: int = int(st["row"])
-		if f > 1:
-			# build every H2 block row j can touch (rows j-1..j+1 span at
-			# most blocks (j-1)/16..(j+1)/16; blocks are built in order)
-			var need_hi: int = mini(FACE_GRID - 1, (j + 1) / 16)
-			while int(st["bld_row"]) <= need_hi:
-				_face_build_block_mt(f, st, int(st["bld_row"]))
-				st["bld_row"] = int(st["bld_row"]) + 1
-				if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
-					return false
-		var cz := 0
-		var lz := 0
-		if f <= 1:
-			var z: int = int(floorf(hw * (2.0 * (float(j) + 0.5) / NPIX - 1.0)))
-			cz = int(floorf(float(z) / 16.0))
-			lz = int(z - cz * 16.0)
-		for i in NPIX:
-			var hv: int
-			var tv: int
-			var gx: float
-			var gz: float
-			if f <= 1:
-				var x: int = int(floorf(hw * ((float(i) + 0.5) / NPIX if f == 0 else (float(i) + 0.5) / NPIX - 1.0)))
-				var cx: int = int(floorf(float(x) / 16.0))
-				var lx: int = int(x - cx * 16.0)
-				if cx != int(st["ch_cx"]) or cz != int(st["ch_cz"]):
-					_home_chunk_load_mt(f, st, cx, cz)
-				var h16: PackedInt32Array = st["h16"]
-				var t16: PackedByteArray = st["t16"]
-				var gx16: PackedFloat32Array = st["gx16"]
-				var gz16: PackedFloat32Array = st["gz16"]
-				var slot: int = lz * 16 + lx
-				hv = h16[slot]
-				tv = int(t16[slot])
-				gx = gx16[slot]
-				gz = gz16[slot]
-			else:
-				var h2: PackedInt32Array = st["h2"]
-				var t2: PackedByteArray = st["t2"]
-				var pidx: int = j * NPIX + i
-				hv = h2[pidx]
-				tv = int(t2[pidx])
-				gx = (float(h2[j * NPIX + mini(i + 1, NPIX - 1)]) - float(h2[j * NPIX + maxi(i - 1, 0)])) / (2.0 * du_m)
-				gz = (float(h2[mini(j + 1, NPIX - 1) * NPIX + i]) - float(h2[maxi(j - 1, 0) * NPIX + i])) / (2.0 * dv_m)
-			hgrid[j * NPIX + i] = hv  # AC-0384 r2: the height channel (the geometry + PNG alpha source)
-			_pixel_mt(st, (j * NPIX + i) * 3, hv, tv, gx, gz)
-		st["row"] = j + 1
-		if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
-			return false
-	# face complete - the PNG (the deflate spike lands on the calling
-	# thread - the pool worker). RGBA8: the alpha channel carries the
-	# height (A = round(H * 255 / HMAX)); the RGB bytes are exactly the
-	# _pixel output (untouched: the colour stays canonical).
-	var t_png := Time.get_ticks_usec()
-	var out: PackedByteArray = st["out"]
-	var out4 := PackedByteArray()
-	out4.resize(NPIX * NPIX * 4)
-	for k in NPIX * NPIX:
-		out4[k * 4] = out[k * 3]
-		out4[k * 4 + 1] = out[k * 3 + 1]
-		out4[k * 4 + 2] = out[k * 3 + 2]
-		out4[k * 4 + 3] = clampi(int(roundf(float(hgrid[k]) * 255.0 / float(HMAX))), 0, 255)
-	var img := Image.create_from_data(NPIX, NPIX, false, Image.FORMAT_RGBA8, out4)
-	img.save_png(_cache_path(f))
-	st["png_ms"] = float(st["png_ms"]) + float(Time.get_ticks_usec() - t_png) / 1000.0
-	st["out"] = PackedByteArray()  # release the 3 MB RGB (the face is on disk)
-	return true
-
-
-# AC-0414: _pixel on the per-face state (arithmetic untouched).
-func _pixel_mt(st: Dictionary, o: int, hv: int, tv: int, gx: float, gz: float) -> void:
-	var ocean: bool = hv < SEA
-	var col: Vector3
-	if ocean:
-		col = FCC[5]
-	else:
-		match tv:
-			1:
-				col = FCC[1]
-			4:
-				col = FCC[4]
-			12:
-				col = FCC[12]
-			32:
-				col = FCC[32]
-			_:
-				col = FCC[5]  # the piece-1 default (an unknown top reads as water)
-	var b: float = 0.45 + 0.55 * clampf((-LX * gx + LY - LZ * gz) / sqrt(gx * gx + gz * gz + 1.0), 0.0, 1.0)
-	if ocean:
-		b = 1.0
-	var out: PackedByteArray = st["out"]
-	out[o] = _byte(_l2s(col.x * b))
-	out[o + 1] = _byte(_l2s(col.y * b))
-	out[o + 2] = _byte(_l2s(col.z * b))
-
-
-# AC-0414: _guard_check without the _first_col instance write (that
-# field is the main-thread diagnostic; the guard dictionary - the
-# tripwire - is identical).
-func _guard_check_mt(img: Image) -> Dictionary:
-	var rows := 1
-	var cols := 1
-	var minc := [255, 255, 255]
-	var maxc := [0, 0, 0]
-	var first_line: PackedByteArray = PackedByteArray()
-	for k in 16:
-		var j := k * 64
-		var line := PackedByteArray()
-		for i in 16:
-			var px := img.get_pixel(i * 64, j)
-			line.append(px.r8)
-			line.append(px.g8)
-			line.append(px.b8)
-			minc[0] = mini(minc[0], px.r8)
-			minc[1] = mini(minc[1], px.g8)
-			minc[2] = mini(minc[2], px.b8)
-			maxc[0] = maxi(maxc[0], px.r8)
-			maxc[1] = maxi(maxc[1], px.g8)
-			maxc[2] = maxi(maxc[2], px.b8)
-		if first_line.is_empty():
-			first_line = line
-		elif line != first_line:
-			rows += 1
-	var first_col: PackedByteArray = PackedByteArray()
-	for k in 16:
-		var i := k * 64
-		var col := PackedByteArray()
-		for j in 16:
-			var px := img.get_pixel(i, j * 64)
-			col.append(px.r8)
-			col.append(px.g8)
-			col.append(px.b8)
-		if first_col.is_empty():
-			first_col = col
-		elif col != first_col:
-			cols += 1
-	var spread: int = mini(mini(maxc[0] - minc[0], maxc[1] - minc[1]), maxc[2] - minc[2])
-	return {
-		"rows": rows,
-		"cols": cols,
-		"spread": spread,
-		"ok": rows >= 4 and cols >= 4 and spread >= 8,
-	}
-
-
-# AC-0414: the geometry body of _geom_for_face WITHOUT the _geom cache
-# (the cache's self-append is a shared write - main-thread only). The
-# face task calls this on its own H grid; the main thread assembles the
-# results into _geom in face order (identical to the old single-task
-# path's 0..11 append order).
-func _geom_for_face_local(f: int, hgrid: PackedInt32Array) -> Dictionary:
-	var nu_nv: Vector2i = _mesh_grid(f)
-	var nu: int = nu_nv.x
-	var nv: int = nu_nv.y
-	var has_h: bool = hgrid.size() == NPIX * NPIX
-	var RB: float = R + float(SEA)  # the winding-test radius (any radial scale works)
-	var verts := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var nrm := PackedVector3Array()
-	var idx := PackedInt32Array()
-	for j in nv + 1:
-		for i in nu + 1:
-			var u: float = float(i) / float(nu)
-			var v: float = float(j) / float(nv)
-			var rr: float = RB
-			if has_h:
-				rr = R + _hgrid_sample(hgrid, u, v)
-			var p: Vector3 = SphereMath.uv_to_world(f, u, v, rr)
-			verts.append(p)  # body origin = the sphere centre: local == radial
-			uvs.append(Vector2(u, v))
-			nrm.append(p / rr)
-	# winding per face: the chart axes differ per face; the corner
-	# test picks the per-face index order (the AC-0411 inversion - see
-	# _geom_for_face for the full note; copied verbatim).
-	var p00: Vector3 = SphereMath.uv_to_world(f, 0.0, 0.0, RB)
-	var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
-	var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
-	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) < 0.0
-	for j in nv:
-		for i in nu:
-			var a: int = j * (nu + 1) + i
-			var b: int = a + 1
-			var c: int = a + (nu + 1)
-			var d: int = c + 1
-			if outward:
-				idx.append_array([a, c, b, b, c, d])
-			else:
-				idx.append_array([a, b, c, b, d, c])
-	return {"v": verts, "u": uvs, "n": nrm, "i": idx}
 
 
 # The per-frame driver (world._process). State is read back through the
@@ -1129,12 +798,15 @@ func _geom_for_face_local(f: int, hgrid: PackedInt32Array) -> Dictionary:
 func process_frame(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
 	if bake_active:
 		var s0 := Time.get_ticks_usec()
-		if bake_mt and not bake_done:
-			_bake_main_step_mt()  # AC-0414: the sharded poll/merge/assemble
+		if phase == Phase.WORK and not bake_done:
+			if bake_mt:
+				_bake_main_step_mt()  # AC-0414: the sharded poll/merge/assemble
+			else:
+				_bake_main_step_single()  # AC-0418: poll the single detached task
 		else:
-			# Once the sharded assembly set bake_done (or in the OFF path
-			# throughout), the shared consume loop in _bake_main_step
-			# takes over (one face per frame until _finish_bake).
+			# Once the assembly set bake_done (or past WORK), the shared
+			# consume loop in _bake_main_step takes over (one face per
+			# frame until _finish_bake).
 			_bake_main_step()
 		var sms := float(Time.get_ticks_usec() - s0) / 1000.0
 		_step_sum_ms += sms
@@ -1163,7 +835,9 @@ func _bake_main_step() -> void:
 		var img: Image
 		if _load_src == "cache":
 			# user:// runtime file - a raw FileAccess read is correct.
-			img = _load_png(_cache_path(lf))
+			# AC-0418: the load is the shared worker-side static (the
+			# node's _load_png twin moved with the worker).
+			img = SatelliteBakeWorker.load_png(_cache_path(lf))
 		else:
 			# res:// shipped texture - the IMPORT SYSTEM (AC-0384). The raw
 			# .png is not in the PCK, so FileAccess cannot read it; only
@@ -1176,7 +850,7 @@ func _bake_main_step() -> void:
 			_fail("cannot load %s (res:// faces come from the import system - the "
 				+ "export ships the imported texture, not the raw png; via=%s)" % [_res_path(lf), _res_load_via])
 			return
-		var gd := _guard_check(img)
+		var gd := SatelliteBakeWorker.guard_check(img)  # AC-0418: the shared worker-side static
 		guard.append(gd)
 		if not gd["ok"]:
 			_fail("variance guard failed on face %d: %s" % [lf, str(gd)])
@@ -1221,6 +895,32 @@ func _bake_main_step() -> void:
 	if bake_consume >= 12:
 		visible = false
 		_finish_bake()
+
+
+# AC-0418: the OFF path's poll/collect. The single detached task
+# (SatelliteBakeWorker.single_task) owns the pipeline in _bake_st and
+# sets st["done"] LAST (its writes are final once the pool says the
+# task is complete - this collect is the single writer of the instance
+# fields, the same ordering the old single-writer contract had:
+# bake_done set last). The old _bake_worker wrote the instance directly
+# from the pool thread; now the pool thread never touches the node.
+func _bake_main_step_single() -> void:
+	var st: Dictionary = _bake_st
+	if not bool(st.get("done", false)):
+		return
+	for gd in st.get("guard", []):
+		guard.append(gd)
+	for img in st.get("worker_images", []):
+		_worker_images.append(img)
+	for ge in st.get("geom", []):
+		_geom.append(ge)
+	_gen_ms = float(st.get("gen_ms", 0.0))
+	_color_ms = float(st.get("color_ms", 0.0))
+	_png_ms = float(st.get("png_ms", 0.0))
+	_load_ms = float(st.get("load_ms", 0.0))
+	bake_worker_ms = int(st.get("worker_ms", 0))
+	bake_result = st.get("result", {})
+	bake_done = true
 
 
 func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float) -> void:
@@ -1348,341 +1048,6 @@ func opacity_at(d: float) -> float:
 	return smoothstep(last_fog_far, last_render_edge, d)
 
 
-# AC-0382: the off-thread bake (one WorkerThreadPool slot, LOW priority
-# so the streaming HIGH tasks are never starved). The pipeline:
-#  1. generate_far x 196,196 -> pay (the pure const C++ call the
-#     thread-gen pool already runs from worker threads - the same
-#     precedent as world.gd _threadgen_worker; no new C++ task type
-#     owed, the GDScript pool-thread twin suffices);
-#  2. the piece-1 colour per face (the un-sliced twin of the old main-
-#     thread slice: same _step_face row machine, budget = INF), each
-#     face's PNG written as it completes (the ~tens-of-ms deflate spike
-#     lands on the pool thread, not the main one);
-#  3. the read-back + the variance guard on the bytes actually written;
-#  4. the 12 face geometries (pure SphereMath, thread-safe).
-# Single writer until bake_done (see the class header).
-func _bake_worker(g: Variant) -> void:
-	var err := ""
-	var ship_msg := ""  # AC-0384 r2: the AWECRAFT_SATELLITE_SHIP report
-	var w0 := Time.get_ticks_msec()
-	if g == null:
-		err = "no AweGen (WorldGen.gen_cpp() null)"
-	if err == "":
-		var t0 := Time.get_ticks_msec()
-		for i in pay_total:
-			# AC-0414: the probe arm's clean-quit handle (the game never
-			# aborts - bake_abort stays false and the check is inert).
-			if i % 8192 == 0 and bake_abort:
-				err = "aborted"
-				break
-			var rec: PackedByteArray = _gen_one(g, i)
-			if rec.size() != 1024:
-				err = "generate_far payload %d bytes at record %d" % [rec.size(), i]
-				break
-			pay.append_array(rec)  # records land in generation order
-		_gen_ms = float(Time.get_ticks_msec() - t0)  # ms (the fields are ms)
-	if err == "" and pay.size() != pay_total * 1024:
-		err = "payload %d bytes (want %d)" % [pay.size(), pay_total * 1024]
-	if err == "":
-		var t_face := Time.get_ticks_msec()
-		for f in 12:
-			if bake_abort:
-				err = "aborted"
-				break
-			color_face = f
-			_start_face()
-			while not _step_face(Time.get_ticks_usec(), 1e9):
-				pass
-			# AC-0384 r2: the geometry is built RIGHT AFTER the colour -
-			# the face's H grid (_hgrid) is live; one code path for bake
-			# and load (the pre-r2 second geometry loop ran after pay
-			# was freed and built the constant-radius sphere).
-			# AC-0384 r3: _geom_for_face self-appends to _geom when it
-			# builds (the f == _geom.size() append at its tail) - the
-			# pre-r3 _geom.append(...) HERE was a second append: after
-			# face 0 the cache size overshot the face index, so every
-			# later face hit the "return _geom[f]" early-out with face 0's
-			# geometry (the cache grew to 13, all g0, and the bake path's
-			# 11 non-home faces drew the home patch). Call it bare.
-			_geom_for_face(f, _hgrid)
-		# colour time = the face-pipeline wall minus the PNG writes (the
-		# old main-thread slice's field semantics: colour and png separate;
-		# _step_face accrues the png time into _png_ms inside the face).
-		_color_ms = float(Time.get_ticks_msec() - t_face) - _png_ms
-		pay = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
-		# AC-0384 r2 (harness-only): ship the freshly baked faces to a
-		# repo asset dir (the re-ship with the height channel). Env
-		# AWECRAFT_SATELLITE_SHIP=<abs dir>; unset = no-op (the
-		# canonical bake path). Reported via bake_result (worker thread:
-		# _satline is main-thread only).
-		var ship_dir := OS.get_environment("AWECRAFT_SATELLITE_SHIP")
-		if ship_dir != "":
-			for f in 12:
-				var rf := FileAccess.open(_cache_path(f), FileAccess.READ)
-				if rf == null:
-					err = "ship: cannot read %s" % _cache_path(f)
-					break
-				var wb := rf.get_buffer(rf.get_length())
-				rf.close()
-				var wf := FileAccess.open(ship_dir + "/satellite_face%02d.png" % f, FileAccess.WRITE)
-				if wf == null:
-					err = "ship: cannot write %s" % (ship_dir + "/satellite_face%02d.png" % f)
-					break
-				wf.store_buffer(wb)
-				wf.close()
-			ship_msg = "shipped 12 height-channel faces to %s" % ship_dir if err == "" else err
-	if err == "":
-		var t2 := Time.get_ticks_msec()
-		for f in 12:
-			var img: Image = _load_png(_cache_path(f))
-			if img == null:
-				err = "cannot read %s" % _cache_path(f)
-				break
-			var gd := _guard_check(img)
-			guard.append(gd)
-			if not gd["ok"]:
-				err = "variance guard failed on face %d: %s" % [f, str(gd)]
-				break
-			_worker_images.append(img)
-		_load_ms = float(Time.get_ticks_msec() - t2)  # ms
-	# (AC-0384 r2: the per-face geometry is built in the colour loop
-	# above, while each face's H grid is live - no separate pass.)
-	bake_result = {"ok": err == "", "why": err, "ship": ship_msg}
-	bake_worker_ms = int(Time.get_ticks_msec() - w0)
-	bake_done = true
-
-
-# AC-0311 piece 3 (the same flat-frame class the port retired from
-# generation): the piece-1 keying's per-face seed salt
-# (seed^(face*1000003)) is DROPPED — in the sphere domain the field
-# is ONE pure f(world, seed), so the bake and the streamed face
-# chunks read the SAME terrain (a salted face would have been a
-# different world from the live one). The (face, R) thread reaches
-# the C++ (d, δ) domain on both lanes (R explicit — the bake is per
-# (planet_id, R, seed), and the 4000 default is only the home planet).
-func _gen_one(g: Variant, idx: int) -> PackedByteArray:
-	if idx < HOME_CHUNKS:
-		var cx: int = idx % HOME_N - HOME_HALF
-		var cz: int = idx / HOME_N - HOME_HALF
-		return g.generate_far(cx, cz, seed, HMAX, SEA, 0, R)
-	var kf: int = idx - HOME_CHUNKS
-	var f: int = 2 + kf / FACE_CHUNKS
-	var kk: int = kf % FACE_CHUNKS
-	var ccx: int = kk % FACE_GRID
-	var ccz: int = kk / FACE_GRID
-	return g.generate_far(f * FACE_GRID + ccx, f * FACE_GRID + ccz, seed, HMAX, SEA, f, R)
-
-
-func _record_offset(f: int, ccx: int, ccz: int) -> int:
-	return (HOME_CHUNKS + (f - 2) * FACE_CHUNKS + ccz * FACE_GRID + ccx) * 1024
-
-
-func _home_rec_offset(cx: int, cz: int) -> int:
-	return ((cz + HOME_HALF) * HOME_N + (cx + HOME_HALF)) * 1024
-
-
-func _start_face() -> void:
-	color_row = 0
-	_out = PackedByteArray()
-	_out.resize(NPIX * NPIX * 3)
-	_hgrid = PackedInt32Array()
-	_hgrid.resize(NPIX * NPIX)
-	if color_face > 1:
-		_h2 = PackedInt32Array()
-		_h2.resize(NPIX * NPIX)
-		_t2 = PackedByteArray()
-		_t2.resize(NPIX * NPIX)
-		_bld_row = 0
-	else:
-		_ch_cx = -999
-		_ch_cz = -999
-
-
-func _home_chunk_load(cx: int, cz: int) -> void:
-	_ch_cx = cx
-	_ch_cz = cz
-	var o := _home_rec_offset(cx, cz)
-	_h16 = PackedInt32Array()
-	_h16.resize(256)
-	_t16 = PackedByteArray()
-	_t16.resize(256)
-	for slot in 256:
-		_h16[slot] = int(pay[o + 2 * slot]) | (int(pay[o + 2 * slot + 1]) << 8)
-		_t16[slot] = int(pay[o + 768 + slot])
-	# clamped central differences (the piece-1 home recipe: the gradient
-	# is computed PER CHUNK - clamped at the chunk edges), 1 m spacing.
-	_gx16 = PackedFloat32Array()
-	_gx16.resize(256)
-	_gz16 = PackedFloat32Array()
-	_gz16.resize(256)
-	for lz in 16:
-		for lx in 16:
-			var s := lz * 16 + lx
-			_gx16[s] = float(_h16[lz * 16 + mini(lx + 1, 15)] - _h16[lz * 16 + maxi(lx - 1, 0)]) / 2.0
-			_gz16[s] = float(_h16[mini(lz + 1, 15) * 16 + lx] - _h16[maxi(lz - 1, 0) * 16 + lx]) / 2.0
-
-
-func _face_build_block(b: int) -> void:
-	# One 16-row H2/T2 block (rows 16b..16b+15) from the payload. The
-	# mirror class stores cell (iu, iv) in local slot (15 - (iu&15), iv&15)
-	# (SphereMath.face_mirror_x, machine-diffed in piece 1).
-	var f: int = color_face
-	var mirrored: bool = SphereMath.face_mirror_x(f)
-	for lz in 16:
-		var iv: int = b * 16 + lz
-		for ccx in FACE_GRID:
-			var o := _record_offset(f, ccx, b)
-			for lx in 16:
-				var slot := lz * 16 + lx
-				var iu: int = ccx * 16 + (15 - lx if mirrored else lx)
-				var pidx: int = iv * NPIX + iu
-				_h2[pidx] = int(pay[o + 2 * slot]) | (int(pay[o + 2 * slot + 1]) << 8)
-				_t2[pidx] = int(pay[o + 768 + slot])
-
-
-# The row machine for the current face (color_face / color_row state).
-# AC-0382: the pre-AC-0310 main-thread 6 ms slice is gone - the caller
-# is the pool worker (budget_ms = 1e9, runs the face to completion).
-# Returns false when the budget is spent (face incomplete - resume on
-# the next call), true when the face's rows are done AND its PNG is
-# written (the deflate spike is part of the face, measured in _png_ms).
-func _step_face(t0: int, budget_ms: float) -> bool:
-	var f: int = color_face
-	var s_cell: float = SphereMath.face_cell_size(R)
-	var du_m: float
-	var dv_m: float
-	if f >= 4 and f <= 7:
-		du_m = s_cell
-		dv_m = s_cell * 0.5
-	else:
-		du_m = s_cell * 0.5
-		dv_m = s_cell
-	var hw: float = SphereMath.face_width(R) * 0.5
-	while color_row < NPIX:
-		var j: int = color_row
-		if f > 1:
-			# build every H2 block row j can touch (rows j-1..j+1 span at
-			# most blocks (j-1)/16..(j+1)/16; blocks are built in order)
-			var need_hi: int = mini(FACE_GRID - 1, (j + 1) / 16)
-			while _bld_row <= need_hi:
-				_face_build_block(_bld_row)
-				_bld_row += 1
-				if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
-					return false
-		var cz := 0
-		var lz := 0
-		if f <= 1:
-			var z: int = int(floorf(hw * (2.0 * (float(j) + 0.5) / NPIX - 1.0)))
-			cz = int(floorf(float(z) / 16.0))
-			lz = int(z - cz * 16.0)
-		for i in NPIX:
-			var hv: int
-			var tv: int
-			var gx: float
-			var gz: float
-			if f <= 1:
-				var x: int = int(floorf(hw * ((float(i) + 0.5) / NPIX if f == 0 else (float(i) + 0.5) / NPIX - 1.0)))
-				var cx: int = int(floorf(float(x) / 16.0))
-				var lx: int = int(x - cx * 16.0)
-				if cx != _ch_cx or cz != _ch_cz:
-					_home_chunk_load(cx, cz)
-				var slot: int = lz * 16 + lx
-				hv = _h16[slot]
-				tv = int(_t16[slot])
-				gx = _gx16[slot]
-				gz = _gz16[slot]
-			else:
-				var pidx: int = j * NPIX + i
-				hv = _h2[pidx]
-				tv = int(_t2[pidx])
-				gx = (float(_h2[j * NPIX + mini(i + 1, NPIX - 1)]) - float(_h2[j * NPIX + maxi(i - 1, 0)])) / (2.0 * du_m)
-				gz = (float(_h2[mini(j + 1, NPIX - 1) * NPIX + i]) - float(_h2[maxi(j - 1, 0) * NPIX + i])) / (2.0 * dv_m)
-			_hgrid[j * NPIX + i] = hv  # AC-0384 r2: the height channel (the geometry + PNG alpha source)
-			_pixel((j * NPIX + i) * 3, hv, tv, gx, gz)
-		color_row += 1
-		if (Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
-			return false
-	# face complete - the PNG (the deflate spike lands on the calling
-	# thread - the pool worker since AC-0382). AC-0384 r2: RGBA8 - the
-	# alpha channel carries the height (A = round(H * 255 / HMAX)) so
-	# the cache/res paths rebuild the displaced mesh without the
-	# payload. The RGB bytes are exactly the _pixel output (untouched:
-	# the colour stays canonical across the re-ship).
-	var t_png := Time.get_ticks_usec()
-	var out4 := PackedByteArray()
-	out4.resize(NPIX * NPIX * 4)
-	for k in NPIX * NPIX:
-		out4[k * 4] = _out[k * 3]
-		out4[k * 4 + 1] = _out[k * 3 + 1]
-		out4[k * 4 + 2] = _out[k * 3 + 2]
-		out4[k * 4 + 3] = clampi(int(roundf(float(_hgrid[k]) * 255.0 / float(HMAX))), 0, 255)
-	var img := Image.create_from_data(NPIX, NPIX, false, Image.FORMAT_RGBA8, out4)
-	img.save_png(_cache_path(f))
-	_png_ms += float(Time.get_ticks_usec() - t_png) / 1000.0
-	_out = PackedByteArray()
-	color_face += 1
-	return true
-
-
-func _pixel(o: int, hv: int, tv: int, gx: float, gz: float) -> void:
-	var ocean: bool = hv < SEA
-	var col: Vector3
-	if ocean:
-		col = FCC[5]
-	else:
-		match tv:
-			1:
-				col = FCC[1]
-			4:
-				col = FCC[4]
-			12:
-				col = FCC[12]
-			32:
-				col = FCC[32]
-			_:
-				col = FCC[5]  # the piece-1 default (an unknown top reads as water)
-	var b: float = 0.45 + 0.55 * clampf((-LX * gx + LY - LZ * gz) / sqrt(gx * gx + gz * gz + 1.0), 0.0, 1.0)
-	if ocean:
-		b = 1.0
-	_out[o] = _byte(_l2s(col.x * b))
-	_out[o + 1] = _byte(_l2s(col.y * b))
-	_out[o + 2] = _byte(_l2s(col.z * b))
-
-
-# sRGB companding (the standard piecewise; the inverse of the srgb_to_linear
-# the fcc probe applied) - the piece-1 formula, byte-for-byte.
-func _l2s(v: float) -> float:
-	if v <= 0.0031308:
-		return v * 12.92
-	return 1.055 * pow(v, 1.0 / 2.4) - 0.045
-
-
-# np.round is round-half-to-even; match it so the bake reproduces the
-# shipped seed-44 PNG where the float paths agree.
-func _byte(v: float) -> int:
-	var x := v * 255.0
-	var fl := int(floorf(x))
-	var fr := x - float(fl)
-	var r: int
-	if fr > 0.5:
-		r = fl + 1
-	elif fr < 0.5:
-		r = fl
-	else:
-		r = fl + 1 if fl % 2 == 1 else fl
-	return clampi(r, 0, 255)
-
-
-func _load_png(pth: String) -> Image:
-	var f := FileAccess.open(pth, FileAccess.READ)
-	if f == null:
-		return null
-	var b := f.get_buffer(f.get_length())
-	f.close()
-	var img := Image.new()
-	if img.load_png_from_buffer(b) != OK:
-		return null
-	return img
 
 
 # AC-0384: load one shipped res:// face via the IMPORT SYSTEM. The export PCK
@@ -1703,62 +1068,13 @@ func _load_res_face(f: int) -> Dictionary:
 		img = tex.get_image()
 	if img != null:
 		return {"img": img, "via": "import"}
-	img = _load_png(pth)
+	# AC-0418: the raw read is the shared worker-side static.
+	img = SatelliteBakeWorker.load_png(pth)
 	if img != null:
 		return {"img": img, "via": "raw-fallback"}
 	return {"img": null, "via": "import-no-image"}
 
 
-# The runtime twin of the piece-1 on-disk variance guard (the smear
-# repair): the loaded image must vary along BOTH axes. Lighter sample
-# than the bake's (16 lines x 16 px, floor 4 distinct / 8 spread) - the
-# bake-side guard is the strong one; this is the in-game tripwire that
-# keeps a broken texture out of the tree (a failed guard hides the body
-# rather than drawing garbage).
-func _guard_check(img: Image) -> Dictionary:
-	var rows := 1
-	var cols := 1
-	var minc := [255, 255, 255]
-	var maxc := [0, 0, 0]
-	var first_line: PackedByteArray = PackedByteArray()
-	for k in 16:
-		var j := k * 64
-		var line := PackedByteArray()
-		for i in 16:
-			var px := img.get_pixel(i * 64, j)
-			line.append(px.r8)
-			line.append(px.g8)
-			line.append(px.b8)
-			minc[0] = mini(minc[0], px.r8)
-			minc[1] = mini(minc[1], px.g8)
-			minc[2] = mini(minc[2], px.b8)
-			maxc[0] = maxi(maxc[0], px.r8)
-			maxc[1] = maxi(maxc[1], px.g8)
-			maxc[2] = maxi(maxc[2], px.b8)
-		if first_line.is_empty():
-			first_line = line
-		elif line != first_line:
-			rows += 1
-	_first_col = PackedByteArray()
-	for k in 16:
-		var i := k * 64
-		var col := PackedByteArray()
-		for j in 16:
-			var px := img.get_pixel(i, j * 64)
-			col.append(px.r8)
-			col.append(px.g8)
-			col.append(px.b8)
-		if k == 0:
-			_first_col = col
-		elif col != _first_col:
-			cols += 1
-	var spread: int = mini(mini(maxc[0] - minc[0], maxc[1] - minc[1]), maxc[2] - minc[2])
-	return {
-		"rows": rows,
-		"cols": cols,
-		"spread": spread,
-		"ok": rows >= 4 and cols >= 4 and spread >= 8,
-	}
 
 
 # The face geometry (pure SphereMath - thread-safe; the worker
@@ -1771,79 +1087,15 @@ func _geom_for_face(f: int, hgrid: PackedInt32Array = PackedInt32Array()) -> Dic
 	# of the H field, each at R + H(u, v) (the terrain's far LOD). The
 	# pre-r2 constant R + SEA sea-level shell is the fallback when the
 	# face's image carries no height channel (legacy set).
-	var nu_nv: Vector2i = _mesh_grid(f)
-	var nu: int = nu_nv.x
-	var nv: int = nu_nv.y
-	var has_h: bool = hgrid.size() == NPIX * NPIX
-	var RB: float = R + float(SEA)  # the winding-test radius (any radial scale works)
-	var verts := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var nrm := PackedVector3Array()
-	var idx := PackedInt32Array()
-	for j in nv + 1:
-		for i in nu + 1:
-			var u: float = float(i) / float(nu)
-			var v: float = float(j) / float(nv)
-			var rr: float = RB
-			if has_h:
-				rr = R + _hgrid_sample(hgrid, u, v)
-			var p: Vector3 = SphereMath.uv_to_world(f, u, v, rr)
-			verts.append(p)  # body origin = the sphere centre: local == radial
-			uvs.append(Vector2(u, v))
-			nrm.append(p / rr)
-	# winding per face: the chart axes differ per face; the corner
-	# test picks the per-face index order. AC-0411: the comparison is
-	# INVERTED relative to the original - under Forward+ cull_back an
-	# indexed triangle rasterises as FRONT from outside exactly when
-	# its geometric normal (v1-v0)x(v2-v0) points TOWARD the centre,
-	# i.e. the order this test labels "inward" in 3D terms. Verified
-	# against the exact orbital camera (screen-space winding of the
-	# real index orders, .scratch/AC-0411 analysis): with the old
-	# sign, faces 0/1 (the +-Y hemisphere = the whole near cap) were
-	# back-facing and culled, and faces 2-11 drew their FAR side -
-	# the orbital disc was the planet's UNDERSIDE (the disc-centre
-	# wash at haz=1, the fourth "plain white ball" attribution).
-	# Flipped: the near hemisphere rasterises front, the far side is
-	# culled - one front patch per view ray, no self-ordering problem.
-	var p00: Vector3 = SphereMath.uv_to_world(f, 0.0, 0.0, RB)
-	var p10: Vector3 = SphereMath.uv_to_world(f, 1.0, 0.0, RB)
-	var p01: Vector3 = SphereMath.uv_to_world(f, 0.0, 1.0, RB)
-	var outward: bool = (p01 - p00).cross(p10 - p00).dot(p00) < 0.0
-	for j in nv:
-		for i in nu:
-			var a: int = j * (nu + 1) + i
-			var b: int = a + 1
-			var c: int = a + (nu + 1)
-			var d: int = c + 1
-			if outward:
-				idx.append_array([a, c, b, b, c, d])
-			else:
-				idx.append_array([a, b, c, b, d, c])
-	var ge := {"v": verts, "u": uvs, "n": nrm, "i": idx}
+	# AC-0418: the build is the SINGLE worker-side implementation (pure
+	# SphereMath - SatelliteBakeWorker.geom_for_face_local; the full
+	# AC-0411 winding note lives there). The cache (self-append in
+	# face order, main-thread only) is unchanged.
+	var stg := {"R": R, "SEA": SEA, "mesh_step": mesh_step, "npix": NPIX}
+	var ge := SatelliteBakeWorker.geom_for_face_local(stg, f, hgrid)
 	if f == _geom.size():
 		_geom.append(ge)
 	return ge
-
-
-func _hgrid_sample(hgrid: PackedInt32Array, u: float, v: float) -> float:
-	# Bilinear over the 1024^2 per-texel H grid. Texel centres sit at
-	# (k + 0.5) / NPIX in (u, v) - the same lattice the PNG texels and
-	# _step_face's H reads use (home pair: the 1 m cells, faces 2-11:
-	# the 6.135 m lattice) - so a mesh vertex lands on the H the
-	# terrain's far tier shows there, up to the 16 m grid's pooling.
-	var fx: float = clampf(u * float(NPIX) - 0.5, 0.0, float(NPIX) - 1.0)
-	var fy: float = clampf(v * float(NPIX) - 0.5, 0.0, float(NPIX) - 1.0)
-	var x0: int = int(fx)
-	var y0: int = int(fy)
-	var x1: int = mini(x0 + 1, NPIX - 1)
-	var y1: int = mini(y0 + 1, NPIX - 1)
-	var tx: float = fx - float(x0)
-	var ty: float = fy - float(y0)
-	var h00: float = float(hgrid[y0 * NPIX + x0])
-	var h10: float = float(hgrid[y0 * NPIX + x1])
-	var h01: float = float(hgrid[y1 * NPIX + x0])
-	var h11: float = float(hgrid[y1 * NPIX + x1])
-	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), ty)
 
 
 func _build_face(f: int) -> void:
@@ -1935,7 +1187,7 @@ func _finish_bake() -> void:
 		"mt": bake_mt,
 		"shards": BAKE_SHARDS if bake_mt else 0,
 		"gen_wall_ms": int(_mt_gen_wall_ms) if bake_mt else 0,
-		"face_wall_ms": int(_mt_face_ms.max()) if bake_mt and _mt_face_ms.size() == 12 else 0,
+		"face_wall_ms": int(_bake_st.get("face_ms", []).max()) if bake_mt and _bake_st.get("face_ms", []).size() == 12 else 0,
 		"frames": _frame_n,
 		"step_ms_max": roundf(_step_max_ms * 100.0) / 100.0,
 		"step_ms_mean": roundf(_step_sum_ms / maxf(float(_frame_n), 1.0) * 100.0) / 100.0,
@@ -1968,9 +1220,10 @@ func bake_progress_line() -> String:
 				n += 1
 		return "payload %d/%d shards (%d of %d records)" % [n, BAKE_SHARDS, n * BAKE_SHARD_LEN, pay_total]
 	if _mt_stage == 2:
+		# AC-0418: the face channels live in the bake state.
 		var c := 0
 		for i in 12:
-			if _mt_face_img[i] != null or _mt_face_err[i] != "":
+			if _bake_st["face_img"][i] != null or _bake_st["face_err"][i] != "":
 				c += 1
 		return "face %d/12" % c
 	return "starting"
@@ -1983,7 +1236,9 @@ func bake_progress_line() -> String:
 # racing the worker (the pre-AC-0414 shutdown race the satellite arm
 # documents: an abandoned worker surfaces spurious CowData lines).
 func abort_bake() -> void:
-	bake_abort = true
+	# AC-0418: the flag lives in the bake state (the worker reads it from
+	# there - no instance access in the worker frame).
+	_bake_st["abort"] = true
 
 
 # AC-0414: true when every enqueued sharded task has settled (the probe

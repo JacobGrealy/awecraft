@@ -14111,7 +14111,8 @@ func _satellite_test(spawn: Vector3) -> void:
 		# wrote; the res/cache paths compare against their own files.
 		if sb._load_src == "" or sb._load_src == "bake":
 			raw_path = sb._cache_path(hf)  # the bake's own disk output
-		var img_raw: Image = sb._load_png(raw_path)
+		# AC-0418: the raw read moved to the detached worker's static.
+		var img_raw: Image = SatelliteBakeWorker.load_png(raw_path)
 		var fl: int = img_loaded.get_format()
 		var fr: int = img_raw.get_format() if img_raw != null else -1
 		if hf == 0:

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0418 results — bake-exit use-after-free (the stochastic crash)</title>
+<style>
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem auto; max-width: 100rem; padding: 0 1rem; line-height: 1.45; color: #1a1a1a; }
+h1 { border-bottom: 3px solid #b3402a; padding-bottom: .3rem; }
+h2 { margin-top: 2rem; color: #b3402a; }
+pre { background: #f4f2ee; border: 1px solid #ddd; border-radius: 6px; padding: .8rem; overflow-x: auto; font-size: .82rem; line-height: 1.35; }
+table { border-collapse: collapse; margin: 1rem 0; }
+th, td { border: 1px solid #ccc; padding: .35rem .7rem; font-size: .88rem; }
+th { background: #f4f2ee; }
+.ok { color: #1a7a1a; font-weight: 600; }
+.bad { color: #b3402a; font-weight: 600; }
+code { background: #f4f2ee; padding: .1rem .3rem; border-radius: 3px; font-size: .88em; }
+.small { font-size: .85rem; color: #555; }
+</style>
+</head>
+<body>
+<h1>AC-0418 — bake-exit use-after-free: workers that hold no reference to the node</h1>
+<p class="small">Tree b5b1d5c, engine 4.7.1.stable.a13da4feb, headless, seed 5432 (non-canonical → forced bake) for the exit probes, seed 44 (canonical) for the re-bake. All runs: <code>HOME=/tmp/dsh_home</code>, <code>ulimit -v 8388608</code>, one godot at a time. Logs under <code>.scratch/AC-0418/</code>.</p>
+
+<h2>1. The defect, in code</h2>
+<p>The bake's pool tasks were methods <b>of the SatelliteBody node</b>:
+<code>pool.add_task(_mt_shard_task.bind(_mt_g, s), true)</code> etc. A worker thread executing one of them is inside the node's <b>script instance</b>. Closing the game mid-bake runs the scene-tree teardown (in <code>Main::start</code> finish), which frees the node and its script instance, while the pool's <code>finalize()</code> (in <code>Main::cleanup</code>) joins the workers — i.e. the worker's frame can outlive the instance. Every instance read in the frame (<code>seed</code>, <code>HMAX</code>, <code>SEA</code>, <code>R</code>, <code>pay</code>, …) is then a use-after-free. The shipped mitigation (<code>static var _mt_exit_aborted</code> + <code>_exit_tree()</code>) makes each worker stand down at its next boundary — but the check cadence is the whole problem: shard loops check per record (µs window, the mitigation covers it), face slices run up to 5000 ms <b>without</b> a check (a whole slice of exposure). The mitigation also cannot shrink the epilogue: returning from a GDScript function still runs inside the instance's VM frame.</p>
+<p>Manifestations (both measured this ticket): <b>hard</b> — SIGSEGV, rc=139, backtrace on the pool thread in the worker's frame; <b>soft</b> — <code>SCRIPT ERROR: Bad address index</code> in the worker's frame (the VM catches the freed read instead of the kernel), process exits rc=0. The defect leaves a clean log until that line — <b>the exit status (and the Bad-address scan) is the signal</b>.</p>
+
+<h2>2. Before: the crash was shown, not assumed</h2>
+<p>Probe: the temporary <code>satexit</code> harness arm (in+out this task) boots seed 5432 (bake forced, sharded path), the AC-0414 hold engages, and at the requested stage — 1 = a shard in flight (<code>payload N&lt;98/98</code>), 2 = a face in flight (<code>face N/12</code>) — it quits after a 5 s delay. 5 s &gt;&gt; one record boundary, ≪ one face slice, so stage 2 always lands a worker mid-slice.</p>
+<table>
+<tr><th>phase</th><th>stage</th><th>attempts</th><th>hard crashes (rc=139)</th><th>soft (Bad address, rc=0)</th><th>clean</th></tr>
+<tr><td>pre-mitigation (flag scratch-disabled)</td><td>1 (shard in flight, 20–25 shards)</td><td>6</td><td class="bad">2 (#01 #03)</td><td class="bad">4 (#02 #04 #05 #06, 5× each)</td><td>0</td></tr>
+<tr><td>as-shipped (mitigation ON)</td><td>1</td><td>10</td><td>0</td><td>0</td><td class="ok">10</td></tr>
+<tr><td>as-shipped (mitigation ON)</td><td>2 (face in flight, 4 at the cap, face 8–9/12)</td><td>2</td><td class="bad">2 (both, rc=139)</td><td>—</td><td>0</td></tr>
+</table>
+<p><b>Pre-fix total: 18 attempts, 8 show the UAF signature (4 hard + 4 soft), 10 clean.</b> The mitigation holds exactly where its check cadence allows (shard stage: per-record check → 10/10 clean) and fails exactly where it doesn't (face stage: 5 s slice → 2/2 SIGSEGV). The stage-2 backtrace is the AC-0414 crash, reproduced on demand:</p>
+<pre>RESULT {"line":"face 8/12","ok":true,"satexit":{...,"stage":2,"stage_wait_ms":80732}}
+SCRIPT ERROR: Bad address index.
+          at: SatelliteBody._pixel_mt (res://world/satellite_body.gd:1007)
+          GDScript backtrace (most recent call first):
+              [0] _pixel_mt (res://world/satellite_body.gd:1007)
+              [1] _step_face_mt (res://world/satellite_body.gd:981)
+              [2] _mt_face_task (res://world/satellite_body.gd:825)
+Segmentation fault (core dumped)</pre>
+<p class="small">Pre-mitigation hard-crash tail (identical frame class, shard stage): <code>[0] _gen_one (satellite_body.gd:1477) → [1] _mt_shard_task (658)</code>, rc=139. Summaries: <code>.scratch/AC-0418/exit_premit_stage1.summary</code>, <code>exit_shipped_stage1.summary</code>, <code>exit_shipped_stage2.summary</code>; per-attempt logs alongside.</p>
+
+<h2>3. The fix: workers that hold no reference to the node</h2>
+<p>New plain script <code>godot/world/satellite_bake_worker.gd</code> (<code>class_name SatelliteBakeWorker</code>, statics only). Every worker task is now a static function of that script, and everything it touches travels in <code>st</code> — a plain <b>Dictionary</b> (RefCounted) the node fills in <code>_bake_state()</code> before enqueue and passes as a <b>bound argument</b>. A Callable to a static holds no object; the state is kept alive by the tasks' own bound arguments, so at process exit the node is freed and the state is not. The worker frame then holds only: its own state, the AweGen C++ handle (a C++ singleton, alive for the process — the same precedent threadgen/threadmesh already use), class statics (SphereMath, the exit flag) and engine singletons. Nothing in it is freed with the node.</p>
+<p>The arithmetic is copied <b>verbatim</b> (instance reads → <code>st</code> reads; the node's consts travel by value, their single home stays <code>satellite_body.gd</code>); same values, same operation order → same bytes. The node keeps: the main-thread poll/merge/assemble (<code>_bake_main_step_mt</code>, now reading the state), a new thin <code>_bake_main_step_single()</code> collect for the OFF path, and the consume/load paths. Deleted from the instance: the per-face row-machine fields (<code>pay</code>, <code>color_row</code>, <code>_h2/_t2/_bld_row/_out</code>, the chunk cache <code>_ch_cx/_ch_cz/_h16/_t16/_gx16/_gz16</code>, <code>_first_col</code>, <code>_hgrid</code>), the worker channels (<code>_mt_g</code>, <code>_mt_shard_bufs/err/ms</code>, <code>_mt_face_*</code>), <code>bake_abort</code> (→ <code>st["abort"]</code>) and every worker-side function (<code>_mt_shard_task</code>, <code>_mt_face_task</code>, <code>_bake_worker</code>, the <code>_step_face*</code>/<code>_pixel*</code> machines, <code>_gen_one</code>, the offsets, <code>_l2s</code>/<code>_byte</code>, <code>_load_png</code>, <code>_guard_check*</code>, <code>_geom_for_face_local</code>, <code>_mesh_grid</code>, <code>_hgrid_sample</code>, <code>_ship_faces</code>).</p>
+<p>The shipped mitigation stays and is exercised on both paths: every task reads <code>SatelliteBody._mt_exit_aborted</code> <b>first</b> (readable without touching anything that gets freed) and stands down at the next boundary. With the workers detached the epilogue no longer touches the node either, so the flag is now a speed/politeness measure, not a safety net — safety is the detachment.</p>
+
+<h2>4. After: the same exits, repeatedly</h2>
+<p><b>After total: 18/18 clean (before: 8/18 symptomatic &mdash; 4 hard crashes + 4 soft).</b> The stage-2 row is the one that matters: the as-shipped tree SIGSEGV&rsquo;d twice on exactly this state (<code>face 8/12</code>, <code>face 9/12</code>, the worker in <code>_pixel_mt</code>); with the workers detached the same exits complete cleanly &mdash; the node is freed at teardown and nothing in a worker frame is freed with it. The mitigation is still exercised: every task reads <code>SatelliteBody._mt_exit_aborted</code> first (the flag is set by <code>_exit_tree</code> on every one of these exits and stood the workers down at the next boundary; the detachment is what makes the epilogue safe). Summaries: <code>exit_after_stage1.summary</code> (15/15), <code>exit_after_stage2.summary</code> (3/3); per-attempt logs alongside.</p>
+<p>Same arm, same seed, same delays, stricter pass bar (rc=0 <b>and</b> zero <code>Bad address index</code> <b>and</b> zero <code>handle_crash</code>):</p>
+<table>
+<tr><th>stage</th><th>attempts</th><th>hard crashes</th><th>soft (Bad address)</th><th>clean</th><th>in flight at exit (the arm's RESULT)</th></tr>
+<tr><td>1 (shard in flight)</td><td>15</td><td class="ok">0</td><td class="ok">0</td><td class="ok">15</td><td>payload 75&ndash;83/98 shards in flight</td></tr>
+<tr><td>2 (face in flight)</td><td>3</td><td class="ok">0</td><td class="ok">0</td><td class="ok">3</td><td><b>face 8&ndash;9/12</b>, 4 at the cap &mdash; the exact state that segfaulted 2/2 as-shipped</td></tr>
+</table>
+
+<h2>5. Bake output unchanged — exactly</h2>
+<p>All three re-bakes ran the arm's forced re-bake (seed 44, the canonical seed) and dumped the 12 face PNGs; comparison is <code>cmp</code> (byte compare) plus the arm's own <code>rebuild_vs_shipped</code> (pixel-sampled against the shipped <code>res://</code> assets, 589,824 samples).</p>
+<table>
+<tr><th>run</th><th>path</th><th>vs pre-fix re-bake (cmp)</th><th>rebuild_vs_shipped</th><th>bake wall</th><th>gen wall (shards)</th><th>face wall (max)</th></tr>
+<tr><td>before (original code)</td><td>MT (sharded)</td><td>&mdash; (baseline)</td><td>identical, diff 0 / 589,824</td><td>166,347 ms</td><td>140,364 ms</td><td>25,805 ms</td></tr>
+<tr><td>after, ON</td><td>MT (sharded, detached)</td><td class="ok">12/12 byte-identical</td><td class="ok">identical, diff 0 / 589,824</td><td>160,886 ms</td><td>137,243 ms</td><td>23,435 ms</td></tr>
+<tr><td>after, OFF (<code>AWECRAFT_SATPRELOAD=0</code>)</td><td>single detached task (<code>mt: false</code>)</td><td class="ok">12/12 byte-identical (also 12/12 vs after-ON)</td><td class="ok">identical, diff 0 / 589,824</td><td>804,163 ms (1 thread, as before)</td><td>gen 718,441 ms</td><td>&mdash; (un-sliced)</td></tr>
+</table>
+<p><b>GENHASH: 25/25 <code>GENHASH cx cz &lt;md5&gt;</code> lines byte-identical before vs after</b> (GENMS 130 &rarr; 126; the genhash arm reads the C++ generator directly, no bake). Speed: the after bake is at or slightly <i>above</i> the before (160.9 s vs 166.3 s wall, ~3% &mdash; within run-to-run noise; the added main-thread work is one ~201 MB concat per bake, already present in the before tree). Byte-identity of the OFF state to the pre-ticket path: after-OFF == pre-fix output (measured: 12/12 byte-identical, table above); pre-fix OFF == pre-fix ON is AC-0414&rsquo;s standing bit-identity invariant (the sharded path was built to be bit-identical to the single-task path, the arm&rsquo;s REBAKE pixel-compare through both paths is the project&rsquo;s standing proof) &mdash; so after-OFF is the pre-ticket OFF bytes.</p>
+
+<h2>6. Normal shutdown and shutdown during the hold</h2>
+<p>Three shutdown shapes, all measured:</p>
+<ul>
+<li><b>Shutdown during the load hold / mid-bake (the defect's case)</b>: all 36 exit attempts (18 before + 18 after) quit while the bake is in WORK &mdash; stage 1: the arm observes the payload stage at its spawn (<code>stage_wait_ms: 0</code> &mdash; the bake is already there) and quits ~5 s later at payload 75&ndash;83/98 (the loading-window hold had released at its 42 s budget); stage 2: the arm waits ~80 s for the face stage, then quits 5 s in with faces 8&ndash;9/12 in flight (the bake, well past the hold). After: all clean.</li>
+<li><b>Normal shutdown (bake completes, world presented, then quit)</b>: the <code>satexit</code> arm's <code>complete</code> mode boots seed 5432, waits until <code>phase == LOADED</code> (the consume loop finished, the body is in the tree), then quits. Before: rc=0 (boot bake 107,638 ms). After: rc=0 (boot bake 105,114 ms; max frame hitch 11.9 s vs 16.2 s — the main thread is lighter once the merge reads the state). The teardown ordering (scene tree first, pool finalize after) is the one that used to hit the UAF; with the workers reference-free it is now a plain join.</li>
+<li><b>Normal in-game quit (no bake in flight)</b>: the canonical seed-44 res:// path (the SMOKE battery + PROBE runs above) and G0 &mdash; all rc=0, census 0/0.</li>
+</ul>
+
+<h2>7. The AC-0403 link — tested, not assumed</h2>
+<p><b>Refuted as the specific cause; confirmed as the failure class.</b> AC-0403's signal-11 ran on the <b>canonical seed 44 → res:// path → no bake in flight</b> (a bake only runs for non-canonical seeds / missing caches), at t≈27 s during steady-state physics, on the <b>main thread</b> (slab read <code>chunk.gd:657 get_local</code> from the player's physics step), with a clean log across 14/14 reruns. This defect needs a bake in flight, strikes on <b>pool threads</b> in the worker's frame, and manifests at <b>process exit</b> (teardown), not steady state. The two crashes are separate causes of the same class: concurrent VM use where a frame holds a node's script instance that another actor can free or race. AC-0403's remaining candidates stand (threadgen/threadmesh node methods running from pool threads the whole time + the PBA shallow-handle edge, AC-0403 §7); this ticket's scope is the bake workers, and the streaming workers keep the same exit-race class at a far lower in-flight fraction (thousands of clean arm exits bound it empirically) — a follow-up ticket.</p>
+
+<h2>8. Gates (exit status is the primary signal)</h2>
+<p>Every gate paired: exit status <b>and</b> the <code>gate_census.py</code> count (this defect class leaves a clean log &mdash; the exit status is the primary signal; and the engine exits 0 on a parse failure &mdash; the census is the other half).</p>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 before (original + arm, <code>--quit</code>)</td><td class="ok">rc=0, 0 SCRIPT / 0 SHADER (<code>g0_before.log</code>, <code>g0_restored.log</code>)</td></tr>
+<tr><td>G0 after the fix (first run)</td><td class="bad">rc=0, 13 SCRIPT ERRORs &mdash; &ldquo;Identifier SatelliteBakeWorker not declared&rdquo;: the new <code>class_name</code> is invisible to headless runs until one <code>--headless --import</code> refreshes <code>.godot/global_script_class_cache.cfg</code>. Refreshed, re-ran:</td></tr>
+<tr><td>G0 after (post-refresh) / final (arm removed)</td><td class="ok">rc=0, 0/0 (<code>g0_after.log</code>, <code>g0_final.log</code>)</td></tr>
+<tr><td>GENHASH after vs before</td><td class="ok">25/25 <code>GENHASH</code> lines byte-identical; GENMS 130 &rarr; 126 (rc=0, 0/0)</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td class="ok">rc=0, 0/0, 5/5 RESULTs; battery summary <code>ok: true</code> (interact: mine/place/drop/highlight/inv all green; light: torch_far 0&rarr;9, census ok; fluids: sea_stable true, 320&rarr;320 zero-write)</td></tr>
+<tr><td>PROBE lightstate R16 &times;2</td><td class="ok">both rc=0, 0/0; standing invariants hold: 20/20 chunks leaks 0, <code>worst</code> null, <code>wash_detected</code> false, stragglers 0, demoted 41, <code>arr_diff_cells</code> 1 at the [0,141,0] fixture (the AC-0311 re-baseline), A/B before==after (air_n 542, mean_eff 2.01); <code>low_on_high_n</code> 1/2 (the documented FLIP churn, not a gate)</td></tr>
+</table>
+<p class="small">HEAVY gates (boundary r4/r24, flake, genhash re-run, r50, the shaderforce arm) and the Windows build: the coordinator&rsquo;s &mdash; this subagent ran the light set per the ticket.</p>
+
+<h2>9. Deliberately not done</h2>
+<ul>
+<li>HEAVY gates + Windows build — the coordinator's (this subagent: light gates only).</li>
+<li>threadgen/threadmesh worker detachment — the same class in the streaming workers, out of this ticket's scope (bake only); follow-up ticket with this ticket's pattern as the reference.</li>
+<li>Fenced files (main.gd, game.gd, debug.gd, drop.gd, AC-0067/AC-0384 artifacts) — untouched; no commits/pushes; <code>tasks/TASKS.yaml</code> untouched.</li>
+</ul>
+
+<h2>Captures</h2>
+<ul class="small">
+<li><code>.scratch/AC-0418/exit_premit_stage1.summary</code> + logs 01–06 (pre-mitigation; #01/#03 = the segfaults)</li>
+<li><code>.scratch/AC-0418/exit_shipped_stage1.summary</code> + logs 01–10 (mitigation holds: 10/10 clean)</li>
+<li><code>.scratch/AC-0418/exit_shipped_stage2.summary</code> + logs 01–02 (the _pixel_mt crashes)</li>
+<li><code>.scratch/AC-0418/exit_after_*.summary</code> + logs (after-fix)</li>
+<li><code>.scratch/AC-0418/rebake_{before,after,after_off}/*.png</code> + <code>cmp</code> outputs; <code>rebake_*.log</code> (the arm's RESULT incl. rebuild_vs_shipped)</li>
+<li><code>.scratch/AC-0418/genhash_{before,after}.log</code>; <code>g0_*.log</code> (rc + census inline)</li>
+<li><code>godot/world/satellite_bake_worker.gd</code> (new, the detached worker); <code>godot/world/satellite_body.gd</code> (the node side)</li>
+</ul>
+</body>
+</html>
