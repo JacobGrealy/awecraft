@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T09:37
+  updated_at: 2026-10-12T14:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,7 +27,6 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
-- AC-0418
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -26640,11 +26639,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-10T09:34
-  updated_at: 2026-10-10T09:34
-  completed_at: null
+  updated_at: 2026-10-12T14:25
+  completed_at: 2026-10-12T14:25
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Closing the game while the world is still loading should not crash it. More importantly,
@@ -26981,6 +26980,71 @@ intake:
     12/12); any look change ships behind a switch defaulting conservative; and the recent work must keep
     holding - the volumetric cloud layer, the far tier''s curvature placement, the engine-fog single source,
     and the satellite body''s mesh winding.
+
+    '
+  comments: []
+- id: AC-0423
+  title: see-through-gaps-between-chunks
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-12T14:25
+  updated_at: 2026-10-12T14:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The world should be solid. Standing anywhere and looking at the join between
+    two chunks, the player should see terrain, not a slit of whatever is behind it. The user''s words:
+    "it''s not flicker you can literally see through the edges between the chunks, and it was there before
+    vertex lighting."
+
+
+    2) Technical Details:
+
+    A CORRECTION FROM THE USER 2026-10-12 THAT INVALIDATES THE PREVIOUS INVESTIGATION, and it must be
+    read before anything else is measured. A ticket was opened for this complaint and its run concluded,
+    from measurement, that the seams OVERLAP by one and a half millimetres and therefore that there is
+    no gap, attributing the visible line to a per-chunk vertex-lighting discontinuity instead. THE USER
+    SAYS OTHERWISE ON BOTH POINTS: the defect is not a shading discontinuity but a SEE-THROUGH GAP - the
+    player can look through the edges between chunks - and it PREDATES the vertex lighting work entirely,
+    which exonerates that work as a cause. The user is flying the build and has been right about every
+    visual report so far, so their description is the specification and the previous measurement must
+    be treated as having measured the wrong thing.
+
+    WHAT THAT IMPLIES ABOUT THE MEASUREMENT: if a gap is visible, then either the surfaces do not in fact
+    meet at the boundaries that matter, or the measurement sampled a boundary where they do meet while
+    the visible defect occurs elsewhere - between tiers rather than between chunks of the same tier, for
+    instance, or at a boundary the instrument did not visit. Start by finding WHERE the player sees through,
+    in a frame, and only then measure that boundary. Do not re-run the same instrument over the same locations
+    and conclude again that there is no gap.
+
+    CANDIDATES, in the order the project''s recent history suggests, none of them to be assumed: THE NEAR-FAR
+    TIER BOUNDARY, because a recent change made every near-field material discard beyond a single fog-wall
+    distance, so the near tiers genuinely stop being drawn at that distance and the far tier must cover
+    that boundary exactly - any mismatch there is a see-through slit, and it is the one place where geometry
+    is deliberately removed; A MESHING OFF-BY-ONE, where a chunk''s mesh does not cover its final row
+    or column of blocks; BACKFACE CULLING on incorrectly wound geometry, which this project has already
+    been bitten by once when the satellite body''s winding was inverted for the entire life of an objective;
+    and the collision or lighting lanes leaving a visual hole where they disagree with the render mesh.
+
+    ACCEPTANCE IS A FRAME THAT SHOWS WHAT IS BEHIND THE SLIT: a close render at a boundary where the user
+    sees through, at ground level, showing either terrain or the skybox through the gap - because the
+    current state is the proof. Then the same frame after the fix showing solid ground, plus the measurement
+    of what the gap actually is in that specific place: the vertex positions on both sides, which surface
+    is missing, and by how much. A rendering that cannot see through the join is the only acceptable outcome.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and
+    the recent work must keep holding - the far tier''s curvature placement, the engine-fog single source,
+    the carved-top fill, the volumetric cloud layer, the satellite body''s mesh winding, the orbital sort
+    offset and the height-based relief.
 
     '
   comments: []
