@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0422 plan — the hard horizon line at altitude</title>
+<style>
+body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #1a202c; }
+h1 { border-bottom: 3px solid #2b6cb0; padding-bottom: .3rem; }
+h2 { margin-top: 2rem; color: #2b6cb0; }
+code, pre { font-family: "SF Mono", Consolas, monospace; font-size: 13px; }
+pre { background: #f1f5f9; padding: .8rem; border-radius: 6px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid #cbd5e0; padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: #edf2f7; }
+.kv td:first-child { width: 220px; font-weight: 600; }
+.ok { color: #276749; font-weight: 600; }
+.warn { color: #975a16; font-weight: 600; }
+.bad { color: #9b2c2c; font-weight: 600; }
+</style></head>
+<body>
+<h1>AC-0422 — the hard horizon line at altitude: plan</h1>
+
+<table class="kv">
+<tr><td>Ticket</td><td><code>AC-0422 hard-horizon-line-at-altitude</code> (user, priority 1, reported again 2026-10-11 with a screenshot; repeat of a long-standing complaint — the user previously read the same appearance as "the bottom of the skybox")</td></tr>
+<tr><td>Resume state</td><td>The previous run of this ticket wrote <b>one</b> journal line to <code>tasks/AC-0422/continuity.md</code> (fresh run, reading the checklist, the coordinator's first hypothesis recorded) and then stopped at the token limit. <b>No plan, no captures, no code edits, no gates</b> (verified: <code>git status</code> + <code>find -newermt</code> — only <code>tasks/TASKS.yaml</code> and the journal were touched; no <code>.scratch/AC-0422*</code> logs). This run continues from zero.</td></tr>
+<tr><td>Spec (the frame)</td><td>"Above the player is a flat blue-grey field filling the upper half of the frame with no gradient and no variation, and it ends at a hard straight edge across the whole width. Below that edge is terrain with cloud." A hard straight edge is the signature of a boundary <i>drawn</i> rather than <i>computed</i> — a gradient would not produce it.</td></tr>
+</table>
+
+<h2>1. Diagnosis — what the edge is</h2>
+
+<p>The frame is reproduced on this box (Forward+ / llvmpipe, seed 44, noon, shipped defaults:
+render 50, fog 87 → the fog wall at <b>706 m</b>), looking at the <b>local horizon</b> from
+altitude (the new env-gated <code>AWECRAFT_CAM_HORIZON=1</code> aim on the existing planet preset —
+the limb/nadir/zenith aims cannot produce this view: the limb is the tangent to the R disc, which
+is <i>below</i> the local horizon at these altitudes). Measured luminance profile down the
+<code>800 m</code> frame (radial altitude 941 m, the sky's A-window blend <code>w = 0.80</code>):</p>
+
+<pre>
+row   angle        row-median luminance
+ 330    -3.66°      100.11   ← bright horizon haze band (above branch at hl = 0)
+ 360    +0.00°       51.67   ← below branch (space-thinned): a 64.15/255 ONE-ROW STEP
+ 450   +10.86°       45.59   ← the flat expanse
+ 690   +35.12°      106.24   ← the satellite body's rim (its 100%-fog rim is u_air)
+STEPS raw_max 64.15 @ row 360 (the local horizon) · third-max: top 0.72 / mid 64.15 / bottom 12.43
+</pre>
+
+<p>Two drawn boundaries, one root cause:</p>
+
+<table>
+<tr><th>#</th><th>Boundary in the frame</th><th>Where</th><th>Measured</th></tr>
+<tr><td>1</td><td>The <b>local horizon</b> (<code>hl = 0</code>) — the <code>step(0.0, -hl)</code> branch switch in <code>sky_on()</code> (<code>aero_sky_gradient.gdshader</code>, the default <code>u_sky_alt = 1</code> path): the above branch (gradient thinned to space by the A window <code>w</code> + the horizon haze band) meets the below branch (<code>mix(space, u_air, 1-w)</code> — flat) with a discontinuity</td><td>frame centre</td><td class="bad">64.15/255 in one row</td></tr>
+<tr><td>2</td><td>The <b>satellite body's rim</b> — the body's per-fragment 100%-fog rim is exactly <code>u_air</code> (the single-source air colour), while the sky just beyond it is the space-thinned below branch, which equals <code>u_air</code> <i>only at w = 0</i> (ground level)</td><td>bottom band</td><td class="bad">12.43/255 step</td></tr>
+</table>
+
+<p><b>Root cause (the coordinator's hypothesis, confirmed in the frame):</b> a sky term evaluated
+against a fixed state rather than the player's local one. The AC-0384-r8 contract made the fog
+seam exact <i>by construction at ground level</i>: the world's near tiers fade to the single-source
+air colour <code>u_air</code> (env fog <code>fog_light_color</code> = the body's <code>u_air</code> = the sky's
+horizon value — "one colour at the seam"). AC-0417/AC-0419 then re-keyed the sky to the local
+zenith with the A window <code>w = Aero.sky_space(alt_rad)</code>, and <b>space-thinned the
+below-horizon branch with the same <code>w</code></b> — so at any altitude where <code>w &gt; 0</code>, the sky's
+horizon value and its below-horizon fill <i>drift away from the fog colour the world is still
+dissolving into</i>. The seam, exact at <code>w = 0</code>, becomes a hard edge at altitude. The
+<code>step(0.0, -hl)</code> switch is the same boundary drawn twice: above the line the sky is
+space-thinned, below it the flat space-thinned fill, and the two differ by up to 64/255 in one
+pixel row. It is not a world-aligned plane (the sky is correctly keyed to the local radial —
+<code>upc = -u_limb_center/r</code>); it is a <b>drawn boundary between two regions that no longer share
+a colour at the player's altitude</b> — the fourth instance of the flat-world class, in its fog/haze
+form.</p>
+
+<p>Why it survived the previous sky fixes: AC-0419's acceptance views were the ground dome, the
+zenith (looking up) and the limb (looking at the tangent) — all <i>radial or tangential</i> views.
+The user's frame is the one view none of them covers: <b>looking at the local horizon from
+altitude</b>, where both the horizon step and the fog-wall/body-rim seam sit in the frame.</p>
+
+<h2>2. The fix (one switch, default ON, shader default OFF = the old path bit-for-bit)</h2>
+
+<p>All in <code>sky_on()</code>, behind the new <code>u_horizon</code> (Settings <code>"sky_horizon"</code>, default ON —
+the user asked for the edge removed, twice; the pre-fix look is the shader default, so a material
+that never sees the push keeps the old look; A/B via <code>AWECRAFT_SKYHORIZON=0|1</code>, the
+<code>AWECRAFT_RAMPS</code> pattern). Three terms, each keeping a verified contract:</p>
+
+<table>
+<tr><th>Term</th><th>Old</th><th>New</th><th>Contract preserved</th></tr>
+<tr><td>below branch</td><td><code>mix(space, u_air, 1-w)</code></td><td><code>u_air</code> at every altitude</td><td>the AC-0384-r8 single-source seam restored for <code>w &gt; 0</code> (the fog fades to <code>u_air</code>, the body's rim <i>is</code> <code>u_air</code>, the sky under the horizon <i>is</code> <code>u_air</code> — one colour at the seam); the air is not space-thinned — the air does not become space, the view does (F3: the gap reads as haze, not a hole — still true)</td></tr>
+<tr><td>above-branch thinning</td><td><code>mix(w², w, u)</code></td><td><code>mix(w², w, u) · u</code></td><td>the horizon is spared: weight 0 at <code>hl = 0</code> (the grazing ray sweeps the longest air column and keeps its colour — the bright band at the horizon is the atmosphere seen edge-on), <code>w</code> at the zenith (<code>u = 1</code> keeps the weight exactly <code>w</code> — the sky is still space at A when <i>looking up</i>, AC-0417)</td></tr>
+<tr><td>branch switch</td><td><code>step(0, -hl)</code> (hard)</td><td><code>smoothstep(0, 0.03, -hl)</code> (~2° blend, OR'd with the inside-disc term)</td><td>above the horizon the switch is 0 in both paths — the above branch's only change there is the <code>·u</code> thinning</td></tr>
+</table>
+
+<p>Bit-identity of the OFF path is by construction (every new factor is <code>mix(old, new, u_horizon)</code>
+or <code>·mix(1, u, u_horizon)</code>, which is exactly the old expression at <code>u_horizon = 0</code>) and is
+<i>verified</i>: an <code>AWECRAFT_SKYHORIZON=0</code> re-shoot at 800 m must md5-match the before frame.</p>
+
+<p>Files: <code>godot/core/aero_sky_gradient.gdshader</code> (the <code>u_horizon</code> uniform + <code>sky_on</code>),
+<code>godot/world/world.gd</code> (boot env preload + the change-gated push in <code>_ac0401_push</code>, block 2c),
+<code>godot/autoload/settings.gd</code> (the <code>"sky_horizon"</code> default),
+<code>godot/scenes/harness.gd</code> (the env-gated <code>AWECRAFT_CAM_HORIZON=1</code> aim, additive — the
+AC-0417/AC-0419 aim precedent), <code>godot/HARNESS.md</code> §2 (the aim documented in the
+<code>AWECRAFT_CAM</code> row). No new arm, no <code>harness_data.yaml</code> row (the aim is an option on the
+existing planet cam — the zenith-aim precedent, AC-0419). Fenced files untouched. <code>ARCHITECTURE.md</code>
+owes no change (no new subsystem/component/convention — one switch on the existing sky push seam).</p>
+
+<h2>3. Acceptance — the user's frame re-taken + the luminance profile as numbers</h2>
+
+<table>
+<tr><th>Check</th><th>Method</th><th>Pass</th></tr>
+<tr><td>The user's frame re-taken, same altitude/configuration (seed 44, noon, shipped render 50 / fog 87 → 706 m wall), before/after at 800 m (radial 941, <code>w = 0.80</code>) and 1300 m (radial 1441, <code>w = 1.0</code>)</td><td>planet preset, <code>AWECRAFT_CAM_HORIZON=1</code>, Forward+ (the boot line asserts), 1280×720</td><td>no hard edge, no flat field; air below the player, sky above, varying continuously with the local zenith</td></tr>
+<tr><td>The luminance profile down the frame, before/after, as numbers</td><td><code>tasks/AC-0422/measure.py</code> (row-median luminance, the max single-row step, the per-third max step, the horizon-row step)</td><td>the 64.15/255 one-row step at the local horizon and the 12.43/255 step at the body rim are gone — the profile is monotone or smoothly varying (max single-row step in the small-step class of the rest of the frame), not a step</td></tr>
+<tr><td>The OFF path is the old look</td><td><code>AWECRAFT_SKYHORIZON=0</code> re-shoot at 800 m, md5 vs the before frame</td><td>byte-identical</td></tr>
+<tr><td>The recent sky work still holds</td><td>2141 m zenith (looking straight up at A: the zenith is space) and 2141 m limb (the atmosphere reads as wrapping the world — smooth air-column glow, no boundary surface, no hard edge), compared against the AC-0419 captures; the ground view is provably unchanged (<code>w = 0</code>: every new factor is exactly 1/0 in the old values)</td><td>the daytime sky is bright; the local-zenith behaviour holds at altitude; the rim is smooth</td></tr>
+<tr><td>Gates (mine)</td><td>G0 = <code>gate_census.py</code> <b>and</b> the process exit status (the stochastic use-after-free leaves a clean log — the paired check, AC-0403); the smoke battery <code>player;interact;light;fluids;settings;genhash</code>; <code>genhash</code> 25/25 standalone ×2 (<code>world/*</code> touched); <code>shaderforce</code> on the Forward+ path (the shader actually compiles — G0's headless dummy renderer does not prove it); one <code>boundary</code> r4 self-check (the builder's allowance, world/AGENTS.md)</td><td>all green, exit statuses recorded</td></tr>
+</table>
+
+<p>Heavy gates (farab, ladder, meshprobe, halo, lightstate, r16, the rest of the standing set, the
+full battery) are the coordinator's background job. The fix is sky-shader-fragment-only (no
+generation, no lighting, no streaming, no C++ lane) — the standing set is expected to be
+unaffected; the boundary self-check covers the one world.gd edit (a push, not streaming).</p>
+
+</body></html>

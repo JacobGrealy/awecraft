@@ -114,6 +114,12 @@ uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
 // three consumers (the AC-0400 identity). The default is the T = 0.5
 // value; world.gd pushes the live day/night value per frame.
 uniform vec3 u_air : source_color = vec3(0.8157, 0.9451, 0.9843);
+// AC-0422: the continuous-horizon switch (Settings "sky_horizon",
+// default ON; pushed change-gated by world.gd _ac0401_push block 2c).
+// 0.0 = the pre-AC-0422 path VERBATIM (the hard branch step at
+// hl = 0 + the space-thinned below branch), so a material that never
+// sees the push keeps the old look; 1.0 is the fix (see sky_on).
+uniform float u_horizon : hint_range(0.0, 1.0) = 0.0;
 // AC-0417 clause D: the limb geometry at the atmosphere top A.
 // u_atmo_radius = R + A (the A shell's radius - the visible-tangent
 // convention u_limb_radius uses for R + SEA extends to A, so the
@@ -225,7 +231,35 @@ vec3 sky_on(vec3 dir) {
 	// below the cone: the ray is under the local horizon (hl < 0) or the
 	// camera is inside the R + SEA disc (r <= u_limb_radius - no horizon
 	// exists, everything is air).
-	float below = clamp(step(0.0, -hl) + (1.0 - step(u_limb_radius, r)), 0.0, 1.0);
+	// AC-0422: the continuous horizon (u_horizon - see the uniform).
+	// The old path DREW a boundary instead of computing one: a hard
+	// step at hl = 0 (a straight line across the frame at altitude)
+	// with BOTH branches space-thinned by the A window (w) - so at
+	// w > 0 the sky no longer met the world's single-source fog
+	// colour (u_air - the env fog and the satellite body's rim ARE
+	// u_air, the AC-0384 r8 seam), and the fog wall and the body rim
+	// became visible hard edges (measured before: a 64.15/255
+	// single-row step at the local horizon and a 12.43/255 step at
+	// the body rim, tasks/AC-0422/AC-0422-results.html). The fix
+	// keeps every contract AC-0417/AC-0419 verified (the local-zenith
+	// gradient; the sky is space at A when LOOKING UP; the below
+	// branch reads as haze, not a hole) and removes the boundary:
+	// (1) the below branch is u_air at EVERY altitude - the air is
+	//     not space-thinned (the air does not become space, the view
+	//     does): the fog fades to u_air, the body's rim is u_air, the
+	//     sky under the horizon is u_air - one colour at the seam;
+	// (2) the space thinning spares the horizon: the weight is
+	//     multiplied by u - 0 at the local horizon (the grazing ray
+	//     sweeps the longest air column and keeps its colour: the
+	//     bright band at the horizon IS the atmosphere seen edge-on),
+	//     w at the zenith (u = 1 keeps the weight exactly w - the
+	//     sky is still space at A when looking up);
+	// (3) the branch switch is a smooth blend of width 0.03 (~2 deg)
+	//     below the horizon instead of the step.
+	float under_disc = 1.0 - step(u_limb_radius, r);
+	float below_old = clamp(step(0.0, -hl) + under_disc, 0.0, 1.0);
+	float below_soft = max(under_disc, smoothstep(0.0, 0.03, -hl));
+	float below = mix(below_old, below_soft, u_horizon);
 	float w = u_space_sky;
 	// the local-zenith gradient (the sky_off expression, re-keyed):
 	// horizon -> mid over the lower third, -> zenith over the top.
@@ -234,10 +268,10 @@ vec3 sky_on(vec3 dir) {
 	grad = mix(grad, zenith_color, smoothstep(0.25, 0.90, u));
 	// above the horizon: the gradient thinned to space by the A window
 	// (zenith by w, grazing by w*w - the longer air column); w = 1 is
-	// space exactly (the AC-0417 contract). Below: the unchanged F3
-	// single-source haze mix.
-	vec3 above = mix(grad, space_color, mix(w * w, w, u));
-	vec3 belowc = mix(space_color, u_air, 1.0 - w);
+	// space exactly (the AC-0417 contract). Below: the AC-0422
+	// single-source haze (see (1) above).
+	vec3 above = mix(grad, space_color, mix(w * w, w, u) * mix(1.0, u, u_horizon));
+	vec3 belowc = mix(mix(space_color, u_air, 1.0 - w), u_air, u_horizon);
 	vec3 col = mix(above, belowc, below);
 	// the horizon haze band (the sky_off term) hugs the local horizon
 	// from both sides and dies with the air (it is low-atmosphere

@@ -1273,6 +1273,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		# hint is horizontal (pl_hd), the same look_at degeneracy the nadir
 		# aim handles.
 		var pl_zenith := OS.get_environment("AWECRAFT_CAM_ZENITH") == "1"
+		# AC-0422 (additive, env-gated — unset = the original behaviour,
+		# byte-identical): AWECRAFT_CAM_HORIZON=1 aims the camera at the
+		# LOCAL HORIZON (horizontal, along the in-plane tangent reference
+		# pl_hd, up = the radial) — the view a player looking out over the
+		# world at altitude actually sees: the local horizon line across
+		# the frame, terrain + clouds below it, sky above. The limb aim
+		# (the tangent to the R disc, degrees BELOW the local horizon at
+		# these altitudes), the nadir and the zenith cannot produce it.
+		var pl_horizon := OS.get_environment("AWECRAFT_CAM_HORIZON") == "1"
 		var pl_pos := pl_spn + pl_up * pl_alt
 		player = main._spawn_player()
 		player.set_physics_process(false)
@@ -1332,6 +1341,12 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		elif pl_zenith:
 			pl_aim_dir = pl_up
 			pl_aim_up = pl_hd
+		elif pl_horizon:
+			# AC-0422: horizontal along the tangent reference; the local
+			# horizon (hl = 0) sits at the frame centre. dir ⟂ up, so
+			# look_at is well-posed.
+			pl_aim_dir = pl_hd
+			pl_aim_up = pl_up
 		camera.look_at(camera.position + pl_aim_dir, pl_aim_up)
 		camera.current = true
 		# AC-0399: the frozen stand-in player is the OBSERVER for the
@@ -1406,7 +1421,7 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 				"body_phase": pl_phase, "drain": pl_drain,
 				"steps": pl_snapped,
 				"cam_off": [pl_off_val.x, pl_off_val.y], "nadir": pl_nadir,
-				"zenith": pl_zenith,
+				"zenith": pl_zenith, "horizon": pl_horizon,
 				# AC-0417: the ORIGINAL spawn (pre in-plane offset) - the
 				# measurement side (tasks/AC-0417/measure.py camera_basis)
 				# re-applies the offset projection itself, so it needs the
@@ -35387,3 +35402,5 @@ func _rayline_test(spawn: Vector3) -> void:
 				break
 		res[s[2]] = {"px": [int(s[0]), int(s[1])], "cells": hits, "air": air}
 	Debug.result(res)
+
+

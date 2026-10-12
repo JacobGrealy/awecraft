@@ -97,6 +97,24 @@ const DEFAULTS := {
 	# bit-identical sky. Env-overridable (AWECRAFT_SKYALT=0|1 at boot,
 	# world.gd).
 	"sky_altitude": true,
+	# AC-0422: the continuous-horizon sky switch (u_horizon in
+	# aero_sky_gradient.gdshader sky_on). DEFAULTS ON — the user asked
+	# for it in their own words, twice ("the skybox shouldn't have a
+	# horizon line"; reported again 2026-10-11 with a screenshot: a
+	# flat expanse terminated by a hard straight edge at altitude).
+	# The pre-fix look is the shader default (u_horizon 0.0 - the old
+	# path bit-for-bit, the AC-0401 short-circuit convention) and the
+	# A/B rides the harness env override. With the switch ON: the
+	# below-horizon branch is the single-source air colour u_air at
+	# every altitude (the AC-0384 r8 fog seam restored for w > 0 - the
+	# world's fog and the satellite body's rim are exactly u_air, so
+	# the fog wall and the body rim stop being hard edges), the space
+	# thinning spares the horizon (the weight is * u: 0 at the local
+	# horizon, w at the zenith - the sky is still space at A when
+	# looking up), and the branch switch is a smooth blend instead of
+	# the step at the local horizon. Env-overridable
+	# (AWECRAFT_SKYHORIZON=0|1 at boot, world.gd).
+	"sky_horizon": true,
 	# AC-0405: the raymarched-volumetric-clouds switch. DEFAULTS ON —
 	# the user ordered the rework in their own words ("rethink clouds...
 	# forget how we currently do it"), the modern_light/cloud_deck

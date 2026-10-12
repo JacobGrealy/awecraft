@@ -3912,6 +3912,13 @@ func _ready() -> void:
 	var spe := OS.get_environment("AWECRAFT_SATPRELOAD")
 	if spe != "":
 		Settings.values["sat_preload"] = spe == "1"
+	# AC-0422: the continuous-horizon switch (Settings "sky_horizon",
+	# default ON) - same pattern: the env overrides the STORED setting
+	# for this process only (no save); _ac0401_push reads it live, so no
+	# boot derive is owed.
+	var she := OS.get_environment("AWECRAFT_SKYHORIZON")
+	if she != "":
+		Settings.values["sky_horizon"] = she == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -4995,6 +5002,8 @@ var _ac0401_fog_wall := -1.0
 var _ac0401_n_mats := -1  # AC-0420: late (lazily built) materials gate
 var _ac0401_deck := -1.0
 var _ac0401_limb := -1.0
+# AC-0422: the continuous-horizon push state (same seam, change-gated).
+var _ac0422_horizon := -1.0
 # AC-0414: the clause-2 limb gate push state (same seam, change-gated).
 var _ac0414_limb_loaded := -1.0
 var _ac0414_body_loaded := -1.0
@@ -5114,6 +5123,18 @@ func _ac0401_push() -> void:
 			sm2.set_shader_parameter("u_body_loaded", body_load_v)
 		_ac0414_limb_loaded = limb_load_v
 		_ac0414_body_loaded = body_load_v
+	# (2c) AC-0422: the continuous-horizon switch (Settings
+	# "sky_horizon", default ON - the user asked twice: "the skybox
+	# shouldn't have a horizon line", re-reported with a screenshot).
+	# The shader default is 0.0 = the pre-AC-0422 path bit-for-bit, so
+	# a material that never sees the push keeps the old look
+	# (the AC-0401 short-circuit convention).
+	var horz_v := 1.0 if bool(Settings.values.get("sky_horizon", true)) else 0.0
+	if horz_v != _ac0422_horizon:
+		var smh = mn.get("sky_mat")
+		if smh is ShaderMaterial:
+			smh.set_shader_parameter("u_horizon", horz_v)
+		_ac0422_horizon = horz_v
 	# (3) AC-0402 -> AC-0417: the sky's altitude-aware space blend
 	# (Settings "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env
 	# preload). AC-0417 REDEFINED this setting: ON now runs the
