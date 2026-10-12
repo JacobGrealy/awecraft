@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0421 results — orbital look: sheen, cloud flicker, flatness, held item</title>
+<style>
+ body { font: 15px/1.5 "Segoe UI", system-ui, sans-serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; color: #222; }
+ h1 { font-size: 1.5em; border-bottom: 3px solid #2a7; padding-bottom: .3em; }
+ h2 { font-size: 1.2em; margin-top: 1.8em; color: #146; }
+ h3 { font-size: 1.05em; margin-top: 1.3em; }
+ table { border-collapse: collapse; margin: 1em 0; font-size: .93em; }
+ th, td { border: 1px solid #bbb; padding: 4px 10px; text-align: left; vertical-align: top; }
+ th { background: #eef; }
+ code, pre { font-family: Consolas, monospace; font-size: .92em; }
+ pre { background: #f4f4f4; border: 1px solid #ddd; padding: .6em .9em; overflow-x: auto; }
+ .ok { color: #080; font-weight: bold; }
+ .bad { color: #b00; font-weight: bold; }
+ .note { background: #fff8e0; border-left: 4px solid #ec5; padding: .5em .9em; margin: 1em 0; }
+ img.e { max-width: 460px; margin: .4em .8em .4em 0; border: 1px solid #999; height: auto; }
+ .pair { display: flex; flex-wrap: wrap; gap: .6em; margin: .6em 0; }
+ .cap { font-size: .85em; color: #555; max-width: 440px; }
+ .mono { font-family: Consolas, monospace; }
+</style>
+</head>
+<body>
+
+<h1>AC-0421 — orbital look: sheen, cloud flicker, flatness, held item</h1>
+<p><b>Verdict: all four defects fixed and proven; one prior-run bug found and corrected; all owned gates green.</b>
+The previous run made the code changes and died before any gate, render or results page. This run verified the five
+file diffs, finished the missing work (the defect-2 fix was not started; the menu row, harness docs and architecture
+line were absent), found a logic bug in the prior run's defect-4 change (a no-op toggle — proven by probe), corrected
+it, ran the gates, captured the acceptance renders and measured.</p>
+<p class="mono">Engine Godot 4.7.1 · llvmpipe Forward+ (proxy renderer — geometry/draw-order/layout evidence, not the shipped look) ·
+config = the user's: R24/F83 (fog_far 332 / render_edge 400), T0.5, CLOUD_T0=411200, SAT_ALT=2600, nadir, 1280×720,
+SNAP_DRAIN=60 (AC-0417 R24 note), 1200 s wall, no AWECRAFT_LOGIC (the planet preset is self-contained).</p>
+
+<h2>1 · Verification — per-file assessment of the previous run's diff</h2>
+<table>
+<tr><th>File</th><th>Assessment</th></tr>
+<tr><td><span class="mono">godot/autoload/settings.gd</span></td>
+    <td><span class="ok">COMPLETE, correct.</span> <span class="mono">relief_shading</span> bool, DEFAULT ON,
+    <span class="mono">sanitize_bool</span> clamp in the clamp chain. Matches the shipped settings pattern.</td></tr>
+<tr><td><span class="mono">godot/core/satellite_body.gdshader</span></td>
+    <td><span class="ok">COMPLETE, correct.</span> <span class="mono">u_relief</span> (default 0.0): after the sRGB decode,
+    <span class="mono">texv *= 1.0 + 0.4*(texs.a - 0.5)</span> inside <span class="mono">if (u_relief &gt; 0.5)</span> —
+    0.0 short-circuits bit-identical; ±20 % centred on mid height; linear domain so hue is preserved.
+    <span class="mono">u_spec</span> (default 0.0): <span class="mono">SPECULAR = u_spec</span> — the sheen removal.
+    The haz limb term was correctly identified as the fog-wall bridge, not a sheen, and left in place.</td></tr>
+<tr><td><span class="mono">godot/world/satellite_body.gd</span></td>
+    <td><span class="ok">COMPLETE, correct.</span> Boot envs read once (<span class="mono">AWECRAFT_RELIEF</span>,
+    <span class="mono">AWECRAFT_SPEC</span>), live <span class="mono">Settings</span> value for the relief, both uniforms
+    pushed to all 12 face materials every tick in <span class="mono">_tick_view</span> (cloud_deck/limb_space pattern).</td></tr>
+<tr><td><span class="mono">godot/player/player.gd</span></td>
+    <td><span class="bad">BUGGY — corrected this run.</span> <span class="mono">_vm_orbit_sync()</span> (called from
+    <span class="mono">_process</span> every frame) computed the orbit flag correctly (radial altitude ≥
+    <span class="mono">Aero.atmosphere_height()</span>, the one-home A) but the change-gate was inverted:
+    <span class="mono">if hand_root.visible == orbit: return</span> then <span class="mono">visible = not orbit</span>.
+    In every state the comparison passes <i>or</i> the assignment is a no-op (visible=true/orbit=true → return with the
+    item still shown; visible=false/orbit=false → return with it still hidden). The fix was dead code. Proven by the
+    vmorbit probe: 281 orbit frames, <span class="mono">vis_before=true</span> every frame, zero state changes.
+    <b>Corrected:</b> compare against the desired state <span class="mono">want_visible = not orbit</span>.
+    Re-probe: surface visible → orbit hidden → descent restored, <span class="mono">ok:true</span>.</td></tr>
+<tr><td><span class="mono">godot/scenes/harness.gd</span></td>
+    <td><span class="ok">COMPLETE, correct.</span> Planet-branch instrument: <span class="mono">AWECRAFT_FPV_ITEM=&lt;id&gt;</span>
+    gives the frozen player the block, selects it and reparents <span class="mono">sway_root</span> to the preset camera so
+    the orbital frame carries the held item (env-gated; unset = byte-identical). Used only for the before-frame.</td></tr>
+<tr><td colspan="2"><b>Missing from the previous run (completed this run):</b> the defect-2 fix was <b>not started at all</b>
+(no cloud_layer.gdshader / world.gd change) — implemented in <span class="mono">godot/world/world.gd</span>;
+the plan's Options row — added to <span class="mono">godot/ui/menu.gd</span> (CheckBox + sync + toggle, cloud_deck pattern);
+the harness env documentation — added to <span class="mono">godot/HARNESS.md</span> §2 (the §2 env prose is hand-maintained
+outside the generated blocks; <span class="mono">harness_doc.py --check</span> passes); the settings-layer line — added to
+<span class="mono">godot/ARCHITECTURE.md</span> §2 (the row documents each settings bool; a task that leaves it wrong is not done).</td></tr>
+</table>
+
+<h2>2 · The four defects — what each was and the fix</h2>
+
+<h3>Defect 1 — "the low lod should not look this reflective"</h3>
+<p><b>The sheen term:</b> the body material is a <i>lit</i> spatial shader, and its <b>engine-default SPECULAR 0.5</b>,
+lit by the sun's DirectionalLight3D, is the term that gives the surface the glossy cast. No custom rim/fresnel/sheen term
+exists in the shader (the haz limb term is the fog-wall bridge — it stays). <b>Fix:</b>
+<span class="mono">SPECULAR = u_spec</span>, shipped <b>0.0</b> (matte); <span class="mono">AWECRAFT_SPEC=0.5</span> restores
+the pre-fix sheen for the A/B only. Not a look preference — the user's phrase is the specification.</p>
+
+<h3>Defect 2 — "z fighting preventing the clouds from showing on the face near you in orbit"</h3>
+<p><b>Mechanism (measured, this build):</b> every cloud shell node and every body face node sits at the planet centre
+(0,−R,0), so the engine's transparent sort — per-instance key = camera-to-NODE distance + <span class="mono">sorting_offset</span>,
+<b>larger key draws later</b> — is a <b>perfect tie</b> across all 15 transparent instances (12 body faces + 3 cloud shells +
+the star), and the tie-break alone decides who covers whom. Verified with a four-case synthetic matrix
+(two concentric transparent shells at one origin, camera nadir; <span class="mono">render_priority</span> does not exist in
+4.7.1 — introspection returned null — while <span class="mono">sorting_offset</span>/sorting_use_aabb_center do):</p>
+<div class="pair">
+ <div><img class="e" src="tie_A_nooffset.png" alt="case A"><div class="cap"><b>A · no offsets:</b> the tie-break puts a body face
+ AFTER the cloud → at op≈1 the body covers the near-face cloud (the defect). The limb survives (cloud extends past the body disc).</div></div>
+ <div><img class="e" src="tie_C_cloud_plus1000.png" alt="case C"><div class="cap"><b>C · cloud +1000 offset:</b> cloud key larger →
+ cloud draws later → cloud on top. (B: cloud −1000 → body wins; D: body −1000 → cloud wins. 4/4 consistent.)</div></div>
+</div>
+<p><b>Why it flickered:</b> cull/rebuild state moves which instances are present in the transparent pass per frame, so the
+tie-break winner changes frame to frame — clouds "flash in and out" on the near face, while at the limb the geometry
+separation keeps the clouds visible regardless. <b>Fix (world.gd, one-time push in <span class="mono">_ac0401_push</span>):</b>
+<span class="mono">sorting_offset = +2.0</span> on each cloud shell node — the AC-0401 2 m idiom applied to the sort key —
+so the weather layer sorts <b>deterministically after every body face at every altitude</b>. Depth is untouched (the cloud
+writes no depth; the body keeps <span class="mono">depth_draw_always</span> — no thin-veil holes), and the AC-0401
+near-tier/body radial ordering (opaque pass) is unchanged. Like AC-0401, this is a defect fix, not a look option — no switch
+("shipping the flicker behind a toggle is not an option").</p>
+
+<h3>Defect 3 — "the satellite view reads too flat" (the user's own fix direction)</h3>
+<p><b>Fix:</b> height-based modulation of the body's sampled colour — <span class="mono">texv *= 1.0 + 0.4*(texs.a - 0.5)</span> —
+where the face textures' alpha channel carries the height (<span class="mono">A = round(H·255/HMAX)</span>, HMAX=384;
+verified on the shipped bake: 12 faces, mean α=104 ≈ H156, p5–p95 α74–124 ≈ H73–192 — this world's terrain sits mostly
+below the mid height, so the read is a baked-shadowed lowland with brightened peaks — exactly the map-renderer look).
+Conservative ±20 % amplitude centred on the mid height; applied in the linear domain after the sRGB decode.
+<b>Switch:</b> <span class="mono">Settings relief_shading</span>, DEFAULT ON (the user ordered the change — the AC-0398/AC-0401
+precedent for user-asked look changes), Options-page row, live re-push on toggle, <span class="mono">AWECRAFT_RELIEF=0|1</span> A/B.
+u_relief=0 short-circuits bit-identical.</p>
+
+<h3>Defect 4 — the held item rendered in orbit</h3>
+<p><b>What it was:</b> the viewmodel (hand + item) has no altitude awareness — it is a surface instrument drawn from the
+preset camera "tens of kilometres from the ground" (the user's screenshot: a large tan quad in the corner; a prior triage
+had closed it as a stale SIZE complaint — the screenshot is the authority: the defect is that it renders <b>at all</b>).</p>
+<p><b>Fix:</b> <span class="mono">player._vm_orbit_sync()</span>, every frame in <span class="mono">_process</span>: radial
+altitude = <span class="mono">|pos − (0,−R,0)| − R</span> (the exact <span class="mono">sync_flight_band</span> expression,
+so it holds for a frozen player too) ≥ <span class="mono">Aero.atmosphere_height()</span> (the one-home "how far up is
+space", A=1200 m) → hide <span class="mono">hand_root</span> (the common parent of fist/item/tool — one place hides the
+whole viewmodel), restore on descent. <span class="mono">AWECRAFT_VMORBIT=0</span> forces the pre-fix always-visible state
+for the before-frame. <span class="bad">The prior run's version of this exact function was a no-op</span> (inverted change-gate,
+§1) — corrected this run; see the probe evidence below.</p>
+
+<h2>3 · Acceptance renders (the user's two frames, re-taken)</h2>
+<div class="pair">
+<div><img class="e" src="ac0421-before-orbit.png" alt="before"><div class="cap"><b>BEFORE</b> (all four defects; A/B envs
+<span class="mono">SPEC=0.5 RELIEF=0 VMORBIT=0 FPV_ITEM=2</span>; captured 07:49:17 — 31 s before the defect-2 fix landed,
+mtime-verified, so the cloud order is the buggy one too): the held dirt block occupies the corner (defect 4), the near face
+is a featureless haze with clouds only around the limb (defect 2), the disc reads flat (defect 3), the sheen state (defect 1).</div></div>
+<div><img class="e" src="ac0421-after-orbit.png" alt="after"><div class="cap"><b>AFTER</b> (shipped state: no A/B envs —
+relief ON, spec 0.0, no item, fixed cloud order): clouds stable across the WHOLE disc including the near face, no held item,
+terrain with height-based relief, matte read.</div></div>
+</div>
+<p>Steps <span class="mono">_s20/_s40/_s60</span> (multi-frame drain, same config): the before steps are pixel-identical to each
+other and the after steps pixel-identical within their run — in the frozen harness the order is stable; the user's flicker is
+the live-session symptom of the tie (cull/rebuild state moves the winner per frame). The acceptance evidence for defect 2 is
+therefore the before state (clouds hidden on the near face — measured below) vs the after state (clouds stably drawn over the
+body) plus the clouds on/off pair.</p>
+
+<h3>Clouds on/off pair — the flicker is fixed, not hidden</h3>
+<div class="pair">
+<div><img class="e" src="ac0421-after-orbit.png" alt="after clouds on"><div class="cap"><b>ON</b> (shipped, clouds on): the cloud
+field is drawn <i>over</i> the body across the disc — 10.75 % of the frame differs from the off frame by &gt;20 lum
+(sampled 1/4), including 7.16 % in the near-face box where the defect lived.</div></div>
+<div><img class="e" src="ac0421-after-orbit-clouds-off.png" alt="after clouds off"><div class="cap"><b>OFF</b> (shipped,
+<span class="mono">AWECRAFT_CLOUDS=0</span> — SATDIAG: "clouds: none (the AC-0385 shell is not in the tree)"): the bare body.
+Same code, same config, same weather seed — the only difference is the weather layer. The near-face box is featureless again
+(std 1.12) — proving the texture in the ON frame is cloud, drawn over the body, not a body-surface change.</div></div>
+</div>
+<div class="note"><b>Provenance note on the pre-fix pair:</b> the previous run's scratch frames
+(<span class="mono">ac0421-prefix-orbit-clouds-on/-off.png</span>, captured 05:55–06:01 on the pre-fix tree) show the buggy
+ordering from the prior run's own camera: near face featureless, clouds only around the limb. Its "clouds-off" frame is in fact
+<b>deck mode</b> (three shells, <span class="mono">AWECRAFT_CLOUDVOL=0</span>-class state — SATDIAG c0/c1/c2 all vis=true),
+NOT a true clouds-off (the <span class="mono">AWECRAFT_CLOUDS</span> env was evidently not set by that run): it is shown as
+context for the pre-fix cloud state, and the true on/off pair above is the acceptance one. The prefix pair's near-face std is
+identical to the before frame's (1.08 vs 1.07) — two independent pre-fix runs, both featureless near faces.</div>
+
+<h3>Relief measurement (before and after)</h3>
+<p>Control pair for a clean read (both <span class="mono">AWECRAFT_CLOUDS=0</span>, so no cloud confound):
+<span class="mono">ac0421-relief-off-clouds-off.png</span> (RELIEF=0, the exact pre-AC-0421 flat sample) vs
+<span class="mono">ac0421-after-orbit-clouds-off.png</span> (RELIEF=1, shipped). 9.0 % of all pixels differ; the ×12-amplified
+difference (<span class="mono">diff_relief_amp12.png</span>, grey = identical) is <b>structured and terrain-following</b> —
+lowlands darkened, the rare high-ground texels brightened — not noise. In the crisp (non-hazed) terrain band 20.4 % of pixels
+are darker by 1–4/255 (the haze mix attenuates the per-texel modulation — the user's own R24/F83 fog softens the disc, so the
+relief rides under it exactly like everything else); max +1/255 brightening (high-ground texels). The expected pre-haze
+modulation for this world is mean ≈ −3.7 % (mean H≈156 &lt; mid height 192) to −7 % in the lowlands — consistent with the
+measured haze-attenuated −0.72/255 quadrant mean (−0.28 %). Terrain-box luminance: mean 193.4→192.6, std 64.8→65.2
+(relief off→on, no clouds).</p>
+
+<h2>4 · Measurements</h2>
+<table>
+<tr><th>Quantity</th><th>Before (defects)</th><th>After (shipped)</th><th>Reading</th></tr>
+<tr><td>Near-face box (350,200,640,500) luminance std — defect 2</td>
+    <td>1.07 (before) · 1.08 (prefix, pre-fix)</td><td><b>7.38</b> (after) · 1.12 (after, clouds off)</td>
+    <td>Featureless → textured only when clouds are on AND the fixed order is in place: cloud drawn over the body.</td></tr>
+<tr><td>Cloud coverage added (on vs off, |Δlum|&gt;20, 1/4 sample, frame-wide)</td>
+    <td>—</td><td><b>10.75 %</b> (7.16 % in the near-face box)</td>
+    <td>Weather layer present over the disc in the fixed state; absent with clouds off.</td></tr>
+<tr><td>Held-item corner box (900,520,1270,710) dark-pixel fraction — defect 4</td>
+    <td><b>0.895</b> (dark dirt block, mean lum 38.2)</td><td><b>0.000</b> (sky only, mean lum 243.7)</td>
+    <td>The item renders in the before frame and not at all in the after frame.</td></tr>
+<tr><td>Relief control pair (relief off→on, clouds off) — defect 3</td>
+    <td colspan="2">9.0 % of pixels differ; structured, terrain-following (×12 diff); quadrant mean Δ −0.72/255;
+    crisp band: 20.4 % darker by 1–4/255, max +1/255; expected pre-haze mean −3.7 % (mean H≈156 &lt; 192 mid).</td>
+    <td>Height modulation present, conservative, under the user's fog — the flat pastel read is gone.</td></tr>
+<tr><td>Specular — defect 1</td><td>SPECULAR 0.5 (A/B env)</td><td><b>SPECULAR 0.0</b> (shipped)</td>
+    <td>The engine-default gloss term removed for this material; matte read.</td></tr>
+</table>
+
+<h2>5 · Gates (owned set — one godot at a time, HOME=/tmp/dsh_home, absolute engine path, logs in .scratch/AC-0421-gates/)</h2>
+<table>
+<tr><th>Gate</th><th>Command / log</th><th>Exit status</th><th>Result</th></tr>
+<tr><td>G0 (zero SCRIPT ERROR AND zero SHADER ERROR via <span class="mono">gate_census.py</span> AND exit 0)</td>
+    <td>final smoke boot, <span class="mono">battery_final.log</span></td>
+    <td><span class="ok">godot rc=0</span></td>
+    <td><span class="ok">census: SCRIPT ERROR 0, SHADER ERROR 0 — ok</span> (the paired check; the engine exits 0 on script failures).</td></tr>
+<tr><td>Smoke battery <span class="mono">player;interact;light;fluids;genhash</span></td>
+    <td><span class="mono">battery_final.log</span> (same run)</td>
+    <td>rc=0</td>
+    <td><span class="ok">aggregate ok:true</span> (96× "ok":true across the arms), 260 s.</td></tr>
+<tr><td>genhash 25/25 byte-identical (world.gd touched)</td>
+    <td><span class="mono">battery_final.log</span></td>
+    <td>—</td>
+    <td><span class="ok">25/25 identical to the current standing set</span> (matches the AC-0419-r2 / AC-0422 reference logs;
+    the AC-0367 log is an older rebase).</td></tr>
+<tr><td>vmorbit probe (held-item fix, rigorous: surface → orbit → descent)</td>
+    <td><span class="mono">vmorbit4.log</span> (temporary arm, removed after — evidence in the log)</td>
+    <td>rc=0, 0 errors</td>
+    <td><span class="ok">RESULT {"vmorbit":{"surface_vis":true,"orbit_vis":false,"descent_vis":true,"ok":true}}</span> —
+    visible at the surface (alt 89 &lt; A=1200), hidden in orbit (alt 2600 ≥ A), restored on descent (alt 200 &lt; A).
+    The same probe on the prior run's code returned <span class="mono">ok:false</span> (orbit_vis true) with 281 no-op sync
+    frames — the bug, then the fix, in one instrument.</td></tr>
+<tr><td>shaderforce (every shipped .gdshader forced through Forward+; 12/12 standing)</td>
+    <td><span class="mono">shaderforce2.log</span> (fwdshot recipe: xvfb + lavapipe)</td>
+    <td>rc=0</td>
+    <td><span class="ok">RESULT ok:true, count:12, failed:[]</span>, 12× <span class="mono">verdict=ok</span>;
+    census 0/0 ok (a lone grep hit was the arm's own note text, not an error line).</td></tr>
+<tr><td>Before/after render runs</td>
+    <td><span class="mono">before-orbit.log</span> / <span class="mono">after-orbit.log</span> /
+    <span class="mono">after-orbit-clouds-off.log</span> / <span class="mono">relief-off-clouds-off.log</span></td>
+    <td>all rc=0, 0 errors</td>
+    <td>SNAP file existence checked each run; RESULT confirms the user's config (alt 2600, nadir, body LOADED,
+    fog_far 332 / render_edge 400).</td></tr>
+</table>
+<p><b>Heavy gates (farab, ladder, meshprobe, halo, lightstate, r16, boundary r4) are the coordinator's background job</b> —
+not run here per the task split. Debt check for them: the changes are render-side (two body-material uniforms, a node
+<span class="mono">sorting_offset</span>, a viewmodel visibility toggle, one settings bool, harness instrumentation) — no
+streaming, scheduling, C++/gdext, data/save-format or worldgen change, so no standing-value re-establishment is owed
+(genhash is the world/* gate and is 25/25).</p>
+
+<h2>6 · Deliberate non-actions</h2>
+<ul>
+<li>No C++/gdext change — the defects are all GDScript/shader/render-state; the engine's transparent sort is used as-is
+(with <span class="mono">sorting_offset</span>, the API this build exposes — <span class="mono">render_priority</span> does not exist in 4.7.1).</li>
+<li>No change to <span class="mono">cloud_layer.gdshader</span> — the ordering fix is a node sort key, not a depth bias
+(the spec's "establish the ordering by construction rather than by a depth bias" is exactly what a sort-key offset is;
+depth writes stay as they are on both sides, so no thin-veil terrain holes and no AC-0401 regression).</li>
+<li>The defect-2 fix ships <b>without a switch</b> (defect fix, AC-0401 precedent); the relief ships behind
+<span class="mono">relief_shading</span> (default ON — user-asked) and the specular ships 0.0 with the A/B env only.</li>
+<li>Fenced files untouched: <span class="mono">main.gd</span>, <span class="mono">game.gd</span>, <span class="mono">drop.gd</span>,
+<span class="mono">debug.gd</span> (other session's uncommitted work) and <span class="mono">tasks/AC-0067</span>,
+<span class="mono">tasks/AC-0384</span>; no <span class="mono">git add -A</span>, no commits, no pushes;
+<span class="mono">TASKS.yaml</span> untouched (status change is the coordinator's closeout).</li>
+<li>The temporary <span class="mono">vmorbit</span> probe arm went in and out in the same task (scenes/AGENTS.md);
+its RESULT lines live in <span class="mono">.scratch/AC-0421-gates/vmorbit*.log</span>.</li>
+<li>Render caveat: llvmpipe Forward+ proxy — the frames are evidence about geometry, draw order and layout, not the
+shipped <span class="mono">forward_plus</span> look.</li>
+<li>The "flicker" is stable-hidden in the frozen harness (pixel-identical drain frames) — the live-session symptom; the
+acceptance evidence is the measured before/after near-face state + the on/off pair, as above.</li>
+</ul>
+
+<h2>7 · Evidence files (this folder)</h2>
+<p class="mono">ac0421-before-orbit.png (+_s20/_s40/_s60) · ac0421-after-orbit.png (+_s20/_s40/_s60) ·
+ac0421-after-orbit-clouds-off.png · ac0421-relief-off-clouds-off.png · ac0421-prefix-orbit-clouds-on/-off.png (+.log) ·
+tie_A_nooffset / tie_B_cloud_minus1000 / tie_C_cloud_plus1000 / tie_D_body_minus1000.png · diff_relief_amp12.png ·
+gate logs: .scratch/AC-0421-gates/{battery_final,vmorbit4,shaderforce2,before-orbit,after-orbit,after-orbit-clouds-off,relief-off-clouds-off}.log</p>
+
+</body>
+</html>

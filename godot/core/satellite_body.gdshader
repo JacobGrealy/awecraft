@@ -100,6 +100,21 @@ uniform vec3 u_sun;
 // gl_compatibility) - pushed by satellite_body.gd, the same value
 // main.gd pushes to the other sRGB-domain materials.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0421: the height-based RELIEF switch (Settings "relief_shading",
+// default ON - the user asked for it in their own words: "alter the color
+// of the sample based on the height ... baked lighting, like what minecraft
+// does with its maps"). 0.0 = the exact pre-AC-0421 path (the fragment
+// short-circuits the relief, bit-identical); 1.0 modulates the decoded
+// sample by the texel's height channel (the alpha carries H/HMAX) so the
+// surface reads as baked-lit relief instead of a flat pastel map. Pushed
+// per face by satellite_body.gd.
+uniform float u_relief : hint_range(0.0, 1.0) = 0.0;
+// AC-0421: the SPECULAR amount for this material. Shipped value 0.0 (the
+// satellite LOD must not be reflective - the user's phrase is the spec):
+// the engine's default specular (0.5, lit by the sun) is the glossy cast
+// the user reported. Pushed per face by satellite_body.gd from the
+// AWECRAFT_SPEC env (0.0 shipped; 0.5 the pre-AC-0421 state, A/B only).
+uniform float u_spec : hint_range(0.0, 1.0) = 0.0;
 
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
@@ -175,12 +190,34 @@ void fragment() {
 	// shift them; at sun_l = 1 the two orders are identical, so this
 	// agrees with the AC-0242 convention exactly where it is measured.
 	// u_air is NOT pre-decoded (already linear) - see the header.
-	vec3 texv = texture(tex, UV).rgb;
+	vec4 texs = texture(tex, UV);
+	vec3 texv = texs.rgb;
 	texv = mix(texv, pow(texv, vec3(2.2)), u_srgb_pre);
+	// AC-0421: the height-based RELIEF - the map renderer's "baked lighting"
+	// (the user's own fix direction): modulate the decoded sample by the
+	// height of the terrain it represents (the alpha channel carries H/HMAX,
+	// a data channel, so it is sampled as-is - no sRGB decode), so high ground
+	// reads as catching the light and the low ground reads in shade - the
+	// surface stops reading as a flat pastel map. Conservative amplitude,
+	// centred on the mid height; applied in the LINEAR domain (after the sRGB
+	// decode above) so the texel's hue is preserved. u_relief <= 0.5
+	// short-circuits before this line: the pre-AC-0421 path is bit-identical.
+	if (u_relief > 0.5) {
+		texv *= 1.0 + 0.4 * (texs.a - 0.5);
+	}
 	vec3 base = texv * (u_day - u_day_gain * (1.0 - sun_l));
 	// AC-0394: spatial outputs are ALBEDO and ALPHA - COLOR is the canvas_item
 	// (2D) output and is a read-only vertex input here, which is why the parser
 	// reported "Constants cannot be modified" at this line.
 	ALBEDO = mix(base, u_air.rgb, haz);
+	// AC-0421: the satellite LOD must NOT look reflective - the user's phrase
+	// is the specification. The material is a lit spatial shader, and its
+	// SPECULAR contribution (the engine default 0.5, lit by the sun's
+	// DirectionalLight3D) is the term that gives the surface its glossy cast
+	// instead of a matte terrain read. Remove it for this material: the
+	// relief now comes from the baked lambert + the height modulation above,
+	// not from a specular sheen. (The haz limb term is the fog-wall bridge,
+	// not a sheen - it stays.)
+	SPECULAR = u_spec;
 	ALPHA = op;
 }

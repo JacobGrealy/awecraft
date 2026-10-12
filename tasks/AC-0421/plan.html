@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0421 plan</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1100px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:28px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+code{background:#f4f4f4;padding:1px 4px}
+</style></head>
+<body>
+<h1>AC-0421 plan — orbital look: sheen, cloud flicker, flatness, held item</h1>
+<p>SPEC: <a href="../TASKS.yaml">TASKS.yaml AC-0421</a> · CONTINUITY: <a href="continuity.md">continuity.md</a></p>
+
+<h2>Goal</h2>
+<p>Make the orbital view read as a matte world with relief and its weather, and nothing else:
+remove the glossy sheen on the satellite body, stop the clouds flickering on the near face (without
+reintroducing the AC-0401 near-tier/body flicker), give the sampled surface colour height-based
+relief (the user's own fix direction), and suppress the held item in orbit. Every look change ships
+behind a switch with a conservative default; the two defect fixes (sheen term, cloud ordering) ship
+unswitched (the flicker is not a feature to toggle).</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/satellite_body.gdshader</code></td><td>Defect 1: kill the specular (matte terrain). Defect 3: <code>u_relief</code> — height-based shading of the sampled colour (the texel's alpha channel carries H/HMAX), short-circuited when OFF (bit-identical).</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code></td><td>Push <code>u_relief</code> (change-gated) to the 12 face materials from the live Settings value + env preload.</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code> / <code>godot/world/world.gd</code></td><td>Defect 2: establish the cloud-vs-body ordering by construction (radial), preserving the AC-0401 near-tier/body radial ordering. <em>Exact mechanism confirmed against the before-frame before editing.</em></td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>Defect 4: hide the viewmodel (hand_root) when the radial altitude is at/above the atmosphere height <code>Aero.atmosphere_height()</code> (in orbit, where it is meaningless). Surface + flight below A unchanged.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>relief_shading</code> bool (DEFAULT ON — the user asked; sanitize_bool clamp + DEFAULTS row, the modern_light/cloud_deck pattern).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row for <code>relief_shading</code> (CheckBox + sync + toggle, the cloud_deck pattern).</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>Planet preset: env-gated <code>AWECRAFT_FPV_ITEM</code> gives the frozen player a block + selects it, so the orbital frame carries the held item the user's screenshot shows (additive; unset = byte-identical, the CAM_OFF/CAM_NADIR pattern). Instrument for the before/after, not a shipped behaviour.</td></tr>
+</table>
+
+<h2>Defect findings + approach</h2>
+<table>
+<tr><th>#</th><th>User report</th><th>What it is</th><th>Approach</th></tr>
+<tr><td>1</td><td>“the low lod should not look this reflective: satellite lod”</td>
+<td>The body is a <em>lit</em> spatial shader (render_mode is not <code>unshaded</code>) with a default specular; the sun's DirectionalLight3D puts a specular sheen on it — the “glossy” cast. Confirm against the before-frame.</td>
+<td>Remove the specular contribution for this material (matte terrain). If the before-frame shows the sheen is the engine light rather than a shader term, make the body unlit by the engine light (the bake already carries the lambert — the header's stated intent). Measure: the sheen region's brightness before/after.</td></tr>
+<tr><td>2</td><td>“z fighting preventing the clouds from showing on the face near you in orbit view, they flash in and out but they always show around the edge of the limb”</td>
+<td>The cloud volume (fragment at the outer shell R+400, no depth write) and the body (transparent, <code>depth_draw_always</code>, at R+H−2, H≤384) are both at the planet centre → tied in the transparent sort. The depth test favours the cloud (R+400 is always in front of R+H≤R+384 at the nadir), so the contest is the <em>draw order</em>: where the body draws after the cloud it (op≈1) covers it on the near face; at the limb the cloud extends beyond the body's disc so it survives. Confirm the order + the flicker (the cloud drift clock advances per frame, so multi-frame snaps show it) against the before-frames.</td>
+<td>Establish the cloud-vs-body ordering by construction (radial, the AC-0401 2 m-inset precedent): the cloud is the weather layer <em>above</em> the ground, so from orbit it must draw on top of the body. Preserve the AC-0401 near-tier/body radial ordering (the 2 m body inset + the fog-wall partition) — do not move the body's inset or the near-tier discard. Evidence: a clouds-on/off pair + a near-face multi-frame set showing the cloud is stably present (not hidden, not flickering).</td></tr>
+<tr><td>3</td><td>“the satellite view reads too flat … alter the color of the sample based on the height … baked lighting, like what minecraft does with its maps”</td>
+<td>The body's sampled colour is the baked terrain albedo with no relief cue — a flat pastel map (the finding recorded twice). The texel's alpha channel already carries the height (A = round(H·255/HMAX), HMAX 384).</td>
+<td>Implement the user's exact suggestion: modulate the sampled colour by the terrain height (higher = lighter, the map-renderer / hypsometric look), behind <code>u_relief</code> / Settings <code>relief_shading</code> (default ON — the user asked; OFF = bit-identical). Conservative magnitude. Measure the disc's luminance spread (relief) before/after.</td></tr>
+<tr><td>4</td><td>The tan quad (held item) in the corner of the orbital frame</td>
+<td>The viewmodel (hand + item) is camera-attached with <code>no_depth_test</code> (always-on-top) and renders at <em>every</em> altitude — it is meaningless in orbit. (The prior triage closed a report as a stale SIZE complaint; the screenshot is the authority: the defect is that it renders at all at that altitude.)</td>
+<td>Suppress the viewmodel when the radial altitude is at/above the atmosphere height <code>Aero.atmosphere_height()</code> (the one-home “how far up is space”): hide <code>hand_root</code> in orbit, restore it on descent. Surface + sub-atmosphere flight unchanged. Verify: before-frame carries the block (via the harness FPV_ITEM instrument), after-frame is clean; a headless check that the viewmodel is visible at the surface and hidden in orbit.</td></tr>
+</table>
+
+<h2>Harness gates (light set, then exit)</h2>
+<ul>
+<li><strong>G0</strong>: <code>gate_census.py</code> — ZERO <code>SCRIPT ERROR</code> and ZERO <code>SHADER ERROR</code> lines, <em>and</em> the process exit status checked (the stochastic use-after-free leaves a clean log with a signal-11 exit).</li>
+<li><strong>SMOKE</strong>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> (dependency-mapped; the viewmodel + relief touches player.gd/satellite_body, genhash confirms no generation drift).</li>
+<li><strong>PROBE</strong>: the meshprobe / a headless viewmodel-visibility check (visible at the surface, hidden in orbit) — the held-item fix's rigorous test.</li>
+<li><strong>shaderforce</strong>: every shipped .gdshader forced through the live Forward+ renderer (the body + cloud shaders changed).</li>
+<li><strong>Renders</strong> (the acceptance): the user's orbital frame re-taken at 2600 m (the standing orbit altitude), T0.5, CLOUD_T0=411200, R24/F83 — before (all four defects present) and after (all four gone); a clouds-on/off after pair (the flicker fixed, not hidden); the relief measured before/after on the disc. One godot at a time, 1200 s budget per run.</li>
+</ul>
+
+<h2>Deliberate non-actions (anticipated)</h2>
+<ul>
+<li>No C++ change (genhash-neutral by construction — all four fixes are GDScript/shader). No main.gd / game.gd / drop.gd / debug.gd edits (fence).</li>
+<li>No new altitude threshold for the held item — it rides the atmosphere height (one home). No re-baselining of standing gates (rendering-only).</li>
+<li>Heavy gates (farab, ladder, meshprobe full, halo, lightstate, r16, boundary r50, the battery, the Windows build) are the coordinator's — exit after the light set.</li>
+</ul>
+</body></html>

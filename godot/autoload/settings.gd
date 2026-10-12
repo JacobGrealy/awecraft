@@ -159,6 +159,19 @@ const DEFAULTS := {
 	# Env-overridable (AWECRAFT_VMOCC=0|1 at boot, player.gd — the
 	# AWECRAFT_RAMPS pattern, written to Settings.values WITHOUT save).
 	"viewmodel_occlude": false,
+	# AC-0421: the height-based RELIEF on the satellite body. DEFAULTS ON —
+	# the user asked for it in their own words ("alter the color of the
+	# sample based on the height to make it more like baked lighting, like
+	# what minecraft does with its maps"), so the modern_light/cloud_deck
+	# default rule applies (default to conservative only when the user has
+	# NOT asked). The effect itself is conservative: a subtle amplitude
+	# (±20 % centred on the mid height) that gives the disc a baked-lit
+	# read without a lighting model. The switch rides u_relief on the body's
+	# 12 face materials (satellite_body.gd pushes it live from this value):
+	# 0.0 short-circuits before the modulation — the exact pre-AC-0421 flat
+	# sample, byte-identical. Env-overridable (AWECRAFT_RELIEF=0|1 at boot,
+	# satellite_body.gd — the AWECRAFT_RAMPS pattern).
+	"relief_shading": true,
 	# AC-0395: the noclip toggle (the user's own request — disable the
 	# player's collision so they can fly through blocks and inspect
 	# geometry). DEFAULTS OFF: the shipped state is exactly today's
@@ -385,6 +398,8 @@ func _clamp(k: String, v) -> void:
 		"sat_preload":  # AC-0414: bool (the bake-before-load switch).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"viewmodel_occlude":  # AC-0394: bool (the held-item occlusion switch).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"relief_shading":  # AC-0421: bool (the satellite body's height relief).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"noclip":  # AC-0395: bool (the player-collision switch). sanitize_bool
 			# as viewmodel_occlude: a hand-edited string in the cfg fails to

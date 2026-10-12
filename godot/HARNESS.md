@@ -271,7 +271,10 @@ suspiciously small PNG is a black frame.
 | `AWECRAFT_ANIM_SHOT=1` + `AWECRAFT_ANIM_PHASE=0..1` | camera above a water cell to capture fluid anim; phase sets shader `phase` | without a water cell near spawn it prints and skips |
 | `AWECRAFT_HELD=id` | give + select item id for the held viewmodel in snapshot runs | with `AWECRAFT_SNAPSHOT` |
 | `AWECRAFT_INV=1\|table` | open inventory (E) or crafting table with seeded contents for UI shots | `1` also autofills + hovers item 111 |
-| `AWECRAFT_FPV_ITEM=id` | held item for first-person snapshot (also used by `AWECRAFT_WALK_SHOT`) | |
+| `AWECRAFT_FPV_ITEM=id` | held item for first-person snapshot (also used by `AWECRAFT_WALK_SHOT`); **AC-0421: also honoured by the `planet` preset** — the frozen player is given + selects the block and its viewmodel is reparented to the preset camera, so the orbital frame carries the held item (instrument for the before-frame, unset = byte-identical) | |
+| `AWECRAFT_SPEC=0.5\|0` | **AC-0421** the satellite body's specular amount (satellite_body.gd, boot-only): unset = shipped 0.0 (matte — the reflectivity defect fix), `0.5` = the pre-AC-0421 engine-default sheen (the A/B before-state only) | planet/orbit shots |
+| `AWECRAFT_RELIEF=0\|1` | **AC-0421** the satellite body's height-based relief (satellite_body.gd, boot-only): unset = the live `Settings relief_shading` value (default ON), `0` = the exact pre-AC-0421 flat sample | planet/orbit shots |
+| `AWECRAFT_VMORBIT=0` | **AC-0421** force the player viewmodel VISIBLE in orbit (player.gd, boot-only) — the pre-fix state for the before-frame instrument; unset = shipped (hidden at/above the atmosphere height `Aero.atmosphere_height()`) | with `AWECRAFT_FPV_ITEM` |
 | `AWECRAFT_WALK_SHOT=1` | build flat pad, walk forward, snap ×2 (`_w2` suffix) | |
 | `AWECRAFT_EMPTYHAND=1` | empty inventory for bare-hand shot | |
 | `AWECRAFT_SWING=fraction` | hold swing at fraction for the shot | float 0..1 |

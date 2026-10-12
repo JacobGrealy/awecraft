@@ -1292,6 +1292,21 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		# must be re-synced from the new position — the per-step update never
 		# runs on a frozen player.
 		player.sync_flight_band()
+		# AC-0421 (additive, env-gated — unset = the original behaviour,
+		# byte-identical): AWECRAFT_FPV_ITEM=<id> gives the frozen player
+		# that block and selects it, so the orbital frame carries the HELD
+		# ITEM the user's screenshot shows (the viewmodel renders at any
+		# altitude — the defect this ticket suppresses). The default
+		# snapshot path's AWECRAFT_FPV_ITEM (main.gd) does not reach this
+		# self-contained preset, so the instrument lives here.
+		var pl_item := OS.get_environment("AWECRAFT_FPV_ITEM")
+		if pl_item != "":
+			var pi: int = pl_item.to_int()
+			player.inv_add(pi, 1)
+			for si in player.inv.size():
+				if int(player.inv[si].get("id", 0)) == pi:
+					player.sel = si
+					break
 		# the frozen player's HUD (hotbar + hunger) would overprint the
 		# shot; the instrument hides it for the capture (the inventory
 		# manages its children's visibility, never the layer's, so a
@@ -1349,6 +1364,23 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			pl_aim_up = pl_up
 		camera.look_at(camera.position + pl_aim_dir, pl_aim_up)
 		camera.current = true
+		# AC-0421 (additive, env-gated — unset = the original behaviour,
+		# byte-identical): the preset's shot camera is a SEPARATE camera
+		# (main._make_camera, above), not the player's — so the viewmodel
+		# (sway_root, a child of the player's camera) is absent from the
+		# orbital shot. But the user's screenshot shows the HELD ITEM in
+		# the corner of the orbit frame (their camera rides the player, so
+		# the viewmodel IS in their orbit view). Reparent the viewmodel to
+		# the preset camera so the shot carries the held item the user sees
+		# — only when FPV_ITEM is set (the instrument that gives the frozen
+		# player a block to hold), so the default preset is untouched. The
+		# player's _process still drives the viewmodel (sway/visibility), so
+		# _vm_orbit_sync's suppression applies to the reparented node too.
+		if pl_item != "" and player.sway_root != null:
+			var _vm_par: Node = player.sway_root.get_parent()
+			if _vm_par != null:
+				_vm_par.remove_child(player.sway_root)
+			camera.add_child(player.sway_root)
 		# AC-0399: the frozen stand-in player is the OBSERVER for the
 		# world's view-biased fill order (world.gd samples
 		# Game.player.aim_dir()), so it must look where the preset camera

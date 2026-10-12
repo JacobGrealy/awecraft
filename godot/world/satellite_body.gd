@@ -179,6 +179,13 @@ var textures: Array = []  # 12 ImageTexture (appended in load order 0..11)
 var face_nodes: Array = []  # 12 MeshInstance3D
 var shader_mats: Array = []  # 12 ShaderMaterial
 var _shader: Shader = null
+# AC-0421: boot-time env reads for the body's A/B (read once, cached; the
+# values cannot change mid-run). _relief_env: -1 unset (use the live
+# Settings "relief_shading"), 0 = the pre-AC-0421 flat path, 1 = the relief.
+# _spec_env: -1.0 unset (shipped 0.0 — the satellite LOD is not reflective),
+# 0.5 = the pre-AC-0421 glossy state (A/B only).
+var _relief_env: int = -1
+var _spec_env: float = -1.0
 var _load_src := ""  # "cache" | "res" - where the LOAD phase reads
 # AC-0384: which predicate CHOSE _load_src, recorded so a run that silently
 # fell through to baking is VISIBLE in the arm's RESULT (the editor-true /
@@ -1282,6 +1289,28 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 		# the space gradient touches the background only (the ground seen
 		# from orbit is depth-fog only, no double darkening).
 		var u_air := Aero.fog_display(day_t)
+		# AC-0421: the height-based relief switch. Read the boot env once,
+		# then the live Settings value (toggling in the menu re-pushes next
+		# frame — the cloud_deck/limb_space live-read pattern). u_relief 0.0
+		# short-circuits the shader's modulation (the pre-AC-0421 flat path,
+		# byte-identical); 1.0 is the conservative baked-lit relief.
+		if _relief_env < 0:
+			var _re := OS.get_environment("AWECRAFT_RELIEF")
+			_relief_env = 0 if _re == "0" else (1 if _re == "1" else -2)
+		var relief_on: bool
+		if _relief_env == 0:
+			relief_on = false
+		elif _relief_env == 1:
+			relief_on = true
+		else:
+			relief_on = bool(Settings.values.get("relief_shading", true))
+		var u_relief: float = 1.0 if relief_on else 0.0
+		# AC-0421: the specular amount. Shipped 0.0 (the satellite LOD must
+		# not be reflective — the user's phrase is the spec); AWECRAFT_SPEC=0.5
+		# restores the pre-AC-0421 glossy state for the A/B only.
+		if _spec_env < 0.0:
+			_spec_env = 0.5 if OS.get_environment("AWECRAFT_SPEC") == "0.5" else 0.0
+		var u_spec: float = _spec_env
 		for m in shader_mats:
 			m.set_shader_parameter("u_fog_far", ff)
 			m.set_shader_parameter("u_render_edge", edge)
@@ -1293,6 +1322,10 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
 			m.set_shader_parameter("u_day_gain", 0.82 * day)
 			m.set_shader_parameter("u_sun", -DayNight.sun_direction(day_t))
+			# AC-0421: the relief + the specular (both A/B-able; the relief
+			# is the look switch, the specular is the reflectivity defect fix).
+			m.set_shader_parameter("u_relief", u_relief)
+			m.set_shader_parameter("u_spec", u_spec)
 		# The camera far plane (default 4000) would clip the body's far
 		# limb (h + 2*RB out): extend it while the body is visible,
 		# restore it when hidden. AC-0384 r2: RB is now the displaced

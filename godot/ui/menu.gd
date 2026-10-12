@@ -74,6 +74,11 @@ var noclip_check: CheckBox
 # AC-0414: the bake-before-load toggle (Settings page, default ON — the
 # user asked for the planet to be ready when they arrive).
 var sat_preload_check: CheckBox
+# AC-0421: the satellite body's height-based relief (Settings page,
+# default ON — the user asked in their own words: "alter the color of
+# the sample based on the height ... like what minecraft does with its
+# maps").
+var relief_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -415,6 +420,22 @@ func _ready() -> void:
 	opt_vbox.add_child(sat_preload_check)
 	if hi + 15 < opt_vbox.get_child_count():
 		opt_vbox.move_child(sat_preload_check, hi + 16)
+	# AC-0421: the satellite body's height-based RELIEF toggle — the
+	# user's own fix direction ("alter the color of the sample based on
+	# the height to make it more like baked lighting, like what minecraft
+	# does with its maps"), default ON (they asked). No apply step is
+	# owed: satellite_body.gd reads the live value in _tick_view every
+	# frame and re-pushes u_relief on change (the cloud_deck/limb_space
+	# pattern; 0.0 = the exact pre-AC-0421 flat sample, the shader
+	# short-circuits the modulation).
+	relief_check = CheckBox.new()
+	relief_check.name = "ReliefCheck"
+	relief_check.text = "Orbital view: height-based terrain relief"
+	relief_check.add_theme_font_size_override("font_size", 15)
+	relief_check.toggled.connect(_on_relief_toggled)
+	opt_vbox.add_child(relief_check)
+	if hi + 16 < opt_vbox.get_child_count():
+		opt_vbox.move_child(relief_check, hi + 17)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -901,6 +922,9 @@ func _sync_controls() -> void:
 	noclip_check.button_pressed = bool(Settings.values.get("noclip", false))
 	# AC-0414: the bake-before-load toggle (default ON).
 	sat_preload_check.button_pressed = bool(Settings.values.get("sat_preload", true))
+	# AC-0421: the satellite body's height-based relief (default ON —
+	# the user asked).
+	relief_check.button_pressed = bool(Settings.values.get("relief_shading", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1330,6 +1354,16 @@ func _on_sat_preload_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("sat_preload", on)
+
+
+# AC-0421: the satellite body's height-based relief toggle (default ON —
+# the user asked). set_value does the clamp chain + the save; no apply
+# step is owed: satellite_body.gd reads the live value every frame and
+# re-pushes u_relief on change (the cloud_deck/limb_space pattern).
+func _on_relief_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("relief_shading", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

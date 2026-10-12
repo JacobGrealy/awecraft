@@ -5021,6 +5021,9 @@ var _ac0417_star_blend := -1.0
 var _ac0417_star_night := -1.0
 var _ac0417_wash := -1.0
 var _ac0417_asserted := false
+# AC-0421: the cloud-vs-body transparent sort-order push state (same
+# seam, one-time set with the (2)-block retry-until-visible pattern).
+var _ac0421_cloud_sort := -1.0
 # AC-0405: the raymarched-volume push state (same seam: _ac0401_push,
 # change-gated — the value only moves on a toggle or a planet_R change).
 var _ac0405_vol := -1.0
@@ -5098,6 +5101,36 @@ func _ac0401_push() -> void:
 				if cm is ShaderMaterial:
 					cm.set_shader_parameter("u_deck", deck_v)
 			_ac0401_deck = deck_v
+	# (2a) AC-0421: the cloud-vs-body transparent ordering (defect 2 —
+	# the user's "z fighting preventing the clouds from showing on the
+	# face near you in orbit view, they flash in and out but they always
+	# show around the edge of the limb"). Every cloud shell node and
+	# every body face node sits at the planet centre, so the engine's
+	# transparent sort (per-instance key = camera-to-node distance +
+	# sorting_offset; a LARGER key draws LATER — verified in this build
+	# with a four-case tie matrix, .scratch/AC-0421) is a PERFECT tie
+	# and the tie-break alone decides who covers whom: where a body face
+	# draws second, its op~1 covers the near-face cloud (hidden, or
+	# flickering as cull/rebuild state moves the tie); at the limb the
+	# cloud extends past the body disc and survives. The fix is the sort
+	# order by construction (the AC-0401 2 m idiom applied to the sort
+	# key instead of the radius): +2.0 on each cloud shell makes the
+	# weather layer sort deterministically AFTER every body face at
+	# every altitude, exactly as it already draws over the opaque near
+	# tiers (the transparent pass always trails the opaque pass). Depth
+	# is untouched: the cloud writes no depth and the body keeps
+	# depth_draw_always (no thin-veil terrain holes), and the AC-0401
+	# near-tier/body radial ordering (the 2 m inset + fog-wall
+	# partition) is unchanged. One-time set; the retry-until-visible
+	# above means the layers exist before this runs.
+	if _ac0421_cloud_sort < 0.0:
+		var cl2 = mn.get("cloud_layers")
+		if cl2 != null and cl2.size() > 0:
+			for layer in cl2:
+				var cn = layer.get("node")
+				if cn is VisualInstance3D:
+					cn.sorting_offset = 2.0
+			_ac0421_cloud_sort = 2.0
 	var limb_v := 1.0 if bool(Settings.values.get("limb_space", true)) else 0.0
 	if limb_v != _ac0401_limb:
 		var sm = mn.get("sky_mat")

@@ -208,6 +208,7 @@ var _vm_light_ms := 0
 var _vm_sky := 0.0
 var _vm_blk := 0.0
 var _vm_L := 1.0
+var _vm_orbit_env: int = -1  # AC-0421 A/B: AWECRAFT_VMORBIT (read once; -1 = unset = the shipped fix)
 
 
 func _ready() -> void:
@@ -282,6 +283,7 @@ func _process(dt: float) -> void:
 	_update_swing_loop()
 	_update_swing(dt)
 	_update_sway(dt)
+	_vm_orbit_sync()  # AC-0421: the held item is a surface instrument - hidden in orbit
 	_vm_occ_sync()  # AC-0394: the held-item occlusion switch (live value; the material flags re-apply only on change)
 	_noclip_sync()  # AC-0395: the noclip toggle (live value; applied only on change)
 	vm_refresh(false)
@@ -1310,6 +1312,46 @@ func vm_refresh(force: bool = false) -> void:
 		# Color * scalar would also scale alpha (GDScript) — RGB only, keep opaque.
 		var bc := ent[1] as Color
 		(ent[0] as StandardMaterial3D).albedo_color = Color(bc.r * lvm, bc.g * lvm, bc.b * lvm, 1.0)
+
+
+# AC-0421: the held item is a SURFACE instrument — it is meaningless in
+# orbit (the user's 2026-10-11 screenshot: the held block drawn into the
+# orbital frame from far above the surface). Suppress the WHOLE viewmodel
+# (hand + item, hand_root) when the radial altitude is at/above the
+# atmosphere height — the one-home "how far up is space" (Aero.
+# atmosphere_height, the same A the sky's space window rides) — and restore
+# it on descent. The altitude is the exact sync_flight_band expression
+# (|pos - C| - R, C = (0,-R,0)) computed live, so it holds on a frozen
+# player (whose _physics_process never runs) as well as in flight. Below A
+# the existing per-item visibility (_update_held) is untouched; the fist /
+# item / tool children keep their own flags — hand_root is their common
+# parent, so hiding it hides the whole viewmodel in one place.
+func _vm_orbit_sync() -> void:
+	if hand_root == null:
+		return
+	# A/B hook (the harness): AWECRAFT_VMORBIT=0 forces the viewmodel on —
+	# the pre-AC-0421 always-on-top state, for the before-frame. Unset/other
+	# = the shipped fix. Read once (the value cannot change mid-run).
+	if _vm_orbit_env < 0:
+		_vm_orbit_env = 0 if OS.get_environment("AWECRAFT_VMORBIT") == "0" else 1
+	if _vm_orbit_env == 0:
+		if not hand_root.visible:
+			hand_root.visible = true
+		return
+	var R_b: float = Game.planet_R if Game.world != null else 0.0
+	var alt: float = position.y
+	if R_b > 0.0:
+		alt = (position + Vector3(0.0, R_b, 0.0)).length() - R_b
+	var orbit := alt >= Aero.atmosphere_height()
+	# The change-gate compares the CURRENT visibility with the DESIRED one
+	# (visible iff below A) — comparing it with `orbit` directly would make
+	# the branch a no-op (true==true returns with the item still shown,
+	# false==false returns with it still hidden: the AC-0421 probe caught
+	# the shipped-shape bug before the gate could).
+	var want_visible: bool = not orbit
+	if hand_root.visible == want_visible:
+		return
+	hand_root.visible = want_visible
 
 
 func _item_atlas_tex(id: int) -> ImageTexture:
