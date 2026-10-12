@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-11T15:03
+  updated_at: 2026-10-12T00:10
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26781,11 +26781,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-11T10:04
-  updated_at: 2026-10-11T10:04
-  completed_at: null
+  updated_at: 2026-10-12T00:10
+  completed_at: 2026-10-12T00:10
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The world should be seamless - no visible cracks between chunks - and the player
@@ -26839,6 +26839,85 @@ intake:
     clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
     0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and
     the recent work must keep holding.
+
+    '
+  comments: []
+- id: AC-0421
+  title: orbital-look-sheen-cloud-flicker-flatness-and-held-item
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-12T00:10
+  updated_at: 2026-10-12T00:10
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A player in orbit should see a world with relief and shape, its weather and its
+    air, and nothing else - no glare on the ground, no flickering, and certainly not the item in their
+    hand. The user has sent two screenshots: one from altitude showing a flat fog plane with a hard horizon
+    line across the whole frame, and one from orbit showing a pale, glossy-looking planet with clouds
+    visible around the limb but flickering in and out across the near face, with a large brown quad occupying
+    a corner of the view.
+
+
+    2) Technical Details:
+
+    FIVE REPORTS FROM THE USER 2026-10-11, four of them about the orbital view, in their words: "the low
+    lod should not look this reflective: satellite* lod" / "there is also z fighting preventing the clouds
+    from showing on the face near you in orbit view, they flash in and out but they always show around
+    the edge of the limb" / "and the satellite view reads too flat, I think we need to alter the color
+    of the sample based on the height to make it more like baked lighting, like what minecraft does with
+    it''s maps" / and, with a screenshot, the visible tan quad which is the held item drawn into the orbital
+    view.
+
+    REFLECTIVITY: the satellite body renders with what reads as a specular or rim highlight, giving the
+    surface a glossy cast instead of a matte terrain look. Find which term produces it - a specular contribution,
+    a rim or fresnel term, or a sheen riding on the air colour - and remove it for this material. The
+    user''s phrase is precise and should be treated as the specification: the satellite level of detail
+    should not be reflective.
+
+    CLOUD Z-FIGHTING ON THE NEAR FACE: this is the same family as the flicker already fixed between the
+    near tiers and the body, and the fix then was a radial ordering. Here the contest is between the CLOUD
+    layer and the body: the clouds survive around the limb, where the two surfaces are seen nearly edge-on
+    and the separation projects differently, and flicker where the two are nearly coincident in depth
+    across the near face. Measure the radial relationship between the cloud annulus and the body''s displaced
+    surface at the altitudes in question and establish the ordering by construction rather than by a depth
+    bias, and be careful not to reintroduce the flicker that the previous ordering fixed.
+
+    FLATNESS, AND THE USER HAS PROVIDED THE FIX DIRECTION: the orbital surface reads as a flat pastel
+    map with no relief. Their suggestion is height-based shading of the sampled colour - the technique
+    map renderers use, where the sample is darkened or lightened according to the height of the terrain
+    it represents, which gives a baked-lit appearance without any runtime lighting model. That is a good
+    and cheap idea and it directly addresses a finding this project has recorded twice already: the orbital
+    material measures as a flat pastel map, and sixteen-metre faceting was noted before it turned out
+    to be tied to a different defect. Implement height-based shading on the body''s sampled colour, behind
+    a switch with a conservative default, and measure the resulting relief in the frames.
+
+    THE HELD ITEM IN ORBIT: a large tan quad occupies a corner of the orbital view. The player''s held
+    item is being drawn when the camera is tens of kilometres from the ground, where it makes no sense.
+    This was reported long ago and a triage concluded it was probably a stale report about the item''s
+    SIZE - the size was indeed already corrected, which is why it was closed. The screenshot shows that
+    conclusion was wrong: the item still renders in orbit, and the problem is that it renders AT ALL at
+    that altitude, not that it is too large. Suppress the viewmodel when the camera is far above the surface,
+    and check whether the same suppression should apply to other places the viewmodel is meaningless.
+
+    ACCEPTANCE IS THE USER''S OWN TWO FRAMES RE-TAKEN: the same orbital altitude and configuration as
+    their screenshot, showing no specular sheen, no flickering clouds on the near face, visible relief
+    on the disc from height-based shading, and no held item in the frame - plus the measurement of the
+    relief before and after, and a clouds-on/off pair proving the flicker is fixed rather than merely
+    hidden.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); every look change ships behind a switch defaulting conservative; and the recent work must
+    keep holding - the local-zenith sky and its air column, the far tier''s curvature placement, the engine-fog
+    single source, the carved-top fill, the volumetric cloud layer, and the satellite body''s mesh winding.
 
     '
   comments: []
