@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T03:07
+  updated_at: 2026-10-12T09:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26849,11 +26849,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-12T00:10
-  updated_at: 2026-10-12T00:10
-  completed_at: null
+  updated_at: 2026-10-12T09:37
+  completed_at: 2026-10-12T09:37
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A player in orbit should see a world with relief and shape, its weather and its
