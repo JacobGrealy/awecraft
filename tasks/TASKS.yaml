@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T00:11
+  updated_at: 2026-10-12T03:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26928,11 +26928,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-12T00:11
-  updated_at: 2026-10-12T00:11
-  completed_at: null
+  updated_at: 2026-10-12T03:07
+  completed_at: 2026-10-12T03:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From altitude there should be air below the player and space above, not a flat
