@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T22:29
+  updated_at: 2026-10-12T22:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,6 +27,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0425
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -27093,4 +27094,84 @@ intake:
     \ all three flags true; or, if (a)/(c) is the answer, an honest\n  re-baseline note in the harness\
     \ entry (tasks/harness_data.yaml + `harness_doc.py --render`)\n  recording the partial-build flag\
     \ + the A/B evidence above.\n"
+  comments: []
+- id: AC-0425
+  title: audit-remaining-flat-world-assumptions
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-12T22:30
+  updated_at: 2026-10-12T22:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The world should be consistently spherical everywhere. Right now defects of one
+    specific kind keep reaching the player - places where a curved world is treated as flat - and each
+    one is found only when the user notices it and reports it. This ticket hunts the rest deliberately
+    instead of waiting.
+
+
+    2) Technical Details:
+
+    FIVE CONFIRMED INSTANCES OF THE SAME CLASS, each of which passed a clean shader census and every other
+    automated gate, and each of which was found by rendering the thing and looking at it after the user
+    reported it:
+
+    (a) the far tier''s outer slabs were placed on a flat grid offset with unrotated normals while every
+    near tier rode the chunk''s column transform, so on a four thousand metre radius they stood above
+    the curved surface by the sagitta - sixteen metres at three hundred and fifty out, and four hundred
+    and eighty to five hundred and nineteen at two thousand;
+
+    (b) the sky was shaded against a fixed world up-axis rather than the local radial zenith, producing
+    a two-hundred-unit colour discontinuity across a face boundary;
+
+    (c) the far tier''s normals were not rotated with the surface, and were fixed alongside (a);
+
+    (d) the sky''s below-horizon branch was thinned by altitude in a way that pulled it away from the
+    single-source air colour, turning an invisible seam into a drawn edge whose step grew with height
+    - the user reported the resulting horizon line twice;
+
+    (e) the terrain''s tangent sheets have edge lines that diverge with height, because the offset grows
+    as height times cell size over the planet radius, so at terrain tops near a hundred and forty metres
+    adjacent sheets fell about half a metre short and left a SEE-THROUGH slit the length of every chunk
+    boundary.
+
+    THE POINT OF THIS TICKET: five instances found by accident, each costing a user report and a round,
+    is a systemic gap rather than bad luck. Find the rest by looking for the pattern rather than by waiting
+    for it to be reported.
+
+    METHOD: search the codebase for curvature-sensitive and axis-sensitive terms and test each by RENDERING,
+    not by reading. The shapes to look for are: offsets scaled by a height or a distance divided by the
+    planet radius; any use of a fixed world up axis where the local radial direction is meant; tangent
+    or bitangent frames built from a world axis rather than from the surface; flat-grid placement of anything
+    that should follow the surface; approximations that are only valid when the radius is large compared
+    with the feature; and any constant that encodes the world''s size but was written when it was smaller.
+    Suspects include the meshing lanes, the collision and lighting lanes, water and fluid surfaces, tree
+    and prop placement, mob placement and movement, the far level of detail, the star and sky lanes, and
+    anything cached across a chunk boundary.
+
+    ALSO COVER THE RESIDUALS THE SEAM TICKET EXPLICITLY LEFT UNTOUCHED, since they are known live visual
+    issues rather than speculation: the face-chunk least-squares seams, the far level of detail, a cliff-moat
+    dip, and ultraviolet stretch on the new seam-extension strip.
+
+    ACCEPTANCE: a RANKED LIST OF CONFIRMED DEFECTS, each with a frame that shows it and a measurement
+    of its size in metres or units, plus fixes for those that are bounded enough to fix safely in the
+    same run. A candidate that cannot be shown in a frame is not a confirmed defect and should be listed
+    separately as unconfirmed rather than mixed in. Finding nothing beyond what is already known is a
+    legitimate and useful result and should be reported as such.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); every
+    look change ships behind a switch defaulting conservative; and the recent work must keep holding -
+    the seam closure, the orbital sort offset and relief, the local-zenith sky with its air column, the
+    far tier''s curvature placement, the engine fog, the carved-top fill and the cloud layer.
+
+    '
   comments: []
