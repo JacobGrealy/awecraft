@@ -1616,6 +1616,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	ctx_w["blk_strips"] = st["blk"]
 	ctx_w["blk_strips_b"] = st["blk_b"]
 	ctx_w["top"] = int(top)
+	# AC-0423: the seam-V extension radius — the C++ emitter extends the
+	# top-face edge rows past the nominal footprint by the V-crack width at
+	# the surface height (the per-column tangent sheets diverge with height,
+	# AC-0307's documented "known physical consequence"; nothing ever closed
+	# the V — the user's see-through seam). The face-chunk path
+	# (build_mesh_face) stays OFF: its placement is the LSQ affine, not the
+	# home column math.
+	ctx_w["sphere_r"] = float(Game.planet_R)
 	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — every meshed
 	# band is full-fidelity (the far LOD is the separate low placeholder).
 	var ms_full: Dictionary

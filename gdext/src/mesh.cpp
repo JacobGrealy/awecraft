@@ -105,6 +105,7 @@
 #include <vector>
 
 #include "awe_common.h"
+#include "sphere_math_cpp.h" // AC-0423: the shipped column placement (the seam-V extension)
 
 using namespace godot;
 
@@ -217,6 +218,11 @@ static void copy_colors(const PackedColorArray &src, Color *dst, int n) {
 struct Ctx {
 	int h = 384;
 	int top = -1;
+	// AC-0423: the seam-V extension radius — Game.planet_R, set by the
+	// home-pair build path (build_mesh) ONLY; 0 = off = the pre-AC-0423
+	// mesh byte-identical (the face-chunk path and the hand-built arm
+	// ctxs carry no key, so their REF fingerprints stay green).
+	float sphere_r = 0.0f;
 	float atlas_px = 1024.0f;
 	bool has_tex = false;
 	bool coarse = false;
@@ -286,6 +292,7 @@ static bool parse_rect_key(const String &k, int &id, int &face) {
 static void parse_ctx(const Dictionary &ctx, Ctx &out) {
 	out.h = (int)ctx.get("h", 384);
 	out.top = (int)ctx.get("top", -1);
+	out.sphere_r = (float)ctx.get("sphere_r", 0.0f); // AC-0423 (absent = off)
 	out.atlas_px = (float)ctx.get("atlas_px", 1024.0);
 	out.has_tex = (bool)ctx.get("has_tex", false);
 	out.coarse = (bool)ctx.get("coarse", false);
@@ -367,25 +374,100 @@ struct Acc {
 	}
 };
 
+// ---------------------------------------------------------------------------
+// AC-0423: the seam-V extension (the user's see-through chunk seams).
+//
+// The per-column tangent sheets (the shipped placement — awesm::
+// sm_column_transform, SEAM_FILL included) are placed gapless at their
+// BASE (the folded-net edge lines coincide to the 1.6 mm AC-0362 grout)
+// but DIVERGE with height: each sheet's local +Y is the radial at its own
+// centre, the neighbour's radial leans 16 m / R away, so the two sheets'
+// edge lines open a V of width ~ h·16/R at a surface h metres above the
+// fold. The terrain tops sit h ≈ 140 m up, so every seam carried a ~0.55 m
+// see-through slit at ground level (measured live, probe-r4: 552–558 mm
+// across the across-seam gap). AC-0307's close note documents the
+// divergence as a "known physical consequence" covered by "AC-0042's
+// hidden filler" — the filler is the flat-world one and never existed in
+// the sphere placement, so nothing ever closed the V; the AC-0362 grout
+// closed the sheet-PLANE footprint residual (vertical rays) only.
+//
+// FIX: the TOP-FACE edge rows (opaque + fluid) extend past the nominal
+// 0..16 footprint by the V width at the corner's own height, so the two
+// sheets' top faces OVERLAP across the seam; the sheet planes then meet
+// in the fold crease and no line of sight threads the seam at surface
+// level. E(t, i) = K0[k][i] + K1[k]·t + SEAM_V_MARGIN, clamped to
+// [0, SEAM_V_MAX]; k ∈ {0=W,1=E,2=S,3=N} (parse_nbs order), i = the
+// along-edge cell (0..15, clamped), t = the corner's local height. K0/K1
+// come from the two columns' PLACED transforms and the neighbour's
+// edge-column tops read per cell from the neighbour ring (the exact
+// geometric value — the V is closed against the neighbour's own edge
+// surface). OFF (sphere_r absent) every edge is inactive and the mesh is
+// byte-identical to pre-AC-0423.
+// ---------------------------------------------------------------------------
+static const double SEAM_V_MARGIN = 0.05; // m — float32 storage + the crease sliver
+static const double SEAM_V_MAX = 2.5;     // m — clamp (HEIGHT·16/R + the base residual)
+
+struct SeamExt {
+	bool act[4] = {false, false, false, false}; // per edge: the neighbour top is known
+	double K0[4][16];
+	double K1[4] = {0.0, 0.0, 0.0, 0.0};
+};
+
+static inline double seam_ext_at(const SeamExt &se, int k, int i, double t) {
+	if (!se.act[k])
+		return 0.0;
+	int ic = i >= 16 ? 15 : (i < 0 ? 0 : i);
+	double e = se.K0[k][ic] + se.K1[k] * t + SEAM_V_MARGIN;
+	if (e <= 0.0)
+		return 0.0;
+	if (e > SEAM_V_MAX)
+		e = SEAM_V_MAX;
+	return e;
+}
+
+// One TOP-FACE corner (px, pz ∈ 0..16 local; t = the corner's local
+// height). The edge checks read the ORIGINAL coordinates (a seam corner
+// sits on two edges; each extension uses the other's raw value).
+static inline void seam_ext_corner(const SeamExt *se, float &px, float &pz, float t) {
+	if (se == nullptr)
+		return;
+	int ix = (int)(px + 0.5f);
+	int iz = (int)(pz + 0.5f);
+	double ex = 0.0;
+	double ez = 0.0;
+	if (px == 16.0f)
+		ex = seam_ext_at(*se, 1, iz, (double)t);
+	else if (px == 0.0f)
+		ex = -seam_ext_at(*se, 0, iz, (double)t);
+	if (pz == 16.0f)
+		ez = seam_ext_at(*se, 3, ix, (double)t);
+	else if (pz == 0.0f)
+		ez = -seam_ext_at(*se, 2, ix, (double)t);
+	px = (float)(px + ex);
+	pz = (float)(pz + ez);
+}
+
 // _qwrite (chunk.gd:751) — one quad: positions lx/cv.x, y/py_j, lz/cv.z;
 // normals n; per-vertex uvs (precomputed); color c; index pattern
 // b, b+2, b+1, b, b+3, b+2.
-static void qwrite(Acc &acc, const Color &c, const int n[3], const float *uvs, const float (*fcv)[3], int lx, int y, int lz, float py0, float py1, float py2, float py3) {
+static void qwrite(Acc &acc, const Color &c, const int n[3], const float *uvs, const float (*fcv)[3], int lx, int y, int lz, float py0, float py1, float py2, float py3, const SeamExt *se) {
 	int k = acc.q;
 	acc.ensure(k + 1);
 	int b = k * 4;
-	acc.v[(b + 0) * 3 + 0] = (float)lx + fcv[0][0];
-	acc.v[(b + 0) * 3 + 1] = (float)y + py0;
-	acc.v[(b + 0) * 3 + 2] = (float)lz + fcv[0][2];
-	acc.v[(b + 1) * 3 + 0] = (float)lx + fcv[1][0];
-	acc.v[(b + 1) * 3 + 1] = (float)y + py1;
-	acc.v[(b + 1) * 3 + 2] = (float)lz + fcv[1][2];
-	acc.v[(b + 2) * 3 + 0] = (float)lx + fcv[2][0];
-	acc.v[(b + 2) * 3 + 1] = (float)y + py2;
-	acc.v[(b + 2) * 3 + 2] = (float)lz + fcv[2][2];
-	acc.v[(b + 3) * 3 + 0] = (float)lx + fcv[3][0];
-	acc.v[(b + 3) * 3 + 1] = (float)y + py3;
-	acc.v[(b + 3) * 3 + 2] = (float)lz + fcv[3][2];
+	const float pys[4] = {py0, py1, py2, py3};
+	// AC-0423: the seam-V extension — top-face corners on a chunk edge
+	// only (the fcv == FCV[2] guard keeps every other face untouched).
+	bool seamv = (se != nullptr) && (fcv == FCV[2]);
+	for (int j = 0; j < 4; j++) {
+		float vx = (float)lx + fcv[j][0];
+		float vy = (float)y + pys[j];
+		float vz = (float)lz + fcv[j][2];
+		if (seamv)
+			seam_ext_corner(se, vx, vz, vy);
+		acc.v[(b + j) * 3 + 0] = vx;
+		acc.v[(b + j) * 3 + 1] = vy;
+		acc.v[(b + j) * 3 + 2] = vz;
+	}
 	for (int j = 0; j < 4; j++) {
 		acc.n[(b + j) * 3 + 0] = (float)n[0];
 		acc.n[(b + j) * 3 + 1] = (float)n[1];
@@ -411,22 +493,24 @@ static void qwrite(Acc &acc, const Color &c, const int n[3], const float *uvs, c
 // corners carry different light/AO values cannot merge into a single-colour
 // quad, so each vertex gets its own colour. Positions/normals/uvs/index
 // pattern are identical to qwrite.
-static void qwrite_vc(Acc &acc, const Color *c, const int n[3], const float *uvs, const float (*fcv)[3], int lx, int y, int lz, float py0, float py1, float py2, float py3) {
+static void qwrite_vc(Acc &acc, const Color *c, const int n[3], const float *uvs, const float (*fcv)[3], int lx, int y, int lz, float py0, float py1, float py2, float py3, const SeamExt *se) {
 	int k = acc.q;
 	acc.ensure(k + 1);
 	int b = k * 4;
-	acc.v[(b + 0) * 3 + 0] = (float)lx + fcv[0][0];
-	acc.v[(b + 0) * 3 + 1] = (float)y + py0;
-	acc.v[(b + 0) * 3 + 2] = (float)lz + fcv[0][2];
-	acc.v[(b + 1) * 3 + 0] = (float)lx + fcv[1][0];
-	acc.v[(b + 1) * 3 + 1] = (float)y + py1;
-	acc.v[(b + 1) * 3 + 2] = (float)lz + fcv[1][2];
-	acc.v[(b + 2) * 3 + 0] = (float)lx + fcv[2][0];
-	acc.v[(b + 2) * 3 + 1] = (float)y + py2;
-	acc.v[(b + 2) * 3 + 2] = (float)lz + fcv[2][2];
-	acc.v[(b + 3) * 3 + 0] = (float)lx + fcv[3][0];
-	acc.v[(b + 3) * 3 + 1] = (float)y + py3;
-	acc.v[(b + 3) * 3 + 2] = (float)lz + fcv[3][2];
+	const float pys[4] = {py0, py1, py2, py3};
+	// AC-0423: the seam-V extension (top-face corners on a chunk edge;
+	// see qwrite).
+	bool seamv = (se != nullptr) && (fcv == FCV[2]);
+	for (int j = 0; j < 4; j++) {
+		float vx = (float)lx + fcv[j][0];
+		float vy = (float)y + pys[j];
+		float vz = (float)lz + fcv[j][2];
+		if (seamv)
+			seam_ext_corner(se, vx, vz, vy);
+		acc.v[(b + j) * 3 + 0] = vx;
+		acc.v[(b + j) * 3 + 1] = vy;
+		acc.v[(b + j) * 3 + 2] = vz;
+	}
 	for (int j = 0; j < 4; j++) {
 		acc.n[(b + j) * 3 + 0] = (float)n[0];
 		acc.n[(b + j) * 3 + 1] = (float)n[1];
@@ -824,6 +908,91 @@ static void parse_nbs(const Dictionary &nbs, Nv &out) {
 			// full decode.
 			awecommon::slab_views(nb.get("d", Array()), out.nd[k]);
 			awecommon::slab_views(nb.get("f", Array()), out.nfd[k]);
+		}
+	}
+}
+
+// The K tables from the two columns' PLACED transforms (awesm — the
+// shipped placement the chunk node wears) + the neighbour's edge-column
+// tops read PER CELL from the neighbour data (both shapes parse_nbs
+// accepts: the compact ring — 256 B/slab, y_in*16 + t, t = the edge
+// index — and the legacy full slab — 4096 B, y*256 + z*16 + x; an
+// all-air edge cell has no seam surface there, so no V to fill; a dead
+// legacy slab is an empty vector and is skipped, never dereferenced).
+// The per-cell top is the exact geometric value — the V is closed
+// against the neighbour's own edge surface (no over-extension into its
+// solid, no column-max conservatism).
+static void build_seam_ext(SeamExt &se, int cx, int cz, double R, const Nv &nv) {
+	for (int k = 0; k < 4; k++) {
+		se.act[k] = false;
+		se.K1[k] = 0.0;
+		for (int i = 0; i < 16; i++)
+			se.K0[k][i] = 0.0;
+	}
+	if (R <= 0.0)
+		return;
+	static const int DX[4] = {-1, 1, 0, 0};
+	static const int DZ[4] = {0, 0, -1, 1};
+	for (int k = 0; k < 4; k++) {
+		if (nv.nd[k].empty())
+			continue;
+		// Two neighbour shapes share nv.nd (parse_nbs): the AC-0211
+		// compact SNAP RING (256 B per slab, index = y_in*16 + t, t =
+		// the along-edge cell — the ring holds exactly this column)
+		// and the legacy full-slab decode (4096 B, index = y*256 +
+		// z*16 + x — the build_snap_data full-layout read). A LEGACY
+		// slab entry can also be an EMPTY vector (dead/all-air slab —
+		// slab_views starts empty): skip it, never dereference it.
+		const bool ring = nv.nd[k][0].size() == 256;
+		const int a_edge = (DX[k] != 0) ? (DX[k] > 0 ? 0 : 15) : (DZ[k] > 0 ? 0 : 15);
+		const awesm::SmT To = awesm::sm_column_transform(cx, cz, R);
+		const awesm::SmT Tn = awesm::sm_column_transform(cx + DX[k], cz + DZ[k], R);
+		bool any = false;
+		for (int i = 0; i < 16; i++) {
+			double tn = -1.0;
+			for (int s = (int)nv.nd[k].size() - 1; s >= 0 && tn < 0.0; s--) {
+				const std::vector<uint8_t> &sv = nv.nd[k][s];
+				if (sv.empty())
+					continue; // dead slab (legacy shape) — no surface
+				const uint8_t *sl = sv.data();
+				if (ring) {
+					for (int yi = 15; yi >= 0 && tn < 0.0; yi--)
+						if (sl[(size_t)yi * 16 + i] != 0)
+							tn = (double)(s * 16 + yi);
+				} else {
+					// Full slab: the edge line is x = a_edge (dx edge,
+					// z = i) or z = a_edge (dz edge, x = i).
+					for (int yi = 15; yi >= 0 && tn < 0.0; yi--) {
+						size_t idx = (DX[k] != 0)
+							? ((size_t)yi * 256 + (size_t)i * 16 + a_edge)
+							: ((size_t)yi * 256 + (size_t)a_edge * 16 + i);
+						if (sl[idx] != 0)
+							tn = (double)(s * 16 + yi);
+					}
+				}
+			}
+			if (tn < 0.0)
+				continue;
+			if (DX[k] > 0)
+				se.K0[1][i] = Tn.o[0] - To.o[0] - 16.0 * To.m[0][0] + tn * Tn.m[1][0] + (double)i * (Tn.m[2][0] - To.m[2][0]);
+			else if (DX[k] < 0)
+				se.K0[0][i] = To.o[0] - Tn.o[0] - 16.0 * Tn.m[0][0] - tn * Tn.m[1][0] + (double)i * (To.m[2][0] - Tn.m[2][0]);
+			else if (DZ[k] > 0)
+				se.K0[3][i] = Tn.o[2] - To.o[2] - 16.0 * To.m[2][2] + tn * Tn.m[1][2] + (double)i * (Tn.m[0][2] - To.m[0][2]);
+			else
+				se.K0[2][i] = To.o[2] - Tn.o[2] - 16.0 * Tn.m[2][2] - tn * Tn.m[1][2] + (double)i * (To.m[0][2] - Tn.m[0][2]);
+			any = true;
+		}
+		if (any) {
+			if (DX[k] > 0)
+				se.K1[1] = -To.m[1][0];
+			else if (DX[k] < 0)
+				se.K1[0] = To.m[1][0];
+			else if (DZ[k] > 0)
+				se.K1[3] = -To.m[1][2];
+			else
+				se.K1[2] = To.m[1][2];
+			se.act[k] = true;
 		}
 	}
 }
@@ -1451,7 +1620,7 @@ static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uin
 // Java; the flat path is byte-identical to the pre-AC-0159 code.
 // AC-0398: hg = the modern column-top grid (null = pre-feature path; the
 // flat branch never touches it — see Ctx.modern).
-static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg) {
+static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const uint8_t *xtab, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg, const SeamExt *se) {
 	int h = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1512,7 +1681,7 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 				Color c = light_color(sl, osh, chan[0], face_color, has_tex);
 				if (has_tex)
 					c = mul_cc(c, tint);
-				qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+				qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3, se);
 			} else {
 				Color cc[4];
 				for (int j = 0; j < 4; j++) {
@@ -1522,7 +1691,7 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 					if (has_tex)
 						cc[j] = mul_cc(cc[j], tint);
 				}
-				qwrite_vc(sa, cc, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+				qwrite_vc(sa, cc, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3, se);
 			}
 		} else {
 			// Flat per-face light (rk/rq and cutout blocks — unchanged).
@@ -1531,7 +1700,7 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 			Color c = light_color(sl, FSH[fi], mask, face_color, has_tex);
 			if (has_tex)
 				c = mul_cc(c, tint);
-			qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+			qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3, se);
 		}
 	}
 }
@@ -1566,7 +1735,7 @@ struct MergedCell {
 	int plane;
 };
 
-static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0, int W, int H, bool has_tex, const Ctx &ctx, const Vector2i &sr, float ms_h) {
+static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0, int W, int H, bool has_tex, const Ctx &ctx, const Vector2i &sr, float ms_h, const SeamExt *se) {
 	int id = c0.id;
 	int fni = c0.fni;
 	int mask = c0.mask;
@@ -1642,6 +1811,8 @@ static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0
 			uu = 0.5f + cvx * (float)W * ctx.ppb;
 			vv = 0.5f + (1.0f - cvy) * (float)H * ctx.ppb;
 		}
+		if (fi == 2)
+			seam_ext_corner(se, px, pz, py); // AC-0423: TOP faces only — the side faces stay on the exact seam plane (nullptr / non-edge corners are no-ops)
 		acc.v[(b + j) * 3 + 0] = px;
 		acc.v[(b + j) * 3 + 1] = py;
 		acc.v[(b + j) * 3 + 2] = pz;
@@ -1706,7 +1877,7 @@ static void qwrite_merged(Acc &acc, int fi, const int n[3], const MergedCell &c0
 // Ctx.modern). Modern changes the merge key from (id, fni, FSH*sl) to
 // (id, fni, mask, s, oshade): a gradient cannot cross a merge, and the
 // colour needs s and oshade separately (the product alone is not enough).
-static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg) {
+static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs, const Vector3i &lmn, const uint8_t *larr, int lw, int ld, int cx, int cz, bool has_tex, const Ctx &ctx, const Ms &ms, const uint8_t *bmask, int bmask_sz, const std::vector<uint8_t> &snap, const uint8_t *stab, bool smooth, const int16_t *hg, const SeamExt *se) {
 	int hgt = ctx.h;
 	int wx0 = cx * SIZE;
 	int wz0 = cz * SIZE;
@@ -1766,7 +1937,7 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 						cc[j] = mul_cc(cc[j], tint);
 				}
 				const float *uvs = s_uvc(uvc, ctx, r.id, fi, face_idx);
-				qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1]);
+				qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1], se);
 				continue;
 			}
 			sl = ctx.modern ? msl[0] : s_corner_sl(lsum[0], ao[0]);
@@ -1853,7 +2024,7 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 					}
 					g[vi + u0] = nullptr;
 					int si = (fi == 0 || fi == 1 || fi == 4 || fi == 5) ? (c0->v0 / 16) : (c0->plane / 16);
-					qwrite_merged(accs[si], fi, n, *c0, w, h, has_tex, ctx, merge_strip(ms, c0->id, c0->fni), ms.h);
+					qwrite_merged(accs[si], fi, n, *c0, w, h, has_tex, ctx, merge_strip(ms, c0->id, c0->fni), ms.h, se);
 				}
 			}
 		}
@@ -1863,7 +2034,7 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 // _s_emit_fluid (chunk.gd:1509) — top/sides/bottom fluid quads with the
 // height-clipped corners (hgt where the corner sits on the surface, else
 // the neighbor's height hn).
-static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs, const std::vector<uint8_t> &snap, const std::vector<uint8_t> &snap_fl, bool has_tex, const Ctx &ctx, int h) {
+static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs, const std::vector<uint8_t> &snap, const std::vector<uint8_t> &snap_fl, bool has_tex, const Ctx &ctx, int h, const SeamExt *se) {
 	UvcCache uvc;
 	for (const FluidRec &r : recs) {
 		int lx = r.lx;
@@ -1893,7 +2064,7 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 			Color c = has_tex ? mul_cc(Color(0.95f, 0.95f, 0.95f, 1.0f), tint_t) : mul_cf(ctx.ct[id], 0.95f);
 			const float *uvs = s_uvc(uvc, ctx, id, 2, 1);
 			static const int N_TOP[3] = {0, 1, 0};
-			qwrite(sa, c, N_TOP, uvs, FCV[2], lx, y, lz, top_h, top_h, top_h, top_h);
+			qwrite(sa, c, N_TOP, uvs, FCV[2], lx, y, lz, top_h, top_h, top_h, top_h, se); // AC-0423: the water surface carries the seam-V extension too
 		}
 		for (int fi : {0, 1, 4, 5}) {
 			const int n[3] = {FN[fi][0], FN[fi][1], FN[fi][2]};
@@ -1911,7 +2082,7 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 			float py1 = FCV[fi][1][1] == 1.0f ? hgt : hn;
 			float py2 = FCV[fi][2][1] == 1.0f ? hgt : hn;
 			float py3 = FCV[fi][3][1] == 1.0f ? hgt : hn;
-			qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3);
+			qwrite(sa, c, n, uvs, FCV[fi], lx, y, lz, py0, py1, py2, py3, nullptr);
 		}
 		int below = 0;
 		if (y > 0)
@@ -1920,7 +2091,7 @@ static void emit_fluid(const std::vector<FluidRec> &recs, std::vector<Acc> &accs
 			Color c = has_tex ? mul_cc(Color(0.6f, 0.6f, 0.6f, 1.0f), tint_b) : mul_cf(ctx.cb[id], 0.6f);
 			const float *uvs = s_uvc(uvc, ctx, id, 3, 2);
 			static const int N_BOT[3] = {0, -1, 0};
-			qwrite(sa, c, N_BOT, uvs, FCV[3], lx, y, lz, 0.0f, 0.0f, 0.0f, 0.0f);
+			qwrite(sa, c, N_BOT, uvs, FCV[3], lx, y, lz, 0.0f, 0.0f, 0.0f, 0.0f, nullptr);
 		}
 	}
 }
@@ -1962,8 +2133,8 @@ static void emit_xquad(const std::vector<XRec> &recs, std::vector<Acc> &accs, co
 		Acc &sa = accs[y / 16];
 		static const int N_A[3] = {0, 0, 1};
 		static const int N_B[3] = {1, 0, 0};
-		qwrite(sa, c, N_A, it->second.data(), XQ_A, lx, y, lz, 0.0f, 0.0f, 1.0f, 1.0f);
-		qwrite(sa, c, N_B, it->second.data() + 8, XQ_B, lx, y, lz, 0.0f, 0.0f, 1.0f, 1.0f);
+		qwrite(sa, c, N_A, it->second.data(), XQ_A, lx, y, lz, 0.0f, 0.0f, 1.0f, 1.0f, nullptr);
+		qwrite(sa, c, N_B, it->second.data() + 8, XQ_B, lx, y, lz, 0.0f, 0.0f, 1.0f, 1.0f, nullptr);
 	}
 }
 
@@ -3411,6 +3582,10 @@ public:
 		}
 		Nv nv;
 		parse_nbs(nbs, nv);
+		// AC-0423: the seam-V extension tables (OFF = sphere_r absent =
+		// every edge inactive = the pre-AC-0423 mesh byte-identical).
+		SeamExt se;
+		build_seam_ext(se, cx, cz, (double)C.sphere_r, nv);
 
 		// Light: three sources — (AC-0283 P2) the STAR payload (the
 		// AweStarlight engine's settled nibbles, captured at dispatch under
@@ -3791,9 +3966,9 @@ public:
 		{
 			int64_t te = now_msec();
 			if (M.nonempty && !ro.empty() && !scoped)
-				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
+				emit_ro_merged(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, M, bmask_ptr, bmask_sz, snap, C.stab, true, hgp, &se);
 			else
-				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
+				emit_faces(ro, s_ao, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp, &se);
 			// AC-0205: the ramp quads (into the SAME opaque acc — the
 			// collider is derived from it, so mesh and collider agree by
 			// construction). rr is empty when C.ramps is off.
@@ -3801,16 +3976,16 @@ public:
 				emit_ramp(s_ao[r.y / 16], r, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz, snap, hgp);
 			phet[0] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp);
+			emit_faces(rc_o, s_ac, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, true, hgp, &se);
 			phet[1] = now_msec() - te;
 			te = now_msec();
-			emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, C, h);
+			emit_fluid(rf_w, s_af_w, snap, snap_fl, has_tex, C, h, &se);
 			phet[2] = now_msec() - te;
 			te = now_msec();
-			emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, C, h);
+			emit_fluid(rf_l, s_af_l, snap, snap_fl, has_tex, C, h, &se);
 			phet[3] = now_msec() - te;
 			te = now_msec();
-			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, false, hgp);
+			emit_faces(rk, s_ak, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, C.xtab, bmask_ptr, bmask_sz, snap, C.stab, false, hgp, &se);
 			phet[4] = now_msec() - te;
 			te = now_msec();
 			emit_xquad(rq, s_ax, bmn, barr.data(), 20, 20, cx, cz, has_tex, C, bmask_ptr, bmask_sz);

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0423 plan — see-through gaps between chunks</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.6em; }
+table { border-collapse: collapse; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; }
+code { background: #f0f0f0; padding: 1px 4px; } .red { color: #a00; } .grn { color: #060; }
+</style></head><body>
+<h1>AC-0423 — plan: the see-through gaps between chunks</h1>
+
+<h2>1. The defect (established by the previous run)</h2>
+<p>A frame at ground level shows what is <b>behind</b> the terrain along the chunk
+seams: pale-cyan slits (RGB ≈ 183,235,247 — skybox colour) at every seam crossing
+the view. BEFORE frame: <code>captures/ac0423-before-ground-north.png</code>. The
+fog wall (332 m) cannot reach 16–30 m seams — refuted. Measured live (probe
+r4/r4b): a <b>552–558 mm across-seam gap</b> at terrain-top height (terrain tops
+139–146) at the x=16 seam; node transforms verified against a Python
+replication to the mm.</p>
+
+<h2>2. Root cause (analytic + measured)</h2>
+<p>The per-column tangent-sheet placement (<code>SphereMath.column_transform</code> /
+C++ <code>sm_column_transform</code>, SEAM_FILL 1e-4 included) is gapless at the sheet
+<b>base</b> — the folded-net edge lines coincide to the 1.6 mm AC-0362 grout — but the
+sheets' edge lines <b>diverge with height</b>: the neighbour's radial leans 16/R away
+from the own sheet's radial, so a V of width ≈ h·(16/R) opens at surface height h
+above the fold (fold ≈ 0.4 m, near the base). Terrain tops sit h ≈ 140 m up →
+<b>~0.55 m see-through slit at every seam at ground level</b> (0.5584 m at t = 140,
+i = 8, R = 4000 — matches the 552–558 mm measurement). A line of sight aimed at the
+seam (depression band ≈ 5.56°–5.72°) threads the V channel — its walls are the
+culled seam faces (no geometry) — to the skybox. Cliff cases self-close (the cliff
+face catches the ray); the open case is roughly-flat terrain across the seam (the
+common case). AC-0307's close note documents the divergence as a "known physical
+consequence" covered by "AC-0042's hidden filler" — the filler is the flat-world
+one and never existed in the sphere placement, so nothing ever closed the V; the
+AC-0362 grout closed the sheet-<i>plane</i> footprint residual (vertical rays) only.</p>
+
+<h2>3. Fix design</h2>
+<p>Extend the <b>top-face edge rows</b> (opaque merged + single-quad + fluid top)
+past the nominal 0..16 local footprint by the V width at the corner's own height,
+so the two sheets' top faces <b>overlap</b> across the seam; the sheet planes then
+meet in the fold crease and no line of sight threads the seam at surface level:</p>
+<pre>E(t, i) = K0[k][i] + K1[k]·t + SEAM_V_MARGIN (0.05 m), clamped [0, SEAM_V_MAX (2.5 m)]</pre>
+<p>with k ∈ {0=W, 1=E, 2=S, 3=N} (parse_nbs order), i = the along-edge cell
+(0..15), t = the corner's local height. K0/K1 come from the two columns'
+<b>placed</b> transforms (<code>awesm::sm_column_transform</code>) and the neighbour's
+<b>edge-column tops read per cell</b> from the neighbour ring already handed to
+<code>build_accs</code> (slab·256 + y_in·16 + t; an all-air edge cell has no seam
+surface there → no V to fill). The per-cell top is the exact geometric value — the
+V closes against the neighbour's own edge surface (no over-extension into its
+solid). Side faces stay on the exact seam plane (top faces only — the merged path
+is guarded on <code>fi == 2</code>, the single-quad paths on <code>fcv == FCV[2]</code>).</p>
+<table>
+<tr><th>edge</th><th>own edge</th><th>K0 (per cell i)</th><th>K1</th></tr>
+<tr><td>E (k=1, nx=+1)</td><td>local x=16</td><td>Tn.o[0] − To.o[0] − 16·To.m[0][0] + t_n·Tn.m[1][0] + i·(Tn.m[2][0] − To.m[2][0])</td><td>−To.m[1][0]</td></tr>
+<tr><td>W (k=0, nx=−1)</td><td>local x=0</td><td>To.o[0] − Tn.o[0] − 16·Tn.m[0][0] − t_n·Tn.m[1][0] + i·(To.m[2][0] − Tn.m[2][0])</td><td>To.m[1][0]</td></tr>
+<tr><td>N (k=3, nz=+1)</td><td>local z=16</td><td>Tn.o[2] − To.o[2] − 16·To.m[2][2] + t_n·Tn.m[1][2] + i·(Tn.m[0][2] − To.m[0][2])</td><td>−To.m[1][2]</td></tr>
+<tr><td>S (k=2, nz=−1)</td><td>local z=0</td><td>To.o[2] − Tn.o[2] − 16·Tn.m[2][2] − t_n·Tn.m[1][2] + i·(To.m[0][2] − Tn.m[0][2])</td><td>To.m[1][2]</td></tr>
+</table>
+<p><b>Enable key:</b> <code>ctx["sphere_r"] = Game.planet_R</code> — set on the home
+worker ctx template (world.gd <code>_tm_ctx</code>, the three build sites) and the sync
+arm path (chunk.gd <code>build_mesh</code>). The face-chunk path
+(<code>build_mesh_face</code>) and every hand-built arm ctx (meshprobe, ramps,
+seamcensus fixture) carry <b>no key</b> → <code>sphere_r = 0</code> → all tables zero →
+the mesh is <b>bit-identical to pre-AC-0423</b> (standing REF gates stay green; the
+face placement is the LSQ affine, a different mechanism). Corner hook: a top-face
+corner exactly on a chunk edge (integer sums, exact float equality); both
+extensions computed from the <b>original</b> coordinates (a seam corner sits on two
+edges). UVs: stretch (the fold crease hides the strip).</p>
+
+<h2>4. Implementation (files)</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/sphere_math_cpp.h</code> (new)</td><td>the shared column-placement math (<code>awesm</code> namespace), moved <b>verbatim</b> from gen.cpp (SEAM_FILL, planet-frame origin shift) — gen.cpp and mesh.cpp consume the same source of truth.</td></tr>
+<tr><td><code>gdext/src/gen.cpp</code></td><td>splice: the sm_* block replaced by <code>#include "sphere_math_cpp.h"</code> + using-directive (genhash bit-identical proves the move).</td></tr>
+<tr><td><code>gdext/src/mesh.cpp</code></td><td><code>SeamExt</code> struct + <code>seam_ext_at</code> + <code>seam_ext_corner</code> + <code>build_seam_ext</code> (ring per-cell tops); <code>ctx.sphere_r</code>; hooks in <code>qwrite</code>/<code>qwrite_vc</code> (<code>fcv == FCV[2]</code> guard) and <code>qwrite_merged</code> (<code>fi == 2</code> guard); the emitters thread <code>const SeamExt*</code> (top-face calls get <code>&amp;se</code>, side/bottom/xquad get <code>nullptr</code>); <code>build_accs</code> builds the tables after <code>parse_nbs</code>.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_tm_ctx["sphere_r"] = float(Game.planet_R)</code> at the three worker-ctx build sites.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>same key on the sync/test-arm path (<code>build_mesh</code>); <code>build_mesh_face</code> stays off.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>(a) temp <code>ac0423probe</code> arm (previous run) extended with the post-fix <code>ext_edge</code>/<code>ext_overlap_mm</code> measurement — <b>removed at closeout</b> (pristine rule); (b) <code>seamcensus</code> standing instrument repaired: three latent <code>var q: Array</code> type bugs (the arm had never run — <code>_seamc_quad</code> is designed to return null) + the AC-0423 rebase (the extended top-face edge rows span −2.5..18.5 local, the back-map's 0..16 assumption is stale — same instrument-rebase class as the AC-0306 grout / AC-0311-3 walk re-base).</td></tr>
+</table>
+
+<h2>5. Verification plan</h2>
+<ol>
+<li>G0: headless load, zero SCRIPT/SHADER ERROR + rc 0 (paired).</li>
+<li><code>ac0423probe</code>: across-seam overlap positive on all 9 seam pairs (was a 552–558 mm gap).</li>
+<li><code>seamcensus</code> r4: instrument self-check ok (reverse-map validated, fixture 44/44) <b>and</b> <code>missing_faces</code> 0 on 64 seams / 393,216 rows; A/B with the extension off stays clean (no new holes introduced by the fix).</li>
+<li>Render AFTER frame, same boot camera as BEFORE — the slits gone, the frame solid.</li>
+<li>genhash (bit-identity of the gen.cpp splice), farab (h_mismatch 0), ladder (band A 20/20), the full smoke battery + heavy gates (boundary r4, flake, r50, shaderforce, meshprobe 1.0, Windows build) via the coordinator background job.</li>
+</ol>
+
+<h2>6. Out of scope (documented in results)</h2>
+<p>Face-chunk seams (faces 2–11, LSQ affine placement — the documented 4.69 m
+patch-boundary V-crack is a different mechanism, AC-0311 territory); far-LOD /
+band-A (transient far bands); the 1-cell dip-at-seam "moat" between two cliffs
+(the neighbour edge cell is air — E = 0 there, the far cliff face shows through,
+not sky); ramp edges; the UV stretch on the extension strip (hidden by the fold
+crease).</p>
+
+</body></html>

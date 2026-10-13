@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T14:25
+  updated_at: 2026-10-12T22:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27047,4 +27047,50 @@ intake:
     offset and the height-based relief.
 
     '
+  comments: []
+- id: AC-0424
+  title: boundary-r50-marker-remesh-fail
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-12T22:24
+  updated_at: 2026-10-12T22:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "## 1) User Story\n\nThe big-radius boundary test (render radius 50 — the \"nightly\" heavy gate)\
+    \ walks its seam line\ncleanly but its two end-of-run safety checks fail: the one that verifies the\
+    \ test's own edit\nsurvives the marker chunk being freed and re-entered, and the one that verifies\
+    \ that chunk gets\nrebuilt. Nothing is visibly broken for the player (the r4 twin of the same test\
+    \ passes), but the\nr50 gate can no longer give a clean green on this dev box, so a real streaming\
+    \ or edit-persistence\nregression at large radius would be invisible behind the red. Decide whether\
+    \ it is the test's\nwait budget that is too tight for a ~2,600-chunk world on the software renderer,\
+    \ or a real\nstreaming/edit-persistence defect at r50 — and make the gate report which.\n\n## 2) Technical\
+    \ Details\n\n- Arm: `_boundary_test` in `godot/scenes/harness.gd` (dispatch branch ~line 945, body\
+    \ from\n  27532). Run: headless `AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=50` (standard recipe,\n \
+    \ `HOME=/tmp/dsh_home`, one godot at a time).\n- Repro (2026-10-12 tree, both builds): RESULT `ok:false`,\
+    \ `marker_ok:false`, `remesh_ok:false`;\n  `crossings:20 == walk_chunks:20` (the walk itself completes);\
+    \ `built_final` 233–246 of ~2,601\n  (partial build at arm end); `resident_final` ~5,800; `walk_s`\
+    \ ~20.3; marker `[16,139,8,1,3]`\n  (an id-3 edit at world (16,139,8), chunk [1,5]).\n- Gate semantics\
+    \ (harness.gd:27921-27940): post-walk the player retreats 128 m toward the start,\n  waits up to 3,000\
+    \ physics frames for the marker chunk to re-enter in-radius, re-mesh\n  (`mesh_built and has_any_slab_body()`)\
+    \ and preserve the edit (`world.get_block(mx,my,mz) ==\n  new_id`); `ok := crossings == walk_lines\
+    \ and marker_ok`. At r50 both flags fail; at r4 (same\n  tree, same day) `ok/marker_ok/remesh_ok`\
+    \ are all true.\n- Pre-existing as of this tree, A/B-proven at AC-0423 (2026-10-12): identical failure\
+    \ with the\n  AC-0423 native changes stashed (pre-change .so: `ok/marker_ok/remesh_ok` all false,\n\
+    \  built_final 246) and with them applied (built_final 233). Logs:\n  `.scratch/AC-0423-gates/boundary_r50.log`\
+    \ (post) and `boundary_r50-pre.log` (pre).\n- Suspects (UNVERIFIED — the investigation is the point\
+    \ of this ticket):\n  (a) the 3,000-frame re-entry wait budget is too small for the r50 dispatch volume\
+    \ on this box\n  (the drain had built only ~9% of the world at arm end);\n  (b) the marker edit is\
+    \ genuinely lost through free -> regenerate at r50 (the AC-0080 re-entry /\n  AC-0119 data-preservation\
+    \ contract);\n  (c) the ok formula conflates a partial build with edit loss — the arm should report\
+    \ the\n  partial-build state as its own field (cf. the `built_all` pattern in the r16 arm) instead\
+    \ of\n  failing `ok` on a world the drain was never given time to finish.\n- Verify: r50 RESULT with\
+    \ all three flags true; or, if (a)/(c) is the answer, an honest\n  re-baseline note in the harness\
+    \ entry (tasks/harness_data.yaml + `harness_doc.py --render`)\n  recording the partial-build flag\
+    \ + the A/B evidence above.\n"
   comments: []

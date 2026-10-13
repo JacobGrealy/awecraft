@@ -314,6 +314,18 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			# synthetic tables through the pure core).
 			await _spawnsearch_test()
 			return
+		if logic == "ac0423probe":
+			# AC-0423 TEMPORARY probe (REMOVED AT CLOSEOUT): the see-through
+			# census — per-seam live-mesh edge vertices (world coords) + the
+			# seam-edge data rows + the cross-edge gap, at the 16 m chunk
+			# seams around spawn. The BEFORE frame
+			# (tasks/AC-0423/captures/ac0423-before-ground-north.png) shows
+			# see-through slits at these seams; this measures the place the
+			# frame points at (not the AC-0420 seam re-measurement).
+			world.recenter(spawn.x, spawn.z, true)
+			await _ac0423probe_test()
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -31383,7 +31395,13 @@ func _seamc_quad(verts: PackedVector3Array, normals: PackedVector3Array, k: int,
 	if axis == 0 or axis == 2:
 		ok = ok and coord >= 0 and coord <= 16 and a0 >= 0 and a1 < Data.HEIGHT and b0 >= 0 and b1 < 16
 	else:
-		ok = ok and coord >= 0 and coord <= Data.HEIGHT and a0 >= 0 and a1 < 16 and b0 >= 0 and b1 < 16
+		# AC-0423: the seam-V extension moves the top-face EDGE-row corners
+		# past the nominal 0..16 footprint (west/south out to -SEAM_V_MAX
+		# -2.5, east/north out to 16 + 2.5; round -> -3..19); the side faces
+		# stay on the exact seam plane. Y-flat quads are skipped by the
+		# callers anyway — this only keeps the extended edge rows out of the
+		# anomaly/null classes.
+		ok = ok and coord >= 0 and coord <= Data.HEIGHT and a0 >= -3 and a1 < 20 and b0 >= -3 and b1 < 20
 	if not ok:
 		return null
 	var n: Vector3 = normals[k * 4]
@@ -31472,7 +31490,7 @@ func _seamc_emit_planes(c: Node3D) -> Dictionary:
 		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
 		var nq := int(verts.size()) / 4
 		for k in range(nq):
-			var q: Array = _seamc_quad(verts, normals, k, yoff)
+			var q = _seamc_quad(verts, normals, k, yoff)
 			if q == null:
 				out["anomalies"] = int(out["anomalies"]) + 1
 				continue
@@ -31593,7 +31611,7 @@ func _seamc_recover_faces(c: Node3D) -> Array:
 		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
 		var nq := int(verts.size()) / 4
 		for k in range(nq):
-			var q: Array = _seamc_quad(verts, normals, k, yoff)
+			var q = _seamc_quad(verts, normals, k, yoff)
 			if q == null:
 				continue
 			var axis := int(q[0])
@@ -31791,7 +31809,7 @@ func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
 			var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
 			var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
 			for k in range(int(verts.size()) / 4):
-				var q: Array = _seamc_quad(verts, normals, k, int(vm[1]))
+				var q = _seamc_quad(verts, normals, k, int(vm[1]))
 				if q == null:
 					wbad += 1
 					continue
@@ -35437,3 +35455,241 @@ func _rayline_test(spawn: Vector3) -> void:
 	Debug.result(res)
 
 
+
+
+# ============================================================================
+# AC-0423 TEMPORARY (REMOVED AT CLOSEOUT) — the see-through census.
+# The BEFORE frame (tasks/AC-0423/captures/ac0423-before-ground-north.png,
+# ground level at spawn facing +Z, R24/F83) shows: bright slits along the
+# 16 m chunk seams (the pale-cyan (140,193,203) class pixels), a dark banded
+# seam further out, and a "floating wedge" at the x=-16 seam. This arm
+# measures THOSE places: for each seam around spawn, (1) the seam-edge DATA
+# row of both columns (per-cell tops + a central column profile, what is
+# under the surface), (2) the LIVE slab-mesh vertices sitting on the shared
+# edge (world coords, via the column transform), top-face vs side, (3) the
+# cross-edge gap of the top-face edge vertices paired along the seam
+# (positive = a void between the surfaces). It does NOT re-measure the
+# AC-0420 conclusion; it reads the meshes that are actually in the tree.
+# ============================================================================
+func _ac0423probe_test() -> void:
+	var w: Node3D = world
+	# side A = the first column of each pair (west for x seams, south for z
+	# seams — its seam edge is at LOCAL 16); side B = the second (east /
+	# north — seam edge at LOCAL 0).
+	var seams: Array = [
+		["x16_z16", [0, 1], [1, 1], "x"],
+		["x16_z0", [0, 0], [1, 0], "x"],
+		["xm16_z16", [-1, 1], [0, 1], "x"],
+		["xm16_z0", [-1, 0], [0, 0], "x"],
+		["z16_x0", [0, 0], [0, 1], "z"],
+		["z16_x16", [1, 0], [1, 1], "z"],
+		["z16_xm16", [-1, 0], [-1, 1], "z"],
+		["z32_x0", [0, 1], [0, 2], "z"],
+		["z32_x16", [1, 1], [1, 2], "z"],
+	]
+	var need: Array = []
+	for s in seams:
+		if not need.has(s[1]):
+			need.append(s[1])
+		if not need.has(s[2]):
+			need.append(s[2])
+	var t0 := Time.get_ticks_msec()
+	var built := false
+	for i in 3000:
+		var ok := true
+		for cc in need:
+			var c = w.chunks.get(w._key(int(cc[0]), int(cc[1])))
+			if c == null or c.data.is_empty() or not c.mesh_built:
+				ok = false
+				break
+		if ok:
+			built = true
+			break
+		await get_tree().process_frame
+	if not built:
+		Debug.result({"ac0423": {"ok": false, "fail": "not_built", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var out: Dictionary = {}
+	for s in seams:
+		var name: String = s[0]
+		var ca: Node3D = w.chunks.get(w._key(int(s[1][0]), int(s[1][1])))
+		var cb: Node3D = w.chunks.get(w._key(int(s[2][0]), int(s[2][1])))
+		var axis: String = s[3]
+		var ra: Dictionary = _ac0423probe_side(ca, axis, 16.0)
+		var rb: Dictionary = _ac0423probe_side(cb, axis, 0.0)
+		var entry: Dictionary = {"a": ra, "b": rb}
+		entry["across_gap"] = _ac0423probe_gap(ra, rb)
+		out[name] = entry
+	Debug.result({"ac0423": {"ok": true, "ms": Time.get_ticks_msec() - t0, "seams": out}})
+
+
+func _ac0423probe_gap(ra: Dictionary, rb: Dictionary) -> Dictionary:
+	# Pair side-A top-face edge vertices (local edge 16) with side-B's
+	# (local edge 0) by the ALONG-seam world coordinate (rounded to the
+	# metre); the gap = B's edge coord minus A's, in the seam's world axis
+	# (x for an x seam, z for a z seam). Positive = a void between them.
+	var a: Array = ra.get("top_edge", [])
+	var b: Array = rb.get("top_edge", [])
+	var bmap: Dictionary = {}
+	for v in b:
+		var k := int(roundf(float(v[0])))
+		if not bmap.has(k):
+			bmap[k] = v
+	var pairs: Array = []
+	var gmin := 1e18
+	var gmax := -1e18
+	var gsum := 0.0
+	var n := 0
+	for v in a:
+		var k := int(roundf(float(v[0])))
+		var bv: Array = bmap.get(k, [])
+		if bv.is_empty():
+			for dk in [-1, 1, -2, 2]:
+				if bmap.has(k + dk):
+					bv = bmap[k + dk]
+					break
+		if bv.is_empty():
+			continue
+		var g: float = (float(bv[1]) - float(v[1])) * 1000.0
+		gmin = minf(gmin, g)
+		gmax = maxf(gmax, g)
+		gsum += g
+		n += 1
+		if pairs.size() < 24:
+			pairs.append([roundf(float(v[0]) * 100.0) / 100.0, roundf(g * 100.0) / 100.0, int(v[2]), int(bv[2])])
+	if n == 0:
+		var r0: Dictionary = {"n": 0, "a_n": int(a.size()), "b_n": int(b.size())}
+		_ac0423probe_extfield(r0, ra, rb)
+		return r0
+	var r: Dictionary = {"n": n, "min_mm": roundf(gmin * 100.0) / 100.0, "max_mm": roundf(gmax * 100.0) / 100.0, "mean_mm": roundf(gsum / float(n) * 100.0) / 100.0, "pairs": pairs}
+	_ac0423probe_extfield(r, ra, rb)
+	return r
+
+
+func _ac0423probe_extfield(r: Dictionary, ra: Dictionary, rb: Dictionary) -> void:
+	# AC-0423 r3: the post-fix EXTENDED-edge overlap — A's farthest extended
+	# edge (its ext max, world seam-axis coord) minus B's farthest (its ext
+	# min); positive = the two top faces overlap across the seam (closed).
+	var ea: Array = ra.get("ext_edge", [])
+	var eb: Array = rb.get("ext_edge", [])
+	if ea.size() == 3 and eb.size() == 3:
+		r["ext_overlap_mm"] = roundf((float(ea[1]) - float(eb[0])) * 1000.0)
+	else:
+		r["ext_overlap_mm"] = null
+
+
+func _ac0423probe_side(c: Node3D, axis: String, edge: float) -> Dictionary:
+	var out: Dictionary = {"col": [int(c.cx), int(c.cz)], "top": int(c.top), "mesh_built": bool(c.mesh_built)}
+	# AC-0423 r2: the ACTUAL transforms in the tree (the SphereMath
+	# column_transform prediction is computed offline against these).
+	var tr: Transform3D = c.transform
+	var fx: Vector3 = tr * Vector3(1, 0, 0) - tr.origin
+	var fy: Vector3 = tr * Vector3(0, 1, 0) - tr.origin
+	var fz: Vector3 = tr * Vector3(0, 0, 1) - tr.origin
+	out["xform_x"] = [roundf(fx.x * 1e6) / 1e6, roundf(fx.y * 1e6) / 1e6, roundf(fx.z * 1e6) / 1e6]
+	out["xform_y"] = [roundf(fy.x * 1e6) / 1e6, roundf(fy.y * 1e6) / 1e6, roundf(fy.z * 1e6) / 1e6]
+	out["xform_z"] = [roundf(fz.x * 1e6) / 1e6, roundf(fz.y * 1e6) / 1e6, roundf(fz.z * 1e6) / 1e6]
+	var o: Vector3 = c.transform.origin
+	out["xform_origin"] = [roundf(o.x * 1000.0) / 1000.0, roundf(o.y * 1000.0) / 1000.0, roundf(o.z * 1000.0) / 1000.0]
+	var pn := c.get_parent()
+	if pn is Node3D:
+		var pg: Transform3D = (pn as Node3D).global_transform
+		out["parent_origin"] = [roundf(pg.origin.x * 1000.0) / 1000.0, roundf(pg.origin.y * 1000.0) / 1000.0, roundf(pg.origin.z * 1000.0) / 1000.0]
+	var nslp: int = int(c.slab_n())
+	for si2 in nslp:
+		var s2p = c.slabs[si2]
+		if s2p != null and s2p.mesh_instance != null:
+			var mgi: Transform3D = s2p.mesh_instance.global_transform
+			out["mi_origin"] = [roundf(mgi.origin.x * 1000.0) / 1000.0, roundf(mgi.origin.y * 1000.0) / 1000.0, roundf(mgi.origin.z * 1000.0) / 1000.0]
+			out["mi_parent_is_chunk"] = s2p.mesh_instance.get_parent() == c
+			break
+	var brow: int = 15 if edge > 8.0 else 0
+	var tops: Array = []
+	var ids: Array = []
+	var prof: Array = []
+	for k in 16:
+		var bx: int = k if axis == "z" else brow
+		var bz: int = k if axis == "x" else brow
+		var ty := -1
+		var bid := 0
+		for y in range(mini(int(c.top) + 1, Data.HEIGHT - 1), -1, -1):
+			var b: int = c.get_local(bx, y, bz)
+			if b != 0:
+				ty = y
+				bid = b
+				break
+		tops.append(ty)
+		ids.append(bid)
+		if k == 8:
+			for y in range(int(c.top), maxi(int(c.top) - 24, 0) - 1, -1):
+				prof.append([y, int(c.get_local(bx, y, bz))])
+	out["edge_row_tops"] = tops
+	out["edge_row_ids"] = ids
+	out["profile_k8"] = prof
+	var tx: Transform3D = c.transform
+	var top_edge: Array = []  # [along_world_m, edge_world_m, y_int]
+	var side_edge: Array = []
+	var n_top := 0
+	var n_side := 0
+	var n_ext := 0
+	var ext_min := 1e18
+	var ext_max := -1e18
+	var nsl: int = int(c.slab_n())
+	for si in nsl:
+		var sl = c.slabs[si]
+		if sl == null or sl.mesh_instance == null or sl.mesh_instance.mesh == null:
+			continue
+		var mesh: ArrayMesh = sl.mesh_instance.mesh
+		if mesh.get_surface_count() == 0:
+			continue
+		var arrs: Array = mesh.surface_get_arrays(0)
+		var vv: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var nn: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+		if int(vv.size()) != int(nn.size()):
+			continue
+		for i in vv.size():
+			var v: Vector3 = vv[i]
+			var e: float = v.x if axis == "x" else v.z
+			var nw: Vector3 = nn[i]
+			if nw.y > 0.5:
+				var wpe: Vector3 = tx * v
+				var ece: float = wpe.x if axis == "x" else wpe.z
+				# AC-0423 r3: the post-fix EXTENDED edge row — top-face
+				# vertices in the near-edge band (pre-fix the edge row sits
+				# at 15.95..16.05 / -0.05..0.05; the seam-V extension moves
+				# it to 16+E / 0-E).
+				if ((edge > 8.0) and e > 15.4) or ((edge <= 8.0) and e < 0.6):
+					n_ext += 1
+					ext_max = maxf(ext_max, ece)
+					ext_min = minf(ext_min, ece)
+				if absf(e - edge) > 0.05:
+					continue
+				n_top += 1
+				if top_edge.size() < 400:
+					var along: float = wpe.z if axis == "x" else wpe.x
+					top_edge.append([roundf(along * 1000.0) / 1000.0, roundf(ece * 1000.0) / 1000.0, int(roundf(wpe.y))])
+			elif absf(nw.y) < 0.5:
+				if absf(e - edge) > 0.05:
+					continue
+				n_side += 1
+				if side_edge.size() < 40:
+					var wps: Vector3 = tx * v
+					side_edge.append([roundf(wps.x * 1000.0) / 1000.0, roundf(wps.y * 1000.0) / 1000.0, roundf(wps.z * 1000.0) / 1000.0, roundf(nw.y * 1000.0) / 1000.0])
+	out["n_top_edge"] = n_top
+	out["n_side_edge"] = n_side
+	out["top_edge"] = top_edge
+	out["side_edge_sample"] = side_edge
+	# AC-0423 r3: [ext_min_world, ext_max_world, n] for the extended edge.
+	out["ext_edge"] = [roundf(ext_min * 1000.0) / 1000.0, roundf(ext_max * 1000.0) / 1000.0, n_ext] if n_ext > 0 else []
+	var tv: Array = []
+	var tsi: int = int(c.top) / 16
+	for dsi in [0, 1]:
+		var s2i: int = tsi + dsi
+		if s2i >= 0 and s2i < nsl:
+			var s2 = c.slabs[s2i]
+			if s2 == null or s2.mesh_instance == null:
+				tv.append(-1)
+			else:
+				tv.append(1 if s2.mesh_instance.visible else 0)
+	out["visible_top_slabs"] = tv
+	return out

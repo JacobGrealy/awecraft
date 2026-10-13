@@ -3809,6 +3809,7 @@ func _ready() -> void:
 	# MAIN-THREAD only (the 20 Hz tick); no worker dereferences it.
 	_random_tick = AweRandomTick.new()
 	_tm_ctx = ChunkScript.make_ctx()
+	_tm_ctx["sphere_r"] = float(Game.planet_R)  # AC-0423: the seam-V extension radius (the home worker ctx template; the face-chunk sync path keeps no key)
 	_tm_ms_full = ChunkScript._merge_atlas()
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
@@ -5422,6 +5423,7 @@ func _process(_delta: float) -> void:
 	var _at: Texture2D = Data.atlas_tex
 	if _at != _tm_ctx_atlas:
 		_tm_ctx = ChunkScript.make_ctx()
+		_tm_ctx["sphere_r"] = float(Game.planet_R)  # AC-0423 (see the boot template above)
 		_tm_ctx_atlas = _at
 		_tm_ms_full = ChunkScript._merge_atlas()
 		_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
@@ -5906,6 +5908,7 @@ func refresh_textures() -> void:
 	# deduped keys so every chunk is rebuilt once with the new tables.
 	if threadmesh:
 		_tm_ctx = ChunkScript.make_ctx()
+		_tm_ctx["sphere_r"] = float(Game.planet_R)  # AC-0423 (see the boot template above)
 		_tm_ms_full = ChunkScript._merge_atlas()
 		_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 		_tm_ctx_atlas = Data.atlas_tex  # AC-0160: re-stamp (the _process guard would catch it, but stamp now)

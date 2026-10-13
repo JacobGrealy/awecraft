@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0423 results — see-through gaps between chunks</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.8em; border-bottom: 1px solid #bbb; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+code { background: #f0f0f0; padding: 1px 4px; } pre { background: #f6f6f6; padding: 8px; overflow-x: auto; }
+.ok { color: #060; font-weight: bold; } .bad { color: #a00; font-weight: bold; } .warn { color: #960; font-weight: bold; }
+img { max-width: 100%; border: 1px solid #ccc; } .pair { display: flex; gap: 1em; flex-wrap: wrap; } .pair > div { flex: 1 1 420px; }
+</style></head><body>
+<h1>AC-0423 results — the see-through gaps between chunks</h1>
+<p><b>Verdict: the defect is real, the root cause is measured, the fix is verified.</b> The ground-level frame that showed skybox slits along the chunk seams is now solid: every measured slit band reads 0 skybox pixels (before 5.6–24.2%), and the across-seam gap the probe measured at 552–558 mm is now a 654–1,290 mm <b>overlap</b> on all 9 seam pairs. All light gates green; the heavy set green except one <b>pre-existing</b> r50 failure (A/B-proven, follow-up ticket AC-0424 filed) and one gate crash that <b>was</b> mine and is fixed + re-verified.</p>
+
+<h2>1. The defect (user-reported, measured)</h2>
+<p>A frame at ground level (default boot camera at spawn, facing +Z) shows what is <b>behind</b> the terrain along the chunk seams: pale-cyan slits (RGB ≈ 183,235,247 — the skybox) threading every seam crossing the view. The fog wall (332 m) cannot reach 16–30 m seams (refuted in the prior run). The probe measured the across-seam gap at terrain-top height: <b>552–558 mm</b> at the x=16 seam (terrain tops 139–146 m); node transforms were verified against an independent Python replication of the placement math to the millimetre.</p>
+
+<h2>2. Root cause</h2>
+<p>The per-column tangent-sheet placement (<code>SphereMath.column_transform</code> / C++ <code>sm_column_transform</code>, SEAM_FILL 1e-4 included) is gapless at the sheet <b>base</b> — the folded-net edge lines coincide to the AC-0362 1.6 mm grout — but the sheets' edge lines <b>diverge with height</b>: the neighbour's radial leans 16/R away from the own sheet's radial, so a V of width ≈ h·(16/R) opens at surface height h above the fold (≈ 0.4 m). Terrain tops sit h ≈ 140 m up → <b>~0.55 m see-through slit at every seam at ground level</b> (0.5584 m at t = 140, i = 8, R = 4000 — the measured value). A line of sight aimed at the seam (a ~5.6° depression band) threads the V — its walls are the culled seam faces — out to the skybox. Cliff cases self-close (the cliff face catches the ray); the open case is roughly-flat terrain across the seam, the common one. AC-0307's close note documented the divergence as a "known physical consequence" covered by "AC-0042's hidden filler" — the filler is the flat-world one and <b>never existed in the sphere placement</b>, so nothing ever closed the V; the AC-0362 grout closed the sheet-<i>plane</i> footprint (vertical rays) only.</p>
+
+<h2>3. The fix</h2>
+<p>Extend the <b>top-face edge rows</b> (opaque merged + single-quad + fluid top) past the nominal 0..16 local footprint by the V width at the corner's own height, so the two sheets' top faces <b>overlap</b> across the seam and meet in the fold crease:</p>
+<pre>E(t, i) = K0[k][i] + K1[k]·t + SEAM_V_MARGIN (0.05 m), clamped [0, SEAM_V_MAX (2.5 m)]</pre>
+<p>k ∈ {0=W,1=E,2=S,3=N}, i = the along-edge cell, t = the corner's local height. K0/K1 come from the two columns' <b>placed</b> transforms (<code>awesm::sm_column_transform</code> — the math moved verbatim from gen.cpp into <code>sphere_math_cpp.h</code>, the single source of truth) and the neighbour's <b>edge-column tops read per cell</b> from the neighbour data already handed to <code>build_accs</code> (an all-air edge cell has no seam surface there → no V to fill). Per-cell tops = exact geometric values (no over-extension into the neighbour's solid). <b>Top faces only</b> — the merged path is guarded on <code>fi == 2</code>, the single-quad paths on <code>fcv == FCV[2]</code>; side faces stay on the exact seam plane (the unguarded first version extended side faces and the seamcensus caught it: 3 missing below-floor faces + 3,175 map anomalies + 89 winding-bad). Enabled by <code>ctx["sphere_r"] = Game.planet_R</code> on the home worker ctx template (world.gd, the three <code>_tm_ctx</code> build sites — the game builds through the C++ worker lane, not <code>chunk.build_mesh</code>) + the sync path (chunk.gd). The face-chunk path (<code>build_mesh_face</code>) and every hand-built arm ctx carry no key → <code>sphere_r = 0</code> → all edges inactive → <b>bit-identical to pre-AC-0423</b> (standing REF gates stay green; the face placement is the LSQ affine, a different mechanism).</p>
+
+<h2>4. Acceptance — before / after, same frame</h2>
+<div class="pair">
+<div><img src="captures/ac0423-before-ground-north.png" alt="BEFORE: slits visible"><br><b>BEFORE</b> — the slits: the horizontal z=16 band, the xm16 diagonal on the left, the x16 right edge (pale-cyan = skybox behind the terrain).</div>
+<div><img src="captures/ac0423-after-ground-north.png" alt="AFTER: solid"><br><b>AFTER</b> — same boot camera, 1280×720, R4. The seams are solid (the thin dark fold creases are the overlapping top faces meeting — no skybox behind).</div>
+</div>
+<p><b>Pixel census of the slit bands (pale-cyan skybox class, G,B &gt; 200, B &gt; R+10):</b></p>
+<table>
+<tr><th>band</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>z16 left (200–400, 405–425)</td><td>707 / 4,000 (17.7%)</td><td class="ok">0 / 4,000 (0.0%)</td></tr>
+<tr><td>xm16 diagonal (0–340, 520–545)</td><td>475 / 8,500 (5.6%)</td><td class="ok">0 / 8,500 (0.0%)</td></tr>
+<tr><td>x16 right edge (1215–1280, 415–440)</td><td>394 / 1,625 (24.2%)</td><td class="ok">0 / 1,625 (0.0%)</td></tr>
+<tr><td>whole mid-band (0–1280, 330–460, every 2nd px)</td><td>1,240 / 83,200</td><td class="ok">0 / 83,200</td></tr>
+</table>
+<p>Zooms: <a href="captures/ac0423-after-zoom-z16_left.png">z16-left</a> · <a href="captures/ac0423-after-zoom-xm16_diag.png">xm16-diagonal</a> · <a href="captures/ac0423-after-zoom-x16_right.png">x16-right</a>. Render: Forward+ / llvmpipe boot line present, rc=0, census clean; the <code>SNAPDRAIN not fully drained after 600 frames</code> cap fired — the documented 600-frame budget behaviour (the BEFORE shot used the same cap). The AFTER frame was captured with the pre-incident .so; the later .so rebuild (the meshprobe fix, §6) is byte-identical on the live ring path (genhash identical + probe + seamcensus re-verified, §7), so the frame remains valid evidence.</p>
+
+<h2>5. Gates (this run — exit statuses + censuses)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>exit</th><th>log</th></tr>
+<tr><td>G0 (headless load)</td><td class="ok">rc 0 · SCRIPT ERROR 0 / SHADER ERROR 0</td><td>0</td><td>.scratch/AC-0423/g0-r5.log</td></tr>
+<tr><td>genhash</td><td class="ok">25 lines; (0,0) <code>46c20b07…</code> = the standing AC-0311-P2 reference — bit-identical (proves the gen.cpp → header splice)</td><td>0</td><td>.scratch/AC-0423/genhash-r1.log (re-runs r3/r4 identical)</td></tr>
+<tr><td>farab</td><td class="ok">ok · h_mismatch 0 · slab_cmp 1080/1080 · mat_pierce 0</td><td>0</td><td>.scratch/AC-0423/farab-r1.log</td></tr>
+<tr><td>ladder</td><td class="ok">ok · band_a 20/20 · band_b 144/144 · band_c 90/90 (self-consistent; A/B with the extension OFF is identical — the drift from the AC-0331 note 155/94 is PRE-EXISTING, §6)</td><td>0</td><td>.scratch/AC-0423/ladder-r1..r2.log + ladder-ab.log</td></tr>
+<tr><td>seamcensus r4</td><td class="ok">ok · missing_faces 0 on 64 seams / 393,216 rows · fixture 44/44 · map_anomalies 0 · winding_bad 0 — first actual run of the instrument (the arm had never run: three latent typed-<code>null</code> bugs, repaired + re-based for the extension, harness_data.yaml + HARNESS.md updated)</td><td>0</td><td>.scratch/AC-0423/seamcensus-r4.log (r5 post-rebuild identical)</td></tr>
+<tr><td>ac0423probe (the ticket's probe)</td><td class="ok">ok · all 9 seam pairs: across-seam gap 0, ext_overlap 654–1,290 mm (was the 552–558 mm gap); ext_edge shows the top-face rows reaching 16.88/0.33/33.4 local (past the nominal 16/0 footprint)</td><td>0</td><td>.scratch/AC-0423/probe-r10.log (r9 pre-rebuild identical)</td></tr>
+<tr><td>boundary r4 (×2, flake)</td><td class="ok">both ok · flap 196/105 · staged_dropped 2464/2580 (box-timing class, the AC-0384-verified band)</td><td>0</td><td>.scratch/AC-0423-gates/boundary_r4_1.log, boundary_r4_flake.log</td></tr>
+<tr><td>genhash re-run (heavy job)</td><td class="ok">IDENTICAL to r1</td><td>0</td><td>.scratch/AC-0423-gates/genhash.log</td></tr>
+<tr><td>boundary r50</td><td class="bad">ok false: marker_ok + remesh_ok false (crossings 20/20 — the walk completes) — <b>A/B-PROVEN PRE-EXISTING</b> (identical on the pre-AC-0423 native build), follow-up <b>AC-0424</b> filed; not a regression, not a re-baseline</td><td>0</td><td>.scratch/AC-0423-gates/boundary_r50.log + boundary_r50-pre.log</td></tr>
+<tr><td>meshprobe</td><td class="warn">first run: deterministic SIGSEGV (rc 134) — <b>my code</b> (two legacy-shape bugs in build_seam_ext), fixed + rebuilt + re-run <span class="ok">ok · ac0211_ok true · compact_ok 32/32</span> (§6)</td><td>134 → 0</td><td>.scratch/AC-0423-gates/meshprobe.log (crash) → meshprobe-r3.log (pass)</td></tr>
+<tr><td>full battery</td><td class="ok">rc 0 · all 6 arms RESULT green (player on_floor + sprint, interact place/mine/drop, light torch 0→9, fluids sea stable + lava 25, buckets scoop/place, genhash)</td><td>0</td><td>.scratch/AC-0423-gates/battery.log</td></tr>
+<tr><td>shaderforce</td><td class="ok">12/12 shaders ok · 0 failed</td><td>0</td><td>.scratch/AC-0423-gates/shaderforce.log</td></tr>
+<tr><td>Windows build + serve</td><td class="ok">build rc 0 (post-fix rebuild, stamp 20261012-2211) · :8080/AweCraft.exe → 200 (the standing daemon serves exports/windows/ from disk) · :8081 → 200 (fresh daemon; :8080 is held by the standing one) · :5180 board answers GET</td><td>0</td><td>.scratch/AC-0423-gates/build_windows-r2.log</td></tr>
+</table>
+<p>Serve addresses: <code>http://localhost:8080/AweCraft.exe</code> and <code>http://192.168.0.224:8080/AweCraft.exe</code> (board <code>http://192.168.0.224:5180/</code>).</p>
+
+<h2>6. Deviations</h2>
+<ol>
+<li><b>meshprobe crashed deterministically (rc 134, SIGSEGV) — my bug, fixed.</b> The arm's REF build passes the <b>legacy full-slab</b> nbs shape with a ctx that duplicates <code>world._tm_ctx</code> (which now carries <code>sphere_r</code>), and <code>build_seam_ext</code> had two legacy-shape bugs: (1) a dead legacy slab is an <b>empty</b> vector (<code>slab_views</code> starts empty) — <code>.data()</code> == nullptr → the deref (the AC-0403 unguarded-read family, reintroduced); (2) the top scan indexed the 4096-B full slab with the 256-B ring formula (y_in*16+t) — the wrong cells. Fix: the shape discriminant <code>nd[k][0].size()==256</code> (the build_snap_data canonical), per-slab empty-skip, full-slab index <code>y*256 + a_edge*16 + i</code>. Rebuilt → meshprobe green; re-verified on the new .so: genhash identical, probe all seams closed, seamcensus identical (the ring path is byte-identical — the fix only touches the legacy shape + the null guard). 3/3 pre-fix runs crashed at the same offset; the post-fix run is clean.</li>
+<li><b>boundary r50 red — pre-existing, not AC-0423.</b> A/B: the AC-0423 native changes stashed (pre-change .so, same tree) → identical failure (<code>ok/marker_ok/remesh_ok</code> false, built_final 246 vs 233, walk 20.33 s vs 20.35 s). The r4 twin of the same arm passes both runs. Follow-up ticket <b>AC-0424</b> filed (open, p2, unqueued) with the repro + the three unverified suspects (3,000-frame re-entry budget vs r50 dispatch volume; genuine edit loss through free→regenerate at r50; ok-formula conflating partial build with edit loss).</li>
+<li><b>ladder band_b/c counts 144/90 vs the AC-0331 note 155/94</b> — A/B-PROVEN pre-existing (extension OFF reads the identical counts); the standing 20/20 band-A value holds; the absolute far-band counts are documented as "what the post-floor world draws at read time," not invariants.</li>
+<li><b>the seamcensus instrument had never run</b> (three latent <code>var q: Array = _seamc_quad(...)</code> bugs — the function is designed to return null) — repaired + re-based in this task (harness_data.yaml row + HARNESS.md re-rendered); its first actual run is the post-fix r4 result above, with an A/B (extension off) that stays clean, so the instrument is proven on pre-fix geometry too.</li>
+<li><b>the ac0423probe arm stays in harness.gd until closeout</b> — it is this ticket's probe (the heavy set's "the task's probe"), the user's fly pass may re-run it, and the ticket is not yet closed; it is removed at closeout per the pristine rule. No harness_data.yaml row is owed (temp arm).</li>
+<li><b>SNAPDRAIN 600-frame cap</b> fired on both acceptance shots — the documented proxy-renderer budget behaviour (HARNESS.md §2), the shots are geometry evidence on the Forward+ llvmpipe path.</li>
+</ol>
+
+<h2>7. Deliberately out of scope (documented)</h2>
+<ul>
+<li><b>Face-chunk seams</b> (faces 2–11): the LSQ affine placement is a different mechanism — its patch-boundary V-crack (AC-0311 territory) is untouched; the extension is OFF there by the <code>sphere_r</code> key contract (bit-identical face meshes — the genhash + REF gates prove it).</li>
+<li><b>Far-LOD / band-A</b> transient far bands (the coarse emitters never carried the extension; the band-A materialized build does — consistent, harmless at that tier).</li>
+<li><b>The 1-cell dip-at-seam "moat"</b> between two cliffs (the neighbour edge cell is air → E = 0 there; the far cliff face shows through, not the sky — not a see-through defect).</li>
+<li><b>Ramp edges</b> (the AC-0205 ramp quads are interior; their seam-adjacent rows take the same top-face treatment as the merged rows) and the <b>UV stretch</b> on the extension strip (hidden by the fold crease; the stretch is the cheaper of the two options, the alternative being a new atlas band).</li>
+<li><b>Closeout itself</b>: no commits/pushes (not requested); TASKS.yaml untouched by hand; the AC-0424 follow-up is the only registry change (via tasks.py).</li>
+</ul>
+
+<h2>8. Files</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/sphere_math_cpp.h</code> (new)</td><td>the <code>awesm</code> column-placement math, moved verbatim from gen.cpp (single source of truth for gen + mesh).</td></tr>
+<tr><td><code>gdext/src/gen.cpp</code></td><td>splice to the header (genhash bit-identical).</td></tr>
+<tr><td><code>gdext/src/mesh.cpp</code></td><td><code>SeamExt</code> + <code>seam_ext_at</code> + <code>seam_ext_corner</code> + <code>build_seam_ext</code> (both neighbour shapes, null-safe); <code>ctx.sphere_r</code>; the top-face-only hooks in the emitters.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>_tm_ctx["sphere_r"] = float(Game.planet_R)</code> at the three worker-ctx build sites.</td></tr>
+<tr><td><code>godot/world/chunk.gd</code></td><td>the sync path key.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>ac0423probe arm (temp — out at closeout) + seamcensus repair/rebase.</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code></td><td>seamcensus row (rebase + first-run note), re-rendered.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§4 mesh.cpp lane row + the per-column placement bullet (the V-crack class corrected: it was open, now closed by the seam-V extension).</td></tr>
+<tr><td><code>tasks/AC-0423/</code></td><td>plan.html, this page, continuity.md, captures/ (before/after + zooms).</td></tr>
+</table>
+</body></html>
