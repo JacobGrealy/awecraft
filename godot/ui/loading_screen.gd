@@ -67,3 +67,9 @@ func set_note(note: String) -> void:
 
 func hide_screen() -> void:
 	visible = false
+
+# AC-0186: read the current stats line (the AC-0186 continuewin probe arm
+# samples it while the continue window is open - a public getter keeps the
+# arm off the underscore member).
+func progress_text() -> String:
+	return _stats.text

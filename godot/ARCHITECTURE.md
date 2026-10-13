@@ -1934,7 +1934,8 @@ Match these; do not improvise a different approach in a task.
   moment the **SIM TAXI DIAMOND** around the load anchor — every column with
   `taxi(dx,dz) <= band0_r` (= sim), 41 columns at sim 4 — is `mesh_built` by the
   NORMAL streaming machinery, and `start_game` (fresh spawn) / `_continue_slot`
-  (continue — no loading window there) activate the player only after the SAME
+  (continue — the window arms there via the world-owned AC-0186 trigger)
+   activate the player only after the SAME
   condition (`_await_sim_band`, the diamond wait; `_await_core_3x3` survives as
   the harness arms' settling helper) — the `simband` wall (the load arm's
   `simband_ms`, renamed from `spawn3x3_ms`) IS the load→activation wall. The
@@ -1972,6 +1973,23 @@ Match these; do not improvise a different approach in a task.
   lands ~2.8 min after spawn instead of 13+; on desktop-class hardware the
   bake finishes inside the budget and the player is never released early).
   The hold latches (no second stall) and resets with the window.
+  **AC-0186 (the continue-path window)**: the window was fresh-spawn-only —
+  `main._continue_slot` has no `start_loading` caller, so a Continue press
+  hid the menu and the player watched the half-built world for the whole
+  sim-band wait. The world now arms the SAME window on that path
+  (`world.gd _ac0186_continue_window`, called from `_process` before
+  `_loading_tick`): the first process frame where `loading_bypass` + first
+  window of the boot + mode play + the player not handed over yet + the
+  active slot HAS a save file (a fresh spawn's slot is empty until
+  `Save.save_now` after the load — and its own `start_loading` has already
+  fired synchronously, so the fresh-spawn path is untouched) + the Menu
+  node exists under Main (the real menu-first flow; the harness arms boot
+  without a menu and keep `loading_active=false` — the load arm's standing
+  contract; `AWECRAFT_LOADCONTINUE=1` forces the trigger for the probe runs).
+  Title "Continuing world (seed N)..." — the progress line, the disk/gen
+  counters (a continue's `disk` count IS the saved-columns load), the AC-0414
+  bake hold + live line and the diamond close are the existing path-agnostic
+  machinery.
 - **Deterministic spawn search (AC-0324)**: the player's start column is NOT a
   fixed constant — `World.spawn_point()` runs a no-RNG search once the
   SIM-BAND data the load gate guarantees is built, and returns the searched

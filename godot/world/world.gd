@@ -3505,6 +3505,11 @@ var loading_active := false
 var _shutting_down := false
 var _load_done_once := false
 var _loading_target := 0
+# AC-0186: the continue-path window trigger's own frame count (see
+# _ac0186_continue_window). The world node counts frames so the trigger
+# can prove the boot's synchronous section (start_game's own
+# start_loading, or _continue_slot's recenter + await) has already run.
+var _ac0186_boot_frames := 0
 # AC-0274: the per-second LOADER timeline (env AWECRAFT_LOADLOG=1) - the
 # stall repro's evidence: progress %, both pool depths, io/gen counts.
 # print() is piped-buffered - run under stdbuf -oL.
@@ -5458,6 +5463,11 @@ func _process(_delta: float) -> void:
 	_sw_frame += 1  # AC-0339: the settle-wait frame counter (before the idle return)
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
+	# AC-0186: the continue-path window trigger (the real menu flow's
+	# Continue has no start_loading caller - the world arms its own window;
+	# inert for the harness, see the function). BEFORE the idle early-return.
+	_ac0186_boot_frames += 1
+	_ac0186_continue_window()
 	# AC-0178: BEFORE the idle early-return — the completion state IS the
 	# all-idle state, so the check must not sit behind that return.
 	_loading_tick()
@@ -6097,6 +6107,44 @@ func stop_loading() -> void:
 	# finishes at full speed instead of idling behind the LOW yield.
 	if satellite != null and satellite.bake_active:
 		satellite.bake_yield = false
+
+
+# AC-0186: the continue path owes the SAME loading window as the fresh
+# spawn (the ticket: Continue shows the cover + progress until the spawn
+# sim diamond is disk-loaded + meshed - no half-loaded void).
+# main._continue_slot has no start_loading caller (the window was
+# fresh-spawn-only), so the world arms it itself on that path. GATES:
+#   - loading_bypass (AWECRAFT_LOADBYPASS=0 kills every window) and the
+#     FIRST window of this boot (not loading_active / not
+#     _load_done_once - the radius-change window stays note_render_distance's);
+#   - mode play + the player not handed over yet (the continue flow spawns
+#     the player only after its _await_sim_band, so no input can exist while
+#     the cover is up);
+#   - a CONTINUE, not a fresh spawn: Save.active_slot is set to a slot that
+#     HAS a save file (a fresh spawn's slot is empty until Save.save_now runs
+#     AFTER the load - and start_game's own start_loading has already fired
+#     by the first _process tick, so this gate is belt for that path);
+#   - the REAL menu flow: the Menu node exists under Main (main.gd's
+#     menu-first dispatch creates it; the harness arms boot without a menu
+#     and must keep loading_active=false - the load arm's standing contract:
+#     "battery/chunkio/save/continue arms run with loading_active=false").
+# AWECRAFT_LOADCONTINUE=1 forces the trigger on for a run (the AC-0186
+# continuewin probe arm - temporary). Everything AFTER the trigger (the
+# progress line, the disk/gen counters, the AC-0414 bake hold + live line,
+# the diamond close) is the existing path-agnostic window machinery.
+func _ac0186_continue_window() -> void:
+	if not loading_bypass or loading_active or _load_done_once:
+		return
+	if _ac0186_boot_frames < 2:
+		return
+	if Game.mode != "play" or Game.player != null:
+		return
+	if Save.active_slot < 0 or not Save.file_exists(int(Save.active_slot)):
+		return
+	var forced := OS.get_environment("AWECRAFT_LOADCONTINUE") == "1"
+	if not forced and get_parent().get_node_or_null("Menu") == null:
+		return
+	start_loading("Continuing world (seed %d)..." % int(Game.world_seed))
 
 
 # AC-0414: the hold's per-frame tick (called from _loading_tick — only

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0186 plan — loading screen on the continue path</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1000px;margin:2em auto;padding:0 1em;line-height:1.45}
+code{background:#f4f4f4;padding:1px 4px}
+.box{border:1px solid #888;padding:8px 12px;margin:1em 0}
+.warn{background:#fdf6e3}
+</style>
+</head>
+<body>
+<h1>AC-0186 plan — continue-saved-world loading screen</h1>
+
+<h2>Goal</h2>
+<p>When <b>Continue</b> is pressed, the player gets the <b>same loading screen</b> the
+new-world path gets — full cover + honest progress — until the spawn
+<b>sim taxi diamond</b> (taxi ≤ sim; 41 cols at sim 4, 41 = the ticket's "spawn radius"
+as corrected by AC-0313 clause 4, the user's own "let's do sim taxi distance" decision)
+is fully <b>disk-loaded + meshed</b>. No half-loaded void, no player input before then
+(the player node does not exist until the diamond is built — input is blocked by
+construction; the menu hides on click; the cover is a full-rect layer-90).</p>
+
+<h2>What already exists (read, not re-derived)</h2>
+<ul>
+<li><b>AC-0178 loading screen</b> (<code>ui/loading_screen.gd</code>): cover + title +
+bar + the honest stats line <code>N% — m / 41 cols (disk X · gen Y)</code>. Already
+path-agnostic.</li>
+<li><b>The window machinery</b> (<code>world.gd</code>): <code>start_loading /
+stop_loading / _loading_tick</code>, the sim-diamond target (<code>_loading_target_col</code>),
+the loading caps, the diamond close. The continue path's await
+(<code>main._await_sim_band</code>) waits on the <b>same condition</b> — the simband wall
+<b>is</b> the load→activation wall.</li>
+<li><b>AC-0414 (bake before load)</b>: the loading window also holds the world release
+for an in-flight satellite bake (bounded 42 s + loud release) and shows the live bake
+line (<code>set_note</code>: seed, shard k/98, face k/12). Measured on this box: 169 s
+bake, 48.4 s release. <b>Path-agnostic</b> — it fires from <code>_loading_tick</code>
+whenever <code>loading_active</code> and the bake is WORK. So a continue whose bake
+cache is absent gets the honest bake line for free once the window opens on that path.</li>
+<li><b>Save/continue</b>: <code>save.gd</code> slots (SAVE_VERSION 4),
+<code>ChunkIO</code> region saves (AC-0287 filter: SIM DIAMOND + edited columns;
+<code>AWECRAFT_SAVEALL=1</code> test-only bypass), <code>_try_disk_load</code> (disk
+reads, <code>disk_reads</code> counter), <code>main._continue_slot</code> (edits/pose
+restore, recenter, sim-band await, spawn, <code>Game.start</code>). The standing
+<code>save</code> arm proves continue correctness.</li>
+</ul>
+
+<div class="box warn">
+<b>THE GAP (what genuinely remains):</b> <code>main._continue_slot</code> (a fenced
+file — another session has uncommitted work there) has <b>no</b>
+<code>start_loading</code> caller. The window opens only on the fresh-spawn path
+(<code>start_game</code>). On continue, the menu hides on click and the player then
+watches the raw half-built world for the whole sim-band wait. Everything the screen
+would show (progress, disk counters, bake line, diamond close) already works — only
+the <b>trigger</b> is missing on the continue path.
+</div>
+
+<h2>What I will change</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>Continue-path window trigger (world-owned, ~35 lines): arms
+<code>start_loading("Continuing world (seed N)...")</code> on the first process frame
+where — <code>loading_bypass</code> + first window of this boot + mode play + player
+not handed over + <b>the active slot has a save file</b> (continue, not fresh spawn:
+a fresh spawn's slot is empty until <code>Save.save_now</code> after the load) +
+<b>the Menu node exists under Main</b> (the real menu-first flow; harness arms boot
+without a menu and must keep <code>loading_active=false</code> — the load arm's
+standing contract, <code>harness_data.yaml</code> load row).
+<code>AWECRAFT_LOADCONTINUE=1</code> forces the trigger for the probe runs. The
+fresh-spawn path is untouched: <code>start_game</code>'s own <code>start_loading</code>
+runs synchronously before the first <code>_process</code> tick.</td></tr>
+<tr><td><code>godot/ui/loading_screen.gd</code></td>
+<td><code>progress_text()</code> getter (3 lines) — the probe samples the live line;
+keeps the arm off the <code>_stats</code> underscore member.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td>
+<td><b>TEMPORARY</b> <code>continuewin</code> arm (pristine rule — in and out this
+task, AC-0414 precedent): one-process save→continue. Phase 1: build the r22 circle,
+6 marker blocks, <code>AWECRAFT_SAVEALL=1</code> full-circle save (1k+ disk census
+via the region tables), save JSON (pose/sel/inv), free. Phase 2:
+<code>main._continue_slot(0)</code> with the forced window; a 0.1 s chained
+<code>create_timer</code> sampler records the window trajectory (the arm's coroutine
+is suspended inside the continue await — the timer keeps ticking while the world's
+<code>_process</code> runs the window). Phase 3: assert window opened/closed at the
+diamond, player enabled after, edits+pose round-trip, <code>disk_reads</code> ≥ 41;
+RESULT JSON. Render env: mid-window + post-continue captures via <code>Debug.snap</code>.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>Same-task sync (invariant 2): the load-screen clause (the window now also arms on
+the continue path — world-owned trigger, real-menu-flow gate) and the
+<code>_continue_slot</code> note ("no loading window there" → armed by the trigger).</td></tr>
+</table>
+
+<h2>Harness gates (light set — one godot at a time, HOME prefix, pgrep first)</h2>
+<ol>
+<li><b>G0</b> before + after: <code>gate_census.py</code> zero SCRIPT ERROR + zero
+SHADER ERROR <b>and the process exit status</b> (the stochastic use-after-free class
+exits 139 on a clean log; a mid-bake exit is the known occurrence — my runs avoid a
+bake entirely, seed 44 = shipped res textures).</li>
+<li><b>SMOKE</b>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>
+(~30 s) — includes genhash.</li>
+<li><b>PROBE</b>: <code>AWECRAFT_LOGIC=player</code> + <code>AWECRAFT_PROBE=1</code>
+(the <code>PROBE ocean_cells=…</code> census line + the player footing arm).</li>
+<li><b>genhash</b> 25/25 byte-identical (<code>world/*</code> touched) vs the standing
+reference.</li>
+<li><b>save</b> arm (~60–90 s) — the continue-correctness standing arm; must run with
+<code>loading_active=false</code> (the trigger stays inert for harness runs).</li>
+<li><b>settings</b> arm.</li>
+<li><b>boundary r4</b> one-shot self-check (world/AGENTS: one at most, then the
+rest is the coordinator's) — the continue path's streaming changed (the window's
+caps), the harness path must read unchanged.</li>
+<li><b>continuewin</b> headless (the 1k+ census + window trajectory + continue
+proof, budget 900 s).</li>
+<li><b>continuewin</b> render: <code>xvfb-run</code> + lavapipe vulkan +
+<code>--rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, verify
+the Forward+ boot line, <b>check the capture files exist</b> (SNAP FAIL trap),
+budget 1200 s.</li>
+<li>G0 re-verified after the temp arm is removed (pristine).</li>
+</ol>
+
+<h2>Deliberately NOT done</h2>
+<ul>
+<li>No <code>main.gd</code>/<code>game.gd</code> edits (fenced) — the trigger lives in
+<code>world.gd</code>, which is why the menu-presence gate (instead of a main.gd
+flag) carries the harness distinction.</li>
+<li>No bake-progress demo on a fresh (uncached) continue: seed 44 loads the body from
+shipped <code>res://</code> textures (phase LOAD, never WORK) — the AC-0414 hold
+cannot engage, and I will not exit mid-bake on a non-canonical seed (the
+stochastic UAF class the coordinator flagged). The hold + live line are the
+same <code>_loading_tick</code> code AC-0414 already measured (169 s bake,
+48.4 s release) on the fresh-spawn path.</li>
+<li>No new settings, no new save fields, no format bump.</li>
+<li>Heavy gate set (full battery, Windows build, shaderforce) — the coordinator's.</li>
+</ul>
+
+</body>
+</html>

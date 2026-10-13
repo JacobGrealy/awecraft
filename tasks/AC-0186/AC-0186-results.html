@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AC-0186 results — loading screen on the continue path</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1050px;margin:2em auto;padding:0 1em;line-height:1.5}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f7f7f7;border:1px solid #ddd;padding:8px;overflow-x:auto;font-size:12px}
+table{border-collapse:collapse}
+td,th{border:1px solid #bbb;padding:3px 8px;text-align:left}
+.ok{color:#060;font-weight:bold}
+.warn{background:#fdf6e3;padding:8px 12px;border:1px solid #cc9}
+img.shot{max-width:640px;border:1px solid #888;margin:6px 0}
+h2{margin-top:1.8em;border-bottom:2px solid #888}
+</style>
+</head>
+<body>
+<h1>AC-0186 results — the continue path gets the loading screen</h1>
+<p><b>Ticket:</b> Continue (menu → slot) must show the same loading screen as new-world
+gen — cover + progress % — and keep the cover until the spawn diamond is fully
+disk-loaded + meshed (no half-loaded void). Reuse the AC-0178 UI; verify on a 1k+ column
+save. <b>Outcome: DONE.</b> The window now opens on continue, shows an honest
+per-column progress line while the saved columns stream off disk, closes exactly at the
+sim taxi diamond, and only then does the player exist (input blocked by construction,
+no void pop). Evidence below is from the frames and the captured state, not from
+description.</p>
+
+<h2>What pre-existed vs. what remained</h2>
+<ul>
+<li><b>Pre-existed (reused, not re-built):</b> the AC-0178 loading screen
+(<code>ui/loading_screen.gd</code>: cover + title + bar +
+<code>N% — m / 41 cols (disk X · gen Y)</code>); the window machinery in
+<code>world.gd</code> (<code>start_loading/stop_loading/_loading_tick</code>, the
+sim-diamond target — taxi ≤ sim, 41 cols at sim 4 — the AC-0313-corrected gate,
+not the ticket's pre-correction "R~8"); the AC-0414 bake hold + live bake line
+(path-agnostic: it fires from <code>_loading_tick</code> whenever
+<code>loading_active</code> and the bake is WORK — so a continue with a cold bake
+cache gets the honest bake line for free); the disk/gen provenance counters
+(<code>_try_disk_load</code> bumps <code>disk_reads</code> — on a continue that
+number IS the saved-columns load); and <code>main._await_sim_band</code>, which waits
+on the SAME condition as the window's close — the simband wall is the
+load→activation wall, so the player can never exist over an unbuilt diamond.</li>
+<li><b>Genuinely remained:</b> <code>main._continue_slot</code> (a fenced file —
+another session's uncommitted work) has <b>no</b> <code>start_loading</code> caller.
+The window was fresh-spawn-only (<code>start_game</code>). On continue, the menu
+hid on click and the player then watched the raw half-built world for the whole
+sim-band wait. Only the TRIGGER was missing; every line the screen would show
+already worked.</li>
+</ul>
+
+<h2>The change (3 files, +74 lines)</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/world.gd</code> (+48)</td>
+<td><code>_ac0186_continue_window()</code> — the world arms its own window on the
+continue path, called from <code>_process</code> right before
+<code>_loading_tick()</code> (a trigger that opens the window is updated on the same
+frame). Gates: <code>loading_bypass</code> (AWECRAFT_LOADBYPASS=0 still kills
+every window) + first window of the boot (the radius-change window stays
+<code>note_render_distance</code>'s) + mode play + player not handed over +
+<b>the active slot has a save file</b> (a fresh spawn's slot is empty until
+<code>Save.save_now</code> runs AFTER the load — and <code>start_game</code>'s own
+<code>start_loading</code> fires synchronously before the first tick, so that path
+is untouched) + <b>the Menu node exists under Main</b> (the real menu-first flow;
+harness arms boot without a menu and must keep <code>loading_active=false</code> —
+the load arm's standing contract). <code>AWECRAFT_LOADCONTINUE=1</code> forces the
+trigger for probe runs. Title: <code>Continuing world (seed N)...</code></td></tr>
+<tr><td><code>godot/ui/loading_screen.gd</code> (+6)</td>
+<td><code>progress_text()</code> getter — the probe samples the live stats line
+without reaching into <code>_stats</code>.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code> (+20)</td>
+<td>Same-task sync (invariant 2): the load-screen clause now records the
+world-owned trigger on the continue path and its gates; the AC-0414 paragraph
+gains the AC-0186 note.</td></tr>
+</table>
+<p>Fenced files untouched: <code>main.gd</code>, <code>game.gd</code>,
+<code>debug.gd</code>, <code>drop.gd</code> — the trigger reaches only public
+members (<code>Game</code>, <code>Save</code>, <code>Settings</code>,
+<code>get_node_or_null("Menu")</code>). A temporary <code>continuewin</code> probe
+arm went into <code>harness.gd</code> for the measurements below and is
+<b>removed again</b> (pristine rule; final G0 re-verified after removal). No
+harness_data.yaml row (temp arms get none — AC-0414 precedent).</p>
+
+<h2>The wait, presented</h2>
+<p>Mid-continue, on the shipped Forward+ path (lavapipe proxy, 1280×720):</p>
+<img class="shot" src="captures/contwin_window.png" alt="the continue loading window">
+<p><b>captures/contwin_window.png</b> (sha256
+<code>00512c73…d1d2ec</code>, 1280×720): full cover — no half-loaded world visible —
+title <i>"Continuing world (seed 44)..."</i>, bar starting, and the honest line
+<i>"2% — 1 / 41 cols (disk 81 · gen 0)"</i>: what is happening (the 41-col spawn
+diamond), how far (1 of 41), and where the data is coming from (disk = the saved
+columns streaming in; gen 0 = nothing being regenerated). The captured trajectory
+(render run, 0.1 s sampling):</p>
+<pre>t+   313 ms  window opens            "0%  —  0 / 41 cols   (disk 0 · gen 0)"
+t+   968 ms  disk streaming          "0%  —  0 / 41 cols   (disk 52 · gen 0)"
+t+  1389 ms  disk complete           "0%  —  0 / 41 cols   (disk 81 · gen 0)"
+t+  5759 ms  meshing                 "31% — 13 / 41 cols   (disk 81 · gen 0)"
+t+  6090 ms  meshing                 "60% — 25 / 41 cols   (disk 81 · gen 0)"
+t+  6515 ms  window CLOSES at 41/41; the player spawns at t+6640 ms
+            (the await returns, Game.start — the player node exists ONLY now)</pre>
+<p>Headless run (the 1k+ census) shows the identical shape with the regen mix on a
+larger save: <code>0% (disk 0 · gen 0) → 0% (disk 81 · gen 21) → 31% → 60% → close</code>,
+window open at t+391 ms, close at t+6097 ms, player at t+6204 ms. If the satellite
+bake cache were cold on a real machine, the same window would show the AC-0414 live
+bake line ("Baking the planet…", shard k/98) instead of a frozen bar — that hold is
+the same <code>_loading_tick</code> code, measured by AC-0414 (169 s bake, 48.4 s
+release); not re-exercised here (see "deliberately not done").</p>
+<p>Post-continue, from the player's saved pose:</p>
+<img class="shot" src="captures/contwin_post.png" alt="the continued world">
+<p><b>captures/contwin_post.png</b> (sha256 <code>b5c84b05…69a7d1</code>): the fully
+meshed world at the saved pose — no void, no pop. The saved marker blocks are visible
+(the trunk + plank stack ahead are non-natural ids placed before the save; the small
+distant plank tufts are the ring edits), and the hotbar shows the saved inventory
+(dirt ×5, the item given before the save) — edits, pose and inventory all round-tripped
+through the save → continue that the window covered.</p>
+
+<h2>The 1k+ column proof (headless, single process)</h2>
+<p>The sandbox's <code>user://</code> is fresh per process, so the arm creates the
+world, saves it and continues it in ONE godot process (the save arm's pattern). It
+built a taxi-22 ring (1013 cols, all inside the r22 render circle), marked 6
+distinctive blocks + one edit per ring column (planks — never generated), saved
+(<code>AWECRAFT_SAVEALL=1</code> — the test-only full-circle save, the flysave arm's
+A/B env; the natural-flow save shape — diamond + edited columns — is the standing
+<code>save</code> arm's territory), evicted, and then ran
+<code>main._continue_slot(0)</code> with the forced window:</p>
+<pre>ok: true
+saved_cols: 1013            &lt;-- the 1k+ disk census (region-table entries, 8 region files)
+window_opened: true         win_open_ms: 391   win_close_ms: 6097   continue_ms: 6204
+disk_reads: 81              gen_count: 21      diamond_ok: true     (all 41 cols data+meshed)
+blocks_match: 6/6           pos_ok: true       sel_ok: true         saved_ok: true   build_ok: true</pre>
+<p>The census counts REGION ENTRIES (the on-disk columns), via the same helpers the
+chunkio arm uses. The continue's <code>disk_reads: 81</code> (41 diamond + halo) with
+<code>gen_count: 21</code> is the honest disk/gen split the progress line shows.</p>
+
+<h2>Gates (all this box, one godot at a time, exit status + census paired)</h2>
+<table>
+<tr><th>Gate</th><th>Run</th><th>Exit</th><th>Census</th><th>Result</th></tr>
+<tr><td>G0 (baseline, pre-change)</td><td><code>--headless --quit</code></td><td class="ok">0</td><td class="ok">0 script / 0 shader</td><td class="ok">ok</td></tr>
+<tr><td>G0 (post-change)</td><td><code>--headless --quit</code></td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok</td></tr>
+<tr><td>SMOKE</td><td><code>BATTERY=player;interact;light;fluids;genhash</code></td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">battery ok: true</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_PROBE=1</code> (standalone terrain census)</td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok"><code>PROBE ocean_cells=49 centroid=[-12,-3] max_h=164</code></td></tr>
+<tr><td>genhash 25/25</td><td>in SMOKE + extracted</td><td class="ok">0</td><td class="ok">—</td><td class="ok">25/25 byte-identical vs the AC-0414 smoke set AND the AC-0403 final set (the standing reference)</td></tr>
+<tr><td>save arm</td><td><code>AWECRAFT_LOGIC=save</code> (runs <code>_continue_slot</code> twice)</td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok: true — 6/6 blocks, pos/sel/time/inv/iso round-trip; ran with <code>loading_active=false</code> per the standing contract</td></tr>
+<tr><td>settings arm</td><td><code>AWECRAFT_LOGIC=settings</code></td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok: true</td></tr>
+<tr><td>boundary r4 (one-shot self-check)</td><td><code>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</code></td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok: true — p50/p95 13/34 ms (AC-0414: 13/35), crossings 20, footprint missing 0, marker_ok</td></tr>
+<tr><td>continuewin headless (1k+ census + window)</td><td><code>LOGIC=continuewin LOADCONTINUE=1</code>, 48 s</td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok: true (table above)</td></tr>
+<tr><td>continuewin render</td><td>xvfb + lavapipe <code>--rendering-driver vulkan</code>, 1280,720, 77 s</td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok: true — boot line <code>Vulkan 1.4.318 - Forward+ - Using Device #0: Unknown - llvmpipe (LLVM 20.1.8, 256 bits)</code>; both captures exist (no SNAP FAIL)</td></tr>
+<tr><td>G0 (final, temp arm removed)</td><td><code>--headless --quit</code></td><td class="ok">0</td><td class="ok">0 / 0</td><td class="ok">ok — the tree is pristine (arm gone); the <code>git diff</code> footprint is world.gd +48, loading_screen.gd +6, ARCHITECTURE.md +20</td></tr>
+</table>
+
+<h2>Deviations, stated</h2>
+<ul>
+<li><b>Trigger location:</b> the ticket's notes assume the continue window is armed on
+the continue path (i.e., in <code>main.gd</code>) — <code>main.gd</code> is fenced, so
+the trigger lives in <code>world.gd</code> and arms the existing
+<code>start_loading</code> entry point. Behaviour is the ticket's; only the owner of
+the call moved.</li>
+<li><b>"R~8 spawn radius":</b> the implemented gate is the SIM TAXI DIAMOND (taxi ≤
+sim = 41 cols at sim 4) — the AC-0313 clause-4-as-corrected gate the user decided
+("let's do sim taxi distance"), which the code and the standing contract both use.
+The window closes when that diamond is meshed; no new R8 circle was invented.</li>
+<li><b>The 1k+ census uses <code>AWECRAFT_SAVEALL=1</code></b> (test-only env, the
+flysave A/B usage) for the bulk of the saved circle + the 6 marker edits; a
+natural-flow save of a building world persists the same way (the AC-0287 edited
+clause) and the standing <code>save</code> arm covers that shape. The census is the
+largest reasonable save shape — the conservative test for the disk load.</li>
+<li><b>Bake line on continue not demonstrated on a fresh bake:</b> seed 44 loads the
+satellite body from the shipped <code>res://</code> textures (phase LOAD, never
+WORK), so the AC-0414 hold cannot engage on these runs — and exiting mid-bake on a
+non-canonical seed is exactly the stochastic use-after-free class the coordinator
+flagged (clean log, signal-eleven exit). The hold + live line are the same
+<code>_loading_tick</code> code AC-0414 measured on the fresh-spawn path.</li>
+<li><b>1-frame gap:</b> the window arms on the world's second <code>_process</code>
+frame after <code>_continue_slot</code> starts — the menu hides on click, the cover
+follows within one frame (~16 ms at 60 Hz). The player node does not exist until the
+diamond is built, so there is no input and no world visible in between.</li>
+</ul>
+
+<h2>Deliberately not done</h2>
+<ul>
+<li>No <code>main.gd</code>/<code>game.gd</code>/<code>debug.gd</code>/<code>drop.gd</code>
+edits (fenced — another session's uncommitted work).</li>
+<li>No new settings, no new save fields, no format bump (SAVE_VERSION stays 4).</li>
+<li>No bake-cache-cold continue demo (UAF-class exit risk; see deviations).</li>
+<li>Heavy gate set (full battery, Windows build, shaderforce at scale) — the
+coordinator's; the light set above is the builder's, all green with paired exit
+status + census.</li>
+</ul>
+
+<p><b>Logs:</b> <code>.scratch/AC-0186-{g0-baseline,g0,g0-final,smoke,probe,savearm,settingsarm,boundary-r4,contwin-headless2,contwin-render}.log</code>.
+<b>Plan:</b> <code>tasks/AC-0186/plan.html</code>. <b>Captures:</b>
+<code>tasks/AC-0186/captures/</code>.</p>
+</body>
+</html>
