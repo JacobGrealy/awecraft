@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-13T12:26
+  updated_at: 2026-10-13T14:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0186
 - AC-0130
 - AC-0294
 - AC-0296
@@ -8107,11 +8106,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T23:32
-  updated_at: 2026-08-31T23:32
-  completed_at: null
+  updated_at: 2026-10-13T14:31
+  completed_at: 2026-10-13T14:31
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player continuing a previously saved world I want a loading screen until
@@ -27237,6 +27236,66 @@ intake:
     CONTEXT: read tasks/AC-0425/AC-0425-results.html for the measurement and the frame, which are the
     evidence for this ticket; the audit deliberately did not fix it because it was hunting a different
     class and because a change to the lighting floor is a look decision rather than a correctness fix.
+
+    '
+  comments: []
+- id: AC-0427
+  title: remaining-holes-and-shading-across-chunk-lines
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-13T14:31
+  updated_at: 2026-10-13T14:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The joins between chunks should be invisible - no holes to see through, and no
+    change in shading across them. The user''s words: "gaps between chunks have improved but there are
+    still a bunch of random holes along the lines. And the shading is weird along the line which is something
+    you already called out."
+
+
+    2) Technical Details:
+
+    REPORTED WITH A SCREENSHOT 2026-10-13, AFTER the ticket that closed the half-metre see-through slit
+    caused by the tangent sheets'' offsets diverging with height. That fix worked - the user says the
+    gaps have IMPROVED - but two things remain, and they are different from each other.
+
+    THE REMAINING HOLES ARE INTERMITTENT AND "RANDOM ALONG THE LINES", which is the important word: a
+    systematic curvature shortfall would produce a continuous slit the length of every boundary, and that
+    is what was fixed. Something that appears in PLACES along the line suggests a per-cell or per-column
+    condition - specific heights, specific neighbours, a corner case in the extension that the previous
+    fix added, or an interaction with the grout or with a neighbouring ring whose tops were not read correctly
+    at that spot. Capture several of these holes at close range, identify what is common to the places
+    where they appear and absent where the seam is solid, and measure that case specifically. The extension
+    added last time used the neighbouring ring''s tops to size itself, so a neighbour that is missing,
+    higher, or not yet resident is the obvious thing to check first.
+
+    THE SHADING ALONG THE LINE IS THE SECOND, SEPARATE DEFECT and it was called out when the seams were
+    first measured: the per-chunk vertex lighting changes across a boundary, by up to half a unit, which
+    draws a visible line even where the geometry is now solid. That measurement is already in the record;
+    what is needed is a decision and a fix. The candidate approaches were listed at the time - make the
+    lighting continuous across seams by sharing or sampling across the boundary, use the near plane with
+    a polygon offset, or keep the grid and eliminate only the flicker. The user has now asked for both
+    the holes and the shading, so the shading is in scope rather than deferred.
+
+    ACCEPTANCE IS THE USER''S OWN VIEW RE-TAKEN: a ground-level frame looking along a chunk line in daylight,
+    showing neither holes nor a shading discontinuity, compared against their screenshot. Plus a count
+    of the remaining holes before and after across a region large enough to be meaningful, and the luminance
+    step across the boundary measured before and after rather than described.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); any
+    change to how the world LOOKS ships behind a switch defaulting conservative; and the recent work must
+    keep holding - the seam extension itself, the ambient lift for unlit faces, the orbital sort offset
+    and relief, the local-zenith sky, the far tier''s curvature placement and the engine fog.
 
     '
   comments: []
