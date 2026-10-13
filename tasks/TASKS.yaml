@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T22:24
+  updated_at: 2026-10-12T22:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26990,11 +26990,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-12T14:25
-  updated_at: 2026-10-12T14:25
-  completed_at: null
+  updated_at: 2026-10-12T22:29
+  completed_at: 2026-10-12T22:29
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The world should be solid. Standing anywhere and looking at the join between
