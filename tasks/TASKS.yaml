@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-13T14:31
+  updated_at: 2026-10-13T14:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27296,6 +27296,90 @@ intake:
     change to how the world LOOKS ships behind a switch defaulting conservative; and the recent work must
     keep holding - the seam extension itself, the ambient lift for unlit faces, the orbital sort offset
     and relief, the local-zenith sky, the far tier''s curvature placement and the engine fog.
+
+    '
+  comments: []
+- id: AC-0428
+  title: sky-horizon-transition-rate-body-opacity-and-cloud-cover-variation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-13T14:32
+  updated_at: 2026-10-13T14:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The sky should be one continuous gradient from horizon to zenith with no line
+    drawn across it, the planet seen from outside should be solid so nothing behind it shows through,
+    and the cloud cover should vary across the world - some regions cloudy, some clear - rather than the
+    whole planet wearing the same uniform sheet.
+
+
+    2) Technical Details:
+
+    FOUR REPORTS FROM THE USER 2026-10-13 WITH TWO SCREENSHOTS, and the coordinator believes at least
+    two of them are the same defect seen twice.
+
+    A STILL-VISIBLE HORIZON IN THE SKY. The user''s words: "sky still has a horizon, I think it''s part
+    of the sky box. We don''t want this." A previous ticket fixed a hard horizon line by removing a branch
+    switch that a sky-thinning change had turned into a drawn edge, and measured the step falling from
+    sixty-four luminance units to zero - so THAT source is gone and this is a DIFFERENT one. The user''s
+    own reading is that it is part of the skybox, which is worth taking seriously because they have been
+    right about every visual report so far.
+
+    THE SKY TRANSITIONS TO SPACE AT DIFFERENT RATES DEPENDING ON DIRECTION. The user''s words: "it seems
+    like the top of the sky turns into space faster than the rest. We don''t want that, entire sky should
+    transition at same rate." Their screenshot shows a deep blue overhead and a pale horizon with the
+    change concentrated near the top, which points at a rate that varies with the zenith angle - a cosine
+    or a power of it - rather than a uniform gradient from horizon to zenith.
+
+    THE SATELLITE LEVEL OF DETAIL IS NOT OPAQUE, and this is the most serious of the four: "When above
+    clouds I can see all of the clouds on the other side of the planet through the satellite lod. The
+    satelite lod should be opague, we should not be able to see through it." Seeing the far side of the
+    world through the world means the body is not writing or not covering, which is a defect that also
+    matters at ground level because it would let the sky through the terrain.
+
+    THE COORDINATOR''S HYPOTHESIS, TO BE TESTED RATHER THAN ASSUMED: THE HORIZON LINE AND THE SEE-THROUGH
+    ARE PROBABLY ONE DEFECT. If the body is not opaque, then what the player sees through it is the sky
+    behind - and the sky behind, seen through a planet-sized hole, would present the skybox''s own lower
+    boundary as a line across the frame. The user reached the same conclusion from the other direction
+    by calling it part of the skybox. Test that first: render the body with the sky disabled and see whether
+    the line disappears, and measure the body''s opacity or coverage directly rather than inferring it
+    from the appearance.
+
+    CLOUD COVER SHOULD VARY ACROSS THE PLANET, and the user has given the technique: "we need some kind
+    of noise or something around the planet that determines where groups of clouds are, it should not
+    be uniformly cloudy across the entire planet." That is the standard approach - a low-frequency field
+    sampled in world or planetary space that gates whether a region has weather at all, with the existing
+    local cloud field providing structure inside the cloudy regions. A planet with one uniform sheet reads
+    as a texture rather than a world, and varying coverage is also what makes a descent into cloud feel
+    like arriving somewhere rather than passing through a layer that is everywhere.
+
+    ALSO NOTED, NOT PART OF THIS TICKET: the held item is still visible in the user''s altitude screenshot
+    as a large tan quad occupying a corner of the frame, despite a recent change that hides it above the
+    atmosphere height. Either that altitude is below the threshold or the suppression is not firing; it
+    should be checked against the earlier ticket''s acceptance, and it is mentioned here only so it is
+    not lost.
+
+    ACCEPTANCE: the user''s two frames re-taken - no line across the sky at altitude, the sky''s gradient
+    varying uniformly with elevation rather than changing rate near the zenith, nothing visible through
+    the planet from outside with the far-side cloud specifically tested, and cloud cover that visibly
+    varies across the globe with some clear regions. Give the measurements alongside the frames: the luminance
+    profile down the frame for both sky items, the body''s opacity or coverage measurement for the third,
+    and the fraction of the surface under cloud before and after for the fourth.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate
+    0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); every
+    look change ships behind a switch defaulting conservative; and the recent work must keep holding -
+    the local-zenith sky with its air column, the orbital sort offset and height relief, the ambient lift
+    for unlit faces, the seam extension, the far tier''s curvature placement and the engine fog.
 
     '
   comments: []
