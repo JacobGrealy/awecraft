@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0426 — plan</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.5em}h2{font-size:1.2em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:28px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:.92em;vertical-align:top}
+th{background:#eee}code{background:#f4f4f4;padding:1px 4px}
+</style></head><body>
+
+<h1>AC-0426 — trees render as black silhouettes in daylight — plan</h1>
+
+<h2>Goal</h2>
+<p>The tree ~54 m ahead of spawn (world ≈ (12,−45), the AC-0425 f1 "blob") renders as a pure
+black silhouette in daylight. Measured mechanism (AC-0425, taken as given): the top two log
+cells are ring-enclosed by their own crown, so their side faces sample the zero of <i>both</i>
+direct terms — sky channel s = 0 (the crown occludes the column's sky flood) and block-light
+g = 0 (no glow source) — and the display formula
+<code>L = 0.20 + 0.80·max(u_day·s, g)</code> (the four <code>chunk_lit_*.gdshader</code>, AC-0128
+structure) collapses to the flat 0.20 floor at <b>every</b> time of day. Multiplied by the dark
+bark/leaf atlas cells (measured this run: darkest log cell (56,43,24)/255, 38.5 % of the tinted
+leaf tile has a zero channel) and the Forward+ <code>pow(2.2)</code> pre-encode, the pixels land
+below 8-bit → exact (0,0,0). Acceptance: the same tree from the same viewpoint in daylight shows
+bark and leaf texture; trunk luminance profile before/after; the world's overall contrast measured
+afterwards; nothing that should be dark at night became bright; ships behind a switch, default
+conservative, off state provably the current behaviour.</p>
+
+<h2>Chosen option and why</h2>
+<p><b>Ticket option 2 with the time-of-day variant:</b> when both direct terms are zero, the face
+falls back to a <b>sky-ambient term that tracks the sky's actual day factor at that hour</b>,
+instead of resting on the constant floor. Implemented as an additive third term, not a
+re-tuning of the floor:</p>
+<pre>L = 0.20 + 0.80·M  +  u_amb · u_day · step(M, 0),   M = max(u_day·s, g)   [1.0 iff M is zero]</pre>
+<p class="warn"><b>DEVIATION 1 (recorded in the results page):</b> the first implementation of the
+mask was <code>1.0 − step(0, M)</code> — but M is non-negative by construction, so that mask is
+always 0.0 and the term was dead. The A/B measurement caught it (the ON frame was identical to
+the BEFORE frame); the second-pass mask was <code>step(M, 0)</code>.</p>
+<p class="warn"><b>DEVIATION 2 (recorded in the results page):</b> the strict-zero mask still
+produced a byte-identical ON frame — because <code>chunk.gd:995</code> clamps the face light
+scalar to <code>[MIN_AMB, 1.0]</code> with <code>MIN_AMB = 0.08</code> (chunk.gd:5, mesh.cpp:117),
+an unlit face never stores <code>s = 0</code>, it stores the floor (20/255 = 0.0784 after the
+8-bit vertex-colour packing). Measured on the built R4 tree (4,461 vertices, zero at r = 0,
+r_min = exactly 20/255): AC-0425's "s = 0" was the conceptual model, not the implementation.
+The shipped mask is <code>step(M, 0.08)</code> — 1.0 iff the face is <i>at</i> the floor
+("effectively unlit"); faces with real pull (≥ 21/255) are untouched.</p>
+<ul>
+<li><b>Why not option 1 (raise the 0.20 floor):</b> the floor is a user-directed value
+(AC-0128/AC-0135) and it also sits in the lit path (const+gain = 1.0 at noon) — raising it
+brightens the whole scene including full sun, the exact quiet-flattening the ticket warns about.</li>
+<li><b>Why not option 3 (re-bake / different combination):</b> re-baking the light or the
+vColor channels changes generation-fed data, costs a mesh re-bake and risks the genhash and
+farab/halo/ladder standing set for a look change; the defect is in the display fallback, not the
+bake.</li>
+<li><b>Why this shape is the safe one:</b>
+  <ul>
+  <li>Off (u_amb = 0.0): <code>0.0·x = 0.0</code>, <code>x + 0.0 = x</code> in IEEE 754 →
+  <b>bit-identical</b> to the current formula, proven by a pixel-identical A/B frame.</li>
+  <li>Night: the chunk shader's <code>u_day = DayNight.day(t)</code> is exactly 0.0 at night →
+  the ambient term is exactly 0.0 at night → <b>the night look is bit-identical even with the
+  switch ON</b>; a tree at midnight stays black (correct, per the ticket).</li>
+  <li>Any face with even a little direct light (M &gt; 0) is untouched at any hour — open
+  terrain is pixel-identical; only zero-light pockets (under-crown trunks, enclosed caves and
+  hollows) brighten, and only in proportion to the sky (linear in u_day: 0 at night → the
+  measured 0.35 at noon).</li>
+  <li>No bake, no data, no vertex colour touched → genhash 25/25 by construction (verified by
+  run), no mesh re-bake, the standing set's light/bake gates see nothing.</li>
+  </ul></li>
+</ul>
+<p>Magnitude <b>u_amb = 0.35</b> (the "ON" value, a <code>world.gd</code> const): at noon a
+zero-light face goes L 0.20 → 0.55 (≈ the shade of a face at half sky, matching how a real
+under-canopy trunk sits in the shade without reading as a hole). Measured atlas consequence:
+the darkest bark cell (56,43,24) at faceShade 0.8 renders ≈ (9,7,4)/255 — dark brown, readable,
+no longer 0; the bark midtones ≈ (19,15,9); leaf structure survives. The lower (open-column)
+trunk stays fully lit as before, so the tree reads bark-then-crown, not a hole-then-crown.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/chunk_lit_opaque.gdshader</code>, <code>chunk_lit_cutout.gdshader</code>,
+<code>chunk_lit_flower.gdshader</code>, <code>chunk_lit_fluid.gdshader</code></td>
+<td>new uniform <code>u_amb</code> (default 0.0 = off) + the additive term on the shared L line
++ the AC-0426 comment (the formula contract lives here, per convention).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>(a) boot env preload <code>AWECRAFT_AMBSKY=0|1</code> → <code>Settings.values["ambient_sky"]</code>
+WITHOUT save (the AWECRAFT_RAMPS/MODERN/CLOUDVOL pattern, the boot block at ~3850); (b) change-gated
+push in <code>_ac0401_push</code> (the standing per-frame switch seam): read the live value, gate on
+(value, material-set size) so late-created materials receive it, set <code>u_amb</code> on the
+<code>ChunkScript._mat_cache</code> ShaderMaterials. Const <code>AMB_SKY_L = 0.35</code>.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td>
+<td><code>"ambient_sky": false</code> in the defaults table (conservative default = the shipped
+behaviour) + the <code>sanitize_bool</code> clamp-chain entry.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td>
+<td>the Settings-page checkbox row (default OFF), the <code>_sync</code> line, the
+<code>_on_…_toggled</code> handler — the AC-0421/AC-0401 row pattern, inserted after the relief row.</td></tr>
+<tr><td><code>godot/HARNESS.md</code> §2 (hand-written env table)</td>
+<td><code>AWECRAFT_AMBSKY</code> row (boot-only, no save; unset/off = the shipped look).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>the AC-0426 entry in the Settings autoload row (the look-change pattern list) — the docs-sync
+invariant for a new look setting.</td></tr>
+</table>
+<p>NOT touched (fenced or pristine): <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code>, <code>scenes/harness.gd</code>
+(pristine — no new arm; the standing arms + the Forward+ renders carry the evidence),
+<code>gdext/*</code> (no C++ change — the bake is untouched by design), <code>TASKS.yaml</code>.</p>
+
+<h2>Harness gates (light set, then exit)</h2>
+<table>
+<tr><th>Gate</th><th>Recipe / expectation</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code> → <code>gate_census.py</code> zero SCRIPT ERROR
+<b>and</b> zero SHADER ERROR, AND the process exit status checked (the stochastic UAF leaves a
+clean log with a non-zero exit).</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_LOGIC=probe</code> — RESULT ok (biomes 4, spawn_h 141).</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> — ok:true,
+values on the standing rows.</td></tr>
+<tr><td>GENHASH</td><td>standalone <code>AWECRAFT_LOGIC=genhash</code> — 25/25 byte-identical to
+<code>.scratch/AC-0425/genhash-final.log</code> (the pre-edit baseline; the change is
+display-side only, so any drift is a finding).</td></tr>
+<tr><td>SHADERFORCE</td><td>fwdshot recipe (xvfb + lvp ICD + vulkan) — 12/12 verdict ok (the four
+edited shaders compile with the new uniform; the probe runs default uniforms, so u_amb = 0.0).</td></tr>
+<tr><td>Forward+ renders (1280,720, R24, default boot camera = the AC-0425 f1 viewpoint, 1200 s
+budget each, the log's <code>- Forward+ -</code> boot line asserted, the PNG checked to exist)</td>
+<td>(1) <b>BEFORE-day</b> on the unmodified tree, no env — baseline; (2) <b>AFTER-off-day</b>
+(new code, switch off) — must be <b>pixel-identical to (1)</b> (the off-state proof);
+(3) <b>AFTER-on-day</b> (<code>AWECRAFT_AMBSKY=1</code>) — the acceptance frame;
+(4) <b>AFTER-off-night</b> (<code>AWECRAFT_TIME=0.0</code>); (5) <b>AFTER-on-night</b> — must be
+<b>pixel-identical to (4)</b> (the night check: u_day = 0 kills the term exactly). Plus
+<code>AWECRAFT_MENU_SHOT</code> + <code>AWECRAFT_MENU_VIEW=options</code> — the new row, default
+OFF.</td></tr>
+</table>
+<p>Measurements from (1)/(3)/(4)/(5): the luminance profile across the trunk in the blob region
+(x 690–860, y 0–75, the AC-0425 coordinates) before/after; the full-frame luminance statistics
+(min/max/mean/std/p5/p50/p95 — the world-contrast evidence); the pixel-diff counts for the two
+identity proofs. The heavy set (farab, ladder, meshprobe, halo, lightstate, r16, boundary, r50)
+is the coordinator's — exit after the light gates.</p>
+
+</body></html>

@@ -79,6 +79,10 @@ var sat_preload_check: CheckBox
 # the sample based on the height ... like what minecraft does with its
 # maps").
 var relief_check: CheckBox
+# AC-0426: the zero-light sky-ambient toggle (Settings page, default OFF
+# — conservative: the shipped look is the floor-only path; the row lets
+# the player turn the under-canopy / enclosed-cave ambient on).
+var ambient_sky_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -436,6 +440,25 @@ func _ready() -> void:
 	opt_vbox.add_child(relief_check)
 	if hi + 16 < opt_vbox.get_child_count():
 		opt_vbox.move_child(relief_check, hi + 17)
+	# AC-0426: the zero-light sky-ambient toggle — user-facing visual
+	# setting on the Settings page (after the relief row), persisted like
+	# every other setting (Settings "ambient_sky", default OFF — the
+	# shipped look is today's floor-only path, bit-identical; a look the
+	# user has not asked for defaults conservative). ON lifts the faces
+	# whose both direct light terms reach zero (trunk under its own
+	# crown, enclosed caves/hollows) by a sky-ambient that tracks the
+	# sky's day factor at that hour — night stays exactly as it is. No
+	# apply step is owed: world.gd _ac0401_push reads the live value
+	# every frame and pushes u_amb to the chunk materials (the
+	# cloud_deck/limb_space pattern).
+	ambient_sky_check = CheckBox.new()
+	ambient_sky_check.name = "AmbientSkyCheck"
+	ambient_sky_check.text = "Shadowed faces: ambient sky light"
+	ambient_sky_check.add_theme_font_size_override("font_size", 15)
+	ambient_sky_check.toggled.connect(_on_ambient_sky_toggled)
+	opt_vbox.add_child(ambient_sky_check)
+	if hi + 17 < opt_vbox.get_child_count():
+		opt_vbox.move_child(ambient_sky_check, hi + 18)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -925,6 +948,8 @@ func _sync_controls() -> void:
 	# AC-0421: the satellite body's height-based relief (default ON —
 	# the user asked).
 	relief_check.button_pressed = bool(Settings.values.get("relief_shading", true))
+	# AC-0426: the zero-light sky-ambient toggle (default OFF).
+	ambient_sky_check.button_pressed = bool(Settings.values.get("ambient_sky", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1364,6 +1389,18 @@ func _on_relief_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("relief_shading", on)
+
+
+# AC-0426: the zero-light sky-ambient toggle (default OFF — conservative:
+# the shipped look is the floor-only path, bit-identical). set_value does
+# the clamp chain + the save; no apply step is owed: world.gd
+# _ac0401_push reads the live value every frame and pushes u_amb to the
+# chunk materials on change (the cloud_deck/limb_space pattern; 0.0
+# short-circuits the shader's added term to 0.0 for every pixel).
+func _on_ambient_sky_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("ambient_sky", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

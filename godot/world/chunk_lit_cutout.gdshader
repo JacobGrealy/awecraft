@@ -1,5 +1,6 @@
 // AC-0128: unlit day/night shading for cutout (leaves) faces.
-// Same vColor repack + formula as chunk_lit_opaque.gdshader, plus the
+// Same vColor repack + formula as chunk_lit_opaque.gdshader (incl. the
+// AC-0426 zero-light sky-ambient term on L, see the fragment), plus the
 // alpha-scissor discard (cutout path, threshold 0.5).
 shader_type spatial;
 render_mode unshaded, cull_back;
@@ -13,6 +14,10 @@ uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 // AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
 // world.gd _process - the same value main.gd sets on the env fog).
 uniform float u_fog_far = 332.0;
+// AC-0426: zero-light sky-ambient magnitude (default 0.0 = the shipped
+// formula bit-identical; the contract comment lives in
+// chunk_lit_opaque.gdshader).
+uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 varying vec3 v_world_pos;
 
 
@@ -29,7 +34,12 @@ void fragment() {
 	}
 	vec4 t = texture(tex, UV);
 	if (t.a < 0.5) discard;
-	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
+	float m_direct = max(u_day * COLOR.r, COLOR.g);
+	float L = 0.20 + 0.80 * m_direct;
+	// AC-0426: the zero-light sky-ambient fallback (the contract comment
+	// lives in chunk_lit_opaque.gdshader; leaves under their own canopy
+	// are the other half of the silhouette).
+	L += u_amb * u_day * step(m_direct, 0.08);  // AC-0426 mask: 1.0 iff m_direct <= MIN_AMB (the light floor - see chunk_lit_opaque.gdshader)
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;

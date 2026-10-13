@@ -172,6 +172,21 @@ const DEFAULTS := {
 	# sample, byte-identical. Env-overridable (AWECRAFT_RELIEF=0|1 at boot,
 	# satellite_body.gd — the AWECRAFT_RAMPS pattern).
 	"relief_shading": true,
+	# AC-0426: the zero-light sky-ambient switch (the black-silhouette
+	# tree fix). DEFAULTS OFF — conservative: the shipped look is today's
+	# floor-only path, and a look the user has NOT asked for ships behind
+	# the switch (the AC-0205/AC-0394 rule). ON adds a sky-ambient term
+	# to faces whose BOTH direct light terms reach zero (the trunk under
+	# its own crown, enclosed caves/hollows), tracking the sky's actual
+	# day factor at that hour (u_day): 0.0 at night (the night look is
+	# bit-identical even when ON — a tree at midnight stays black), the
+	# measured AMB_SKY_L (world.gd) at noon. OFF is the AC-0128 formula
+	# bit-identical (the shader term is 0.0 * x, x + 0.0). No apply step:
+	# world.gd _ac0401_push reads the live value and pushes u_amb to the
+	# four chunk_lit_* ShaderMaterials on change (the cloud_deck/limb_space
+	# pattern). Env-overridable (AWECRAFT_AMBSKY=0|1 at boot, world.gd —
+	# the AWECRAFT_RAMPS pattern, written WITHOUT save).
+	"ambient_sky": false,
 	# AC-0395: the noclip toggle (the user's own request — disable the
 	# player's collision so they can fly through blocks and inspect
 	# geometry). DEFAULTS OFF: the shipped state is exactly today's
@@ -400,6 +415,10 @@ func _clamp(k: String, v) -> void:
 		"viewmodel_occlude":  # AC-0394: bool (the held-item occlusion switch).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"relief_shading":  # AC-0421: bool (the satellite body's height relief).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"ambient_sky":  # AC-0426: bool (the zero-light sky-ambient switch).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (false), never throw.
 			values[k] = AnalogTune.sanitize_bool(v)
 		"noclip":  # AC-0395: bool (the player-collision switch). sanitize_bool
 			# as viewmodel_occlude: a hand-edited string in the cfg fails to

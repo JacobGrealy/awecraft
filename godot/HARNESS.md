@@ -286,6 +286,7 @@ suspiciously small PNG is a black frame.
 | `AWECRAFT_PAUSE_SHOT=1` | with menu_boot: snap the pause menu (P key) | `RESULT {"pause_shot":true,…}` |
 | `AWECRAFT_NO_FOG=1` / `AWECRAFT_NO_COLLISION=1` | disable env fog / chunk collision at boot | |
 | `AWECRAFT_WALL_BEFORE=1` / `AWECRAFT_WALL_SHOTS=…` | `wallshot` mode: before/after AC-0067 comparison shots | writes into `tasks/AC-0067/` |
+| `AWECRAFT_AMBSKY=0|1` | **AC-0426** the zero-light sky-ambient switch (Settings `ambient_sky`, default OFF — the shipped look is the floor-only path, bit-identical). Boot-only env preload into `Settings.values` WITHOUT save (the `AWECRAFT_RAMPS`/`AWECRAFT_MODERN` pattern, `world.gd`); `world.gd _ac0401_push` reads the live value and pushes `u_amb` (0.0 / `AMB_SKY_L` = 0.35) to the four `chunk_lit_*` ShaderMaterials on change. `1` lifts the faces whose BOTH direct light terms reach zero (trunk under its own crown, enclosed caves/hollows) by a sky-ambient tracking `u_day` — 0.0 at night (night look bit-identical even ON), the full lift at noon; faces with any direct light are untouched at any hour. The `nightday`/`lightstate` instruments read the BAKED vColor channels + the in-repo L formula, which do not include the display-side term — they are switch-blind by construction | look A/B under any render recipe; evidence `tasks/AC-0426/` |
 
 ## 3. Battery + known-stable values
 

@@ -4,6 +4,8 @@
 // in own-chunk data, else 0), b = face shade. Fragment (AC-0128 structure,
 // const+gain = 1.0; user-directed 0.20 floor, AC-0135 Run-2):
 //   ALBEDO = tex.rgb * faceShade * (0.20 + 0.80 * max(u_day * r, g))
+// AC-0426: + the zero-light sky-ambient term (u_amb, default 0.0 = the
+// formula above bit-identical; see the fragment comment for the contract).
 shader_type spatial;
 render_mode unshaded, cull_back;
 
@@ -16,6 +18,10 @@ uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 // AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
 // world.gd _process - the same value main.gd sets on the env fog).
 uniform float u_fog_far = 332.0;
+// AC-0426: the zero-light sky-ambient magnitude (Settings "ambient_sky",
+// default OFF; world.gd _ac0401_push pushes AMB_SKY_L on change). 0.0 is
+// the shipped path bit-identical (0*x = 0, x + 0 = x in IEEE 754).
+uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 varying vec3 v_world_pos;
 
 
@@ -35,7 +41,34 @@ void fragment() {
 		discard;
 	}
 	vec4 t = texture(tex, UV);
-	float L = 0.20 + 0.80 * max(u_day * COLOR.r, COLOR.g);
+	float m_direct = max(u_day * COLOR.r, COLOR.g);
+	float L = 0.20 + 0.80 * m_direct;
+	// AC-0426: the light-floor sky-ambient fallback. A face whose BOTH
+	// direct terms sit at the light floor - the trunk under its own crown
+	// (the crown's leaves ring the top log cells, so the sky pull never
+	// reaches them) or an enclosed cave/hollow - rests on ~0.26 at EVERY
+	// hour, and tex * faceShade * 0.26 is sub-8-bit on the dark bark and
+	// leaf atlas cells: the AC-0425 black silhouette. The fix adds a
+	// sky-ambient that tracks the sky's ACTUAL brightness at that hour -
+	// u_day is DayNight.day(t), exactly 0.0 at night (the term is 0.0 then:
+	// a tree at midnight stays black, the night look bit-identical) and 1.0
+	// at noon. Faces with real direct light (m_direct above the floor) are
+	// untouched at any hour; the 0.20 floor itself (the user-directed
+	// AC-0128/AC-0135 value) is never re-tuned.
+	// The mask threshold is MIN_AMB = 0.08 (chunk.gd / mesh.cpp): the
+	// light scalar is clamped to [MIN_AMB, 1.0] at mesh time, so an
+	// unlit face NEVER reads s = 0 - it reads the floor (20/255 = 0.0784
+	// after the 8-bit vertex-colour packing), and the strict-zero mask
+	// step(m_direct, 0.0) can never fire (measured: 4,461 vertices of the
+	// R4 tree, r_min = 20/255, zero at 0.0). step(m_direct, 0.08) is 1.0
+	// iff m_direct <= 0.08, i.e. the face is at the floor (sky pull level
+	// <= 1, no block light): "effectively unlit". step(edge, x) is 1.0
+	// for x >= edge; the tempting 1.0 - step(0.0, m_direct) is always
+	// 0.0 - the first pass shipped exactly that dead mask, caught by the
+	// A/B measurement; this floor threshold is the second pass. u_amb =
+	// 0.0 (the shipped default) makes the added term 0.0 for every pixel:
+	// the AC-0128 formula bit-identical.
+	L += u_amb * u_day * step(m_direct, 0.08);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;

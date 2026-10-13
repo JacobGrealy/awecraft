@@ -7,6 +7,17 @@ const MobScript = preload("res://entities/mob.gd")  # AC-0037 mobs
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 const LoadingScreen = preload("res://ui/loading_screen.gd")  # AC-0178
 
+# AC-0426: the zero-light sky-ambient magnitude (the "ON" value of the
+# Settings "ambient_sky" switch, pushed as u_amb on the four chunk_lit_*
+# ShaderMaterials). Chosen against the measured atlas (this ticket): at
+# noon (u_day = 1) a zero-light face goes L 0.20 -> 0.20 + 0.35 = 0.55,
+# which lifts the darkest bark cell (56,43,24)/255 at faceShade 0.8 to
+# ~ (9,7,4)/255 on the Forward+ display path - dark brown, readable as
+# bark, no longer sub-8-bit black - while a sunlit trunk (L = 1.0) stays
+# untouched, so the tree reads in-the-shade, not in-the-hole. The 0.20
+# floor itself (user-directed, AC-0128/AC-0135) is never re-tuned.
+const AMB_SKY_L := 0.35
+
 const LIGHT_NEIGHBOR := 1
 const FLUSH_FRAME_BUDGET_MS := 40
 const FLUSH_MAX_PER_FRAME := 2
@@ -3930,6 +3941,16 @@ func _ready() -> void:
 	var she := OS.get_environment("AWECRAFT_SKYHORIZON")
 	if she != "":
 		Settings.values["sky_horizon"] = she == "1"
+	# AC-0426: the zero-light sky-ambient switch (Settings "ambient_sky",
+	# default OFF - conservative: the shipped look is today's
+	# floor-only path, bit-identical). Same pattern: the env overrides
+	# the STORED setting for this process only (no save, so the arms
+	# never clobber the user's cfg) and lets the render A/B both states
+	# without a save file. Read live by _ac0401_push, so no boot derive
+	# is owed.
+	var ambe := OS.get_environment("AWECRAFT_AMBSKY")
+	if ambe != "":
+		Settings.values["ambient_sky"] = ambe == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -5069,6 +5090,11 @@ var _ac0421_cloud_sort := -1.0
 # change-gated — the value only moves on a toggle or a planet_R change).
 var _ac0405_vol := -1.0
 var _ac0405_r := -1.0
+# AC-0426: the zero-light sky-ambient push state (same seam, change-gated
+# on the switch value AND the material-set size — the AC-0420 pattern:
+# the chunk materials are created lazily, after the first push).
+var _ac0426_amb := -1.0
+var _ac0426_n_mats := -1
 # AC-0407: the volume's VIRTUAL top bound extends this far ABOVE the
 # topmost shell (hmax) so the vertical profile (flat base / lumpy tops
 # — the "no variance in height" fix) has room for a real skyline. The
@@ -5127,6 +5153,23 @@ func _ac0401_push() -> void:
 			var am2 = Data.fluid_anim_bf_mats[bid]
 			if am2 is ShaderMaterial:
 				am2.set_shader_parameter("u_fog_far", ff)
+	# (1b) AC-0426: the zero-light sky-ambient switch (Settings
+	# "ambient_sky", default OFF; AWECRAFT_AMBSKY=<0|1> env preload at
+	# boot). Same gate shape as (1): the value AND the material-set size,
+	# so lazily built chunk materials receive the current value (the
+	# AC-0420 pattern). 0.0 (OFF) makes the shader's added term 0.0 for
+	# every pixel - the AC-0128 formula bit-identical (0*x = 0, x + 0 = x
+	# in IEEE 754); AMB_SKY_L (ON) is the measured lift for the
+	# zero-light faces (the comment on the const owns the numbers). The
+	# push is colour-only: no mesh, no bake, no data.
+	var amb_v := AMB_SKY_L if bool(Settings.values.get("ambient_sky", false)) else 0.0
+	if amb_v != _ac0426_amb or n_mats != _ac0426_n_mats:
+		_ac0426_amb = amb_v
+		_ac0426_n_mats = n_mats
+		for k in ChunkScript._mat_cache:
+			var m2 = ChunkScript._mat_cache[k]
+			if m2 is ShaderMaterial:
+				m2.set_shader_parameter("u_amb", amb_v)
 	# (2) the switches - the cloud layers and the sky material exist
 	# once _setup_aero has run (before this world's first _process);
 	# the first push retries cheaply until they are visible.
