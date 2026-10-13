@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-12T22:31
+  updated_at: 2026-10-13T06:03
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27,7 +27,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
-- AC-0425
+- AC-0426
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -27102,11 +27102,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-12T22:30
-  updated_at: 2026-10-12T22:30
-  completed_at: null
+  updated_at: 2026-10-13T06:03
+  completed_at: 2026-10-13T06:03
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The world should be consistently spherical everywhere. Right now defects of one
@@ -27172,6 +27172,72 @@ intake:
     look change ships behind a switch defaulting conservative; and the recent work must keep holding -
     the seam closure, the orbital sort offset and relief, the local-zenith sky with its air column, the
     far tier''s curvature placement, the engine fog, the carved-top fill and the cloud layer.
+
+    '
+  comments: []
+- id: AC-0426
+  title: trees-render-as-black-silhouettes-in-daylight
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-13T06:03
+  updated_at: 2026-10-13T06:03
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A tree in daylight should look like a tree - bark, leaves, shape - not a pure
+    black silhouette with a lit rim. The audit found one fifty-four metres from spawn rendering as solid
+    black in full daylight, and anything that reads as a hole in the world rather than an object costs
+    more than it should.
+
+
+    2) Technical Details:
+
+    FOUND BY THE AC-0425 FLAT-WORLD AUDIT, which was hunting a different class of defect and produced
+    this as a by-product after ruling out every other candidate. It is NOT a flat-world problem and it
+    is NOT geometry: it is a look property of the lighting floor.
+
+    THE MECHANISM, MEASURED RATHER THAN GUESSED: the tree stands about fifty-four metres ahead of the
+    player''s spawn. Its trunk blocks sit directly beneath the crown, so the sky-visibility term for those
+    columns is zero because the leaves above them block the sky, and the sun-pull term is zero because
+    the leaves are opaque to the sun''s contribution. Both being zero, the lighting floor takes over -
+    a value of zero point two - and multiplying that against the darkest bark and leaf atlas cells puts
+    the result below what eight bits can represent, so the pixels come out at exactly black.
+
+    THE FINGERPRINT, which is what makes this a finding rather than a guess: the region is eighty-seven
+    per cent exact-black pixels with a red tail, which rules out space, the clouds and the planet; switching
+    the satellite body off leaves the frame pixel-identical; and an overhead view shows a correctly lit
+    crown, so the geometry and the texture are both fine and only the shading underneath is collapsing.
+
+    WHAT TO CONSIDER, none of it prescribed: whether a floor of zero point two is the right value at all
+    for a world whose darkest atlas cells are already dark; whether a term that reaches zero in both the
+    sky and sun directions should fall back to something other than the floor, such as a minimum ambient
+    that reflects the sky''s actual colour at that hour rather than a constant; whether the effect compounds
+    because the same columns are both shadowed and leaf-covered, which may be two effects multiplying
+    when they should be combined differently; and whether the answer should vary with the time of day,
+    since a tree at midnight being black is correct and a tree at noon being black is not.
+
+    ACCEPTANCE: the same tree, from the same viewpoint, in daylight, showing bark and leaf texture rather
+    than a black silhouette - plus the luminance profile across the trunk before and after, and a check
+    that nothing which SHOULD be dark at night became bright. Any change ships behind a switch defaulting
+    conservative, and the world''s overall contrast must be measured afterwards because raising a floor
+    is exactly the kind of change that quietly flattens a scene.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); and the recent work must keep holding - the seam closure, the orbital sort offset and height
+    relief, the local-zenith sky with its air column, the far tier''s curvature placement and the engine-fog
+    single source.
+
+    CONTEXT: read tasks/AC-0425/AC-0425-results.html for the measurement and the frame, which are the
+    evidence for this ticket; the audit deliberately did not fix it because it was hunting a different
+    class and because a change to the lighting floor is a look decision rather than a correctness fix.
 
     '
   comments: []
