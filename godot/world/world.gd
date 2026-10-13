@@ -3299,6 +3299,16 @@ var _cull_slab_span := PackedFloat32Array()
 var _cull_ny := PackedFloat32Array()
 var _cull_dc := PackedFloat32Array()
 var _cull_cen := Vector3()
+# AC-0425: the PLACED-frame cull box (see _placed_cull_prepare) — the flat
+# (cx*16+8, H/2, cz*16+8) box is only the rendered content near the patch
+# pole; at the home-patch corner it sits ~2.3 km from the placed column,
+# and for a face chunk the flat formula maps the face-chunk index through
+# the home cx*16 grid. _cull_pl_* hold the per-plane n.dot(B.e_i) for the
+# current column's transform (B = the placed basis, rigid or LSQ-affine).
+var _cull_pl_cen := Vector3()
+var _cull_pl_dxb := PackedFloat32Array()
+var _cull_pl_dyb := PackedFloat32Array()
+var _cull_pl_dzb := PackedFloat32Array()
 var drain_budget_ms := DRAIN_MS_DEFAULT
 var collide_drain_budget_ms := COLLIDE_DRAIN_BUDGET_MS  # AC-0340: the staged collision lane's per-frame cap
 # AC-0213: small-move (recenter) pacing state.
@@ -4105,18 +4115,24 @@ func _frustum_cull_pass() -> void:
 		var c: Node3D = chunks[key]
 		if c == null:
 			continue
-		var ox := float(int(c.cx)) * 16.0
-		var oz := float(int(c.cz)) * 16.0
-		# AC-0091: column center = world mid-height (H/2 = 192), was 40.0 at H=80.
-		_cull_cen = Vector3(ox + 8.0, float(Data.HEIGHT) * 0.5, oz + 8.0)
+		# AC-0425: the PLACED box (the chunk node's own transform). The old
+		# flat-frame box ((cx*16+8, H/2, cz*16+8), identity basis) only
+		# coincides with the rendered content near the patch pole; at the
+		# home-patch corner it sits ~2.3 km from the placed column (a
+		# live mis-cull in this manual lane at the face edge), and for a
+		# face chunk it maps the face-chunk index through the home cx*16
+		# grid. The transform is set once per chunk, so this reads a
+		# cached value (no trig).
+		_placed_cull_prepare(c.global_transform)
 		var culled := false
 		var all_in := true
 		for i in 6:
-			var d: float = planes[i].distance_to(_cull_cen)
+			var d: float = planes[i].distance_to(_cull_pl_cen)
 			_cull_dc[i] = d
-			if d + _cull_col_span[i] < -m:
+			var s := _placed_col_span(i)
+			if d + s < -m:
 				culled = true
-			elif d - _cull_col_span[i] < -m:
+			elif d - s < -m:
 				all_in = false
 		if culled:
 			for s in c.slabs:
@@ -4127,15 +4143,36 @@ func _frustum_cull_pass() -> void:
 				_cull_set_vis(s, true)
 			continue
 		for s in c.slabs:
-			# slab center y = y0+8, column center y = H/2 -> dy = y0+8-H/2
-			# (AC-0091: was y0-32 at H=80).
+			# slab center = the column center offset along the PLACED local
+			# Y (exact for any basis): d = d_col + dy * (n . By).
 			var dy := float(s.y0) + 8.0 - float(Data.HEIGHT) * 0.5
 			var vis := true
 			for i in 6:
-				if _cull_dc[i] + dy * _cull_ny[i] + _cull_slab_span[i] < -m:
+				if _cull_dc[i] + dy * _cull_pl_dyb[i] + _placed_slab_span(i) < -m:
 					vis = false
 					break
 			_cull_set_vis(s, vis)
+
+# AC-0425: the column's 16 x H x 16 box in its PLACED frame. Center =
+# T * (8, H/2, 8); per frustum plane the EXACT support of the transformed
+# box = 8|n.Bx| + H/2|n.By| + 8|n.Bz| (the image of the box under any
+# linear basis — the rigid column transform or the LSQ face fit alike).
+# Requires _cull_frustum_planes to have run for the current camera.
+func _placed_cull_prepare(T: Transform3D) -> void:
+	_cull_pl_cen = T * Vector3(8.0, float(Data.HEIGHT) * 0.5, 8.0)
+	var B: Basis = T.basis
+	for i in _cull_planes.size():
+		var n: Vector3 = _cull_planes[i].normal
+		_cull_pl_dxb[i] = n.dot(B.x)
+		_cull_pl_dyb[i] = n.dot(B.y)
+		_cull_pl_dzb[i] = n.dot(B.z)
+
+func _placed_col_span(i: int) -> float:
+	var h2 := float(Data.HEIGHT) * 0.5
+	return 8.0 * absf(_cull_pl_dxb[i]) + h2 * absf(_cull_pl_dyb[i]) + 8.0 * absf(_cull_pl_dzb[i])
+
+func _placed_slab_span(i: int) -> float:
+	return 8.0 * (absf(_cull_pl_dxb[i]) + absf(_cull_pl_dyb[i]) + absf(_cull_pl_dzb[i]))
 
 func _cull_frustum_planes(cam: Camera3D) -> void:
 	if _cull_planes.size() != 6:
@@ -4151,6 +4188,9 @@ func _cull_frustum_planes(cam: Camera3D) -> void:
 		_cull_slab_span = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 		_cull_ny = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 		_cull_dc = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_pl_dxb = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_pl_dyb = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+		_cull_pl_dzb = PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 	var B := cam.global_transform.basis
 	var O := cam.global_transform.origin
 	var sz := get_viewport().get_visible_rect().size
@@ -6481,11 +6521,15 @@ func _gen_skip_flag(cx: int, cz: int) -> int:
 		vc.global_transform = Transform3D(Basis.IDENTITY, Vector3(float(last_pcx) * 16.0 + 8.0, float(hgt) + 2.0, float(last_pcz) * 16.0 + 8.0))
 		cam = vc
 	_cull_frustum_planes(cam)
-	_cull_cen = Vector3(float(cx) * 16.0 + 8.0, float(Data.HEIGHT) * 0.5, float(cz) * 16.0 + 8.0)
+	# AC-0425: the PLACED box (this enqueue path only ever sees home
+	# columns — face chunks don't flow through it — but the flat-frame box
+	# is ~2.3 km from the placed column at the patch corner, so the test
+	# must run in the placed frame to be meaningful).
+	_placed_cull_prepare(SphereMath.column_transform(cx, cz, Game.planet_R))
 	for i in 6:
-		var d: float = _cull_planes[i].distance_to(_cull_cen)
+		var d: float = _cull_planes[i].distance_to(_cull_pl_cen)
 		# Offscreen only if the WHOLE column is past the expanded plane.
-		if d + _cull_col_span[i] < -FRUSTUM_CULL_MARGIN:
+		if d + _placed_col_span(i) < -FRUSTUM_CULL_MARGIN:
 			return 2  # AC-0284b: the collar is never meshed — far data
 	return 0
 

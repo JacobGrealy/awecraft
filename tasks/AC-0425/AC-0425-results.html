@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0425 — audit remaining flat-world assumptions</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.5em}h2{font-size:1.2em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:.92em;vertical-align:top}
+th{background:#eee}img{max-width:640px;border:1px solid #ccc;display:block;margin:8px 0}
+.ok{color:#060;font-weight:bold}.bad{color:#c00;font-weight:bold}.warn{color:#a60}code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.85em}
+</style></head><body>
+
+<h1>AC-0425 — audit remaining flat-world assumptions</h1>
+
+<p><b>Verdict.</b> <b>No new confirmed flat-world defects beyond what is already known.</b> The one
+candidate the static sweep rated STRONG (C4 — flat-frame cull boxes in the manual frustum lane) is a
+<b>real code shape and is fixed in <code>godot/world/world.gd</code></b>, but its live effect is
+<b>measured below the cull margin in every state the render harness can produce</b> (flat↔placed box
+offset ≤ 4.5 m vs the 32 m margin; pre-fix manual-lane frame is <b>pixel-identical to the engine-cull
+frame</b>) and its only over-margin state (a live player recentered 3+ km from spawn, face chunks
+resident, dev-lane manual cull) is not renderable by any snapshot-capable arm on this box. Per the
+ticket's method a candidate you cannot show in a frame is not a confirmed defect, so C4 is listed in
+the unconfirmed table below with its measured bound, and the fix is kept as a bounded, genhash-neutral
+removal of a flat assumption in a dev lane. All four AC-0423 residuals were re-measured with frames
+(§4). The f1 "black blob" is a lighting-floor <i>look property</i> (a grassland tree rendered as a black
+silhouette), confirmed by frame, fingerprint and A/B — it is <b>not</b> a flat-world defect; it deserves
+its own look ticket (recommended, not filed — <code>TASKS.yaml</code> is fenced for this run).</p>
+
+<p class="warn">Render caveat: frames are llvmpipe Vulkan (proxy) — geometry/layout evidence only, per
+HARNESS.md §2. One godot at a time; every render run <code>SCRIPT ERROR 0 / SHADER ERROR 0</code> and the
+boot line <code>Vulkan … - Forward+ - … llvmpipe (LLVM 20.1.8, 256 bits)</code>.</p>
+
+<p class="warn"><b>Correction of the previous run's draft (04:13).</b> That draft listed C4 as a confirmed
+defect with an expected "pre-fix mis-culled band" frame at the 3.9 km patch-corner camera. Re-running that
+exact state shows <b>no mis-cull and no resident world there at all</b> (the planet preset flies a
+<b>frozen</b> player, which pins the streaming anchor at spawn — recenter is crossing-driven by design — so
+the camera lands 3.9 km into unstreamed face territory; the frame is the satellite body's disc, and the
+census reads <code>n=81 mismatch=0</code> over the spawn-band resident set). The 2.3 km flat↔placed case the
+plan computed (column (188,188)) is therefore <b>unreachable</b>: the resident band caps at ~130 m from the
+anchor (AC-0346 total tier keeps the <code>_gen_skip_flag</code> offscreen tail dead as previously
+verified). This page reclassifies C4 accordingly.</p>
+
+<h2>1. Confirmed defects (rendered, ranked)</h2>
+<p><b>None beyond what is already known.</b> Finding nothing new is the ticket's own legitimate outcome.
+The five historical instances (AC-0416/0417/0419/0422/0423) keep holding — the recent work the note
+requires to keep holding (seam closure, orbital sort offset and relief, local-zenith sky, far-tier
+curvature placement, engine fog, carved-top fill, cloud layer) was re-checked in the frames of §4/§5.</p>
+
+<h2>2. C4 — the one real candidate: measured, fixed, not frame-confirmable</h2>
+<p><b>Shape.</b> The manual frustum-cull lane (<code>_frustum_cull_pass</code> + the dead
+<code>_gen_skip_flag</code> tail) tested each column against a <i>flat-frame</i> box
+(<code>(cx*16+8, H/2, cz*16+8)</code>, identity basis, flat span) against the <i>world-space</i>
+camera frustum. For home columns the box only coincides with the placed content near the patch pole
+(measured ≤ 4.5 m out across the whole 81-chunk resident set, worst at chunk <code>"1,5"</code>);
+for a face chunk the flat formula maps the face-chunk index through the home grid, so a face chunk
+adjacent to the 3141 m patch edge sits ~3.1 km from its flat box — far over the 32 m margin. The
+manual lane is a dev/AB lane (<code>AWECRAFT_FRUSTUM=manual</code>); the product default is engine
+cull (real node AABBs), which the fix does not touch.</p>
+<p><b>Fix (kept).</b> Placed-box slab test in <code>world.gd</code>: column center
+<code>T·(8, H/2, 8)</code>, exact transformed-box support <code>8|n·B.x| + (H/2)|n·B.y| + 8|n·B.z|</code>
+(exact for the rigid column transform and the LSQ face fit alike), per-slab
+<code>8(|n·B.x| + |n·B.y| + |n·B.z|)</code>; the dead tail uses
+<code>SphereMath.column_transform</code>. No switch (cull/data correctness, not a look change).
+<b>Genhash 25/25 byte-identical</b> (the cull lane touches no data); boundary r4 in-band (§6);
+frame-neutral in every renderable state (§ below).</p>
+<p><b>Why it is not a confirmed live defect (the render evidence).</b></p>
+<table>
+<tr><th>Evidence</th><th>Result</th></tr>
+<tr><td><code>captures/f3c-atspawn-prefix.png</code> — spawn nadir 170 m, R4, <b>manual</b> lane,
+<i>pre-fix</i> tree</td><td>terrain + the pale fog-washed far field render; census
+<code>n=81, mismatch=0, mismatch_culled=0, max_off_m=4.5017, max_off_key="1,5"</code> — the flat and
+placed boxes give the same cull verdict for <b>every</b> resident chunk</td></tr>
+<tr><td><code>captures/f3d-atspawn-engine.png</code> — identical state, <b>engine</b> cull (A/B)</td>
+<td><b>pixel-identical to f3c: 0 / 921,600 px differ</b> — the pre-fix manual lane renders exactly what
+the engine lane renders in the renderable state; the pale region is a cull-lane-independent layer
+(fog-washed far field, also present in f4)</td></tr>
+<tr><td><code>captures/f3b-atspawn-postfix.png</code> — identical state, <b>manual</b> lane,
+<i>post-fix</i> tree</td><td><b>pixel-identical to f3c and f3d: 0 / 921,600 px differ</b> — the fix is
+frame-neutral in every renderable state (its effect is confined to states the box cannot reach)</td></tr>
+<tr><td><code>captures/f3a-boundary-prefix.png</code> — the plan's patch-corner state
+(CAM_OFF 3917,110, 170 m nadir, manual, pre-fix)</td><td>satellite body's baked snow disc fills the view;
+<b>no terrain — the resident set is the 81-chunk spawn band 3.9 km away</b> (frozen-player anchor pinning,
+C5). The 2.3 km corner case is unreachable in any render state. Census at that camera: same bound,
+mismatch 0</td></tr>
+<tr><td>The only over-margin case (face chunks resident)</td><td>requires a <b>live</b> player recentered
+within 64 m of the 3141 m patch edge (<code>_face_stream</code> gates on <code>_rec_player_wx/wz</code>);
+no arm produces that state with a snapshot hook (the planet preset's frozen player never recenters;
+crossface's walk phase is the flake noted in §8). Unrenderable here → listed, not confirmed</td></tr>
+</table>
+<p><b>Dispo.</b> Unconfirmed table row U1 (real assumption, bounded ≤ 4.5 m &lt; 32 m in the renderable
+set, fixed preventively). If a future arm can snapshot a live player at the patch edge (or the band
+configuration ever widens so resident columns approach the pole-distance bound), re-run this A/B.</p>
+
+<h2>3. Unconfirmed / not frame-confirmed candidates (per method, listed separately)</h2>
+<table>
+<tr><th>#</th><th>Candidate</th><th>Evidence</th><th>Why not confirmed / not fixed</th></tr>
+<tr><td>U1 = C4</td>
+<td>Flat-frame cull boxes in the manual frustum lane</td>
+<td>Measured: ≤ 4.5017 m flat↔placed over the full 81-chunk resident set (chunk "1,5"), 0 decision
+mismatches; pre/post-fix and engine lanes pixel-identical (0/921,600 px); corner state has no resident
+world</td>
+<td>Over-margin states are unrenderable on this box (§2). <b>Fixed anyway</b> — bounded, safe,
+genhash-neutral, dev lane only</td></tr>
+<tr><td>blob</td>
+<td>The f1 "black blob" (x 690-860, y 0-75 of the ground frame) = a grassland <b>tree ~54 m ahead of
+spawn, world ≈ (12, -45)</b>, rendered as a black silhouette. Trunk blocks sit under the crown in their
+own column ⇒ starlight pull s = 0 (the crown occludes the column's sky) and sun pull g = 0 (leaves are
+opaque to the pull) ⇒ <code>ALBEDO = tex·faceShade·max(s,g) + floor 0.20</code> with the AC-0128
+user-specified 0.20 lighting floor → sub-8-bit dark → (0,0,0)</td>
+<td>Frame + fingerprint: 87% of the blob's pixels are exact (0,0,0) with a red-shifted tail (1-8, 0, 0)
+— the fingerprint that ruled out space (2,3,10 blue-shifted), the cloud deck (white) and the satellite
+body (f1g A/B: body hidden → blob pixel-identical, 2568/6400 diff pixels in the crop); fog-wall A/B
+(f1b, FOG_PCT=100, wall 348→400 m) left it invariant; geometry: base at frame y 75 → 2.1° below horizon
+at 60°-down boot camera → 54 m, 3.9° right of centre → x ≈ 12; the f2 nadir (160 m over the seam
+(16,8)) shows the crown's top lit green — the tree exists from above</td>
+<td><b>Not a flat-world defect — a look property of the lighting floor.</b> Reported, not fixed (the
+floor is a user-specified AC-0128 value; changing the tree silhouette is a design decision).
+<b>Deserves its own look ticket — recommended, not filed</b> (this run is fenced from
+<code>TASKS.yaml</code>)</td></tr>
+<tr><td>U3 = C3</td>
+<td><code>generate_resl</code> hardcodes <code>R=4000.0</code></td>
+<td>Latent: only R≠4000 saves reach it (the save path clamps 2000-8000 but the shipped worlds are
+R=4000)</td>
+<td>No save to show it in; no frame possible; a radius-change concern, not a live defect</td></tr>
+<tr><td>U4 = C1</td>
+<td>Modern per-vertex lighting bakes a <b>flat-frame</b> sun (fixed (0.25, 1, 0.10)) into
+<code>oshade</code></td>
+<td>Chunks are <code>render_mode unshaded</code> (vertex colour only); the flat-frame sun is the
+documented fixed-noon bake (AC-0204 "the mesh stores noon light")</td>
+<td>By design, not a defect; at face edges the map-frame sun and the world-frame sun (sky/clouds/
+satellite) diverge — inherent to the fixed-noon convention</td></tr>
+<tr><td>U5 = C5</td>
+<td>The planet preset places the camera SAT_ALT above the <b>R-sphere</b>, not above the terrain</td>
+<td>Instrument bug, A/B-proven (the 40-80 m nadirs returned air-colour frames; 141 m terrain top ⇒ the
+camera was below ground)</td>
+<td>Worked around this run (SAT_ALT 160-170 ≥ terrain top + margin); the preset is a shared instrument
+out of this ticket's lane — note for the instrument owner</td></tr>
+<tr><td>U6</td>
+<td>Faint dark 16 m square mid-square in the f1 ground frame</td>
+<td>Per-cell lighting-bake variance on the grass ring (no geometry, no seam)</td>
+<td>Not chased (render budget); below the bar of anything above a texture quirk</td></tr>
+</table>
+
+<h2>4. The four AC-0423 residuals — re-measured</h2>
+<table>
+<tr><th>#</th><th>Residual</th><th>Frame / measurement</th><th>Status</th></tr>
+<tr><td>R1</td>
+<td>Face-chunk least-squares seams</td>
+<td><code>crossface</code> arm ×2 (instrumented tree + pristine <code>harness.gd</code> via git stash):
+all placement/generation/seam sub-gates PASS with <b>identical numbers both runs</b> —
+<code>f_seam_max_m 3.732444</code> (the standing corner value), <code>b_edge_delta_max 2.0</code>,
+<code>a_cell_vs_uv_max_m 0.3336</code>, <code>f_crossing_chasm 0.388 m</code> at the walk site
+(face 5, iu 1023 iv 472), crossing net split 2.7037; <code>captures/f2-seam-zoom.png</code> (nadir 160 m
+over the x16_z0 seam): seam <b>continuous</b>, terrain steps normal, yellow chunk-corner gizmos confirm
+the lattice</td>
+<td>Standing known issue, numbers unchanged from the AC-0309/AC-0379 era — reproduced, not a
+regression. The fix is a placement-mechanism redesign (a separate design decision); out of scope here.
+Note: the crossface <b>walk</b> phase fails (5000-frame cap, <code>walk_crossed=false</code>, rescues
+0 vs 10 run-to-run) and fails identically on the pristine harness — a <b>pre-existing flake, A/B-proven
+not caused by this ticket</b> (§8)</td></tr>
+<tr><td>R2</td>
+<td>Far level of detail</td>
+<td><code>captures/f1-ground-r24.png</code> (R24 ground, +Z): the far tier (band B) is visible upper-right
+with a clean handoff; <b>no slit</b> at far-tier seams — 0.5 m at 128-332 m is &lt; 0.1 px at the frame
+scale</td>
+<td><b>Benign, confirmed by frame.</b> Sub-pixel at play distances; no action</td></tr>
+<tr><td>R3</td>
+<td>Cliff-moat dip</td>
+<td><code>ac0425scan</code> (pure-gen, seed 44): 9 candidates; best = seam <b>x=-16 @ z≈44</b> (spawn
++(-24.5, 0, +35.5)): cliff top 143, moat (neighbour edge cell) 134, far cliff 141 ⇒ <b>dip 9 m, moat 1 m
+wide, far cliff 1 cell in</b>. <code>captures/f4-cliffmoat.png</code> (nadir 170 m over the dip): the dip
+region renders <b>continuous</b> — the 9 m channel with visible step edges; the 1 m moat line is
+sub-resolution at the frame scale (0.36 m/px) — the scan owns that number, the screen owns the rest</td>
+<td><b>Reproduced + measured.</b> Legitimate generated terrain (the heightfield itself), no
+see-through — not a placement defect; no fix owed</td></tr>
+<tr><td>R4</td>
+<td>UV stretch on the seam-extension strip</td>
+<td><code>ac0423probe</code> (<code>ok=true</code>): seam closure HOLDS, <code>ext_edge</code> live at
+x = 16.877-16.883 (side A extends ~0.88 m past the seam at t≈140) ⇒ the edge row's UV is stretched
+<b>≈ 1.88×</b> on the extension strip; <code>captures/f2-seam-zoom.png</code>: sub-pixel at 0.4 m/px,
+seam continuous</td>
+<td><b>Measured + bounded</b> (the extension clamp [0, 2.5], top faces only). The proper fix is a new
+atlas band — texture art, a design decision; reported, not fixed</td></tr>
+</table>
+
+<h2>5. Recent work still holding (the note's constraint list)</h2>
+<p>Seam closure (f2 + ac0423probe), orbital sort offset and relief, local-zenith sky with air column
+(<code>u_air 208,241,251</code> sampled in every planet preset RESULT), far-tier curvature placement
+(f1 handoff clean), engine fog (f1/f1b A/B — the fog wall moves with FOG_PCT as designed), carved-top
+fill and cloud layer (f1/f4 frames). The satellite-bake edge check (previous run): face00.left vs
+face01.right = the internal x=0 seam, mean diff 0.4/765 — continuous, gapless invariant holds; the
+wraparound patch edges mean 228 (expected — different neighbours, not a defect); no black pixels in
+either full face PNG.</p>
+
+<h2>6. Gates (final tree = C4 fix + instrument removed; <code>harness.gd</code> byte-identical to HEAD)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th><th>Exit</th></tr>
+<tr><td>G0 — <code>--headless --quit</code> + <code>gate_census.py</code></td>
+<td class="ok">0 SCRIPT ERROR, 0 SHADER ERROR, exit 0 (the paired check — the stochastic UAF leaves a
+clean log)</td><td>0</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td>
+<td class="ok"><code>ok:true</code> (260 s); sea stable 320.0/1719.0, water_delta 1, interact/light
+sub-gates ok; genhash embedded below</td><td>0</td></tr>
+<tr><td>PROBE</td><td class="ok">RESULT ok (biomes 4, spawn_h 141)</td><td>0</td></tr>
+<tr><td>GENHASH</td><td class="ok"><b>25/25 byte-identical to the pre-edit baseline</b> (standalone run
+and battery run) — the C4 fix moves no generation</td><td>0</td></tr>
+<tr><td>SHADERFORCE</td><td class="ok">12/12 <code>verdict=ok</code>, <code>failed:[]</code>, 0/0
+census</td><td>0</td></tr>
+<tr><td>BOUNDARY r4 (self-check, world/AGENTS.md allowance)</td>
+<td class="ok"><code>ok/remesh_ok/marker_ok</code> true, 20/20 crossings, walk p50 <b>13</b> (flat) /
+p95 <b>35</b> (in band), <code>max_ms 190</code> (smoother than the 357-824 documented noisy band — a
+single-sample count, lower is better), <code>crossing_frame_p50/p95/max 32/47/50</code> (gate fields,
+comparable to the 29/38/38 standing), <code>staged_dropped 2646</code> (≤ 3200; cause split
+unmeshed 2640 — the AC-0408 pattern), <code>staged_pending_final 0</code>,
+<code>staged_drop_holder_residue 0</code>, <code>col_deferred_in_footprint 0</code>,
+<code>footprint.missing 0</code>, <code>flap 165</code>, <code>resident_final 93</code> (identical to
+standing), <code>built_final 64</code> (vs 61 standing — count drift), <code>unbodied_built_final 0</code>
+(AC-0408's flagged 8 reads 0). No standing value moved out of band</td><td>0</td></tr>
+</table>
+<p>The standing set (farab, ladder, meshprobe, halo, lightstate, r16, r50) is the coordinator's heavy
+gate job — not run here. Pre-edit baselines from the previous run: G0 exit 0 + 0/0, genhash 25, SMOKE
+ok — the post tree matches all of them.</p>
+
+<h2>7. Frame index</h2>
+<table>
+<tr><th>Frame</th><th>What it shows</th></tr>
+<tr><td><code>captures/f1-ground-r24.png</code></td><td>R24 ground, boot camera +Z: grass ring, the
+black-blob tree silhouette (x 690-860), far tier (band B) upper-right with clean handoff</td></tr>
+<tr><td><code>captures/f1b-ground-fog100.png</code> / <code>f1g-ground-bodyoff.png</code></td>
+<td>fog-wall A/B (348→400 m, blob invariant) / body-off A/B (blob pixel-identical — not the body)</td></tr>
+<tr><td><code>captures/f2-seam-zoom.png</code></td><td>nadir 160 m over seam x16_z0: continuous seam,
+chunk-corner gizmos, the crown's top lit green (R1/R4 frame evidence)</td></tr>
+<tr><td><code>captures/f4-cliffmoat.png</code></td><td>nadir 170 m over the R3 dip: the 9 m cliff-moat
+channel, step edges, continuous render</td></tr>
+<tr><td><code>captures/f5f-blob4-nadir.png</code></td><td>250 m nadir over (192,-308): real snow biome,
+no local black — the blob is not that terrain</td></tr>
+<tr><td><code>captures/f3a-boundary-prefix.png</code></td><td>the plan's 3.9 km corner state (manual,
+pre-fix): body disc only — no resident world (anchor pinned); census bound 4.5 m</td></tr>
+<tr><td><code>captures/f3c-atspawn-prefix.png</code></td><td>spawn nadir, manual lane, <b>pre-fix</b>:
+terrain + pale fog-washed far field; census 0/81 mismatch, max_off 4.5017 m</td></tr>
+<tr><td><code>captures/f3d-atspawn-engine.png</code></td><td>same state, engine cull — <b>pixel-identical
+to f3c (0/921,600 px)</b></td></tr>
+<tr><td><code>captures/f3b-atspawn-postfix.png</code></td><td>same state, manual lane, <b>post-fix</b> —
+<b>pixel-identical to f3c/f3d</b></td></tr>
+</table>
+
+<h2>8. Standing-arm note (carried forward)</h2>
+<p><b>crossface walk phase is flaky (pre-existing):</b> both runs of this ticket — the instrumented tree
+and pristine <code>harness.gd</code> (git-stash A/B) — fail the walk identically
+(<code>walk_crossed=false</code>, 5000-frame cap; rescue counts 0 vs 10 run-to-run) while every
+placement/generation/seam sub-gate passes with identical numbers. It is not caused by this ticket's
+harness edits (which are now removed) and predates them; it is a standing-arm reliability note for the
+coordinator, reported rather than fixed here (the arm's walk mechanics are out of this ticket's lane).</p>
+
+<h2>9. Deliberately not done</h2>
+<ul>
+<li><b>Coordinator's heavy gates</b> (farab, ladder, meshprobe, halo, lightstate, r16, r50) — the
+division of labour.</li>
+<li><b>No look ticket filed for the black-mass tree</b> — <code>TASKS.yaml</code> is fenced for this
+run; the finding and the recommendation are here for the coordinator to file.</li>
+<li><b>No fix for R1 (LSQ seam placement) or R4 (atlas band)</b> — placement redesign / texture art
+= design decisions beyond this audit's scope; both measured and reported.</li>
+<li><b>The U5 instrument bug was worked around, not fixed</b> (shared preset, out of lane).</li>
+<li><b>The faint dark 16 m square (U6) was not chased</b> — render budget; below any bar of concern.</li>
+<li>The previous run's killed f3a render (no PNG) was re-run from its reconstructed recipe; its
+original log is preserved in <code>.scratch/AC-0425/f3a-boundary.log</code>.</li>
+</ul>
+
+<p class="warn">Logs: <code>.scratch/AC-0425/</code> — <code>g0-final.log</code>, <code>smoke-final.log</code>,
+<code>probe-final.log</code>, <code>genhash-final.log</code>, <code>shaderforce-final.log</code>,
+<code>boundary-final.log</code>, <code>f3a-boundary-rerun.log</code>, <code>f3c-atspawn.log</code>,
+<code>f3d-atspawn-engine.log</code>, <code>f3b-atspawn-postfix.log</code> + the previous run's arm logs
+(<code>ac0423probe</code>, <code>ac0425scan</code>, <code>crossface</code>, <code>crossface-pristine</code>).
+Temporary instruments (the <code>ac0425scan</code> arm, the <code>AWECRAFT_AC0425CENSUS</code> planet-preset
+census, the carve audit) were removed at closeout — <code>harness.gd</code> is byte-identical to HEAD.</p>
+
+</body></html>

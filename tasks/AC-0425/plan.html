@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0425 plan — audit remaining flat-world assumptions</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.8em; border-bottom: 1px solid #bbb; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+code { background: #f0f0f0; padding: 1px 4px; } .ok { color: #060; font-weight: bold; } .bad { color: #a00; font-weight: bold; }
+</style></head><body>
+<h1>AC-0425 plan — audit the remaining flat-world assumptions</h1>
+
+<h2>Goal</h2>
+<p>Hunt the remaining instances of the defect class "spherical world treated as flat" by
+searching for the note's shapes, <b>testing each candidate by rendering it</b> (a candidate that
+cannot be shown in a frame is listed as unconfirmed, not mixed into the findings), covering the
+four residuals AC-0423 explicitly left untouched, and fixing what is bounded.</p>
+
+<h2>Static sweep (done before this plan — the candidate list)</h2>
+<p>Greps over <code>godot/**/*.gd</code> + <code>gdext/src/*.cpp</code> for the note's shapes
+(offsets ÷ planet radius; fixed world up where the local radial is meant; tangent frames from
+world axes; flat-grid placement; size-encoding constants) plus a lane-by-lane read of the meshing,
+collision, lighting, fluid, tree, mob, star/sky, cloud, satellite and cached-across-seam lanes.</p>
+<table>
+<tr><th>id</th><th>candidate (shape matched)</th><th>static verdict</th><th>render test</th></tr>
+<tr><td><b>C4</b></td><td><code>world.gd</code>: the manual frustum-cull pass
+(<code>_frustum_cull_pass</code>) and the <code>_gen_skip_flag</code> offscreen tail test a
+<b>flat-frame column box</b> (<code>(cx*16+8, H/2, cz*16+8)</code>, identity basis, flat span)
+against the <b>world-space</b> camera frustum. At the home-patch corner the flat box sits ~2.3 km
+from the column's real placed content (computed: flat (3008,192,3008) vs placed ~(2221,2300,2300)).</td>
+<td><b>Real assumption, bounded scope.</b> The <code>_gen_skip_flag</code> tail is
+<b>dead code</b> under the AC-0346 total tier rule (tier 0 ⇒ taxi ≤ sim ⇒ always inside the
+render circle ⇒ <code>band_of</code> 0/1 ⇒ returns before the frustum test; verified against
+<code>band_of</code>/<code>_lod_tier_of</code>/the sim &lt; render clamp). The manual pass is
+live only with <code>AWECRAFT_FRUSTUM=manual</code> (dev/A-B lane; the product default is engine
+cull, which uses the real node AABBs and is correct). So: dev-lane mis-cull at the face edge +
+one dead test that would misfire if the bands ever overlapped again.</td>
+<td>Boundary render ×2 (f3a pre-fix / f3b post-fix) with <code>AWECRAFT_FRUSTUM=manual</code>:
+pre-fix visible chunks pop out at the face edge; post-fix they hold. An env-gated census in the
+planet preset (temp instrument, unset = byte-identical) counts live flat-box vs placed-box
+decision mismatches + reports the box offsets in metres at the exact rendered camera state.</td></tr>
+<tr><td>C1</td><td>Modern per-vertex lighting: <code>mesh.cpp</code> bakes
+<code>oshade = 0.5·FSH + 0.5·clamp(dot(N, SUN)/SUN_y)</code> with N and SUN both in the
+<b>flat-map frame</code> (fixed sun (0.25,1,0.10)).</td>
+<td><b>Reviewed — by design, not a defect.</b> Chunks are <code>render_mode unshaded</code>
+(vertex colour only; the engine DirectionalLight never touches terrain). The flat-frame sun is the
+documented fixed-noon bake (AC-0204 "the mesh stores noon light"; the FSH model was equally
+orientation-free). At face edges the map-frame sun and the world-frame sun (sky/clouds/satellite)
+diverge — inherent to the fixed-noon convention, not a new class instance.</td>
+<td>None needed (frame would show the documented convention, not a defect).</td></tr>
+<tr><td>C3</td><td><code>world.gd</code> mat-dispatch: <code>generate_resl(…, 0, 4000.0, …)</code>
+hardcodes the production R (the far payload was generated with the same defaults — internally
+consistent by the documented contract).</td>
+<td><b>Latent robustness note, not reachable in product</b> (a save with R≠4000 is the only path;
+new_world always resets 4000 and the shipped writer only writes 4000).</td>
+<td>None (unconfirmed — cannot be shown in a frame on any reachable world).</td></tr>
+</table>
+<p>LANES CLEARED BY READING (no shape matched): entity physics (mob tangent-plane walk AC-0377,
+arrow/banana/drop/particle radial gravity — all AC-0145 P3 ports); slab collision (bodies are
+chunk-node children — ride the placed transform); fluids (chunk children, box tests converted);
+trees/veg (in-column data); star shell (skybox by design, disc occlusion spherical); sky
+(local-zenith AC-0417/0419/0422; OFF path is the bit-identical switch); clouds (spherical shell,
+polar-axis wind); satellite body (spherical, far-plane formula <code>h + 2(R+HMAX) + 200</code>
+correct); lod_avg/star/fluid shaders (world-pos hash / distance discards — no axis); the AC-0423
+seam-V machinery (home pair only, by contract).</p>
+
+<h2>The four AC-0423 residuals (must cover — live visual issues)</h2>
+<table>
+<tr><th>residual</th><th>code state</th><th>frame + measurement</th><th>expected outcome</th></tr>
+<tr><td>R1 face-chunk LSQ seams (faces 2–11)</td><td>LSQ affine per 16×16-cell chunk
+(<code>face_chunk_transform</code>); the seam-V extension is OFF there by the <code>sphere_r</code>
+key contract. Standing numbers (AC-0309, re-based AC-0379): boundary chasm 2.19 m crossing-row /
+3.73 m corner; face-chunk shared edges ≤ ~0.8 m.</td>
+<td><b>f3</b> (the boundary render, nadir at 40 m: the net/chart boundary line runs through the
+frame) + <b>crossface</b> arm (the standing instrument — <code>b_edge_delta_max</code>,
+<code>f_seam_max_m</code>, <code>f_crossing_chasm_*</code> on the current tree).</td>
+<td>Reproduce + measure. Fix = a different placement mechanism (AC-0311 territory) — design
+decision, out of bounds for this run → report with frame, leave alone.</td></tr>
+<tr><td>R2 far LOD (band B/C coarse tiers)</td><td><code>low_emit_avg_impl</code> /
+<code>h_avg_emit_impl</code> (mesh.cpp) take <b>no SeamExt</b> — the coarse tiers never carry the
+extension (verified in the signatures); the V-crack slit at far-tier seams is ≈ h·16/R ≈ 0.5 m at
+terrain tops.</td>
+<td><b>f1</b> (ground-level R24 frame: the band B ring 128–332 m in the view, inside the 332 m
+fog wall) + pixel-scale arithmetic (0.5 m at 128–332 m &lt; 0.1 px @ 1280×720/75°).</td>
+<td>Reproduce-as-benign: slit is sub-pixel at every distance the tier can be seen (the fog wall
+hides band C entirely from ground level) — "harmless at that tier" confirmed with a frame.</td></tr>
+<tr><td>R3 cliff-moat dip at a seam</td><td>Neighbour edge cell air ⇒ E = 0, no extension — the
+own top-face edge row ends at the seam plane; a 1-cell (1 m) dip between two cliffs at the seam,
+the far cliff face (not sky) filling the V.</td>
+<td>Temp scan arm (<code>AWECRAFT_LOGIC=ac0425scan</code>, pure gen, seed 44, spawn
+neighbourhood) finds the best cliff–moat–cliff seam; <b>f4</b> renders it at ~25 m; the dip is
+measured from the generated column tops.</td>
+<td>Reproduce + measure (expect 1.0 m). Verdict: legitimate terrain (the data says air there) —
+the extension correctly does not apply; reported as "covered, not a see-through defect".</td></tr>
+<tr><td>R4 UV stretch on the seam-extension strip</td><td>qwrite/qwrite_vc/qwrite_merged apply
+<code>seam_ext_corner</code> to positions only — the extended top-face row stays a trapezoid
+(1 m × (1+E) m) carrying the 1 m cell's UVs ⇒ texture stretched (1+E)× across the edge row
+(E ∈ [0.05, 2.5] ⇒ 1.05×–3.5×; ≈1.5× at t ≈ 140 m).</td>
+<td><b>f2</b> (seam zoom: ~10 m above the x=16 seam at spawn, nadir — the edge-cell top rows in
+frame) + <code>ac0423probe</code> (the temp AC-0423 arm, still in harness.gd) for the live E
+values ⇒ exact stretch factors.</td>
+<td>Measure + judge visibility. Fix = a new atlas band (the documented alternative) — design
+decision (texture art) → report with frame, leave alone.</td></tr>
+</table>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><b>the only product change (C4)</b>:
+<code>_frustum_cull_pass</code> + the <code>_gen_skip_flag</code> tail test the column box in the
+column's PLACED transform (the chunk node's own transform / <code>SphereMath.column_transform</code>)
+with the rotated-box support <code>8|n·B.x| + 192|n·B.y| + 8|n·B.z|</code> instead of the flat AABB
+span. Not a look change (cull/data decisions) ⇒ no switch. No world/* meshing, generation or data
+lane touched ⇒ genhash must stay 25/25 byte-identical (verified, not re-based).</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>temp instruments, env-gated, unset =
+byte-identical, out at closeout (the ac0423probe precedent): the <code>ac0425scan</code> arm
+(cliff-moat scan, headless) + the <code>AWECRAFT_AC0425CENSUS=1</code> block in the planet preset
+(mismatch census + box offsets, report-only). No new standing arm ⇒ no harness_data.yaml row.</td></tr>
+<tr><td><code>tasks/AC-0425/</code></td><td>this plan, results page, continuity, captures/.</td></tr>
+</table>
+<p>Fenced files (main.gd, game.gd, drop.gd, debug.gd) are READ for the audit, never edited.
+No C++ change ⇒ no rebuild ⇒ no genhash exposure from the native side.</p>
+
+<h2>Render plan (decisive frames, ~5 renders + headless arms)</h2>
+<table>
+<tr><th>frame</th><th>recipe (all: xvfb-run + lvp ICD + vulkan, 1280,720, budget 1200 s)</th><th>proves</th></tr>
+<tr><td>f1 ground</td><td>plain snapshot, seed 44, <code>AWECRAFT_RADIUS=24</code>, default boot camera (spawn, +Z)</td><td>R2 far-tier seam sub-pixel; AC-0423 seam closure holds at ground level; fog wall / body handoff holds</td></tr>
+<tr><td>f2 seam zoom</td><td>planet preset, <code>CAM_OFF=18,4 SAT_ALT=10 NADIR</code></td><td>R4 stretch visibility on the edge-cell top rows</td></tr>
+<tr><td>f3a boundary (pre-fix)</td><td>planet preset, <code>CAM_OFF≈3890,120 SAT_ALT=40 NADIR R4 AWECRAFT_FRUSTUM=manual AWECRAFT_AC0425CENSUS=1</code></td><td>R1 boundary chasm frame; C4 manual-cull pop + live mismatch census (pre-fix)</td></tr>
+<tr><td>f3b boundary (post-fix)</td><td>identical to f3a</td><td>C4 fix: manual cull holds, census clean; R1 frame re-taken post-fix (placement untouched — must match f3a's terrain)</td></tr>
+<tr><td>f4 cliff-moat</td><td>planet preset, <code>CAM_OFF</code> to the scanned seam, <code>SAT_ALT=25 NADIR</code></td><td>R3 dip frame + measurement</td></tr>
+</table>
+<p>Headless: G0 baseline (exit status + census), SMOKE baseline, genhash baseline (25 lines),
+ac0423probe, ac0425scan, crossface (2–4 min, the R1 standing instrument).</p>
+
+<h2>Harness gates (light set — heavy is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>when</th><th>pass bar</th></tr>
+<tr><td>G0</td><td>pre + post</td><td>exit status 0 AND zero SCRIPT ERROR AND zero SHADER ERROR (<code>gate_census.py</code>) — the stochastic UAF check is the process exit status on a clean log</td></tr>
+<tr><td>SMOKE</td><td>pre + post</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> ok</td></tr>
+<tr><td>PROBE</td><td>post</td><td><code>AWECRAFT_LOGIC=probe</code> ok</td></tr>
+<tr><td>genhash</td><td>pre (baseline) + post</td><td>25/25 byte-identical to the pre-edit log (world/* touched)</td></tr>
+<tr><td>shaderforce</td><td>post</td><td>12/12 ok (no shaders touched — a drift would be a machine/tree issue, not this change)</td></tr>
+<tr><td>boundary r4</td><td>post (the one allowed self-check, world/AGENTS.md)</td><td>standing values (r4 walk/p95; the cull change must not move them — r4 tilt &lt; 1°, flat/placed boxes &lt; 0.6 m apart, 32 m margin)</td></tr>
+</table>
+<p>Standing set (farab, ladder, meshprobe, halo, lightstate, r16, shaderforce 12/12, boundary r4
+band) — the constraint list holds because the change touches no meshing/generation/light/data
+lane; the coordinator's heavy set verifies. Deviations (if any) are recorded in the results page.</p>
+
+</body></html>
