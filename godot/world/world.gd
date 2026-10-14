@@ -3956,6 +3956,15 @@ func _ready() -> void:
 	var ambe := OS.get_environment("AWECRAFT_AMBSKY")
 	if ambe != "":
 		Settings.values["ambient_sky"] = ambe == "1"
+	# AC-0428: the planetary weather-gate switch (Settings "cloud_gate",
+	# default OFF - conservative: the shipped look is today's uniform
+	# deck, bit-identical). Same pattern: the env overrides the STORED
+	# setting for this process only (no save, so the arms never clobber
+	# the user's cfg) and lets the render A/B both states without a save
+	# file. Read live by _ac0401_push, so no boot derive is owed.
+	var gte := OS.get_environment("AWECRAFT_CLOUDGATE")
+	if gte != "":
+		Settings.values["cloud_gate"] = gte == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -5068,6 +5077,9 @@ func _wprof_recon_raw_pct() -> float:
 var _ac0401_fog_wall := -1.0
 var _ac0401_n_mats := -1  # AC-0420: late (lazily built) materials gate
 var _ac0401_deck := -1.0
+# AC-0428: the planetary weather-gate push state (Settings "cloud_gate",
+# default OFF; the shader's vgate short-circuits to 1.0 at u_gate < 0.5).
+var _ac0428_gate := -1.0
 var _ac0401_limb := -1.0
 # AC-0422: the continuous-horizon push state (same seam, change-gated).
 var _ac0422_horizon := -1.0
@@ -5190,6 +5202,20 @@ func _ac0401_push() -> void:
 				if cm is ShaderMaterial:
 					cm.set_shader_parameter("u_deck", deck_v)
 			_ac0401_deck = deck_v
+	# (1b) AC-0428: the planetary weather-gate switch (Settings
+	# "cloud_gate", default OFF - conservative; the shader's vgate
+	# returns 1.0 at u_gate < 0.5, so OFF is the pre-AC-0428 uniform
+	# deck bit-for-bit). Same seam as u_deck: change-gated push to every
+	# cloud layer's material.
+	var gate_v := 1.0 if bool(Settings.values.get("cloud_gate", false)) else 0.0
+	if gate_v != _ac0428_gate:
+		var clg = mn.get("cloud_layers")
+		if clg != null and clg.size() > 0:
+			for layerg in clg:
+				var cmg = layerg.get("mat")
+				if cmg is ShaderMaterial:
+					cmg.set_shader_parameter("u_gate", gate_v)
+		_ac0428_gate = gate_v
 	# (2a) AC-0421: the cloud-vs-body transparent ordering (defect 2 —
 	# the user's "z fighting preventing the clouds from showing on the
 	# face near you in orbit view, they flash in and out but they always

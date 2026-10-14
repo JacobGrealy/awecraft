@@ -264,13 +264,32 @@ vec3 sky_on(vec3 dir) {
 	// the local-zenith gradient (the sky_off expression, re-keyed):
 	// horizon -> mid over the lower third, -> zenith over the top.
 	float u = clamp(hl, 0.0, 1.0);
-	vec3 grad = mix(horizon_color, mid_color, smoothstep(0.0, 0.30, u));
+	// AC-0428 item 1 ("sky still has a horizon"): the gradient's horizon
+	// anchor blends to the single-source air colour as the A window opens
+	// (w). The body's rim (haz) and the world's fog are u_air (the AC-0384
+	// r8 seam), so the sky just outside the limb must be u_air too -
+	// otherwise the seam keeps a visible step: AC-0422 softened the branch
+	// SWITCH (the 0.03 blend) but the two branch COLOURS still differed by
+	// the horizon/u_air gap (223,246,251 vs 208,241,251 at T = 0.5), which
+	// reads as a line across the frame at altitude. At w = 0 (ground) the
+	// anchor is horizon_color exactly (the daytime sky is untouched); the
+	// u_horizon gate keeps the OFF path bit-for-bit.
+	vec3 horizon_eff = mix(horizon_color, u_air, w * u_horizon);
+	vec3 grad = mix(horizon_eff, mid_color, smoothstep(0.0, 0.30, u));
 	grad = mix(grad, zenith_color, smoothstep(0.25, 0.90, u));
-	// above the horizon: the gradient thinned to space by the A window
-	// (zenith by w, grazing by w*w - the longer air column); w = 1 is
-	// space exactly (the AC-0417 contract). Below: the AC-0422
-	// single-source haze (see (1) above).
-	vec3 above = mix(grad, space_color, mix(w * w, w, u) * mix(1.0, u, u_horizon));
+	// above the horizon: the gradient thinned to space by the A window;
+	// w = 1 is space exactly at the zenith (the AC-0417 contract).
+	// AC-0428 item 2 ("the top of the sky turns into space faster than
+	// the rest - the entire sky should transition at the same rate"): the
+	// pre-fix weight mix(w*w, w, u) * u was CONVEX in the local elevation
+	// (slow near the horizon, fast near the zenith - the change
+	// concentrated near the top, the user's screenshot). The fix is w*u -
+	// a UNIFORM rate: the u_air -> space transition spreads evenly over
+	// the elevation range, still 0 at the horizon (the seam stays one
+	// colour, item 1) and w at the zenith (space at A looking up). The
+	// OFF path (u_horizon = 0) keeps the pre-AC-0422 weight bit-for-bit.
+	float thin = mix(mix(w * w, w, u) * 1.0, w * u, u_horizon);
+	vec3 above = mix(grad, space_color, thin);
 	vec3 belowc = mix(mix(space_color, u_air, 1.0 - w), u_air, u_horizon);
 	vec3 col = mix(above, belowc, below);
 	// the horizon haze band (the sky_off term) hugs the local horizon

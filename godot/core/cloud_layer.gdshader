@@ -169,6 +169,19 @@ uniform float u_under : hint_range(0.0, 1.0) = 0.70;
 // plus stronger thickness darkening so the masses read as lit-from-
 // above with deep cores, not as a flat membrane.
 uniform float u_deck : hint_range(0.0, 1.0) = 0.0;
+// AC-0428 item 4 (Settings "cloud_gate", default OFF; world.gd pushes
+// u_gate = 1.0 when ON, the AWECRAFT_CLOUDGATE env preloads it). The
+// planetary WEATHER GATE: a low-frequency field in the planetary space
+// (q - the drift-rotated normalised position, see vgate) that decides
+// WHERE the groups of clouds are. The user: "we need some kind of noise
+// or something around the planet that determines where groups of clouds
+// are, it should not be uniformly cloudy across the entire planet."
+// 0.0 (the shader default - no push, and the Settings default OFF) is
+// the exact pre-AC-0428 cover, bit-for-bit (vgate returns 1.0); 1.0
+// multiplies the cover by the gate, so the field's cloudy regions keep
+// the full structure and the gate's clear regions go to 0 (broad clear
+// gaps between the cloud groups).
+uniform float u_gate : hint_range(0.0, 1.0) = 0.0;
 // AC-0405: the raymarched-volume switch + parameters (world.gd
 // _ac0401_push pushes u_vol / u_vol_r / u_vol_rmin / u_vol_rmax; the
 // step/sigma/edge/phase values are the shipped tuning - the cost knobs
@@ -421,6 +434,33 @@ float vprof2(vec3 q, float topf) {
 	return gate * prof;
 }
 
+// AC-0428 item 4: the planetary WEATHER GATE (see the u_gate uniform).
+// A single LOW-frequency octave (anv) in the planetary space q (the
+// drift-rotated normalised position, |q| ~ 1 on the shell), so the field
+// has broad groups across the whole globe (feature size ~1/3.0 rad ~ 19
+// deg - the "groups of clouds" the user asked for, not the fine puffs the
+// base field carries; the frequency is tuned so the groups are SMALLER
+// than the orbital visible-disc cap (<= 54.7 deg at the lowest orbit) and
+// therefore visibly vary across it - at 1/0.8 the whole disc sat inside
+// one feature and the gate was invisible, measured). Windowed so the gate's low
+// phase is CLEAR (0) and its high phase is CLOUDY (1); the 0.40/0.52
+// window sits around the field's mean so roughly half the globe is
+// clear and half is cloudy (the exact fraction is measured in the
+// ticket's coverage probe and tuned from there). The offset is a
+// constant lattice shift (independent of u_phase, so the gate does not
+// slide with the per-shell pattern offsets - the groups are a property
+// of the planet, shared by all three decks). Applied to BOTH vdens and
+// vdens_coarse so the self-shadow and the dark-edge taps see the same
+// groups (a shadow must exit at the group's edge, not the field's).
+// u_gate < 0.5 returns exactly 1.0 (the pre-AC-0428 cover, bit-for-bit).
+float vgate(vec3 q) {
+	if (u_gate < 0.5) {
+		return 1.0;
+	}
+	float gate_n = anv(q * 3.0 + vec3(31.7, 19.3, 7.1));
+	return smoothstep(0.40, 0.52, gate_n);
+}
+
 // The FULL 3-D density (0..1): the EXACT window chain of the 2-D path
 // (u_deck-parameterised, byte-identical constants), now in 3-D. The fine
 // octave's 0.85+0.15 modulation is dropped in 3-D (the octaves inside
@@ -453,7 +493,8 @@ float vdens(vec3 q) {
 	// variance - the user's complaint). One extra anv per view step -
 	// the skyline is the cost (the "no variance in height" fix).
 	float topf = anv(q * (sc3 * 0.5) + vec3(5.3, 11.7, 8.1));
-	return cl * vprof2(q, topf);
+	// AC-0428 item 4: the planetary weather gate (1.0 when OFF).
+	return cl * vprof2(q, topf) * vgate(q);
 }
 
 // The COARSE density (1 octave + band, same windows): the light march
@@ -484,7 +525,8 @@ float vdens_coarse(vec3 q) {
 	// top whose column ends below it (phantom cloud above a short
 	// column's top) - a dark-tops regression.
 	float topf = anv(q * (sc3 * 0.5) + vec3(5.3, 11.7, 8.1));
-	return cl * vprof2(q, topf);
+	// AC-0428 item 4: the planetary weather gate (1.0 when OFF).
+	return cl * vprof2(q, topf) * vgate(q);
 }
 
 // Henyey-Greenstein phase (the 4*pi normalisation folds into the gains).
@@ -740,7 +782,24 @@ void fragment() {
 		vec4 acc = vec4(1.0, 0.0, 0.0, 0.0);  // (T, L, Lo, A)
 		vec2 sg1 = vseg1(w, rd, rc);
 		acc = vmarchseg(ro, rd, sg1, ca, sa, acc.x, acc.y, acc.z, acc.w);
-		if (acc.x > 0.004) {
+		// AC-0428: the SILHOUETTE GATE (the user's "I can see all the clouds on
+		// the other side of the planet through the satellite lod - it should be
+		// opaque"). The march above already put the NEAR annulus (sg1) into the
+		// fragment's optical depth; the far annulus (sg2) is the cloud layer on
+		// the FAR side of the planet. When the camera is OUTSIDE the outer cloud
+		// sphere (rc > u_vol_rmax - the orbit/satellite view) and the view ray
+		// passes THROUGH the opaque planet (its impact parameter about the centre
+		// b_hit = |w x rd| is under the body's opaque extent u_vol_r + the terrain
+		// height range 384), the far-side annulus sits BEHIND the opaque body: it
+		// must not accumulate into this near-side fragment's depth, or the body's
+		// disc carries the far side's weather (the see-through). Around the limb
+		// the ray misses the body (b_hit >= u_vol_r + 384) and the far side is
+		// legitimately visible, so sg2 still marches there. b_hit uses the same
+		// impact-parameter convention the sky's limb term and ac0417_wash use
+		// (length(cross(rel-centre, view-dir))).
+		float b_hit = length(cross(w, rd));
+		bool body_blocks = (rc > u_vol_rmax) && (b_hit < u_vol_r + 384.0);
+		if (acc.x > 0.004 && !body_blocks) {
 			vec2 sg2 = vseg2(w, rd, rc);
 			acc = vmarchseg(ro, rd, sg2, ca, sa, acc.x, acc.y, acc.z, acc.w);
 		}

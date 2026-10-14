@@ -118,6 +118,27 @@ uniform float u_spec : hint_range(0.0, 1.0) = 0.0;
 
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
+// AC-0428: per-fragment WORLD position + the RADIAL normal, computed in the
+// VERTEX stage and interpolated to the fragment via varyings. AC-0384 built
+// the world position in the fragment stage as `INV_VIEW_MATRIX * VERTEX`, on
+// the (wrong) premise that the fragment-stage VERTEX builtin is the
+// fragment's interpolated view-space position. In the 4.7.1 engine that is
+// NOT the case: the fragment-stage VERTEX degenerates to a constant across a
+// whole draw, so `d`, the `op` existence window, `haz_d` and `cosv` were all
+// computed against ONE fixed point instead of the fragment - the limb haze
+// (designed as a per-fragment impact-parameter model) collapsed into a
+// dot-against-a-fixed-direction and the disc washed flat across the frame
+// (the user's "see-through / half-flat satellite LOD"). Verified in-engine
+// for AC-0428: the vertex-stage world position is a true sphere
+// (|v_world - planet centre| == R at every fragment, whole frame), while the
+// fragment-stage reconstruction was constant. This matches the repo's
+// established pattern (cloud_layer.gdshader / lod_avg.gdshader compute the
+// world position in the vertex stage as MODEL_MATRIX * VERTEX and pass it
+// through a varying). The body carries translation only, so the mesh-local
+// radial direction IS the world-space normal (no NORMAL matrix needed).
+varying vec3 v_world;
+varying vec3 v_nrm;
+
 void vertex() {
 	// AC-0401: radius ordering with a real gap. The displaced surface is the
 	// SAME terrain the near tiers (band A + the annulus) draw at full
@@ -132,17 +153,25 @@ void vertex() {
 	// not move the fog-wall contract (the op window is untouched); the
 	// star-occlusion radius (R + SEA, the star shader) is a separate home.
 	VERTEX -= normalize(VERTEX) * 2.0;
+	// AC-0428: the exact radial normal (the mesh is a sphere, so the local
+	// position direction IS the surface normal; the inset above is radial and
+	// leaves the direction unchanged). Translation-only transform => this
+	// local direction equals the world-space normal.
+	v_nrm = normalize(VERTEX);
+	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
 void fragment() {
-	// World-space geometry (AC-0384 - the builtin spaces, verified in
-	// the 4.7.1 engine source): VERTEX here is the fragment's VIEW-space
-	// position (the camera sits at the origin), so INV_VIEW_MATRIX takes
-	// it to world; CAMERA_POSITION_WORLD is the camera in world space;
-	// NORMAL is world space (the body is translation-only). The old
-	// `d = length(VIEW)` was identically 1.0 (VIEW is a unit vector) -
-	// see the header note: the body discarded every fragment.
-	vec3 p_w = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// World-space geometry (AC-0428, superseding the AC-0384 fragment-stage
+	// reconstruction): p_w is the vertex-stage world position interpolated
+	// through the v_world varying (see the note above the vertex stage - the
+	// fragment-stage VERTEX builtin does not give the per-fragment position
+	// in 4.7.1, and the AC-0384 INV_VIEW_MATRIX * VERTEX was a constant).
+	// nrm is the vertex-stage radial normal through v_nrm. CAMERA_POSITION_WORLD
+	// is the camera in world space. All three are world space, so the d / op /
+	// haz / cosv / sun-lambert math below is a true per-fragment model again.
+	vec3 p_w = v_world;
+	vec3 nrm = v_nrm;
 	vec3 cam_w = CAMERA_POSITION_WORLD;
 	float d = length(p_w - cam_w);
 	float op = smoothstep(u_fog_far, u_render_edge, d);
@@ -159,7 +188,7 @@ void fragment() {
 	// of the render distance: no matter how short the fog is set, the
 	// limb is fully hazy, which is what keeps the disc's edge
 	// continuous with the 100% fogged world just outside it.
-	float cosv = clamp(dot(normalize(cam_w - p_w), NORMAL), 0.0, 1.0);
+	float cosv = clamp(dot(normalize(cam_w - p_w), nrm), 0.0, 1.0);
 	float haz_a = pow(1.0 - cosv, 2.0);
 	// TERM 2 - haz_d: the EDGE-CONTINUITY term - the only distance
 	// term. It is the complement of the existence ramp (op above): 1
@@ -180,7 +209,7 @@ void fragment() {
 	// distance shrinks; now each has its own driver.
 	float haz_d = 1.0 - op;
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
-	float sun_l = clamp(dot(u_sun, NORMAL) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
+	float sun_l = clamp(dot(u_sun, nrm) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
 	// AC-0411: decode the baked sRGB bytes BEFORE the day factor. The
 	// factor (u_day - u_day_gain*(1-sun_l), in [0.18, 1.0]) is a linear
 	// light scalar, not part of the display colour, so the domain

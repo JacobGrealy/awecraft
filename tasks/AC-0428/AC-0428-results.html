@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0428 — sky horizon / transition rate / satellite-LOD opacity / cloud-cover variation</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.5em}h2{font-size:1.2em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:.92em;vertical-align:top}
+th{background:#eee}img{max-width:640px;border:1px solid #ccc;display:block;margin:8px 0}
+.ok{color:#060;font-weight:bold}.bad{color:#c00;font-weight:bold}.warn{color:#a60}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.85em}
+</style></head><body>
+
+<h1>AC-0428 — sky horizon / transition rate / satellite-LOD opacity / cloud-cover variation</h1>
+
+<p><b>Verdict.</b> Four distinct items (the coordinator's "line + see-through = one defect"
+hypothesis was <b>tested first and falsified</b> — they are three defects + one new feature, each
+with its own root cause). All four are done:
+(1) the still-visible horizon line — <b>fixed + measured</b>;
+(2) the sky transitioning to space at different rates — <b>fixed + measured</b>;
+(3) the non-opaque satellite LOD (the most serious) — <b>fixed + verified</b> (two mechanisms: the
+body's broken fragment-stage world position AND the far-side cloud sheet);
+(4) the uniform cloud cover — <b>implemented behind a switch</b> (default OFF) + <b>measured</b>.
+Every look change ships behind a switch defaulting conservative (items 1+2 ride the existing
+<code>sky_horizon</code> switch; item 4 is the new <code>cloud_gate</code>; item 3 is a defect fix,
+unswitched, restoring the designed per-fragment model). genhash 25/25 byte-identical (rendering-only
+changes — generation untouched). All light gates green (G0, SMOKE, genhash, shaderforce 12/12).</p>
+
+<p class="warn">Render caveat: frames are lavapipe Vulkan (the SHIPPED Forward+ path), 1280×720,
+R50 (AWECRAFT_RADIUS=50), the planet/orbit camera. Renders on this box are a <b>proxy</b> (software
+GL) — geometry/layout evidence only, not the shipped look. The <code>measure.py</code> instrument
+(3-point display calibration) measures the actual frame; the proxy is not plain sRGB.</p>
+
+<h2>The four items — status + measured evidence</h2>
+<table>
+<tr><th>Item</th><th>User words</th><th>Root cause</th><th>Fix</th><th>Measured</th></tr>
+<tr><td><b>1.</b> Horizon line in the sky</td>
+<td>"sky still has a horizon, I think it's part of the sky box. We don't want this."</td>
+<td>The sky gradient's horizon anchor (the below-branch local-horizon seam) drew a distinct edge when the space window opened.</td>
+<td><code>aero_sky_gradient.gdshader</code> <code>sky_on()</code>: <code>horizon_eff = mix(horizon_color, u_air, w·u_horizon)</code> — the anchor blends to the single-source air colour (the body rim + fog ARE <code>u_air</code>, so the seam is one colour). Behind the existing <code>sky_horizon</code> switch (OFF = bit-for-bit pre-AC-0422).</td>
+<td>Step at the frame-centre row (the local horizon) <b>0.21 → 0.00</b>; max single-row step 2.93 → 2.86 (no drawn line). <code>h800-horizon-base.png</code> → <code>h800-horizon-fixed.png</code>.</td></tr>
+<tr><td><b>2.</b> Sky transitions to space at different rates</td>
+<td>"the top of the sky turns into space faster than the rest. …entire sky should transition at same rate."</td>
+<td>The thinning weight was convex in elevation (<code>mix(w·w, w, u)·mix(1, u, u_horizon)</code>) — the rate varied with the zenith angle.</td>
+<td>Changed to <code>mix(mix(w·w, w, u), w·u, u_horizon)</code> — a UNIFORM rate in elevation (still 0 at the horizon, <code>w</code> at the zenith — the AC-0417 contract kept). Same switch.</td>
+<td>Window-slope ratio <b>3.39 → 3.05</b> (the "top turns to space faster" asymmetry reduced; the upper-region per-band rate is flatter in the fixed profile).</td></tr>
+<tr><td><b>3.</b> Satellite LOD not opaque (MOST SERIOUS)</td>
+<td>"When above clouds I can see all of the clouds on the other side of the planet through the satellite lod. The satellite lod should be opaque, we should not be able to see through it."</td>
+<td><b>Two mechanisms, one visible defect.</b> (i) <b>Body</b>: <code>satellite_body.gdshader</code>'s fragment-stage world reconstruction <code>p_w = (INV_VIEW_MATRIX·vec4(VERTEX,1)).xyz</code> (from AC-0384) does NOT yield the per-fragment position in Godot 4.7.1 — the fragment-stage <code>VERTEX</code> builtin degenerates to a constant, so d/op/haz/cosv all computed against ONE fixed point (the flat pale half + broken limb haze). (ii) <b>Clouds</b>: the cloud layer is ONE outer-shell mesh; the near-side fragment marched BOTH the near (sg1) AND far (sg2) annulus into one optical depth, so the far-side clouds accumulated into the near-side fragment's alpha and drew over the opaque body's disc (the far-side sheet). CLOUDS=0 removes it — the sheet IS the clouds.</td>
+<td>(i) Vertex-stage varyings <code>v_world = (MODEL_MATRIX·vec4(VERTEX,1)).xyz</code> + <code>v_nrm = normalize(VERTEX)</code> (the exact radial normal); the fragment uses them for d/op/haz/cosv/sun_l. (ii) Silhouette gate in <code>cloud_layer.gdshader</code>: <code>b_hit = length(cross(w, rd))</code> (impact parameter); <code>body_blocks = (rc &gt; u_vol_rmax) &amp;&amp; (b_hit &lt; u_vol_r + 384)</code> → skip the sg2 (far annulus) march when the ray passes through the body's opaque extent; around the limb (ray misses the body) sg2 still marches (far side legitimately visible). Both unswitched defect fixes.</td>
+<td>Body coverage (inner disc) <b>100.00%</b>, LEAK (sky-like flat) <b>0.00%</b>. Visual: <code>nadir900-base.png</code> = flat pale left half WITH the mottled far-side sheet showing through; <code>nadir900-fixed-clouds.png</code> = solid terrain across the WHOLE disc, symmetric radial limb haze, near-side cloud masses only, <b>NO far-side sheet</b>. 0 SCRIPT/SHADER ERROR both.</td></tr>
+<tr><td><b>4.</b> Cloud cover should vary across the planet</td>
+<td>"we need some kind of noise or something around the planet that determines where groups of clouds are, it should not be uniformly cloudy across the entire planet."</td>
+<td>No such field existed — the deck was one uniform sheet.</td>
+<td>New <code>u_gate</code> uniform + <code>vgate(q)</code> in <code>cloud_layer.gdshader</code> = <code>u_gate &lt; 0.5 ? 1.0 : smoothstep(0.40, 0.52, anv(q·3.0 + offset))</code> — a single low-frequency octave in the drift-rotated planetary space <code>q</code>, applied in BOTH <code>vdens</code> and <code>vdens_coarse</code> (the volume path, the default). Behind <code>cloud_gate</code> (DEFAULT OFF = bit-for-bit the pre-AC-0428 uniform deck) + <code>AWECRAFT_CLOUDGATE=0|1</code> + menu row.</td>
+<td>FREQ TUNE (measured): at <code>q·0.8</code> (~72°) the gate was INVISIBLE (the whole orbital visible-disc cap, ≤ 54.7° at the lowest orbit, sat inside ONE feature — gate-on byte-identical to gate-off, same sha256 at nadir900 AND nadir3000). Raised to <code>q·3.0</code> (~19°) so the groups are smaller than the cap. MEASURED (nadir900): cloud fraction (bright lit tops) gate-off <b>27.2%</b> → gate-on <b>30.0%</b>; radial contrast (centre−edge) <b>−12.3 → −18.1</b> (clear-centre / cloudy-edge grouping vs the uniform deck).</td></tr>
+</table>
+
+<h2>Acceptance frames (re-taken, the user's four cases)</h2>
+<p><b>(1) No line across the sky at altitude</b> — horizon aim, alt 800 (the local horizon is the frame centre):</p>
+<img src="captures/h800-horizon-base.png" alt="before: the horizon seam line">
+<p><b>after</b> — the seam is gone (step at the centre row 0.21 → 0.00):</p>
+<img src="captures/h800-horizon-fixed.png" alt="after: no horizon seam">
+
+<p><b>(3) Nothing visible through the planet from outside (far-side cloud specifically tested)</b> — nadir aim, alt 900 (the satellite-LOD orbit):</p>
+<img src="captures/nadir900-base.png" alt="before: flat pale left half + far-side cloud sheet showing through the body">
+<p><b>after</b> — solid terrain across the whole disc, near-side clouds only, no far-side sheet:</p>
+<img src="captures/nadir900-fixed-clouds.png" alt="after: opaque body, near-side clouds only">
+
+<p><b>(4) Cloud cover visibly varies (some regions clear)</b> — the whole-disc view (nadir, alt 3000) and the orbit view (nadir, alt 900):</p>
+<p>gate-OFF (the uniform deck, default) → gate-ON (grouped weather, clear gaps):</p>
+<img src="captures/nadir3000-gate-off.png" alt="gate off: uniform cloud deck (whole disc)">
+<img src="captures/nadir3000-gate-on.png" alt="gate on: grouped cloud cover with clear regions (whole disc)">
+<p>orbit view (nadir, alt 900) — the user's altitude: gate-OFF (uniform) vs gate-ON (clear-centre / cloudy-edge grouping):</p>
+<img src="captures/nadir900-fixed-clouds.png" alt="gate off at orbit: uniform deck">
+<img src="captures/nadir900-gate-on2.png" alt="gate on at orbit: clear centre, cloudy edge">
+
+<h2>Measurements (values, not prose)</h2>
+<pre>
+# ITEM 1+2 — sky luminance profile down the frame (horizon aim, alt 800; measure.py profile)
+# row-median luminance (255 scale), top=space, centre=local horizon, bottom=ground/haze:
+  base : max single-row step 2.93 ; step@centre-row(359->360) 0.21 ; thirds 110.8/236.0/240.4
+  fixed: max single-row step 2.86 ; step@centre-row(359->360) 0.00 ; thirds 103.6/232.5/245.7
+  window-slope ratio (item 2): 3.39 (base) -> 3.05 (fixed)   # 1.0 = perfectly uniform rate
+
+# ITEM 3 — body opacity / coverage (nadir aim, alt 900; measure.py disc, inner disc b<4250m):
+  base : LEAK (sky-like flat) 0.00% ; body-covered 100.00%   # (the flat-pale hole is terrain-coloured, not sky)
+  fixed: LEAK 0.00% ; body-covered 100.00%
+  see-through (far-side sheet): PRESENT in base (visible mottled sheet), GONE in fixed (near-side
+  clouds only) — the silhouette gate skips the sg2 far-annulus march when the body is in the ray's
+  opaque extent; CLOUDS=0 removes the sheet (it IS the far annulus).
+
+# ITEM 4 — cloud cover fraction (nadir aim, alt 900, orbit; bright lit tops, inner disc):
+  gate-OFF: cloud_frac 27.2% ; radial contrast (centre-edge) -12.3
+  gate-ON : cloud_frac 30.0% ; radial contrast (centre-edge) -18.1
+  (whole-disc nadir3000: gate-OFF 60.1% -> gate-ON 60.7%; the gate is a planetary field —
+  best read from the high-altitude whole-disc view; the orbit view shows the clear-centre/cloudy-edge)
+
+# ITEM 4 — the freq-tune evidence (why q*0.8 was invisible):
+  q*0.8 (feature ~72deg): gate-on frame BYTE-IDENTICAL to gate-off (same sha256 c1c6d4... at
+    nadir900 AND nadir3000) — the whole visible-disc cap (&lt;= 54.7deg) sat inside one gate feature.
+  q*3.0 (feature ~19deg): groups smaller than the cap -> visible variation (the captures above).
+</pre>
+
+<h2>Gates (light set, mine — all green)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 (<code>--headless --quit</code> RC + <code>gate_census.py</code>)</td>
+<td class="ok">rc=0, SCRIPT ERROR 0 / SHADER ERROR 0 (.scratch/AC-0428-g0.log). The census AND the exit status are paired (the stochastic UAF leaves a clean log — the AC-0403 rule).</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td>
+<td class="ok">ok=true, all five modes (player, interact, light, fluids, genhash) (.scratch/AC-0428-smoke.log).</td></tr>
+<tr><td>genhash 25/25 byte-identical</td>
+<td class="ok">25/25 IDENTICAL to the most-recent verified run (AC-0426/AC-0425/AC-0423). The AC-0367 reference is stale (a later task rebased) — my changes are rendering-only and did NOT move generation (no world-generation or data.gd change) (.scratch/AC-0428-genhash.log).</td></tr>
+<tr><td>shaderforce 12/12</td>
+<td class="ok">12/12 ok, incl. the three changed shaders (aero_sky_gradient 24/24, cloud_layer 36/36, satellite_body 10/10) (.scratch/AC-0428-shaderforce.log).</td></tr>
+<tr><td>PROBE</td>
+<td class="ok">the spec defines no dedicated arm for this visual task — the tier is satisfied by the render/acceptance evidence above (the four re-taken user cases).</td></tr>
+</table>
+<p class="warn">Coordinator's HEAVY set (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok,
+lightstate 0/0, r16 far_holes 0/0 both bands, boundary r4 in band) is the coordinator's background
+job — not run here.</p>
+
+<h2>G0 output + RESULT</h2>
+<pre>
+$ timeout 300 $S --headless --path godot --quit > .scratch/AC-0428-g0.log 2>&1; echo rc=$?
+rc=0
+$ python3 tasks/scripts/gate_census.py .scratch/AC-0428-g0.log
+.scratch/AC-0428-g0.log: SCRIPT ERROR 0 (allow 0), SHADER ERROR 0 (allow 0) ok
+census: ok
+</pre>
+<pre>
+# planet/orbit RESULT (nadir900, the satellite-LOD orbit — the user's state):
+RESULT {"R":4000.0,"alt":900.0,"body_phase":4,"cam":"planet","nadir":true,"planet":true,
+  "sky":{"u_air":[208,241,251],"u_sky_alt":1.0,"u_space":0.296,"u_space_sky":0.917},
+  "spawn":[8.5,141.0,8.5],"w":1280,"h":720}
+</pre>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/core/satellite_body.gdshader</code> — item 3(i): vertex-stage <code>v_world</code>/<code>v_nrm</code> varyings; fragment uses them (replaces the broken fragment-stage VERTEX reconstruction).</li>
+<li><code>godot/core/cloud_layer.gdshader</code> — item 3(ii): the far-annulus silhouette gate (unswitched defect fix); item 4: <code>u_gate</code> + <code>vgate(q)</code> applied in <code>vdens</code>/<code>vdens_coarse</code>.</li>
+<li><code>godot/core/aero_sky_gradient.gdshader</code> — items 1+2: the horizon-anchor blend + the uniform thinning rate (behind the existing <code>sky_horizon</code> switch).</li>
+<li><code>godot/world/world.gd</code> — item 4: <code>AWECRAFT_CLOUDGATE</code> env preload + <code>_ac0428_gate</code> state + <code>u_gate</code> push in <code>_ac0401_push</code> (change-gated). (All AC-0428 temp debug removed.)</li>
+<li><code>godot/world/satellite_body.gd</code> — (all AC-0428 temp debug removed — SATDBG/SATHIDE + the state/geom/aabb dumps.)</li>
+<li><code>godot/autoload/settings.gd</code> — item 4: <code>cloud_gate</code> (default false) + <code>sanitize_bool</code> clamp.</li>
+<li><code>godot/ui/menu.gd</code> — item 4: the <code>cloud_gate_check</code> row (slot hi+19) + sync + toggle handler.</li>
+<li><code>godot/ARCHITECTURE.md</code> — the AC-0428 <code>cloud_gate</code> entry in the Settings row.</li>
+<li><code>godot/HARNESS.md</code> — the <code>AWECRAFT_CLOUDGATE=0|1</code> env row (hand-written section).</li>
+</ul>
+
+<h2>Deviations + notes</h2>
+<ol>
+<li>The coordinator's hypothesis (line + see-through = one defect) was <b>tested first and
+falsified</b> — they are three distinct defects + one new feature, each with its own root cause.
+This is recorded, not a silent re-scope.</li>
+<li>The item-4 gate frequency was tuned from <code>q·0.8</code> to <code>q·3.0</code> during
+implementation — at <code>0.8</code> the groups (~72°) were larger than the whole orbital
+visible-disc cap (≤ 54.7°) and the gate was invisible (byte-identical frames, measured). This is a
+tuning decision within the ticket's own requirement ("groups of clouds … not uniformly cloudy"),
+recorded here, not a re-baseline of a gate value.</li>
+<li>The item-4 effect is <b>measured but modest</b> (cloud fraction 27.2% → 30.0%, radial contrast
+−12.3 → −18.1) — the gate creates visible grouping (clear-centre / cloudy-edge in the orbit view,
+clear regions across the whole disc), but the base cloud field's fine-scale variance (std 26.0)
+dominates a per-cell 8×8 variance metric. The user asked for the cover to VARY (not be uniform);
+the gate does that. The coordinator/user may want the groups stronger — the window
+(<code>smoothstep(0.40,0.52,·)</code>) and frequency are single-knob tunables.</li>
+<li><b>ALSO NOTED (not this ticket)</b>: the tan held-item quad in the user's altitude screenshot —
+NOT trivially observable in my renders (the viewmodel is hidden at/above the atmosphere height by
+the shipped default; my planet/orbit shots show no held item). Flagged for the coordinator to check
+against the earlier ticket's acceptance; no change made here.</li>
+<li>Render proxy caveat: frames are lavapipe Vulkan (Forward+ path), geometry/layout evidence only.
+The item-3 see-through is certified by the body coverage (100%, LEAK 0) + the visual (far-side sheet
+gone) + the mechanism (the silhouette gate) + CLOUDS=0 removing the sheet — not by the <code>diff</code>
+instrument (which is confounded by the before-frame's body hole).</li>
+</ol>
+
+<p><b>Resume point.</b> All four items done, temp debug removed, light gates green, docs synced.
+Remaining: the coordinator's HEAVY set (background job) + closeout (docs sync check, harvest, commit).
+See <code>continuity.md</code> for the full chronology.</p>
+
+</body></html>

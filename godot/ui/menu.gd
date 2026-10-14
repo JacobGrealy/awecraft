@@ -64,6 +64,9 @@ var sky_alt_check: CheckBox
 # AC-0405: the raymarched-volumetric-clouds toggle (Settings page,
 # default ON - the user ordered the rework).
 var cloud_vol_check: CheckBox
+# AC-0428: the planetary weather-gate toggle (Settings page, default OFF -
+# conservative: the shipped look is today's uniform deck).
+var cloud_gate_check: CheckBox
 # AC-0394: the held-item occlusion toggle (Settings page, default OFF -
 # conservative: the user reported the SIZE, not the occlusion).
 var vm_occ_check: CheckBox
@@ -459,6 +462,23 @@ func _ready() -> void:
 	opt_vbox.add_child(ambient_sky_check)
 	if hi + 17 < opt_vbox.get_child_count():
 		opt_vbox.move_child(ambient_sky_check, hi + 18)
+	# AC-0428: the planetary WEATHER-GATE toggle — the user's own words
+	# ("we need some kind of noise or something around the planet that
+	# determines where groups of clouds are, it should not be uniformly
+	# cloudy across the entire planet"). DEFAULTS OFF — conservative: the
+	# shipped look is today's uniform deck (the shader's vgate returns 1.0
+	# at u_gate < 0.5, bit-for-bit). No apply step is owed: world.gd
+	# _ac0401_push reads the live value every frame and pushes u_gate to
+	# the three cloud-layer materials (env-overridable:
+	# AWECRAFT_CLOUDGATE=0|1 at boot, world.gd).
+	cloud_gate_check = CheckBox.new()
+	cloud_gate_check.name = "CloudGateCheck"
+	cloud_gate_check.text = "Clouds: grouped weather (clear gaps)"
+	cloud_gate_check.add_theme_font_size_override("font_size", 15)
+	cloud_gate_check.toggled.connect(_on_cloud_gate_toggled)
+	opt_vbox.add_child(cloud_gate_check)
+	if hi + 18 < opt_vbox.get_child_count():
+		opt_vbox.move_child(cloud_gate_check, hi + 19)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -950,6 +970,8 @@ func _sync_controls() -> void:
 	relief_check.button_pressed = bool(Settings.values.get("relief_shading", true))
 	# AC-0426: the zero-light sky-ambient toggle (default OFF).
 	ambient_sky_check.button_pressed = bool(Settings.values.get("ambient_sky", false))
+	# AC-0428: the planetary weather-gate toggle (default OFF - conservative).
+	cloud_gate_check.button_pressed = bool(Settings.values.get("cloud_gate", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1346,6 +1368,17 @@ func _on_cloud_vol_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("cloud_volume", on)
+
+
+# AC-0428: the planetary weather-gate toggle (default OFF - conservative:
+# the shipped look is today's uniform deck). set_value does the clamp chain
+# + the save; no apply step is owed: world.gd _ac0401_push reads the live
+# value and pushes u_gate (OFF = the exact pre-AC-0428 uniform deck - the
+# shader's vgate short-circuits to 1.0).
+func _on_cloud_gate_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("cloud_gate", on)
 
 
 # AC-0394: the held-item occlusion toggle (default OFF - conservative:

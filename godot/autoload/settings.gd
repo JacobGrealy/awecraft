@@ -127,6 +127,19 @@ const DEFAULTS := {
 	# centre (verified geometry, the outer shell carries the march).
 	# Env-overridable (AWECRAFT_CLOUDVOL=0|1 at boot, world.gd).
 	"cloud_volume": true,
+	# AC-0428: the planetary WEATHER GATE. DEFAULTS OFF (conservative —
+	# the shipped look is today's uniform deck, bit-for-bit: the shader's
+	# vgate returns 1.0 at u_gate < 0.5). The user asked for it in their
+	# own words: "we need some kind of noise or something around the
+	# planet that determines where groups of clouds are, it should not be
+	# uniformly cloudy across the entire planet." ON (u_gate 1.0)
+	# multiplies the cloud cover by a low-frequency planetary field
+	# (cloud_layer.gdshader vgate - a handful of broad cloud groups with
+	# clear gaps between them); OFF is the pre-AC-0428 uniform deck.
+	# Rides world.gd _ac0401_push (u_gate on the three cloud-layer
+	# materials, change-gated). Env-overridable
+	# (AWECRAFT_CLOUDGATE=0|1 at boot, world.gd).
+	"cloud_gate": false,
 	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
 	# ("after a recent build the level of detail was not showing at all,
 	# and when they looked into it the world 'was still baking'": the
@@ -409,6 +422,10 @@ func _clamp(k: String, v) -> void:
 		"sky_altitude":  # AC-0402: bool (the sky's altitude-aware space blend).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"cloud_volume":  # AC-0405: bool (the raymarched cloud volume).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"cloud_gate":  # AC-0428: bool (the planetary weather gate).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (false), never throw.
 			values[k] = AnalogTune.sanitize_bool(v)
 		"sat_preload":  # AC-0414: bool (the bake-before-load switch).
 			values[k] = AnalogTune.sanitize_bool(v)

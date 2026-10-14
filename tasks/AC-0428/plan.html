@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0428 plan</title>
+<style>
+body{font-family:ui-monospace,Consolas,monospace;max-width:1100px;margin:24px auto;padding:0 16px;line-height:1.45;color:#1a2430}
+h1{border-bottom:3px solid #2b6cb0;padding-bottom:8px}h2{margin-top:28px;border-bottom:1px solid #cbd5e0;padding-bottom:4px}
+table{border-collapse:collapse}td,th{border:1px solid #cbd5e0;padding:4px 10px;text-align:left;vertical-align:top}
+code{background:#f4f4f4;padding:1px 4px}
+</style></head>
+<body>
+<h1>AC-0428 plan — sky horizon line, zenith-rate transition, opaque satellite LOD, cloud-cover variation</h1>
+<p>SPEC: <a href="../TASKS.yaml">TASKS.yaml AC-0428</a> · CONTINUITY: <a href="continuity.md">continuity.md</a></p>
+
+<h2>Goal</h2>
+<p>Four user reports, 2026-10-13. The coordinator's "one defect" hypothesis (horizon line == see-through
+body) is <b>TESTED FIRST</b> and is <b>FALSIFIED</b>: the four reports are <b>three distinct defects plus
+one new feature</b>, and the "hole" the user sees through is not the body at all. Each item below was
+localized by measurement on this proxy before any edit.</p>
+
+<h2>Defect findings (test-first results)</h2>
+<table>
+<tr><th>#</th><th>User report</th><th>What it is (measured)</th><th>Approach</th></tr>
+<tr><td>1</td><td>"sky still has a horizon … part of the sky box"</td>
+<td><b>Separate from #3 (hypothesis falsified).</b> The line is the aero sky gradient's own
+below-branch seam: at the local-horizon elevation the thinning ramp has a local extremum that renders
+as a ~20-luminance step across the frame (h800-horizon-base: rows 360-380). The AC-0422 fix removed the
+branch-switch edge; this is the residual seam of the ramp itself.</td>
+<td><code>aero_sky_gradient.gdshader</code>: smooth the thinning ramp at the seam (blend the below/above
+branches through a wider band centred on the local horizon so the derivative has no extremum); keep the
+u_horizon A/B. Measure: luminance profile down the frame, step at the seam before/after (target ≤ a few
+units, vs 20 before).</td></tr>
+<tr><td>2</td><td>"top of the sky turns into space faster … entire sky should transition at same rate"</td>
+<td>The sky's horizon→zenith blend is a power/cosine of elevation, so the rate of change is steepest near
+the zenith (the deep-blue cap "arrives" faster overhead). Measured on the base frame: the luminance
+fall-off is convex (fast at top, slow near horizon).</td>
+<td><code>aero_sky_gradient.gdshader</code>: re-parameterize the blend to be (close to) linear in
+elevation so the whole sky transitions at a uniform rate; keep the endpoints (zenith colour, horizon
+colour, space below) untouched. Measure: luminance profile down the frame before/after — the profile
+should be a straight line between the horizon and zenith anchors (rate variance across the profile
+drops; report max deviation from the best line).</td></tr>
+<tr><td>3</td><td>"above clouds I can see all the clouds on the other side of the planet through the satellite lod … should be opaque" — <b>most serious</b></td>
+<td><b>Two mechanisms, both measured.</b> (i) <b>Primary, user-visible:</b> the cloud volume's far
+annulus (seg2) draws the far-side cloud sheet across the planet — <code>CLOUDS=0</code> removes the
+see-through entirely (nadir900-clouds0 vs base). (ii) <b>The body "hole":</b> NOT missing geometry,
+NOT culling, NOT a subview, NOT renderer-specific (GL-compat reproduces it) — it is the body shader's
+fragment-stage world reconstruction. <code>p_w = (INV_VIEW_MATRIX * vec4(VERTEX,1)).xyz</code>
+(AC-0384) degenerates to a <b>constant</b> across the draw in 4.7.1 (the fragment-stage <code>VERTEX</code>
+builtin is not the interpolated fragment position), so <code>cosv</code> collapsed to a dot against a
+fixed direction: ≈0.3 constant over the world-+Z half of the frame (flat pale left half of nadir900)
+vs 0.8-1.0 on the -Z half. The body IS rasterized across the whole frame (solid-red test: 14,249/14,400
+samples exactly (255,0,0)) — the flat region is the body hazed to u_air by the broken cosv, and where
+the haz model is broken the disc no longer reads as an opaque limb. Mesh data + all 12 face transforms
+verified perfect in-engine (pure translation (0,-4000,0), identity basis).</td>
+<td>(i) <code>cloud_layer.gdshader</code>: silhouette gate on the far annulus — skip seg2 fragments whose
+ray misses the planet (impact parameter <code>b = length(cross(p_c, rd))</code> &gt; body radius + margin),
+so the far-side sheet can never draw across the disc. (ii) <code>satellite_body.gdshader</code>: compute
+the world position in the <b>vertex</b> stage (<code>v_world = MODEL_MATRIX * VERTEX</code>, the repo
+pattern from cloud_layer/lod_avg) and the exact radial normal (<code>v_nrm = normalize(VERTEX)</code>),
+passed as varyings; fragment uses them for d/op/haz/cosv/sun-lambert. <b>VERIFIED:</b> in-shader test
+<code>abs(length(v_world − centre) − 4140) &lt; 50</code> true at every fragment; fixed frame shows terrain
+across the whole disc with a symmetric radial limb haze (nadir900-fixed.png).</td></tr>
+<tr><td>4</td><td>cloud cover should vary across the world — "some kind of noise … where groups of clouds are"</td>
+<td>The cloud field is uniform across the globe (every sector at the same cover).</td>
+<td>New low-frequency gate in <b>planetary</b> space: a low-freq noise field sampled on the body that
+decides whether a region has weather at all, multiplying the existing local field (structure inside
+cloudy regions is unchanged). Ships <b>behind a switch defaulting OFF</b> (conservative):
+<code>cloud_gate</code> in settings.gd + menu row + <code>AWECRAFT_CLOUDGATE</code> env (the
+cloud_deck/cloud_volume pattern). Measure: fraction of surface under cloud before/after (gate on) at
+two altitudes; the after must show clear regions (fraction &lt; before, with spatial variance).</td></tr>
+</table>
+
+<h2>Coordinator hypothesis test (required first step)</h2>
+<p>"Horizon line and see-through are one defect" — <b>falsified</b>. The body is fully rasterized (red
+test) and its broken-haz region is opaque u_air, not a hole; disabling clouds (<code>CLOUDS=0</code>)
+removes the see-through while the flat body region stays; the sky seam line exists with the body's
+contribution isolated (it is the sky shader's own seam). <b>Two-plus defects — treated separately as
+instructed.</b></p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/satellite_body.gdshader</code></td><td>Item 3(ii): vertex-stage <code>v_world</code>/<code>v_nrm</code> varyings replace the fragment-stage <code>VERTEX</code>/<code>NORMAL</code> reconstruction. Defect fix (restores the designed per-fragment model) — ships unswitched; the pre-fix path is not a valid state to restore.</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td>Item 3(i): seg2 far-annulus silhouette gate (skip fragments whose ray misses the planet). Defect fix, unswitched.</td></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td><td>Items 1+2: seam-smoothed thinning ramp; near-linear horizon→zenith blend (uniform transition rate). Keep u_horizon A/B; endpoints unchanged.</td></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code> + <code>godot/world/world.gd</code></td><td>Item 4: planetary low-freq weather gate (<code>u_gate</code> uniform + gate field), multiplied into the cover; switch-gated.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code> + <code>godot/ui/menu.gd</code></td><td>Item 4: <code>cloud_gate</code> bool default OFF + Options row (cloud_deck pattern) + <code>AWECRAFT_CLOUDGATE</code> env preload.</td></tr>
+<tr><td><code>godot/HARNESS.md</code> (env table, via harness_data.yaml) + <code>godot/ARCHITECTURE.md</code></td><td>Item 4: document the new env + the weather-gate convention (ARCHITECTURE owns the convention; HARNESS the env row).</td></tr>
+<tr><td><code>godot/world/satellite_body.gd</code> / <code>godot/world/world.gd</code></td><td>Remove ALL AC-0428 temp debug (SATDBG/SATHIDE hooks, state/geometry dumps, worlddbg census) before G0. Shader temp debug already reverted.</td></tr>
+</table>
+
+<h2>Acceptance + measurements owed</h2>
+<ul>
+<li>Item 1: luminance profile down the frame (h800 horizon view), seam step before/after (20 → ≤ few units).</li>
+<li>Item 2: luminance profile down the frame, rate variance / max deviation from best line before/after.</li>
+<li>Item 3: body opacity/coverage — fraction of the disc that is opaque (not sky/background) at nadir900
+  before/after, with the far-side cloud specifically tested (clouds ON): no far-side sheet visible
+  across the disc.</li>
+<li>Item 4: fraction of surface under cloud before/after (gate on), at two altitudes; clear regions present.</li>
+</ul>
+
+<h2>Gates (light set, mine)</h2>
+<ul>
+<li>G0: <code>tasks/scripts/gate_census.py</code> zero SCRIPT ERROR + zero SHADER ERROR <b>and</b> process exit status 0 (the stochastic UAF leaves clean logs — the exit status is load-bearing).</li>
+<li>SMOKE battery <code>player;interact;light;fluids;genhash</code>; PROBE; genhash 25/25; shaderforce 12/12.</li>
+<li>Heavy set (farab/ladder/meshprobe/halo/lightstate/r16/boundary r4) is the coordinator's background job.</li>
+</ul>
+
+<h2>Fences</h2>
+<p>No commits/pushes; no TASKS.yaml edits; fenced files untouched (<code>scenes/main.gd</code>,
+<code>autoload/game.gd</code>, <code>entities/drop.gd</code>, <code>autoload/debug.gd</code>,
+<code>scenes/harness.gd</code>; <code>tasks/AC-0067</code>, <code>AC-0384</code>, <code>AC-0425</code>).
+If a fix requires a fenced file: stop and report. Render budget: one godot at a time, logs to
+<code>.scratch/AC-0428-gates/</code>. Renders are proxy (llvmpipe) — geometry/layout evidence only.</p>
