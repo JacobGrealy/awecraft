@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0429 plan — the skybox must have no bottom edge</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1020px;margin:24px auto;padding:0 16px;line-height:1.5}
+h1{font-size:1.4em}h2{font-size:1.15em;margin-top:28px;border-bottom:2px solid #555;padding-bottom:3px}
+code{background:#f4f4f4;padding:1px 4px}pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.85em}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:5px 8px;font-size:.92em;vertical-align:top}th{background:#eee}
+</style></head><body>
+<h1>AC-0429 plan — remove the lower boundary as a concept (the skybox has no bottom edge)</h1>
+
+<h2>Goal</h2>
+<p>Below the local horizon the sky is <b>space</b> — the same black, the same stars. The only thing
+that ever appears across a frame is the planet and its air. Not a smoother version of the old
+look: the anchor, the band, the blend at the bottom of the sky are removed. AC-0428 measured the
+step at the local horizon to 0.00 by making the two sides of the box the <i>same</i> colour
+(<code>u_air</code>) — the user is right that the box is still there: a flat pale expanse from the
+local horizon down to the planet's limb, with a structure computed and smeared at its top. The
+fix must make the below-horizon region <b>space exactly</b> (at the user's altitude) with nothing
+else of the sky model touching that region.</p>
+
+<h2>What draws or implies a lower boundary (the survey)</h2>
+<p>All five live in one place — <code>sky_on()</code> in <code>godot/core/aero_sky_gradient.gdshader</code>
+(the default <code>u_sky_alt &gt;= 0.5</code> path). One root cause: the model treats
+"below the local horizon (<code>hl &lt; 0</code>) or under the R+SEA disc" as a region with a
+DIFFERENT STATE — an air floor — instead of letting the sky be the space background everywhere and
+the planet (with its air) be the only thing in it.</p>
+<table>
+<tr><th>#</th><th>Thing</th><th>Where (sky_on, line refs pre-change)</th><th>What it does</th></tr>
+<tr><td>1</td><td><b>The below-branch air floor</b> (the main body)</td>
+<td><code>belowc = mix(mix(space_color, u_air, 1.0 - w), u_air, u_horizon)</code></td>
+<td>Below <code>hl = 0</code> the sky paints the single-source AIR colour — a flat pale band
+(<code>u_air</code> ≈ [208,241,251] at noon). That flat expanse terminated at the local-horizon
+plane IS the skybox's bottom face the user sees. At <code>w = 1</code> (full space) it is STILL
+pale (AC-0422's after-1300 frame: row 690 = 250.32 "air below").</td></tr>
+<tr><td>2</td><td><b>The gradient's horizon anchor</b></td>
+<td><code>horizon_eff = mix(horizon_color, u_air, w * u_horizon)</code> (AC-0428 item 1)</td>
+<td>The upper gradient's lower edge is anchored to the air colour as the A window opens — the top
+half of the same box, meeting the floor at the local horizon. AC-0428's "step 0.21 → 0.00" made
+the two halves the same colour; the boundary as a structure remained.</td></tr>
+<tr><td>3</td><td><b>The branch-switch band</b></td>
+<td><code>below_soft = max(under_disc, smoothstep(0.0, 0.03, -hl))</code> (AC-0422)</td>
+<td>A ~2° blend band straddling the local horizon — the band where the two halves of the box meet.</td></tr>
+<tr><td>4</td><td><b>The horizon haze band</b></td>
+<td><code>hz = exp(-abs(hl)*9.0) * haze_amount * (1.0 - w)</code></td>
+<td>A bright band centred ON the local horizon, from both sides — a fake-horizon line that keeps
+20% of its weight at the user's <code>w = 0.8</code>.</td></tr>
+<tr><td>5</td><td><b>The thinning weight's horizon exemption</b></td>
+<td><code>thin = mix(mix(w*w, w, u), w*u, u_horizon)</code> (AC-0422 <code>·u</code> / AC-0428)</td>
+<td>The local horizon is where the sky darkens LAST (weight 0 at <code>hl = 0</code>, <code>w</code>
+at the zenith) — the lower edge of the space transition, the "atmosphere seen edge-on" band.</td></tr>
+</table>
+<p><b>Checked and NOT lower-boundary things (untouched):</b> the limb term (the normalized air
+column through the A shell — the planet's OWN air, additive, exactly 0 above the horizon from
+outside: it becomes the ONLY boundary, which is what the user wants); the star field (full
+sphere, no bottom face, occluded only by the planet disc at R+SEA); the AeroWash quad (uniform
+screen tint ×(1−S), no edge); the satellite body + cloud shells (the planet and its air); the env
+fog / fog wall (terrain fading to <code>u_air</code> — the planet's surface, not the sky's
+bottom); the <code>sky_off</code> path (the sky's OFF state — must stay byte-identical, untouched);
+and the <code>under_disc</code> case (camera inside the R+SEA disc): there
+<code>w ≡ 0</code> (alt &lt; 126 m &lt; the 300 m window floor), so the change below is provably
+a no-op.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/aero_sky_gradient.gdshader</code></td>
+<td>New uniform <code>u_no_floor</code> (default 0.0 = the pre-ticket path bit-for-bit, the
+AC-0401 short-circuit convention). In <code>sky_on()</code>: one floor space-weight
+<code>ws = smoothstep(0.0, 0.3, w)</code> (0 at the ground, 1 from <code>w ≥ 0.3</code> ≈ alt
+630 m — the user's frame at <code>w = 0.8</code> lands exactly in space); the below-branch blends
+toward <code>space_color</code> with <code>ws</code> (keeping <code>u_air</code> at
+<code>w = 0</code> — the AC-0384 r8 fog seam at ground level); the gradient anchor blends
+<code>horizon_color → space_color</code> with the SAME <code>ws</code> (the gradient's lower edge
+dissolves into space and equals the below-branch colour at <code>hl = 0</code> for every
+<code>w</code> — no line, no band); the haze band's <code>(1-w)</code> becomes
+<code>mix(1-w, 1-ws, u_no_floor)</code> (the fake-horizon band dies with the floor; the ground
+horizon haze is untouched since <code>ws(0) = 0</code>). UNCHANGED: the thinning weight
+(<code>w·u</code> — the AC-0428 uniform rate), the limb term, the sun terms, the branch switch,
+<code>sky_off</code>.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td><code>AWECRAFT_SKYFLOOR=0|1</code> boot env preload (no save) + change-gated
+<code>u_no_floor</code> push in <code>_ac0401_push</code> (new block 2d) + one state var.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td>
+<td><code>"no_sky_floor": true</code> (default ON — the user asked, twice; the AC-0422 rule:
+conservative only when the user has NOT asked) + the clamp entry.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td>
+<td>The checkbox row (slot hi+20) + sync + toggle handler (AC-0428 pattern).</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td>
+<td>The <code>AWECRAFT_SKYFLOOR=0|1</code> env row in the §2 hand-written table.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>The AC-0429 <code>no_sky_floor</code> entry in the Settings row (§2) + the sky-pass note
+(§3) where the below-branch is described.</td></tr>
+</table>
+<p>Switches: <b>one new switch</b> <code>no_sky_floor</code> (default ON) + env A/B.
+<code>OFF</code> (<code>u_no_floor = 0</code>, the shader default) is the AC-0428 state
+bit-for-bit: every new factor is <code>mix(x, y, 0.0) = x</code>. The sky's own OFF state
+(<code>sky_off</code>, <code>u_sky_alt &lt; 0.5</code>) is not touched at all.</p>
+
+<h2>Why this is "no line, no band" and not another blend</h2>
+<ul>
+<li>At the user's frame (<code>w = 0.8</code>): <code>ws = 1</code> → the below-branch is
+<code>space_color</code> EXACTLY (flat black + stars) and the anchor is <code>space_color</code>
+exactly, so above the horizon the sky starts AT space and the local horizon carries no colour
+change at all (seam = 0, not ≤ 0.03-degree-smeared).</li>
+<li>At intermediate <code>w</code> (the 300–630 m climb): the below-branch and the anchor move
+from <code>u_air</code>/<code>horizon_color</code> to space with the SAME <code>ws</code>, so the
+two halves stay matched at the boundary (|seam| ≤ 15/255·(1−ws), the same order as the
+pre-existing ground-level seam, 0 once <code>ws = 1</code>).</li>
+<li>At the ground (<code>w = 0</code>): <code>ws = 0</code> → every expression reduces to the
+pre-ticket value (bit-identical daytime sky + the AC-0384 r8 fog seam).</li>
+<li>What remains in the lower frame: the planet's disc, its <code>u_air</code> rim haze and the
+sky's limb air-column glow — "the planet and its air". From above the planet (limb aim,
+<code>w = 1</code>): the whole dome is space + stars; the limb is the only boundary.</li>
+</ul>
+
+<h2>Harness gates (light set, mine)</h2>
+<ol>
+<li><b>G0</b>: <code>--headless --quit</code> rc checked (the stochastic UAF leaves a clean log) +
+<code>gate_census.py</code> = 0 SCRIPT / 0 SHADER ERROR.</li>
+<li><b>SMOKE</b>: battery <code>player;interact;light;fluids;genhash</code>.</li>
+<li><b>genhash</b>: <code>AWECRAFT_LOGIC=genhash</code> BEFORE the edits (baseline, this dirty
+tree) and AFTER — must be identical (world.gd touched; the change is rendering-only so it must
+not move generation).</li>
+<li><b>shaderforce</b>: 12/12 forced compile on Forward+ (the new uniform declared AND rendered).</li>
+<li><b>PROBE (render acceptance)</b>, all Forward+/lavapipe, 1280,720, seed 44, T=0.5, R50,
+drain 600, no <code>AWECRAFT_LOGIC</code>:
+  (a) the user's frame — <code>AWECRAFT_CAM=planet AWECRAFT_CAM_HORIZON=1 AWECRAFT_SAT_ALT=800</code>
+  (the AC-0422 aim: the local horizon at frame centre), SKYFLOOR=0 (before) vs default (after):
+  the lower half must be flat space + stars; the luminance profile down the frame as numbers,
+  below the horizon flat, not a gradient;
+  (b) from above the planet — the default limb aim at <code>AWECRAFT_SAT_ALT=2000</code>
+  (<code>w = 1</code>), before vs after: the planet's limb the only boundary;
+  (c) <code>AWECRAFT_CAM_NADIR=1</code> at 900 — planet opacity (body coverage / LEAK, the
+  AC-0428 measure) + the cloud gate ON frame (cloud-cover variation still varies).</li>
+</ol>
+
+</body></html>

@@ -3946,6 +3946,16 @@ func _ready() -> void:
 	var she := OS.get_environment("AWECRAFT_SKYHORIZON")
 	if she != "":
 		Settings.values["sky_horizon"] = she == "1"
+	# AC-0429: the skybox-no-bottom-edge switch (Settings "no_sky_floor",
+	# default ON - the user's correction to the AC-0428 blending: "the
+	# sky box can't have a bottom edge, we are in space!"). Same
+	# pattern: the env overrides the STORED setting for this process only
+	# (no save); _ac0401_push reads it live, so no boot derive is owed.
+	# 1 = no floor (below the local horizon the sky is space), 0 = the
+	# pre-ticket AC-0428 floor.
+	var nofl_e := OS.get_environment("AWECRAFT_NOSKYFLOOR")
+	if nofl_e != "":
+		Settings.values["no_sky_floor"] = nofl_e == "1"
 	# AC-0426: the zero-light sky-ambient switch (Settings "ambient_sky",
 	# default OFF - conservative: the shipped look is today's
 	# floor-only path, bit-identical). Same pattern: the env overrides
@@ -5083,6 +5093,8 @@ var _ac0428_gate := -1.0
 var _ac0401_limb := -1.0
 # AC-0422: the continuous-horizon push state (same seam, change-gated).
 var _ac0422_horizon := -1.0
+# AC-0429: the skybox-no-bottom-edge push state (same seam, change-gated).
+var _ac0429_nofloor := -1.0
 # AC-0414: the clause-2 limb gate push state (same seam, change-gated).
 var _ac0414_limb_loaded := -1.0
 var _ac0414_body_loaded := -1.0
@@ -5283,6 +5295,25 @@ func _ac0401_push() -> void:
 		if smh is ShaderMaterial:
 			smh.set_shader_parameter("u_horizon", horz_v)
 		_ac0422_horizon = horz_v
+	# (2d) AC-0429: the skybox-no-bottom-edge switch (Settings
+	# "no_sky_floor", default ON — the user's correction: the AC-0428
+	# blend removed the STEP at the local horizon but kept the box —
+	# the anchor, the band, the u_air floor below it. With the switch
+	# ON, below the local horizon the sky is space (the same black, the
+	# same stars): the below-branch fill and the gradient's horizon
+	# anchor blend to space with the floor's space weight ws
+	# (smoothstep(0, 0.3, w) — 1 from ~630 m), the horizon haze band
+	# dies with ws, and the planet's limb (the limb term + the body's
+	# u_air rim) is the only boundary left — the planet IS the horizon.
+	# The shader default is 0.0 = the pre-AC-0429 path bit-for-bit, so
+	# a material that never sees the push keeps the AC-0428 look
+	# (the AC-0401 short-circuit convention).
+	var nofl_v := 1.0 if bool(Settings.values.get("no_sky_floor", true)) else 0.0
+	if nofl_v != _ac0429_nofloor:
+		var smf = mn.get("sky_mat")
+		if smf is ShaderMaterial:
+			smf.set_shader_parameter("u_no_floor", nofl_v)
+		_ac0429_nofloor = nofl_v
 	# (3) AC-0402 -> AC-0417: the sky's altitude-aware space blend
 	# (Settings "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env
 	# preload). AC-0417 REDEFINED this setting: ON now runs the

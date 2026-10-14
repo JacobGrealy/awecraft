@@ -67,6 +67,10 @@ var cloud_vol_check: CheckBox
 # AC-0428: the planetary weather-gate toggle (Settings page, default OFF -
 # conservative: the shipped look is today's uniform deck).
 var cloud_gate_check: CheckBox
+# AC-0429: the skybox-no-bottom-edge toggle (Settings page, default ON -
+# the user's correction: the sky below the local horizon is space, the
+# planet's limb is the only boundary).
+var no_sky_floor_check: CheckBox
 # AC-0394: the held-item occlusion toggle (Settings page, default OFF -
 # conservative: the user reported the SIZE, not the occlusion).
 var vm_occ_check: CheckBox
@@ -479,6 +483,23 @@ func _ready() -> void:
 	opt_vbox.add_child(cloud_gate_check)
 	if hi + 18 < opt_vbox.get_child_count():
 		opt_vbox.move_child(cloud_gate_check, hi + 19)
+	# AC-0429: the skybox-no-bottom-edge toggle — the user's own words
+	# (the correction to the AC-0428 horizon blend): "the sky box can't
+	# have a bottom edge, we are in space! We can't fake the horizon,
+	# the planet and satellite is the horizon." DEFAULTS ON (they asked):
+	# below the local horizon the sky is space (the same black, the same
+	# stars) and the planet's limb is the only boundary. No apply step is
+	# owed: world.gd _ac0401_push reads the live value every frame and
+	# pushes u_no_floor to the sky material (the cloud_deck/limb_space
+	# pattern; env-overridable: AWECRAFT_NOSKYFLOOR=0|1 at boot, world.gd).
+	no_sky_floor_check = CheckBox.new()
+	no_sky_floor_check.name = "NoSkyFloorCheck"
+	no_sky_floor_check.text = "Sky: space below the horizon (the planet is the horizon)"
+	no_sky_floor_check.add_theme_font_size_override("font_size", 15)
+	no_sky_floor_check.toggled.connect(_on_no_sky_floor_toggled)
+	opt_vbox.add_child(no_sky_floor_check)
+	if hi + 19 < opt_vbox.get_child_count():
+		opt_vbox.move_child(no_sky_floor_check, hi + 20)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -972,6 +993,8 @@ func _sync_controls() -> void:
 	ambient_sky_check.button_pressed = bool(Settings.values.get("ambient_sky", false))
 	# AC-0428: the planetary weather-gate toggle (default OFF - conservative).
 	cloud_gate_check.button_pressed = bool(Settings.values.get("cloud_gate", false))
+	# AC-0429: the skybox-no-bottom-edge toggle (default ON - the user asked).
+	no_sky_floor_check.button_pressed = bool(Settings.values.get("no_sky_floor", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1379,6 +1402,17 @@ func _on_cloud_gate_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("cloud_gate", on)
+
+
+# AC-0429: the skybox-no-bottom-edge toggle (default ON - the user asked).
+# set_value does the clamp chain + the save; no apply step is owed:
+# world.gd _ac0401_push reads the live value and pushes u_no_floor
+# (OFF = the exact pre-AC-0429 AC-0428 look - the shader's mix
+# short-circuits to the old path).
+func _on_no_sky_floor_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("no_sky_floor", on)
 
 
 # AC-0394: the held-item occlusion toggle (default OFF - conservative:

@@ -115,6 +115,23 @@ const DEFAULTS := {
 	# the step at the local horizon. Env-overridable
 	# (AWECRAFT_SKYHORIZON=0|1 at boot, world.gd).
 	"sky_horizon": true,
+	# AC-0429: the skybox-no-bottom-edge switch (u_no_floor in
+	# aero_sky_gradient.gdshader sky_on). DEFAULTS ON — the user's
+	# correction, in their own words, to the AC-0428 fix: "the sky box
+	# can't have a bottom edge, we are in space! We can't fake the
+	# horizon, the planet and satellite is the horizon." The AC-0428
+	# blend removed the STEP at the local horizon but kept the box
+	# (the anchor, the band, the u_air floor below it) — this removes
+	# the lower boundary as a CONCEPT: below the local horizon the sky
+	# is space (the same black, the same stars), the gradient's horizon
+	# anchor fades to space with the floor's space weight ws
+	# (smoothstep(0, 0.3, w) — 1 from ~630 m), the horizon haze band
+	# dies with ws, and the planet's limb is the only boundary left.
+	# The pre-ticket look (the AC-0428 floor) is the shader default
+	# (u_no_floor 0.0 — the old path bit-for-bit, the AC-0401
+	# short-circuit convention) and the A/B rides the harness env
+	# override (AWECRAFT_NOSKYFLOOR=0|1 at boot, world.gd).
+	"no_sky_floor": true,
 	# AC-0405: the raymarched-volumetric-clouds switch. DEFAULTS ON —
 	# the user ordered the rework in their own words ("rethink clouds...
 	# forget how we currently do it"), the modern_light/cloud_deck
@@ -426,6 +443,10 @@ func _clamp(k: String, v) -> void:
 		"cloud_gate":  # AC-0428: bool (the planetary weather gate).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (false), never throw.
+			values[k] = AnalogTune.sanitize_bool(v)
+		"no_sky_floor":  # AC-0429: bool (the skybox-no-bottom-edge switch).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to false, never throw (the cloud_gate precedent).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"sat_preload":  # AC-0414: bool (the bake-before-load switch).
 			values[k] = AnalogTune.sanitize_bool(v)
