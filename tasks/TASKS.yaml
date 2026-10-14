@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-13T14:32
+  updated_at: 2026-10-14T05:54
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27249,7 +27249,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-13T14:31
-  updated_at: 2026-10-13T14:31
+  updated_at: 2026-10-14T05:54
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -27297,7 +27297,21 @@ intake:
     keep holding - the seam extension itself, the ambient lift for unlit faces, the orbital sort offset
     and relief, the local-zenith sky, the far tier''s curvature placement and the engine fog.
 
-    '
+
+
+    USER CORRECTION 2026-10-13, and it is a diagnostic upgrade rather than a complaint: "not entirely
+    random, look in the screen shot, they are along lines and fairly evenly spaced", clarified as being
+    about the seam holes. THE HOLES ARE PERIODIC, NOT RANDOM. That is a much stronger clue than the wording
+    in the original report suggested and it changes what to look for: an intermittent per-cell condition
+    would appear wherever the local geometry happens to trigger it, whereas holes that are EVENLY SPACED
+    ALONG A LINE indicate something that repeats at a fixed interval - a per-cell rule applied every N
+    cells, a modulo or stride in the extension added by the seam fix, a table indexed by position with
+    a period, or a rounding or quantisation step that fails at regular boundaries. The previous note already
+    identified the neighbouring ring''s tops, which the extension uses to size itself, as the first thing
+    to check; with periodicity established, the question becomes why THAT check would fail at a regular
+    interval rather than in particular places. Reproduce the spacing in a frame and measure it in blocks
+    or metres before changing anything - the interval itself is evidence, and a fix that does not explain
+    the interval has probably not found the cause.'
   comments: []
 - id: AC-0428
   title: sky-horizon-transition-rate-body-opacity-and-cloud-cover-variation
@@ -27306,11 +27320,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-13T14:32
-  updated_at: 2026-10-13T14:32
-  completed_at: null
+  updated_at: 2026-10-14T05:54
+  completed_at: 2026-10-14T05:54
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The sky should be one continuous gradient from horizon to zenith with no line
@@ -27380,6 +27394,63 @@ intake:
     look change ships behind a switch defaulting conservative; and the recent work must keep holding -
     the local-zenith sky with its air column, the orbital sort offset and height relief, the ambient lift
     for unlit faces, the seam extension, the far tier''s curvature placement and the engine fog.
+
+    '
+  comments: []
+- id: AC-0429
+  title: skybox-must-have-no-bottom-edge
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-14T05:54
+  updated_at: 2026-10-14T05:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: There should be no horizon in space. The sky is space; the only horizon is the
+    planet itself. The user''s words: "the sky box can''t have a bottom edge, we are in space! We can''t
+    fake the horizon, the planet and satellite is the horizon."
+
+
+    2) Technical Details:
+
+    REPORTED 2026-10-13 AS A CORRECTION TO A FIX THAT WAS ACCEPTED AS COMPLETE AND IS NOT. The previous
+    ticket found a step at the local horizon in the sky and fixed it by BLENDING the horizon anchor to
+    the air colour, measuring the step falling to zero and reporting no drawn line. THE USER HAS NOW SAID
+    THAT IS THE WRONG SHAPE OF SOLUTION ENTIRELY: the sky should not have a bottom edge at all, blended
+    or otherwise, because the game is in space and the planet is the horizon. A blend removes the STEP
+    but keeps the STRUCTURE - there is still an anchor, still a boundary being computed and smeared, and
+    the user can still see it. What they are asking for is the removal of the lower boundary as a concept,
+    not a smoother version of it.
+
+    WHAT THIS MEANS CONCRETELY, to be established rather than assumed: find what draws or implies a lower
+    boundary in the sky at all. Candidates include an anchor altitude or radius below which the sky model
+    does something different, a horizon term that fades one colour into another over a band, a skybox
+    surface with a bottom face or a lower edge, and any clamp or step keyed on the elevation angle. Whatever
+    it is, the sky below the local horizon should simply be space - the same black, with the same stars
+    - and the only thing that should ever appear across a frame is the planet and its air, which is what
+    the user means by the planet being the horizon.
+
+    THE USER''S FRAMING IS THE SPECIFICATION: in space there is no horizon, the planet is the horizon.
+    Any implementation that still has an edge, a band, an anchor or a fade at the bottom of the sky has
+    not met it.
+
+    ACCEPTANCE: the user''s frame re-taken at altitude showing black space below the local horizon with
+    stars, no band, no line and no change of colour across the lower frame, and the same frame above the
+    planet showing the planet''s limb as the only boundary present. Give the luminance profile down the
+    frame as numbers: below the horizon the profile should be flat space, not a gradient towards anything.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); every look change ships behind a switch defaulting conservative; the sky''s off state must
+    stay byte-identical to the pre-ticket path; and this must not undo the work that made the planet opaque,
+    made the cloud transition rate uniform, or varied the cloud cover across the globe.
 
     '
   comments: []
