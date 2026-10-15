@@ -1,9 +1,11 @@
 meta:
-  updated_at: 2026-10-15T09:44
+  updated_at: 2026-10-15T09:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0434
+- AC-0433
 - AC-0130
 - AC-0294
 - AC-0296
@@ -27647,4 +27649,182 @@ intake:
     revision.
 
     '
+  comments: []
+- id: AC-0433
+  title: one-world-model-no-home-face
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-15T09:54
+  updated_at: 2026-10-15T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The world is one planet and it should behave like one. Today one cube face -\
+    \ the\n\"home\" face, the patch we spawn on - is built by a different set of rules than the rest of\
+    \ the\nplanet: a different cell size, a different chunk size, a different placement formula, a different\n\
+    meshing lane, different coordinate conversions, and a different set of things that work on it at all\n\
+    (mobs, spawns, entities). That is why seams behave differently depending on where you stand, why one\n\
+    lane had a fix the other never got, and why \"fix the seam\" keeps turning into \"fix the seam on\
+    \ one\nface\". When this lands, every part of the world is the same kind of thing: walking off the\
+    \ spawn face\nchanges nothing about how the ground, the seams, the mobs or the coordinates behave.\
+    \ The user waived\nthe compatibility argument for this (2026-10-15, pre-alpha): re-keying the save\
+    \ format and re-basing\nthe genhash anchor are both acceptable, so they are NOT reasons to keep the\
+    \ split.\n\n\n2) Technical Details:\n\nFOUND BY THE INVESTIGATION OF A USER-PHOTOGRAPHED SEAM. The\
+    \ user stood on a chunk line and saw a\ncrafting table and the neighbouring sand block each rendered\
+    \ stretched over the other along the whole\nline. The cause of THAT artifact is the AC-0423 seam-V\
+    \ extension, which deliberately overlaps two\nchunks' edge rows by ~650 mm; it is filed separately\
+    \ as its own ticket. Asking \"why did only one lane\nhave that extension?\" produced this one.\n\n\
+    THE TWO MODELS TODAY (all read from the code, not assumed):\n\n- KEYING AND GRID. Home = cube faces\
+    \ 0/1, chunks keyed by flat (cx,cz), 1 m cells, 16x16 = a 16 m\n  chunk (AC-0143, AC-0306 grid lock).\
+    \ Non-home = faces 2-11, keyed \"face:ccx:ccz\", 1024x1024\n  ANISOTROPIC cells per face (~6.14 m\
+    \ per cell in u - ARCHITECTURE.md:1017-1028), 16x16-cell chunks =\n  a 49-98 m footprint. Storage\
+    \ routing is by face: world.gd:14741-14744 (\"Face 0 (colx,colz) = flat 1m\n  world columns (routes\
+    \ to the flat API); faces 1-11 = 1024-cell grid columns\").\n- PLACEMENT. Home = one rigid facet per\
+    \ chunk column, sphere_math.gd:332-362 (column_transform),\n  mirrored for the meshing lane in gdext/src/sphere_math_cpp.h:109.\
+    \ Non-home = a per-chunk\n  least-squares affine fit, sphere_math.gd:470-539 (face_chunk_transform),\
+    \ with its justification\n  recorded there: a tangent-plane-at-centre construction left far-edge cells\
+    \ 3-4 m off the chart and\n  adjacent chunks' shared edges 98-189 m apart on the mirror class, while\
+    \ the fit holds cells within\n  ~0.4 m and shared edges within ~0.8 m. So the rule differs because\
+    \ the FOOTPRINT differs (16 m vs\n  49-98 m), not because face 0/1 is geometrically special - that\
+    \ is the core finding of this ticket.\n- MESHING LANES. Home builds through the C++ worker lane (World._tm_ctx;\
+    \ the ctx key sphere_r is set\n  at world.gd:3860, 5607, 6092) and the sync path (chunk.gd:1626).\
+    \ Non-home builds synchronously via\n  chunk.build_mesh_face (chunk.gd:1643), which sets NO sphere_r,\
+    \ so the AC-0423 seam extension is\n  silently absent there. This is why AC-0423's first two probe\
+    \ rounds measured no extension at all\n  (its own continuity journal records it), and why \"is the\
+    \ other side armed?\" is a question anyone\n  has to ask.\n- FRAME. The GLOBAL frame is the planet\
+    \ frame shifted by (0,-R,0), so the home patch's flat origin is\n  the world origin and flat coords\
+    \ agree with global to mm near spawn (sphere_math.gd:310-314). Spawn,\n  the save keys and every arm\
+    \ that reads the flat world sit on this anchor.\n- CONSUMERS THAT ARE HOME-ONLY. Mob spawn picks the\
+    \ home-pair spawn region and SKIPS a face spawn\n  rather than misplacing it; the mob walk/facing\
+    \ model is still flat (world-xz intent + rotation.y)\n  with the tangent-plane port listed as follow-up;\
+    \ banana gravity branches \"home: the world->flat\n  conversion, face: the anchor's cell frame\" (ARCHITECTURE.md:1008-1016).\n\
+    - THE SPLIT'S OWN SEAM IS UNFILED. ARCHITECTURE.md:1027 records a crossing-row chasm 2.19 m and a\n\
+    \  corner 3.73 m between the net and the chart placement, and calls the split's closure \"a separate,\n\
+    \  unfiled concern\". This ticket is that closure.\n- PRIOR INVENTORY. AC-0425 (audit remaining flat-world\
+    \ assumptions) is the census of this class. Its\n  C4 finding measured a face chunk adjacent to the\
+    \ 3141 m patch edge sitting ~3.1 km from its\n  flat-frame cull box (fixed in the dev manual-cull\
+    \ lane, genhash-neutral).\n\nHYPOTHESIS TO MEASURE BEFORE ANY OF IT IS RELIED ON (explicitly NOT verified\
+    \ - it is arithmetic from\nthe code plus first-order geometry): the 2.19 m crossing row and the 3.73\
+    \ m corner may not be an LSQ\nin-plane residual at all. Every chunk in BOTH lanes extrudes its columns\
+    \ along the radial at the\nCHUNK CENTRE (home: Basis(x*s, n, z*s) with n at the centre, sphere_math.gd:336-362;\
+    \ face:\n\"local +Y = the radial at the chunk centre\", sphere_math.gd:474-475). Two adjacent chunks\
+    \ therefore\npart with height by (centre separation) x h/R:\n\n  - 16 m chunks: 16 x 140 / 4072 =\
+    \ 550 mm, against the 552-558 mm crack AC-0423 measured. Its own\n    K1[k] = -To.m[1][0] (mesh.cpp:1043-1052)\
+    \ is already a linear-in-height model of exactly this term.\n  - 98 m face chunks: 49 x 140 / 4072\
+    \ = 1.68 m per side, 3.4 m across - the same order as the 2.19 m\n    crossing row and 3.73 m corner.\
+    \ A corner takes both axes' contributions, which is the right shape\n    for 3.73 m.\n\nIf that holds,\
+    \ the crossing row is this term at a 6x larger footprint rather than a fit artifact, and\none change\
+    \ closes both. The existing seam probe already computes the divergence and the lean, so this\nis one\
+    \ arm run - DO IT FIRST, in P1, and report the decomposition before any rule is chosen.\n\nPIECES\
+    \ (worked one at a time; each delegated to a single blocking subagent, gated and committed before\n\
+    the next starts):\n\n- P1 DECIDE AND DOCUMENT THE ONE MODEL (design piece; documentation only, no\
+    \ gameplay code). One grid\n  definition (cell size, chunk footprint, keying), one placement rule,\
+    \ one local<->world conversion\n  API, one meshing lane, and the fate of the far/LOD tiers, the save\
+    \ keys and the frame anchor. Ends in\n  ARCHITECTURE.md plus this ticket's spec, and it starts by\
+    \ running the measurement above. Candidate\n  models, each with its cost stated rather than assumed:\
+    \ (a) 1 m cells and 16 m chunks on every chart -\n  uniform and matches block size, with the chunk-slot\
+    \ count per face (~392x392) and the streaming/\n  far-tier budget as the open question; (b) one fitted,\
+    \ chart-following placement rule at every scale;\n  (c) per-vertex chart placement instead of per-chunk\
+    \ frames, which removes the frame divergence at\n  the source instead of covering it with overlap.\n\
+    - P2 ONE PLACEMENT RULE AND ONE CONVERSION API. Collapse the two math homes (the home pair in\n  sphere_math.gd/.h\
+    \ and gen.cpp's SM_FIT_INV face fit) behind one entry point and route every\n  local<->world conversion\
+    \ through it. The surface is already sized: 21 placement-transform call sites\n  in harness.gd, world.gd,\
+    \ generator.gd and player.gd, plus 45 \"T * Vector3(...)\" conversions in 3\n  files. Candidate (c)\
+    \ concretely: extrude each column along its OWN radial - a shear of d/R per metre\n  of height, <=\
+    \ 0.28 m at 140 m height on a 16 m chunk and <= 1.7 m on a 98 m face chunk, under 0.2\n  degrees of\
+    \ tilt - which makes two adjacent chunks agree at every height by construction and removes\n  the\
+    \ need for any seam extension at all.\n- P3 ONE MESHING LANE. Delete the second build lane (the separate\
+    \ ctx/rings path in\n  chunk.build_mesh_face) so every chunk is built the same way, and make \"does\
+    \ this placement have a\n  seam rule?\" a property of the PLACEMENT rather than a ctx key that has\
+    \ to be remembered at each of\n  the four call sites.\n- P4 THE CONSUMERS GO FACE-AGNOSTIC. Spawn,\
+    \ the player's recenter/sim frame, mob spawn (stop skipping),\n  mob walk and facing, drops and entities,\
+    \ and the save/keys. The save re-key is explicitly accepted:\n  bump the format version and reject\
+    \ an old save cleanly (no migration - old worlds are disposable\n  during development), and re-derive\
+    \ the key format from the one model.\n- P5 VERIFY ON THE WHOLE PLANET. The acceptance is the epic's\
+    \ Story 1 (docs/planet-epic.html): walk\n  the x=0 midline and the +/-3141 m cube edges both ways\
+    \ with on_floor true, no void and no light\n  seam, then circumnavigate and return to spawn. The home<->face\
+    \ crossing row and corner are closed\n  here, and ARCHITECTURE.md:1027's \"unfiled concern\" is retired.\n\
+    \nGATES. G0 semantics + census + exit status; genhash re-baselined IN THE SAME TASK as any commit\
+    \ that\nmoves placement, with the old 25/25 anchor recorded before and after rather than silently\
+    \ drifted;\nboundary r4 walk/p95; the seam instruments (ac0423probe ext_edge/ext_overlap_mm, seamcensus)\
+    \ on every\npiece; a whole-planet crossing arm for P5. Standing gate values that move are re-established\
+    \ in the\nsame task (godot/world/AGENTS.md), and the farab/ladder bit-exactness contracts are re-checked\n\
+    wherever the placement change can reach them.\n\nDEFERRED / OUT OF SCOPE. The seam-overlap artifact\
+    \ the user photographed is its own ticket and will\nland first if it is cheap. The sky, satellite\
+    \ and cloud work is untouched. No new player-facing\nsetting is owed by this ticket as written, because\
+    \ it removes a special case rather than changing a\nlook - but if P1 concludes that the visible result\
+    \ changes, the filing rule applies and the new\nbehaviour ships behind a switch defaulting to the\
+    \ world the user already knows.\n\nHONEST NOTE. Every file:line and every measured value above is\
+    \ from the code, comments and ticket\nrecords. The two arithmetic claims in the HYPOTHESIS block are\
+    \ NOT measured; they must be measured in\nP1 before any design leans on them.\n"
+  comments: []
+- id: AC-0434
+  title: seam-blocks-stretched-into-each-other
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-15T09:54
+  updated_at: 2026-10-15T09:54
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Standing on a chunk line, a block and the block across the seam render stretched\
+    \ over\neach other. In the reported case a crafting table sat flush with the sand surface on a seam:\
+    \ its\ntexture was smeared about half a block into the neighbouring sand, the neighbour's sand was\
+    \ smeared\nback over the crafting table, and the seam ran away from the camera as a visible band with\
+    \ two crisp\nedges. It reads as blocks bleeding into each other along the whole line, not as a gap\
+    \ or a hole. The\nground should meet itself at a seam, not double up.\n\n\n2) Technical Details:\n\
+    \nWHY IT HAPPENS (read from the code; the amounts are the ones the building tickets measured). AC-0423\n\
+    closed the see-through seam by making the two chunks OVERLAP on purpose. The top-face edge rows extend\n\
+    past the nominal 0..16 footprint by the V width at the corner's own height:\n\n  E = K0[k][i] + K1[k]*t\
+    \ + SEAM_V_MARGIN, clamped to [0, SEAM_V_MAX] = [0, 2.5] m\n  (gdext/src/mesh.cpp:426-454; SEAM_V_MARGIN\
+    \ 0.05 at :435, SEAM_V_MAX 2.5 at :436)\n\nseam_ext_corner rewrites ONLY px/pz (mesh.cpp:459-476),\
+    \ and qwrite/qwrite_vc copy the UVs through\nUNCHANGED (mesh.cpp:498-518, 533-562) - so the edge block's\
+    \ 1 m texture is stretched over up to 1.6-3.5\nof geometry. Both sides do it toward each other, so\
+    \ the visible band is the SUM of the two extensions:\nAC-0423 measured ext_overlap 654-1290 mm across\
+    \ its 9 seam pairs where the crack it replaced had been\n552-558 mm, and the AC-0427 round re-measured\
+    \ 12 seams at gaps -634..-678 mm, i.e. crack + two\nmargins. On flat ground the two overlapping surfaces\
+    \ sit within millimetres of each other, so which one\nwins flips at the crease - that is what makes\
+    \ each block appear to lie over the other in both\ndirections. AC-0423's own notes accepted this cost\
+    \ as \"the UV stretch on the extension strip (hidden by\nthe fold crease)\"; a block sitting flush\
+    \ with the surface ON the seam is precisely the case where the\ncrease hides nothing. AC-0427 then\
+    \ added the edge column's outward SIDE faces to the same displacement\n(mesh.cpp:486-503) - note that\
+    \ qwrite_merged, the normal merged opaque path, still guards on fi == 2\n(mesh.cpp:1871), so the side-face\
+    \ extension is live only on the per-cell emitters.\n\nWHERE IT IS ARMED. Only where the build ctx\
+    \ carries sphere_r - the home worker ctx template\n(world.gd:3860, 5607, 6092) and the sync build\
+    \ (chunk.gd:1626) - and only toward a neighbour whose edge\ncolumn has any surface at all (build_seam_ext,\
+    \ mesh.cpp:982-1055; a neighbour with no surface on that\nedge gets no extension). The face-chunk\
+    \ lane sets no sphere_r and so has no extension at all.\n\nTHE FIX DIRECTION (decide with the measurement;\
+    \ do not assume which). The overlap is not geometrically\nrequired - each side only has to REACH the\
+    \ crease, and it currently overshoots it by a full crack width\non each side.\n\n  (a) Move each side\
+    \ by HALF the pairwise gap evaluated at the vertex's own height, keeping the\n      existing grout:\
+    \ the band becomes ~100 mm instead of ~650 mm. Keep the FULL width toward any\n      neighbour that\
+    \ is not armed, so a lane that forgets the key cannot leave a seam half-open - the\n      unilateral\
+    \ guarantee is the reason the over-extension exists and it should survive the change.\n  (b) Extrude\
+    \ each column along its own radial (filed in the one-world ticket, P2) - this makes the two\n    \
+    \  sides agree at every height by construction and DELETES this whole apparatus (K tables, ring\n\
+    \      reads, sphere_r, margins, clamp).\n  (c) Scale the strip's UVs so the smear is not visible\
+    \ - AC-0423 rejected this as the more expensive\n      option (\"the alternative being a new atlas\
+    \ band\"), so it needs a new atlas band to be viable.\n\nMEASURE FIRST. Confirm to the millimetre\
+    \ that the band is the height-times-frame-lean term plus\nmargins: 140 m x 16/4072 = 550 mm on 16\
+    \ m chunks, with the per-cell K0 wobble coming from the\nneighbour's per-cell edge-column tops (mesh.cpp:1008-1041).\
+    \ Record per-cell E against the per-cell\ncrack width, because the AC-0423 measurement (654-1290 mm)\
+    \ and the AC-0427 one (634-678 mm) disagree\nin range and the true per-cell figure decides which fix\
+    \ is enough. The instruments already exist:\nac0423probe's ext_edge/ext_overlap_mm and the standing\
+    \ seamcensus.\n\nDO NOT REOPEN THE CRACK. What this extension was covering is 552-558 mm of skybox\
+    \ visible through the\nground - the user's earlier report. The gate must assert BOTH directions per\
+    \ seam cell: gap <= grout\nAND overlap <= grout, not overlap alone, and the render evidence must be\
+    \ the user's own vantage\n(surface-flush block on the seam, standing on the line, camera above), before\
+    \ and after.\n\nKNOWN HARD CASE. At a step across a seam the crease of the two PLANES is not where\
+    \ the two staircases\nmeet, which is where AC-0427's side-face extension does its real work. A half-rule\
+    \ has to state what\nhappens there rather than leaving it as an unmeasured edge case.\n"
   comments: []
