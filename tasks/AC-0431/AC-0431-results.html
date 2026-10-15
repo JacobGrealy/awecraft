@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0431 results — black step faces at chunk seams</title>
+<style>
+ body{font-family:ui-sans-serif,system-ui,sans-serif;margin:2rem auto;max-width:1000px;line-height:1.5;color:#1a1a1a;padding:0 1rem}
+ h1{font-size:1.5rem;border-bottom:3px solid #333;padding-bottom:.4rem}
+ h2{font-size:1.15rem;margin-top:2rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+ table{border-collapse:collapse;margin:1rem 0;font-size:.9rem}
+ th,td{border:1px solid #bbb;padding:.35rem .6rem;text-align:left}
+ th{background:#f0f0f0}
+ .num{text-align:right;font-variant-numeric:tabular-nums}
+ code{background:#f2f2f2;padding:.1rem .3rem;border-radius:3px;font-size:.85em}
+ img{max-width:100%;border:1px solid #999;border-radius:4px;margin:.5rem 0}
+ .verdict{background:#fff8e6;border:1px solid #e0c060;border-radius:6px;padding:.8rem 1rem;margin:1rem 0}
+ .pass{color:#0a7a0a;font-weight:bold}.fail{color:#b00020;font-weight:bold}
+ .caption{font-size:.85rem;color:#555;font-style:italic}
+ figure{margin:1rem 0}
+</style>
+</head>
+<body>
+
+<h1>AC-0431 — black step faces along chunk seams</h1>
+<p><strong>Verdict:</strong> the first (cheap) hypothesis is <strong>partially right</strong>.
+The black region contains <em>two</em> causes, and the run says so because both contribute.
+Enabling the existing <code>ambient_sky</code> switch lifts the floor-lit faces (Cause&nbsp;A)
+but <strong>cannot</strong> remove the dominant pure-black (Cause&nbsp;B), which is a
+merged-canvas/material bug. No default was flipped, so no look was shipped; the real fix is
+Cause&nbsp;B and needs the mesh/canvas code (partly fenced).</p>
+
+<div class="verdict">
+<strong>Acceptance status:</strong> the re-taken user view (before/after) is captured with the
+luminance numbers below, and the no-flattening + night checks pass. But the acceptance line
+"step faces shaded like their neighbours rather than black" is <span class="fail">NOT met by
+ambient_sky alone</span> — with the switch ON the region is still ~10&times; darker than the lit
+neighbour (lum ~7 vs ~72) and 64% pure black. The remaining defect is Cause&nbsp;B.
+</div>
+
+<h2>What the black region is (measured)</h2>
+<p>Seed 44, default user camera (aim cell (8,140,8); cam (8.5,143.5,10.5); yaw 0; pitch
+&minus;0.98279), r4, Forward+ 1280&times;720. The black quadrilateral (frame x&nbsp;694&ndash;886,
+y&nbsp;0&ndash;72) is terrain <em>in front of</em> the camera at world (x&nbsp;9&ndash;16,
+z&nbsp;&minus;8&hellip;&minus;1): grass tops (block&nbsp;1, top y=140), a tree (logs block&nbsp;6 at
+y140&ndash;142, leaves block&nbsp;7 at y143&ndash;144, x&nbsp;12&ndash;15, z&nbsp;&minus;8&hellip;&minus;5),
+and the step faces between them.</p>
+<p>A ray-march from <strong>221</strong> pixels of the black region hit a solid block in
+<strong>221/221</strong> cases (zero miss): it is <strong>not</strong> a void or a missing face —
+every pixel lands on real geometry. Hit faces: 66% top faces, 29% south faces, 5% west faces.</p>
+
+<h2>Cause A — light floor (the hypothesis; confirmed for its part)</h2>
+<p>The step/top faces beside the tree are occluded by the tree's tall columns (occl&nbsp;&ge;&nbsp;~2.3)
+and sit at the light floor: measured vColor <code>r=20/255</code> (=0.078) on the grass tops at
+(x&nbsp;11&ndash;15, world z&nbsp;&minus;8&hellip;&minus;5, y140) and on the x=16 seam face (t=8&hellip;13).
+These render <strong>dark brown</strong> (e.g. (22,7,0)), not pure black. The AC-0426 ambient term
+(mask <code>step(m_direct,0.08)</code>, which fires at m_direct=0.078) lifts them.</p>
+
+<h2>Cause B — the dominant "exactly (0,0,0)" is a texture/material bug</h2>
+<p>The remaining pure-black pixels (64% of the region <em>even with the switch ON</em>) map, by
+ray-march, to <strong>fully-lit</strong> grass-top faces (vColor r=153&ndash;255) at world
+z&nbsp;&minus;4&hellip;&minus;1 and to tree side faces. A fully-lit face has
+L=0.20+0.8&times;1.0=1.0 and b(oshade)&nbsp;~0.6&ndash;1.0, so <code>ALBEDO = tex*b*L</code> can be
+(0,0,0) <strong>only if the sampled texel is (0,0,0)</strong>. Those faces sample the grass-top
+tile (canvas (1,1)&ndash;(32,32)) — the <em>same</em> tile the green neighbours use — so the
+blackness is in the merged-canvas/material path, not the vColor. This is the ticket candidate
+"the face being emitted by a different path" (the AC-0430 merged-canvas material path).</p>
+<p><strong>Why ambient_sky cannot fix Cause B:</strong> the mask requires m_direct&nbsp;&le;&nbsp;0.08,
+but these faces have m_direct up to 1.0, so the added term is 0 for them (consistent: they stay
+(0,0,0) with the switch ON).</p>
+
+<h2>Acceptance evidence</h2>
+
+<figure>
+<img src="captures/day-sidebyside-x3boost.png" alt="before/after day, x3 boost">
+<div class="caption">Day, the user's view. <strong>Left = switch OFF</strong> (byte-identical to
+the AC-0430 flagged frame, md5 d3498c6f&hellip;), <strong>right = switch ON</strong>, &times;3 boost.
+The switch lifts the left cliff and the dark-brown floor faces; the core stays black (Cause B).</div>
+</figure>
+
+<figure>
+<img src="captures/day-diff-x8.png" alt="amplified diff">
+<div class="caption">ON&minus;OFF, &times;8: the only changes are the left cliff face and two thin
+edge lines. The large black quadrilateral is essentially unchanged — that is Cause B.</div>
+</figure>
+
+<table>
+<tr><th>Region (1280&times;720 frame)</th><th class="num">mean lum OFF</th><th class="num">mean lum ON</th>
+<th class="num">pure-black OFF</th><th class="num">pure-black ON</th></tr>
+<tr><td>Black region x694&ndash;886, y0&ndash;72</td><td class="num">6.51</td><td class="num">7.18</td>
+<td class="num">73.5%</td><td class="num">64.4%</td></tr>
+<tr><td>&nbsp;&nbsp;left cliff x694&ndash;760 (floor face, Cause A)</td><td class="num">4.08</td>
+<td class="num">5.90</td><td class="num">76.5%</td><td class="num">52.3%</td></tr>
+<tr><td>&nbsp;&nbsp;right x820&ndash;886 (Cause B core)</td><td class="num">13.94</td><td class="num">14.03</td>
+<td class="num">62.0%</td><td class="num">60.2%</td></tr>
+<tr><td>Neighbour, lit x890&ndash;960, y40&ndash;110</td><td class="num">71.67</td><td class="num">71.67</td>
+<td class="num">0</td><td class="num">0</td></tr>
+<tr><td>Wider ground band y400&ndash;660</td><td class="num">88.68</td><td class="num">88.68</td>
+<td class="num">0</td><td class="num">0</td></tr>
+</table>
+
+<p><strong>No-flattening check:</strong> <span class="pass">PASS</span> — the lit neighbour
+(71.67) and the wider ground band (88.68) are unchanged (0 pure-black) with the switch ON; the
+frame-wide delta is ~430 px (2&times;2 sampled), all in the black region. Nothing that is lit got
+washed out.</p>
+
+<figure>
+<img src="captures/night-sidebyside-x3boost.png" alt="night before/after, x3 boost">
+<div class="caption">Night (t=0.0), switch OFF (left) vs ON (right), &times;3 boost. Terrain is
+identical; only the sky strip (y0&ndash;76) differs, slightly darker with ON.</div>
+</figure>
+<p><strong>Night check ("nothing that should be dark at night became bright"):</strong>
+<span class="pass">PASS</span> — at t=0.0 the ambient term is <code>u_amb*u_day*…</code> with
+u_day=0, so it is 0; the terrain is stable and the only differences are in the sky, which got
+darker, not brighter.</p>
+
+<h2>Conclusion and next step</h2>
+<ul>
+<li>Cause A (light floor) is real and is lifted by <code>ambient_sky</code> — but it is only part
+of the region, and the lifted faces are still far darker than the neighbours.</li>
+<li>Cause B (the dominant "exactly (0,0,0)") is a merged-canvas/material bug on fully-lit faces.
+<code>ambient_sky</code> cannot touch it (its mask never fires there).</li>
+<li>The <code>ambient_sky</code> default was <strong>left OFF</strong> (no look shipped), because
+flipping it alone would ship an incomplete fix.</li>
+<li>Root-causing Cause B needs the mesh/canvas code: the canvas is built in
+<code>godot/world/chunk.gd</code> (GDScript, not fenced), but the UV generation and high/low
+emit paths are in <code>gdext/src/mesh.cpp</code> (C++, <strong>fenced</strong>). AC-0430 fixed
+one mis-sampling (tier-1 ring) and declared the rest sub-visible at that camera; this run shows a
+fully-lit near tier-0 face sampling black, so that fix did not cover this path. A follow-up ticket
+should root-cause Cause B; if the fix lands in mesh.cpp the work must stop and report (fenced).</li>
+</ul>
+
+<h2>Captures</h2>
+<ul>
+<li><code>captures/before-off-day.png</code> — switch OFF (byte-identical to the AC-0430 flagged frame)</li>
+<li><code>captures/after-on-day.png</code> — switch ON</li>
+<li><code>captures/day-sidebyside-x3boost.png</code>, <code>captures/day-diff-x8.png</code></li>
+<li><code>captures/night-off.png</code>, <code>captures/night-on.png</code>,
+<code>captures/night-sidebyside-x3boost.png</code></li>
+</ul>
+
+</body>
+</html>

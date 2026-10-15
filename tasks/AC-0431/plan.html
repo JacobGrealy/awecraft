@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0431 plan — black step faces along chunk seams</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1050px;margin:24px auto;padding:0 16px;line-height:1.5}
+h1{font-size:1.4em}h2{font-size:1.15em;border-bottom:2px solid #444;padding-bottom:3px;margin-top:26px}
+table{border-collapse:collapse;width:100%;margin:10px 0}th,td{border:1px solid #999;padding:5px 7px;font-size:.92em;vertical-align:top}
+th{background:#eee}code{background:#f4f4f4;padding:1px 4px}.ok{color:#060;font-weight:bold}.warn{color:#a60;font-weight:bold}
+</style></head><body>
+
+<h1>AC-0431 — plan: black step faces along chunk seams</h1>
+
+<h2>Goal</h2>
+<p>Establish the cause of the black faces at terrain steps along chunk seams (flagged by AC-0430,
+whose UV audit found those faces' texture coordinates <b>correct</b> — the darkness is a lighting
+artifact). Fix it and prove it with the user's view re-taken, face luminance before/after as
+numbers, a wider-scene contrast check, and a night check.</p>
+
+<p><b>Hypothesis (cheap, tested first):</b> the black step faces are <b>unlit faces at the light
+floor</b>. The light scalar is clamped to <code>MIN_AMB = 0.08</code> (20/255 after 8-bit
+truncation) at mesh time, so an unlit face reads exactly the floor — and AC-0426's <code>u_amb</code>
+sky-ambient term fires exactly there (<code>step(m_direct, 0.08)</code>), lifting the display L from
+0.2627 to 0.6127 at full day. That term ships behind <code>ambient_sky</code>, <b>default OFF</b>
+(<code>AWECRAFT_AMBSKY=0|1</code> env). Evidence to reuse: AC-0430 measured the black face's vertex
+sky term ≈ 0.078 (the floor); AC-0426 measured the lift's safety (frame mean +0.15, ground band
+0 differing px, night bit-identical because <code>u_day = 0</code> kills the term).</p>
+<p><b>If it holds:</b> the fix is a change of default (<code>settings.gd</code>
+<code>"ambient_sky": false → true</code>) — no new code. Acceptance = the user's view with the
+switch in each state + the final default-boot view.<br>
+<b>If not:</b> the probe arm measures the face itself (baked vColor r/g/b + UV +
+<code>light_at</code> of the adjacent air cell) to discriminate the candidates (disagreeing
+neighbour light, wrong normal, different emit path, seamc corner-shading interaction).</p>
+
+<h2>What the faces are (working model, to be confirmed by the probe)</h2>
+<p>Modern per-vertex lighting (default ON) stores per corner: <code>r = sl</code> (geometric sky
+term, <code>clamp(1 − 0.4·occl, 0.08, 1.0)</code> — a corner buried under ≥ 2 neighbour column tops
+hits the floor), <code>g</code> = block light (0 unless glow evidence), <code>b = oshade</code>
+(<code>0.5·FSH + 0.5·lam</code>). Display: <code>L = 0.20 + 0.80·max(u_day·r, g)</code>;
+<code>ALBEDO = tex·b·L</code>. A side face at the floor with a dark atlas cell and low oshade
+rounds to (0,0,0) in 8-bit — the black polygon. The lit neighbour band keeps its own (higher)
+scalar, which is why it renders brown while its twin renders black.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>TEMPORARY <code>ac0431probe</code> arm — seam
+step-face census (baked vColor + UV + world pos + light_at + boot-camera projection). <b>Removed
+at closeout</b> (pristine rule).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>IF THE HYPOTHESIS HOLDS: flip the default
+<code>"ambient_sky": false → true</code> (line ~236) + refresh the stale "DEFAULTS OFF" comment.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>comment-only: the <code>_ac0401_push</code> / env
+comment "default OFF" → "default ON since AC-0431". No logic change.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>comment-only if stale ("default OFF" wording on the
+"Shadowed faces" row). No logic change (the checkbox syncs the live value).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>the <code>ambient_sky</code> bullet: default OFF →
+ON since AC-0431 (invariant 2 — a changed default is a changed convention).</td></tr>
+<tr><td><code>tasks/AC-0431/</code></td><td>this plan, <code>AC-0431-results.html</code>,
+<code>continuity.md</code>, <code>captures/</code> (5 Forward+ frames).</td></tr>
+</table>
+<p class="warn">Fences: <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code> untouched (parallel session's work);
+native <code>gdext/</code> untouched (the served <code>libchunkio.so</code> already matches the
+working tree — leave the tree in that state). <code>tasks/AC-0067</code>/<code>AC-0384</code>/
+<code>AC-0425</code> untouched.</p>
+
+<h2>Measurement design</h2>
+<table>
+<tr><th>instrument</th><th>what it measures</th></tr>
+<tr><td>probe arm <code>ac0431probe</code> (headless, r4, seed 44)</td><td>For every solid step
+across every resident seam in the r4 window: the high side's outward side-face band
+(AC-0427's extended cliff face) — baked vColor (r, g, b) of the in-plane corners from the built
+slab mesh (surface 0, absolute y), the face UV (tile audit), the block id, the face's world
+position through <code>_col_sphere_transform</code>, and <code>world.light_at</code> of the air cell
+outside the face. Plus the high column's top-face vColor (the lit neighbour) and the boot-camera
+screen projection of each floor face (eye 143.62 @ spawn, fov 90, yaw 0) to match the frame's
+black polygon to a world cell. Census: floor faces (r ≤ 20/255) vs lit (r ≥ 21/255).</td></tr>
+<tr><td>Forward+ capture, user's default view (r4, 1280×720, t=0.3, u_day=1)</td><td>
+<code>before-off-day.png</code> (AWECRAFT_AMBSKY=0, the shipped default) — the black face present.
+<code>after-on-day.png</code> (AWECRAFT_AMBSKY=1).</td></tr>
+<tr><td>pixel analysis</td><td>face-region luminance before/after (pure-black pixel count + mean
+luminance of the polygon); the adjacent lit dirt band's luminance before/after (must be
+unchanged — real direct light, mask never fires); frame mean; ground-band (bottom half) differing
+pixel count between the pair (flattening check, the AC-0426 risk).</td></tr>
+<tr><td>night pair</td><td><code>night-off.png</code> / <code>night-on.png</code> (AWECRAFT_TIME=0.0,
+u_day=0): full-frame differing-pixel count — expectation 0 (the term is 0·x = 0); nothing that
+should be dark at night becomes bright.</td></tr>
+<tr><td>final</td><td><code>final-default-day.png</code> — no env at all, the shipped default after
+the flip = the user's acceptance view.</td></tr>
+</table>
+
+<h2>Harness gates (light set — heavy gates are the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>recipe / pass criterion</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code>; <code>gate_census.py</code> = 0 SCRIPT ERROR +
+0 SHADER ERROR; <b>and the process exit status checked</b> (the stochastic UAF exits 11 on a
+clean log) — run twice (stochastic).</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> — all
+RESULTs ok.</td></tr>
+<tr><td>genhash</td><td>25/25 byte-identical (no <code>world/*</code> change is owed — the probe
+arm touches <code>scenes/harness.gd</code> only; drift would be a finding).</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_LOGIC=meshprobe</code> — 1.0.</td></tr>
+<tr><td>shaderforce</td><td>Forward+ forced compile of every shipped .gdshader (no shader text
+changes are owed, but the gate is cheap insurance).</td></tr>
+</table>
+
+<h2>Run order</h2>
+<ol>
+<li>probe arm + G0 parse check → run probe (headless) → the face measurement (does the floor
+face's r = 20/255? does it match the frame's black polygon? is the neighbour lit?)</li>
+<li>captures: before-off-day → after-on-day → night-off → night-on (Forward+; ~300 s each)</li>
+<li>pixel analysis (face before/after, neighbour, frame mean, ground band, night diff)</li>
+<li>IF hypothesis holds: flip the default (settings.gd + comments + ARCHITECTURE.md)</li>
+<li>final-default-day capture (no env)</li>
+<li>remove the temporary arm → G0 ×2 + SMOKE + PROBE + shaderforce on the final tree</li>
+<li>results page</li>
+</ol>
+
+</body></html>
