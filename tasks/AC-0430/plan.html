@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0430 plan — terrain faces wearing the lava texture</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.6em; border-bottom: 1px solid #bbb; padding-bottom: .2em; }
+table { border-collapse: collapse; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+code { background: #f0f0f0; padding: 1px 4px; } pre { background: #f6f6f6; padding: 8px; overflow-x: auto; }
+</style></head><body>
+<h1>AC-0430 plan — terrain faces wearing the lava texture</h1>
+
+<h2>0. The question that decides everything</h2>
+<p>Is the served build's native half — the UNCOMMITTED <code>gdext/src/mesh.cpp</code>
+(AC-0427: seam-V side-face extension + <code>seamc</code> seam lighting) — the cause of
+the lava-tiled faces? The build script compiles from the working tree, so the answer
+comes from an A/B: the same world rendered on the served .so (B) and on a .so built
+from the committed revision (A).</p>
+<p>Established before starting (fingerprint, see continuity.md): the served
+<code>godot/bin/libchunkio.so</code> (21:11) is newer than the working-tree mesh.cpp
+(20:48) and <em>contains</em> the <code>seamc</code> key — so B = served build =
+what the user ran. A = committed <code>mesh.cpp</code> (356da23, AC-0423), built
+OUT-OF-TREE (<code>.scratch/AC-0430/gdext_A</code> copy + <code>GODOT_CPP</code>
+pointing at the prebuilt <code>.scratch/godot-cpp</code>) so the other session's
+working tree is never touched and nothing is committed.</p>
+
+<h2>1. A/B — confirm the cause</h2>
+<table>
+<tr><th>frame</th><th>what</th><th>recipe</th></tr>
+<tr><td>B (user's view, as served)</td><td>current <code>godot/bin/libchunkio.so</code></td>
+  <td rowspan="2">menu-boot snapshot: <b>no</b> <code>AWECRAFT_LOGIC</code>,
+  <code>AWECRAFT_SNAPSHOT=&lt;abs&gt;</code>, <code>AWECRAFT_SIZE=1280,720</code> (comma),
+  <code>AWECRAFT_SNAP_DRAIN=600</code> (frames), <code>AWECRAFT_RADIUS=4</code>,
+  <code>AWECRAFT_TIME=0.5</code> (daylight), default cam = spawn first-person
+  (= the user's view), <code>xvfb-run -a</code> + lavapipe ICD +
+  <code>--rendering-driver vulkan</code>, budget 1200 s, boot line must assert
+  <code>- Forward+ -</code>. Check the file exists + size afterwards.</td></tr>
+<tr><td>A (committed .so)</td><td>A build of <code>libchunkio</code></td></tr>
+</table>
+<p>Verdicts: orange faces in B, not A → uncommitted change confirmed as the cause.
+Orange in both → the cause is in committed code (or a state of the in-flight work
+that no longer exists — in that case the ticket's fallback: the same A/B method over
+recent mesher changes, using the .scratch captures + reflog to reconstruct the
+10-13 tree state). Neither → wrong view; re-shoot with a seam-line angle.</p>
+
+<h2>2. Locate what is emitting the wrong tile</h2>
+<p>Temporary UV-census arm in <code>harness.gd</code> (in and out in the same task —
+pristine rule; AC-0427 did the same): for every resident chunk near spawn, walk the
+emitted accs (opaque + cutout + fluids + cross) and for each quad record
+(position, normal, 4 uv, the atlas tile implied by the uv). Check every face's uv
+against the tile its (block id, face index) OWNS (Data.atlas_rects / merge-atlas
+rects): flag any face whose uv falls in a different block's tile — above all the
+lava rect [0,32]. Run on B (find the offending faces: which block, which face,
+which quad path, where) and after the fix (must be zero).</p>
+<p>Candidate mechanisms to test in code order (none assumed):</p>
+<ol>
+<li>A newly-extended side face (AC-0427 <code>seamv</code>) written with the wrong
+face-type rect — e.g. the merged path (<code>qwrite_merged</code>) still extends TOP
+only while the per-face path extends sides, so the two paths DISAGREE at the seam;
+a face whose geometry moved is still sampled by the tile of the face it was merged
+with / copied from.</li>
+<li>A visibility effect: the extension exposes a face (of some block, e.g. a lava
+pocket or a mis-id'd edge column) that was hidden on the exact seam plane.</li>
+<li>A merge-atlas strip rect or a <code>brect</code> lookup returning the lava rect
+for a non-lava (id, face).</li>
+</ol>
+<p>Forbidden: patching the atlas lookup without explaining WHY the tile was chosen
+wrongly. The census output (which face, which rect, which code path) is the
+explanation.</p>
+
+<h2>3. The fix</h2>
+<p>Wherever the offending faces are emitted, every newly emitted face must carry its
+OWN orientation's tile. Expected shape (pending the census): the merged path's
+seam extension must apply the same edge-column side-face extension the per-face
+path got in AC-0427 (or vice versa — whichever the census says the game path is)
+WITH the per-face tile of that face's own orientation — never the copied
+face's rect, never a default. The seam closure (AC-0427's verified fix) must stay:
+extending the side face is what closes the under-void, so the fix keeps the
+extension and corrects the texture — not the other way round.</p>
+
+<h2>4. Verify</h2>
+<ul>
+<li>USER'S VIEW re-taken on the fixed build (same recipe as step 1): grass green,
+dirt brown, bark bark — no orange.</li>
+<li>WIDE SAMPLE: the UV census over all resident chunks near spawn (5×5+): no face
+carries the lava tile where it should not (census = 0 foreign-tile faces,
+lava-uv on non-lava id = 0).</li>
+<li>SEAMS STILL CLOSED: <code>seamcensus</code> arm (missing_faces 0 on the seam
+rows) + the AC-0427 under-void census recipe re-run (147/147 class) — the closure
+must hold with the fixed code.</li>
+<li>Gates (this subagent's set, all with exit status + census paired): G0 headless
+(zero SCRIPT ERROR + zero SHADER ERROR via <code>gate_census.py</code> AND rc 0);
+SMOKE battery <code>player;interact;light;fluids;genhash</code>; meshprobe
+(mesher changed — mandatory); genhash 25/25 (mesher touched — a moved value is a
+FINDING); seamcensus r4. shaderforce only if a shader changes (it will not).
+Heavy set = coordinator.</li>
+</ul>
+
+<h2>5. Deliver</h2>
+<p>Report ≤ 20 lines: was the uncommitted change the cause + how confirmed; what
+exactly emitted the wrong tile; what changed; before/after frames; seam-closure
+evidence; gates with exit statuses; what was deliberately not done. Results page
+<code>tasks/AC-0430/AC-0430-results.html</code> (self-contained, values not prose,
+PNGs). Also record the build-pipeline finding (served build packages uncommitted
+native code while labelling itself with the committed hash) per the ticket.</p>

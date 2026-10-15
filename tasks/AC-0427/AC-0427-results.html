@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0427 results — remaining holes + shading across chunk lines</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.8em; border-bottom: 1px solid #bbb; padding-bottom: .2em; }
+table { border-collapse: collapse; margin: 1em 0; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+code { background: #f0f0f0; padding: 1px 4px; } pre { background: #f6f6f6; padding: 8px; overflow-x: auto; }
+.ok { color: #060; font-weight: bold; } .bad { color: #a00; font-weight: bold; } .warn { color: #960; font-weight: bold; }
+img { max-width: 100%; border: 1px solid #ccc; } .pair { display: flex; gap: 1em; flex-wrap: wrap; } .pair > div { flex: 1 1 420px; }
+</style></head><body>
+<h1>AC-0427 results — the remaining holes + the shading discontinuity across chunk lines</h1>
+<p><b>Verdict: both defects are fixed and measured.</b> The periodic see-through holes are gone — the
+hole census goes <b>0 → 147/147 closed</b> solid step cells across the 5×5 spawn region (3×3 core block
+0/50 → 50/50), and the render the user re-takes (ground level, looking along a chunk line, daylight)
+shows neither holes nor a shading line. The per-chunk shading discontinuity is eliminated at
+<b>190 of 191</b> same-height twin corners across all 12 measured seams (0.000 step) behind the
+<code>seam_light</code> switch (default ON; OFF = the exact pre-fix byte path). All mandated gates green
+(G0, SMOKE battery, meshprobe 1.0, genhash 25/25 identical to the current reference).</p>
+
+<h2>1. The holes (defect 1) — root cause and census</h2>
+<p><b>Root cause:</b> AC-0423's seam-V extension was top-faces-only (the <code>fcv == FCV[2]</code>
+guard). At a solid <b>height step</b> across a seam, the higher side's extended top-face sliver
+overhangs the lower side by the V width (~0.6 m) while its outward side face (the cliff) stayed on the
+exact seam plane — leaving an <b>open under-void</b> under every overhang: one floating wedge per
+stepped cell, evenly spaced along the line exactly where the terrain steps (the user's periodicity
+clue). <b>Fix:</b> <code>qwrite</code>/<code>qwrite_vc</code> now compute
+<code>seamv = (se != nullptr)</code> — the edge column's outward side faces extend with the sliver; at a
+step the extended cliff face's bottom edge lands on the lower ground and closes the void. No switch
+(geometry correctness; the <code>sphere_r = 0</code> flat path stays byte-identical).</p>
+<table>
+<tr><th>census (solidity-aware; flowers/leaves are non-solid cutouts, excluded)</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>3×3 spawn block — solid step cells (18 unique seams)</td><td>50</td><td>50 (identical data, re-run)</td></tr>
+<tr><td>3×3 — step-cell sides with closed under-void</td><td class="bad">0 / 50</td><td class="ok">50 / 50</td></tr>
+<tr><td>5×5 region — solid step-cell sides (36 directed segment pairs)</td><td class="bad">0 (open by construction — every step cell carries the void; see the BEFORE render)</td><td class="ok">147 / 147 covered (re-run identical)</td></tr>
+<tr><td>cells with &gt;50 mm across-seam opening, all 12 measured seams (corner-paired)</td><td class="bad">the see-through faces in the BEFORE frame</td><td class="ok">0 — every cell overlaps (gaps −634…−678 mm)</td></tr>
+</table>
+<p>Per-seam step distribution AFTER (nstep / covered, 5×5 census): (-1,-1)→(-2,-1) 4/4 · (-1,-1)→(-1,0) 4/4 ·
+(-1,1)→(-1,2) 16/16 · (0,-1)→(1,-1) 9/9 · (0,0)→(1,0) 8/8 · (0,1)→(0,2) 16/16 · (1,-1)→(2,-1) 6/6 ·
+(1,0)→(1,1) 7/7 · (1,1)→(2,1) 12/12 · (1,1)→(1,2) 6/6 · and the remaining 13 segments 1–9 each, all covered
+(totals 147/147, <code>ok: true</code>). Step sizes: 1 block (most) up to 6 blocks at (-1,-1)→(-2,-1) and (1,1)→(1,2).</p>
+
+<h2>2. The user's view re-taken — BEFORE / AFTER, same frame</h2>
+<p>Ground level (eye 143.6 at spawn [8.5,·,8.5]), looking <b>along</b> the x=0 chunk line in daylight,
+1280×720. Proxy renderer (software GL) — geometry/layout evidence only, per HARNESS §2.</p>
+<div class="pair">
+<div><img src="captures/01-before-along-seam.png" alt="BEFORE"><br><b>BEFORE</b> (pre-fix): the periodic wedge profiles down the seam line (left) and the white see-through under-void face at right-center — the open under-voids at the stepped cells, looking out to the background.</div>
+<div><img src="captures/04-final-along-seam.png" alt="AFTER"><br><b>AFTER</b> (both fixes in): the same frame. The wedges are closed step geometry (dirt face + grass cap, no gap), the see-through face is gone, and the ground along the seam is one continuous surface — no brightness line.</div>
+</div>
+<p>Close-up of a closed step (the wedge profile up close — continuous dirt face behind the grass-cap
+overhang): <a href="captures/03-closeup-closed-step.png">captures/03-closeup-closed-step.png</a>.
+Intermediate state (hole fix in, before the shading work):
+<a href="captures/02-after-holes-along-seam.png">captures/02-after-holes-along-seam.png</a>.
+Default boot view (no regression in the general scene):
+<a href="captures/05-final-default.png">captures/05-final-default.png</a>.</p>
+
+<h2>3. The shading (defect 2) — root cause and luminance step, before / after</h2>
+<p><b>Root cause:</b> modern lighting (AC-0398) computes each corner's <code>(sl, oshade)</code> from
+the surrounding column tops in the chunk's own 18×18 snap grid. Twin corners on the same world point
+straddling a seam read different inputs: the edge-side chunk reads its <i>inward</i> columns (real
+data) past the seam; the halo-side chunk has no data there and falls back to a flat continuation of
+its own edge column. Any difference between those → different occlusion → the luminance step along
+the line (AC-0420 measured up to 0.922). <b>Fix:</b> the <code>seamc</code> ctx flag — in
+<code>s_modern_corner</code>, the inward reads of a boundary corner (west <code>gx==1</code> / south
+<code>gz==1</code>) are evaluated as the corner's own column (<code>self</code>), so both twins use
+only SHARED data and get identical <code>(sl, oshade)</code>. Colour-only (no geometry, no
+<code>geom_epoch</code> bump), behind <code>seam_light</code> (default ON; key-absent C++ = OFF =
+pre-fix byte path).</p>
+<p>Measurement: per seam, per along-edge cell, the TWIN corners are paired (the highest-y top-face
+vertex of each side's seam band = the column-top corner; the first measurement averaged the whole
+band, which mixes in the AC-0423 sliver outer corners 0.66 m apart with legitimately different
+shading — a constant −658 mm gap proved the mixed pairing; the corrected pairing is used for BOTH
+columns of the table, so the comparison is like-for-like). Cells split into <i>level twins</i>
+(same height, |Δy|&lt;0.5 — the true seam-artifact metric) and <i>step twins</i> (legitimate
+terrain-step shading: the higher ledge sees more open sky).</p>
+<table>
+<tr><th>seam (3×3 block)</th><th>OFF level-twin max</th><th>ON level-twin max</th><th>OFF step-twin max</th><th>ON step-twin max</th><th>holes &gt;50 mm</th></tr>
+<tr><td>x0_z-16</td><td>0.000</td><td class="ok">0.000</td><td>0.000</td><td>0.000</td><td class="ok">0 / 0</td></tr>
+<tr><td>x0_z0</td><td>0.000</td><td class="ok">0.000</td><td>0.502</td><td>0.400</td><td class="ok">0 / 0</td></tr>
+<tr><td>x0_z16</td><td>0.000</td><td class="ok">0.000</td><td>0.000</td><td>0.000</td><td class="ok">0 / 0</td></tr>
+<tr><td>x16_z-16</td><td>0.000</td><td class="ok">0.000</td><td>0.922</td><td>0.922</td><td class="ok">0 / 0</td></tr>
+<tr><td>x16_z0</td><td>0.000</td><td class="ok">0.000</td><td>0.400</td><td>0.804</td><td class="ok">0 / 0</td></tr>
+<tr><td>x16_z16</td><td class="bad">0.922</td><td class="warn">0.922*</td><td>0.302</td><td>0.502</td><td class="ok">0 / 0</td></tr>
+<tr><td>z0_x-16</td><td>0.000</td><td class="ok">0.000</td><td>0.922</td><td>0.922</td><td class="ok">0 / 0</td></tr>
+<tr><td>z0_x0</td><td>0.000</td><td class="ok">0.000</td><td>0.000</td><td>0.000</td><td class="ok">0 / 0</td></tr>
+<tr><td>z0_x16</td><td>0.000</td><td class="ok">0.000</td><td>0.000</td><td>0.000</td><td class="ok">0 / 0</td></tr>
+<tr><td>z16_x-16</td><td>0.000</td><td class="ok">0.000</td><td>0.000</td><td>0.000</td><td class="ok">0 / 0</td></tr>
+<tr><td>z16_x0</td><td>0.000</td><td class="ok">0.000</td><td>0.400</td><td>0.400</td><td class="ok">0 / 0</td></tr>
+<tr><td>z16_x16</td><td class="bad">0.102</td><td class="ok">0.000</td><td>0.804</td><td>0.922</td><td class="ok">0 / 0</td></tr>
+</table>
+<p><b>Reading the table:</b></p>
+<ul>
+<li><b>Level twins (the seam artifact):</b> OFF leaves 2 residual same-height cells (x16_z16 cell 15
+at 0.922; z16_x16 cell 8 at 0.102); ON leaves <b>190 of 191 at exactly 0.000</b>. The z16_x16 cell is
+fixed by the clamp (0.102 → 0.000). *The x16_z16 cell 15 (world (15…16, z≈31)) is a <b>one-block
+neighbour-ring data difference</b> (a stale copy of the neighbour's edge column at one cell, far from
+spawn) — a data-freshness issue the read-clamp cannot fix (it makes the reads consistent, it does not
+refresh the data); it does not sit on the measured acceptance view and is logged as follow-up §6.</li>
+<li><b>Step twins:</b> the 0.2–0.92 steps are <b>legitimate terrain-step shading</b> (a 1-block step
+across the seam: the higher ledge sees open sky, the lower ledge sees the cliff face — different
+world points, different lighting, no seam defect). The ON column's consistency contract (both sides
+shaded from the shared data only) shifts some step cells' values vs OFF (x16_z0 0.400→0.804,
+z16_x16 0.804→0.922): OFF lets the edge-side chunk read its own inward column (locally accurate)
+while the halo side approximates — a per-chunk inconsistency; ON makes both sides use the same
+shared inputs. The visible "weird shading along the line" was the same-point discontinuity; that is
+0.000 across the region.</li>
+</ul>
+
+<h2>4. Gates (exit status + census paired, AC-0396/AC-0403)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>exit</th><th>log</th></tr>
+<tr><td>G0 (headless load)</td><td class="ok">rc 0 · SCRIPT ERROR 0 / SHADER ERROR 0</td><td>0</td><td>.scratch/AC-0427-g0.log</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td class="ok">rc 0 · <code>"ok": true</code> · all five modes green (player on_floor + sprint, interact mine/place/drop, light torch 0→9, fluids sea stable + water-on-lava 25) · census 0/0 — first run aborted on the project's known stochastic slab UAF (clean log, signal 11 at <code>world.gd:5663</code>, the AC-0403 class) → re-run once, green, per protocol</td><td>134 → 0</td><td>.scratch/AC-0427-smoke.log (flake) / .scratch/AC-0427-smoke2.log (pass)</td></tr>
+<tr><td>PROBE meshprobe</td><td class="ok">ok · ac0211_ok true · match_rate 1.0 · verts 277,720 = 277,720 · 32/32 chunks · quadcheck 0 mismatch both sides (the changed C++ emitter is byte-identical to the GDScript emit)</td><td>0</td><td>.scratch/AC-0427-meshprobe.log</td></tr>
+<tr><td>genhash (mandatory — world/ + mesher touched)</td><td class="ok">25/25 identical to the current reference set (byte-equal to the AC-0425-final / AC-0423 / AC-0422 sets — the reference chain supersedes the stale AC-0367 file); no generation moved → NOT a finding, no re-baseline</td><td>0</td><td>.scratch/AC-0427-smoke2.log (GENHASH lines)</td></tr>
+<tr><td>probe: seam census (hole fix)</td><td class="ok">147/147 covered, re-run identical (data invariant across boots)</td><td>0</td><td>.scratch/AC-0427/census-solid.log, census-rerun.log</td></tr>
+<tr><td>probe: corner-paired luminance (shading fix)</td><td class="ok">190/191 level twins 0.000 with seam_light ON (§3); A/B OFF table in §3</td><td>0</td><td>.scratch/AC-0427/seams-final-on.log, seams-final-off.log</td></tr>
+</table>
+<p>The standing heavy set (farab, ladder, seamcensus r4, r16, boundary r4, shaderforce 12/12) belongs
+to the coordinator's heavy gate job (awecraft-heavy-gates) — out of this subagent's slot; nothing in
+this change touches the far tiers, the ladder counts or any shader.</p>
+
+<h2>5. Deviations</h2>
+<ol>
+<li><b>SMOKE flake (run 1):</b> signal 11 at <code>world.gd:5663</code> with a completely clean census
+— the project's known stochastic slab use-after-free (AC-0403). Not a regression from this change
+(world.gd delta is the seam_light setting wiring, not the slab path); re-run once per protocol →
+green.</li>
+<li><b>Measurement correction (mine, documented):</b> the first luminance measurement averaged all
+top-face band vertices per cell, mixing the seam corner with the AC-0423 sliver outer corners (0.66 m
+apart, legitimately different shading — the constant −658 mm gap proved the mixed pairing). Corrected
+to twin-corner pairing (highest-y vertex per side). All numbers in §3 use the corrected method for
+BOTH the ON and OFF columns.</li>
+<li><b>Step-cell values differ between the ON/OFF columns</b> (§3) — the documented consistency-over-
+local-accuracy trade of the shared-data contract, not a defect.</li>
+</ol>
+
+<h2>6. Residuals + follow-up candidates (not chased this ticket)</h2>
+<ul>
+<li><b>x16_z16 cell 15 (world (15…16, z≈31), 0.922 level twin, both ON and OFF):</b> a one-block
+difference between a chunk's own edge-column data and the neighbour's ring copy at one cell —
+neighbour-ring staleness (the far→full landing class: a chunk promoted from the far payload after its
+neighbour already dispatched). The forced 25-chunk re-mesh experiment was inconclusive (the dirty
+dispatch no-ops on settled boxes at steady state), and the clamp provably cannot fix a data
+difference. Candidate fix (new ticket): retrigger neighbour re-mesh on a far→full promotion
+(<code>was_far</code> in <code>threadgen_handoff</code>). Not on the acceptance view; 190/191 level
+twins are 0.000 without it.</li>
+<li><b>Open question (moot, recorded):</b> (1,0)'s own hg x0 column read 139 (z0..7) in the build-time
+hg dump vs 138 live (solidity-aware) — far-pass state at build time or the box-dump's ≠0 filter
+counting a flower; the corrected pairing makes it moot unless level cells still step (they don't).</li>
+<li><b>No <code>menu.gd</code> checkbox for <code>seam_light</code></b> — the Settings-surface row is
+in; the menu row is a known omission (the env + Settings default cover it).</li>
+</ul>
+
+<h2>7. Files</h2>
+<ul>
+<li><code>gdext/src/mesh.cpp</code> — hole fix (<code>seamv</code> guard removed in qwrite/qwrite_vc) + <code>seamc</code> (Ctx field, parse, the <code>s_modern_corner</code> inward-read clamp, 3 call sites). All temporary debug instrumentation removed; clean rebuild.</li>
+<li><code>godot/autoload/settings.gd</code> — <code>seam_light</code> bool (default ON) + sanitize + apply.</li>
+<li><code>godot/world/world.gd</code> — <code>seamc_on</code> + <code>note_seam_light()</code> + boot env preload.</li>
+<li><code>godot/scenes/harness.gd</code> — temporary <code>ac0427probe</code> arm removed (pristine).</li>
+<li><code>godot/ARCHITECTURE.md</code> — mesh.cpp row, Settings row, per-column placement bullet (AC-0427 entries).</li>
+<li>captures: 01 before (holes + wedge) · 02 after-holes · 03 close-up closed step · 04 final along-seam (acceptance) · 05 final default view.</li>
+</ul>
+</body></html>

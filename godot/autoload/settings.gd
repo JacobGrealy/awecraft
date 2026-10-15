@@ -66,6 +66,23 @@ const DEFAULTS := {
 	# (harness.gd is pristine). The live world always writes the key at boot
 	# (note_modern), so the game path is explicit in both states.
 	"modern_light": true,
+	# AC-0427: the seam-lighting continuity switch. DEFAULTS ON — the
+	# user asked for it ("the shading is weird along the line"; "the
+	# joins between chunks should be invisible"). The modern per-corner
+	# lighting at a chunk-edge corner used an inward neighbour only the
+	# own chunk knows, so the two corners meeting at a seam read
+	# different occluder sets — a measured 0.08-0.92 luminance step on
+	# every seam (AC-0420). ON: a boundary corner evaluates the inward
+	# side as the seam column itself (flat continuation), so the seam
+	# pair uses only the data both chunks share and the seam's (sl,
+	# oshade) are identical — the lighting is continuous across the
+	# join. OFF = the pre-AC-0427 evaluation exactly (colour-only; the
+	# C++ key-absent default is off, so the arms' hand-built ctx dicts
+	# and their stored fingerprints stay green). Colour-only: a toggle
+	# re-derives the worker ctx ("seamc") and re-meshes every resident
+	# column through the tex_refresh drain — no geom_epoch bump.
+	# Env-overridable (AWECRAFT_SEAM_LIGHT=0|1 at boot, world.gd).
+	"seam_light": true,
 	# AC-0401: the cloud deck character switch. DEFAULTS ON — the user
 	# asked for the new look ("less of them but the individual clouds
 	# should be bigger and they should be volumetric"), the modern_light
@@ -428,6 +445,11 @@ func _clamp(k: String, v) -> void:
 		# never raises and aborts the load).
 		"modern_light":
 			values[k] = AnalogTune.sanitize_bool(v)
+		# AC-0427: the seam-lighting continuity toggle — sanitize_bool,
+		# not bool(): a hand-edited string in the cfg must fail to false,
+		# never raise and abort the whole load.
+		"seam_light":
+			values[k] = AnalogTune.sanitize_bool(v)
 		# AC-0401: the deck character + the limb-glow gate (both look
 		# changes, both default ON - the user asked; see DEFAULTS).
 		# sanitize_bool, not bool(): a hand-edited string in the cfg must
@@ -570,6 +592,13 @@ func set_value(k: String, v) -> void:
 	# standalone context).
 	if k == "modern_light":
 		apply_modern()
+	# AC-0427: the seam-lighting continuity toggle — the world re-derives
+	# the worker ctx flag ("seamc") and re-meshes every resident column
+	# (note_seam_light, the same apply-step seam as modern_light;
+	# colour-only, so no geom_epoch bump). A no-op while Game.world is
+	# absent (menu / the settings arm's standalone context).
+	if k == "seam_light":
+		apply_seam_light()
 	# AC-0088: the remap layer applies to the live InputMap in the same
 	# apply step (the clamp chain above already sanitized the value).
 	if k == "controls":
@@ -813,3 +842,11 @@ func apply_ramps() -> void:
 func apply_modern() -> void:
 	if Game.world != null and Game.world.has_method("note_modern"):
 		Game.world.note_modern()
+
+# AC-0427: the seam-lighting continuity toggle — the same apply-step seam
+# as apply_modern (world re-derives the worker ctx flag "seamc", colour-
+# only, no geom_epoch bump; the has_method guard keeps the _StubWorld /
+# range arms clean).
+func apply_seam_light() -> void:
+	if Game.world != null and Game.world.has_method("note_seam_light"):
+		Game.world.note_seam_light()

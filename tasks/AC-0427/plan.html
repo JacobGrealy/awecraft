@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0427 plan — remaining holes + shading across chunk lines</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 950px; margin: 2em auto; line-height: 1.5; padding: 0 1em; }
+h1 { border-bottom: 2px solid #333; padding-bottom: .3em; } h2 { margin-top: 1.6em; }
+table { border-collapse: collapse; } td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+code { background: #f0f0f0; padding: 1px 4px; } pre { background: #f6f6f6; padding: 8px; overflow-x: auto; }
+.red { color: #a00; } .grn { color: #060; }
+</style></head><body>
+<h1>AC-0427 — plan: the remaining holes + the shading discontinuity across chunk lines</h1>
+
+<h2>1. The defect (established by the report + AC-0420/AC-0423)</h2>
+<p>After AC-0423 closed the continuous ~0.55 m see-through slit (the tangent sheets'
+diverging edge lines), the user reports two remaining defects, both <b>along the chunk
+seam lines</b>:
+(1) <b>holes</b> — "not entirely random ... along lines and fairly evenly spaced":
+intermittent see-through gaps + floating grass/dirt wedge profiles at places along
+every seam;
+(2) <b>shading</b> — the per-chunk vertex lighting changes across a boundary, up to a
+0.922 luminance step at same-geometry corners (the AC-0420 measurement), drawing a
+visible line even where the geometry is solid.</p>
+<p>The periodicity of (1) is the key clue: a systematic curvature shortfall would be
+continuous (already fixed); holes that repeat at regular intervals along a line
+indicate a per-cell rule that fails at specific cells — here, wherever the terrain
+<b>steps in height across the seam</b>.</p>
+
+<h2>2. Root causes</h2>
+<h3>2a. The holes — the seam-V extended the top faces only</h3>
+<p>AC-0423's extension was guarded <code>fcv == FCV[2]</code> (single-quad paths) /
+<code>fi == 2</code> (merged): <b>top-face edge rows only</b>. At a solid height step
+across a seam, the higher side's extended top-face sliver overhangs the lower side by
+the V width (~0.6 m at terrain height) — but the higher side's <b>outward side face</b>
+(the cliff) stayed on the exact seam plane. Between the sliver's overhanging bottom
+edge and the lower ground there is an <b>open under-void</b>: a floating wedge you can
+see through, exactly one per stepped cell — hence the periodic, evenly-spaced holes.
+The flat case (equal tops) self-hides; the step case does not. Measured live: 50 solid
+step cells across the 18 unique seams of the 3×3 spawn block, 0/50 with closed
+under-voids before the fix; the render shows the white see-through face + the wedge
+fronts.</p>
+<h3>2b. The shading — twin corners read different data</h3>
+<p>Modern lighting (AC-0398) computes each corner's <code>(sl, oshade)</code> from the
+8 surrounding column tops + 4 normal columns in the chunk's own 18×18 snap grid. At a
+seam, the two twin corners sitting on the <b>same world point</b> read different
+inputs: the edge-side chunk reads its <i>inward</i> columns (its own real data) for
+the slots past the seam, while the halo-side chunk has <i>no</i> data there and falls
+back to a flat continuation of its own edge column. Whenever the inward column differs
+from the continuation (a 1-block step, a neighbour difference), the two twins get
+different occlusion → different <code>(sl, oshade)</code> → the luminance step along
+the line. Proof of the mechanism (worked example, the x16_z0 seam corner): every one
+of the 12 reads is enumerated for both twins — identical when the shared columns
+agree, and the single divergent read is exactly the off-grid/inward slot.</p>
+
+<h3>3. Fix design</h3>
+<h3>3a. Holes — extend the edge column's outward side faces with the sliver</h3>
+<p>Remove the top-only guard in <code>qwrite</code>/<code>qwrite_vc</code>:
+<code>bool seamv = (se != nullptr)</code> (was <code>fcv == FCV[2]</code>). The
+<code>seam_ext_corner</code> hook already fires for <b>any</b> corner exactly on a chunk
+edge (integer sums, exact float equality) and computes the same per-cell E(t,i), so
+the edge column's outward side faces (the px==0/16 corners of a side face) now extend
+by the same amount as the top face. At a step, the extended cliff face's bottom edge
+sits at the lower ground's top-face level → the under-void is closed; at level cells
+the side face's extension is invisible (it meets the neighbour's face in the fold
+crease, the AC-0423 geometry). <b>No switch</b>: this is geometry correctness —
+completing the AC-0423 V closure, not a look change; and with <code>sphere_r = 0</code>
+(the flat-world path, the arm ctxs, the face path) the tables are all zero and the
+mesh stays byte-identical to pre-AC-0423.</p>
+<h3>3b. Shading — the <code>seamc</code> clamp, behind <code>seam_light</code></h3>
+<p>Add a <code>seamc</code> bool to the C++ ctx. In <code>s_modern_corner</code>, wrap
+the grid-read in a clamp: for a boundary corner (<b>west</b> <code>gx == 1</code> /
+<b>south</b> <code>gz == 1</code> in the read-center grid), any read <i>inward</i> of
+the seam (<code>x &gt; gx</code> / <code>z &gt; gz</code>) returns <code>self</code> —
+the corner's own edge-column top. Then both twins' 12 reads reduce to the same three
+shared sources: the own edge column (real data on one side, the ring copy on the
+other), the neighbour's edge column (the ring on one side, own data on the other), and
+the seam column itself — so with fresh rings the twins get <b>identical</b>
+<code>(sl, oshade)</code> → no step. Colour-only: no vertex moves, no
+<code>geom_epoch</code> bump; the toggle re-dispatches via the <code>tex_refresh</code>
+drain.</p>
+<table>
+<tr><th>piece</th><th>value</th></tr>
+<tr><td>switch</td><td><code>seam_light</code> Settings bool, <b>DEFAULT ON</b> (the user asked for the fix; the <code>modern_light</code> precedent — a look fix the user ordered ships ON with a conservative OFF escape hatch). Key absent in the C++ ctx = OFF (every hand-built arm ctx + stored fingerprint stays on the pre-AC-0427 path, green).</td></tr>
+<tr><td>env</td><td><code>AWECRAFT_SEAM_LIGHT=0|1</code>, preloaded at boot WITHOUT save (<code>world.gd _ready</code>) for the A/B harness runs.</td></tr>
+<tr><td>apply</td><td><code>world.note_seam_light()</code>: sets <code>world.seamc_on</code>, updates <code>_tm_ctx["seamc"]</code>, re-dispatches every resident chunk via <code>tex_refresh</code> (colour-only re-mesh).</td></tr>
+<tr><td>menu</td><td>NO <code>menu.gd</code> checkbox — documented gap (the Settings-surface row pattern applies; the menu row is a known omission, noted in results).</td></tr>
+</table>
+
+<h3>4. Implementation (files)</h3>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>gdext/src/mesh.cpp</code></td><td>(a) <code>qwrite</code>/<code>qwrite_vc</code>: <code>bool seamv = (se != nullptr)</code> (the <code>fcv == FCV[2]</code> top-only guard removed). (b) <code>Ctx</code>: <code>bool seamc</code> + parse (<code>out.seamc = (bool)ctx.get("seamc", false)</code>). (c) <code>s_modern_corner</code>: the <code>rt()</code> grid-read lambda gains the seamc clamp (inward reads of a west/south boundary corner → <code>self</code>); all 8 occlusion reads + 4 normal reads go through it; signature gains <code>self</code> + <code>seamc</code>. (d) the three call sites (<code>emit_ramp</code> :1631, <code>emit_faces</code> :1731, <code>emit_ro_merged</code> :1971) pass <code>hg[gz*SNAP_W+gx]</code> as <code>self</code> (the vertex's own cell column — one diagonal behind the read center) + <code>ctx.seamc</code>.</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"seam_light": true</code> in DEFAULTS; sanitize case → <code>AnalogTune.sanitize_bool</code>; apply-step case → <code>apply_seam_light()</code> (has_method guard → <code>Game.world.note_seam_light()</code>).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>var seamc_on := false</code> + <code>note_seam_light()</code> (early-return on unchanged value); boot block: <code>AWECRAFT_SEAM_LIGHT</code> env → Settings.values (no save) → unconditional <code>note_seam_light()</code>.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>temporary <code>ac0427probe</code> arm (per-cell seam census + corner-paired luminance measurement + box dumps) — <b>removed at closeout</b> (pristine rule).</td></tr>
+</table>
+
+<h3>5. Measurement (the ticket demands counts + luminance, before AND after)</h3>
+<ul>
+<li><b>Hole census</b> (solidity-aware — flowers/leaves are non-solid cutouts and must
+not count as step cells): over every seam of the 5×5 chunk region around spawn
+(36 directed segment pairs), per along-edge cell: the top-face reach of both sides
+in WORLD coordinates (the sheets are tilted — local coords conflate placement with
+extension), <code>covered</code> = the across-seam overlap of the two sides' edge
+top-face vertices at the stepped cells. Before: 0/50 covered (3×3 block); after:
+147/147 covered (5×5 census), 0 cells with &gt;50 mm opening on any of the 12
+measured seams.</li>
+<li><b>Luminance step</b>: per seam, per along-edge cell, pair the TWIN corners — the
+highest-y top-face vertex of each side's seam band (the column-top corner; band
+averages are contaminated by the AC-0423 sliver outer corners, 0.66 m apart with
+legitimately different shading — the constant −658 mm gap in the first measurement
+proved the mixed pairing). Split the cells into <i>same-height twins</i>
+(<code>|Δy| &lt; 0.5</code> — the true seam-artifact metric: identical geometry must
+shade identically) and <i>step twins</i> (legitimate terrain-step shading). Run with
+<code>seam_light</code> ON and OFF for the before/after table.</li>
+<li><b>Render</b>: the user's own view re-taken — a ground-level frame looking ALONG a
+chunk line in daylight (eye 143.6 at spawn, along the x=0 seam), before (pre-fix
+render on file) and after (all fixes in). Proxy renderer — geometry/layout evidence
+only.</li>
+</ul>
+
+<h3>6. Gates</h3>
+<p>G0 (zero SCRIPT ERROR + zero SHADER ERROR via <code>gate_census.py</code> AND exit
+status — the paired check, AC-0396/AC-0403); SMOKE battery
+<code>player;interact;light;fluids;genhash</code>; PROBE <code>meshprobe</code>
+(byte-identity of the changed C++ emitter); <b>genhash 25/25</b> (mandatory —
+world/ + mesher touched; a moved hash is a FINDING, not a re-baseline).</p>
+
+<h3>7. Constraints honored</h3>
+<ul>
+<li>Any change to how the world LOOKS ships behind a switch defaulting conservative →
+<code>seam_light</code> (ON default = the user-asked fix; OFF = the exact pre-AC-0427
+byte path, proven by the key-absent C++ contract). The hole fix is geometry
+correctness (closes see-through voids), not a look change — no switch, flat-world
+path byte-identical.</li>
+<li>Recent work keeps holding: the seam extension itself (AC-0423 V closure), the
+ambient lift (AC-0398/AC-0426), the orbital sort offset and relief, the local-zenith
+sky, the far-tier curvature placement, the engine fog — untouched; the standing
+gates (farab, ladder, seamcensus, r16, boundary, shaderforce) belong to the
+coordinator's heavy set.</li>
+<li>No commits/pushes (coordinator closeout); no TASKS.yaml hand edits;
+<code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code>
+untouched; AC-0067/AC-0384/AC-0425 untouched.</li>
+</ul>
+
+</body></html>

@@ -1081,6 +1081,28 @@ func note_modern() -> void:
 		_tm_ctx["modern"] = en
 		tex_refresh = chunks.keys().duplicate()
 
+# AC-0427: the seam-lighting continuity toggle (Settings "seam_light",
+# game default ON — the user asked for the joins to be invisible; the
+# C++ key-absent default is OFF, so the arms' hand-built ctx dicts stay
+# on the pre-AC-0427 evaluation and their stored fingerprints stay
+# green). Same apply-step seam as note_modern: the flag rides the worker
+# ctx ("seamc") — the C++ build makes the seam-column corners evaluate
+# only the data both chunks share, so the seam's (sl, oshade) are
+# identical on both sides (the AC-0420 0.08-0.92 luminance step
+# disappears). COLOUR-ONLY: a toggle re-derives the ctx and re-dispatches
+# every resident column through the tex_refresh drain but does NOT bump
+# geom_epoch (no geometry moves).
+var seamc_on := false
+
+func note_seam_light() -> void:
+	var en := bool(Settings.values.get("seam_light", true))
+	if en == seamc_on:
+		return
+	seamc_on = en
+	if threadmesh:
+		_tm_ctx["seamc"] = en
+		tex_refresh = chunks.keys().duplicate()
+
 func _rescore_kick() -> void:
 	_rescore_ver += 1
 	_rescore_due = true
@@ -3900,6 +3922,15 @@ func _ready() -> void:
 	if mde != "":
 		Settings.values["modern_light"] = mde == "1"
 	note_modern()  # AC-0398: the boot derive (after the env preload)
+	# AC-0427: harness env preload (the AWECRAFT_MODERN pattern) —
+	# AWECRAFT_SEAM_LIGHT=<0|1> overrides the STORED setting for this
+	# process (written to Settings.values WITHOUT save, so the arms never
+	# clobber the user's cfg) and lets the render A/B test both states
+	# without a save file.
+	var sle := OS.get_environment("AWECRAFT_SEAM_LIGHT")
+	if sle != "":
+		Settings.values["seam_light"] = sle == "1"
+	note_seam_light()  # AC-0427: the boot derive (after the env preload)
 	# AC-0405: harness env preload (the AWECRAFT_RAMPS pattern) —
 	# AWECRAFT_CLOUDVOL=<0|1> (the raymarched-volume switch, Settings
 	# "cloud_volume", default ON) overrides the STORED setting for this

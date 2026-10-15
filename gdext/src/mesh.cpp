@@ -245,6 +245,28 @@ struct Ctx {
 	// column-top grid is never built and every emit site takes its existing
 	// branch, so the mesh is byte-identical to the pre-AC-0398 build.
 	bool modern = false;
+	// AC-0427: the seam-lighting continuity toggle (Settings "seam_light",
+	// game default ON — the user asked for the joins to be invisible).
+	// POLARITY NOTE: same as modern — the GAME default is on, the
+	// key-absent default HERE is off, so the arms' hand-built ctx dicts
+	// (no "seamc" key) stay on the pre-AC-0427 evaluation and their
+	// stored fingerprints stay green. The live world always writes the
+	// key (world.gd note_seam_light at boot + on change).
+	//
+	// WHAT IT DOES: the modern per-corner terms at a chunk-edge corner
+	// were computed with an inward neighbour that only the OWN chunk
+	// knows (my (1,z) for the west edge; the flat continuation for the
+	// east edge), so the two corners that meet at the seam read DIFFERENT
+	// occluder sets and normals — the measured 0.08-0.92 luminance step
+	// on every seam (AC-0420). With this flag, a boundary corner
+	// (seam-column gx == 1 / gz == 1) evaluates the inward side as the
+	// seam column itself (flat continuation), so it uses ONLY the data
+	// both chunks share (the seam column, its z-neighbours, the
+	// neighbour's edge column from the ring) and the seam pair's (sl,
+	// oshade) are identical — the lighting is continuous across the
+	// join. FALSE = the pre-AC-0427 evaluation exactly (colour-only
+	// branch, geometry untouched).
+	bool seamc = false;
 	int uv_scale = 1;
 	float ppb = 31.0f;
 	uint8_t oktab[256];
@@ -298,6 +320,7 @@ static void parse_ctx(const Dictionary &ctx, Ctx &out) {
 	out.coarse = (bool)ctx.get("coarse", false);
 	out.ramps = (bool)ctx.get("ramps", false); // AC-0205 (default = off = pre-feature)
 	out.modern = (bool)ctx.get("modern", false); // AC-0398 (key-absent = off = pre-feature; game default ON — see Ctx.modern)
+	out.seamc = (bool)ctx.get("seamc", false); // AC-0427 (key-absent = off = pre-feature; game default ON — see Ctx.seamc)
 	out.uv_scale = (int)ctx.get("uv_scale", 1);
 	out.ppb = 31.0f / (float)out.uv_scale;
 	copy_table(ctx.get("oktab", PackedByteArray()), out.oktab, 256);
@@ -395,7 +418,12 @@ struct Acc {
 // 0..16 footprint by the V width at the corner's own height, so the two
 // sheets' top faces OVERLAP across the seam; the sheet planes then meet
 // in the fold crease and no line of sight threads the seam at surface
-// level. E(t, i) = K0[k][i] + K1[k]·t + SEAM_V_MARGIN, clamped to
+// level. AC-0427: the edge column's OUTWARD SIDE faces extend by the
+// same E — at a step across the seam the top-face sliver otherwise
+// overhangs the lower side with an open under-void (the periodic holes
+// the user still saw "along the lines"); the extended cliff face closes
+// that void, its bottom edge sitting exactly on the lower ground.
+// E(t, i) = K0[k][i] + K1[k]·t + SEAM_V_MARGIN, clamped to
 // [0, SEAM_V_MAX]; k ∈ {0=W,1=E,2=S,3=N} (parse_nbs order), i = the
 // along-edge cell (0..15, clamped), t = the corner's local height. K0/K1
 // come from the two columns' PLACED transforms and the neighbour's
@@ -455,9 +483,18 @@ static void qwrite(Acc &acc, const Color &c, const int n[3], const float *uvs, c
 	acc.ensure(k + 1);
 	int b = k * 4;
 	const float pys[4] = {py0, py1, py2, py3};
-	// AC-0423: the seam-V extension — top-face corners on a chunk edge
-	// only (the fcv == FCV[2] guard keeps every other face untouched).
-	bool seamv = (se != nullptr) && (fcv == FCV[2]);
+	// AC-0423: the seam-V extension — corners exactly on a chunk edge.
+	// seam_ext_corner's px/pz == 0/16 test does the scoping: the top-face
+	// edge rows (their edge corners) and the edge column's outward side
+	// faces (all four corners on the edge plane). Interior faces never
+	// have a corner on 0/16, so they are untouched. AC-0427: the side
+	// faces are in now (pre-fix: top faces only, the fcv == FCV[2]
+	// guard) — at a step across the seam the overhanging top-face
+	// sliver left an open under-void (the user's periodic holes along
+	// the lines); extending the cliff face the same way closes it, and
+	// its bottom edge meets the neighbour's ground exactly at the lower
+	// top (no new gap).
+	bool seamv = (se != nullptr);
 	for (int j = 0; j < 4; j++) {
 		float vx = (float)lx + fcv[j][0];
 		float vy = (float)y + pys[j];
@@ -498,9 +535,10 @@ static void qwrite_vc(Acc &acc, const Color *c, const int n[3], const float *uvs
 	acc.ensure(k + 1);
 	int b = k * 4;
 	const float pys[4] = {py0, py1, py2, py3};
-	// AC-0423: the seam-V extension (top-face corners on a chunk edge;
-	// see qwrite).
-	bool seamv = (se != nullptr) && (fcv == FCV[2]);
+	// AC-0423: the seam-V extension (corners exactly on a chunk edge;
+	// AC-0427: top-face edge rows + the edge column's outward side
+	// faces — see qwrite).
+	bool seamv = (se != nullptr);
 	for (int j = 0; j < 4; j++) {
 		float vx = (float)lx + fcv[j][0];
 		float vy = (float)y + pys[j];
@@ -737,14 +775,33 @@ static inline int16_t mod_top(const int16_t *hg, int gx, int gz, int16_t self) {
 
 // The modern per-corner terms at world column (wx, wz), world y by. fi
 // selects only the FSH face-shade term. Writes sl + oshade.
-static inline void s_modern_corner(int fi, int wx, int by, int wz, int wx0, int wz0, const int16_t *hg, int16_t self, float &osl, float &oshade) {
+static inline void s_modern_corner(int fi, int wx, int by, int wz, int wx0, int wz0, const int16_t *hg, int16_t self, bool seamc, float &osl, float &oshade) {
 	int gx = (wx - wx0) + 1;
 	int gz = (wz - wz0) + 1;
+	// AC-0427: seam-light continuity (seamc). A boundary corner (the seam
+	// column: gx == 1 the west edge, gz == 1 the south edge) must read
+	// the SAME occluder set as its twin in the neighbour chunk, and the
+	// only data both chunks share is: the seam column (self), its
+	// along-seam neighbours, and the neighbour's edge column (gx == 0 /
+	// gz == 1... i.e. the outward reads). The INWARD reads (gx == 2 /
+	// gz == 2 — my own interior, unknown to the twin) are replaced by
+	// the seam column itself (flat continuation, the same convention as
+	// the off-grid reads the east/north edges already use). Result: the
+	// seam pair's (sl, oshade) are identical -> no luminance step.
+	auto rt = [&](int x, int z) -> int16_t {
+		if (seamc) {
+			if (gx == 1 && x > gx)
+				return self; // west edge: the east side is the seam column
+			if (gz == 1 && z > gz)
+				return self; // south edge: the north side is the seam column
+		}
+		return mod_top(hg, x, z, self);
+	};
 	static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
 	static const int DZ[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 	float occl = 0.0f;
 	for (int d = 0; d < 8; d++) {
-		int16_t hd = mod_top(hg, gx + DX[d], gz + DZ[d], self);
+		int16_t hd = rt(gx + DX[d], gz + DZ[d]);
 		if (hd < by)
 			continue; // the neighbour's top sits below the corner's height: no horizon block
 		float block = (float)(hd - by + 1);
@@ -752,10 +809,10 @@ static inline void s_modern_corner(int fi, int wx, int by, int wz, int wx0, int 
 	}
 	osl = clampf(1.0f - MODERN_OCCL_K * occl, MIN_AMB, 1.0f);
 	// The geometric normal: central difference of the 4 cardinal tops.
-	int16_t hw = mod_top(hg, gx - 1, gz, self);
-	int16_t he = mod_top(hg, gx + 1, gz, self);
-	int16_t hs = mod_top(hg, gx, gz - 1, self);
-	int16_t hn = mod_top(hg, gx, gz + 1, self);
+	int16_t hw = rt(gx - 1, gz);
+	int16_t he = rt(gx + 1, gz);
+	int16_t hs = rt(gx, gz - 1);
+	int16_t hn = rt(gx, gz + 1);
 	float nx = (float)(hw - he) * 0.5f;
 	float ny = 1.0f;
 	float nz = (float)(hn - hs) * 0.5f;
@@ -1569,7 +1626,7 @@ static void emit_ramp(Acc &acc, const RampRec &r, const Vector3i &lmn, const uin
 		if (ctx.modern) {
 			int gx = r.lx + cor[j][0];
 			int gz = r.lz + cor[j][2];
-			s_modern_corner(2, wx0 + gx, r.y + cor[j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+			s_modern_corner(2, wx0 + gx, r.y + cor[j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], ctx.seamc, msl[j], mosh[j]);
 		}
 		col[j] = light_color(msl[j], mosh[j], chan[j], ctx.cs[r.id], has_tex);
 		if (j > 0) {
@@ -1669,7 +1726,7 @@ static void emit_faces(const std::vector<FRec> &recs, std::vector<Acc> &accs, co
 				for (int j = 0; j < 4; j++) {
 					int gx = lx + FCV[fi][j][0];
 					int gz = lz + FCV[fi][j][2];
-					s_modern_corner(fi, wx0 + gx, y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+					s_modern_corner(fi, wx0 + gx, y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], ctx.seamc, msl[j], mosh[j]);
 					if (j > 0 && (msl[j] != msl[0] || mosh[j] != mosh[0] || chan[j] != chan[0]))
 						mod_uniform = false;
 				}
@@ -1909,7 +1966,7 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 				for (int j = 0; j < 4; j++) {
 					int gx = r.lx + FCV[fi][j][0];
 					int gz = r.lz + FCV[fi][j][2];
-					s_modern_corner(fi, wx0 + gx, r.y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], msl[j], mosh[j]);
+					s_modern_corner(fi, wx0 + gx, r.y + FCV[fi][j][1], wz0 + gz, wx0, wz0, hg, hg[gz * SNAP_W + gx], ctx.seamc, msl[j], mosh[j]);
 					if (j > 0 && (msl[j] != msl[0] || mosh[j] != mosh[0] || chan[j] != chan[0]))
 						mod_uniform = false;
 				}
@@ -1936,8 +1993,33 @@ static void emit_ro_merged(const std::vector<FRec> &recs, std::vector<Acc> &accs
 					if (has_tex)
 						cc[j] = mul_cc(cc[j], tint);
 				}
-				const float *uvs = s_uvc(uvc, ctx, r.id, fi, face_idx);
-				qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1], se);
+				// AC-0430: the fallback quad rides the MERGED build's
+				// canvas material, but s_uvc's uv is in the ORIGINAL 1024
+				// space (the per-face path's space — emit_faces assembles
+				// against the 1024 atlas, where it is correct). Under the
+				// merge canvas (ms.h tall) the unscaled v is read 2.09x
+				// lower: faces walked into neighbouring atlas rows and
+				// column-0 tiles (grass top [0,0]) into the lava row
+				// ([0,32]) — the "grass replaced with lava" report.
+				// Rescale v into canvas space: the quad then samples its
+				// own tile in the canvas's base region (identical pixels —
+				// the strips are repeat blits of the same original rects,
+				// so base-region and strip-region reads agree exactly).
+				const float *uvs16 = s_uvc(uvc, ctx, r.id, fi, face_idx);
+				float uvs_ms[8];
+				if (ms.h > 0.0f && ms.h != ctx.atlas_px) {
+					float kv = ctx.atlas_px / ms.h;
+					for (int j = 0; j < 4; j++) {
+						uvs_ms[j * 2] = uvs16[j * 2];
+						uvs_ms[j * 2 + 1] = uvs16[j * 2 + 1] * kv;
+					}
+				} else {
+					for (int j = 0; j < 4; j++) {
+						uvs_ms[j * 2] = uvs16[j * 2];
+						uvs_ms[j * 2 + 1] = uvs16[j * 2 + 1];
+					}
+				}
+				qwrite_vc(accs[r.y / 16], cc, n, uvs_ms, FCV[fi], r.lx, r.y, r.lz, FCV[fi][0][1], FCV[fi][1][1], FCV[fi][2][1], FCV[fi][3][1], se);
 				continue;
 			}
 			sl = ctx.modern ? msl[0] : s_corner_sl(lsum[0], ao[0]);

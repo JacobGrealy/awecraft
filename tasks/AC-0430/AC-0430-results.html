@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0430 — results (terrain faces wearing the lava texture)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-word}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#e9f7e9;border-left:4px solid #2e8b57;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.red{background:#fdeaea;border-left:4px solid #c0392b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.note{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin:6px 0}</style></head><body>
+<h1>AC-0430 — results (terrain faces wearing the lava texture)</h1>
+<p class="meta">2026-10-15 · subagent (UV-audit + mesher fix) · engine 4.7.1.stable · headless llvmpipe proxy renders</p>
+
+<h2>Verdict</h2>
+<div class="ok"><b>FOUND + FIXED + GATED.</b> The uncommitted working-tree mesher change
+(AC-0427) is <b>NOT</b> the cause. The defect is in the <b>committed</b> mesher: the
+non-uniform (per-corner-light) fallback quad inside
+<code>emit_ro_merged</code> (<code>gdext/src/mesh.cpp</code>) gets its UV from
+<code>s_uvc</code> → <code>s_corner_uv</code>, which divides by <code>atlas_px</code>
+(1024) — the PER-FACE path's space — but the merged build is assembled against the
+<b>merge canvas</b> (<code>ms.h</code> = 2144 tall). The unscaled v is read 2.094× lower
+on the canvas: faces walk into neighbouring atlas rows, and column-0 tiles (grass top
+<code>[0,0]</code>) land on <code>[0,32]</code> — <b>the lava tile</b>. Stepped far terrain
+(band A, the materialized tier-1 ring) has non-uniform step-edge faces en masse → the
+fallback fires en masse → "grass replaced with lava". Flat near terrain has uniform
+corners (all faces merge) → clean. The fix rescales the fallback quad's v by
+<code>atlas_px / ms.h</code> (one cached value per quad set — the quad then samples its
+own tile in the canvas's base region, pixel-identical to the strip's source tile).
+Post-fix r8 census: <b>0 foreign, 0 lava</b> across 155,143 quads / 113 chunks
+(pre-fix: 30,586 + 9,316).</div>
+
+<h2>A/B: the uncommitted change is not the cause</h2>
+<table>
+<tr><th>build</th><th>native</th><th>r4 user view</th><th>r4 census</th><th>r8 census</th></tr>
+<tr><td><b>A</b> — committed 356da23</td><td>rebuilt from HEAD, md5 <code>ce62a9ba…</code></td><td>clean (identical to B)</td><td>80,969/80,969 ok</td><td>foreign_plain 31,449 + lava 9,322 — <b>the same defect</b>, same chunks, 100% orig_uv_foreign</td></tr>
+<tr><td><b>B</b> — the served build (working tree)</td><td>md5 <code>369456d6…</code></td><td>clean (identical to A)</td><td>80,969 ok + 2,513 ok_soft (AC-0427 extended side faces, own-tile-verified)</td><td>foreign_plain 30,586 + lava 9,316 — same class</td></tr>
+<tr><td><b>FIXED</b> — working tree + this fix</td><td>rebuilt, md5 <code>6dc07dbc…</code></td><td colspan="2">user view clean</td><td><b>0 + 0</b> (ok_base 30,586 = the fallback quads, now on their own tile)</td></tr>
+</table>
+<p>A ≡ B at both radii (frames + census) → AC-0427's 89-line diff (seam-v extension +
+seamc colour — no UV code) is exonerated; A shows the defect at r8 → it is in committed
+code → this is the user's 2026-10-13 report (a 10-13 build carried the committed
+mesher).</p>
+
+<h2>Root cause (proven at every level)</h2>
+<p>The emit map (verified in code): a FULL non-scoped build with a nonempty merge atlas
+dispatches to <code>emit_ro_merged</code> (canvas space: strip UVs
+<code>tv = (sr.y + vv) / ms.h</code>; plain-fallback UVs also ÷ <code>ms.h</code>). Every
+corner of a face is checked for per-corner light uniformity
+(<code>s_modern_corner</code> (msl, mosh) under the default
+<code>modern_light</code>). A face with ANY differing corner drops out of the merged
+strip path into the per-corner fallback (<code>qwrite_vc</code>, one colour per
+vertex). That fallback's UV came from <code>s_uvc</code> — 1024-space. Data (pre-fix r8):
+100% of the 30,586 foreign quads are (i) single-block (corner-v span ×1024 = 31.0 —
+the <code>qwrite_vc</code> signature; zero multi-block), (ii) 2–4 distinct corner colours
+(per-corner light gradient), (iii) valid original-1024-space UVs for their OWN face tile
+(<code>orig_uv_foreign</code> = 100% per chunk) — and the chunks' opaque material is the
+2144-tall canvas (<code>mat_h</code> = 2144 on every bad chunk). Worked example: stone
+bottom face (own tile <code>[128,0]</code>, uv v = 16/1024) sampled at canvas
+y = 16 × 2.094 = 33.5 → row 1 → <code>[128,32]</code> (a foreign block's tile); grass top
+(column 0) → <code>[0,32]</code> = the lava tile. Band A (far + tier-1 materialized
+columns — AC-0321's Sept band-A texturing, which fixed the MATERIAL half: the mat
+landing must wear the canvas material via <code>apply_accs</code>) is exactly the
+materialized textured ring past the near tier, so its step edges are where the fallback
+fires; bands B/C far are no-UV average-colour placeholders (cannot wear a tile).
+MSDEBUG instrumentation (temp, removed at closeout) proved the merge table was FULL
+(72 rects, h = 2144) at ready and at every mat dispatch — dispatch/assembly table
+divergence ruled out.</p>
+
+<h2>The fix</h2>
+<pre>gdext/src/mesh.cpp — emit_ro_merged, the non-uniform fallback (the ONLY call site of
+s_uvc that lands on the canvas material; emit_faces keeps 1024-space UVs for the
+1024-atlas per-face builds):
+
+-   const float *uvs = s_uvc(uvc, ctx, r.id, fi, face_idx);
+-   qwrite_vc(accs[r.y / 16], cc, n, uvs, FCV[fi], r.lx, r.y, r.lz, ...);
++   const float *uvs16 = s_uvc(uvc, ctx, r.id, fi, face_idx);
++   float uvs_ms[8];
++   if (ms.h > 0.0f && ms.h != ctx.atlas_px) {
++       float kv = ctx.atlas_px / ms.h;              // 1024 / 2144 = 0.4776
++       for (int j = 0; j < 4; j++) {
++           uvs_ms[j * 2] = uvs16[j * 2];            // u: unchanged (both ÷ atlas_px)
++           uvs_ms[j * 2 + 1] = uvs16[j * 2 + 1] * kv;
++       }
++   } else { /* copy unscaled */ }
++   qwrite_vc(accs[r.y / 16], cc, n, uvs_ms, FCV[fi], r.lx, r.y, r.lz, ...);
+
+// the canvas-space formula is EXACTLY the qwrite_merged plain-fallback convention:
+// tv = (tl.y + 0.5 + cvv*ppb) / ms.h  ==  (tl.y + 0.5 + cvv*ppb)/1024 * 1024/ms.h</pre>
+<p>The quad then samples its own original tile in the canvas's <b>base region</b> —
+identical pixels (the strips are repeat blits of the same original rects), so the
+base-region and strip-region reads agree exactly. No geometry, light, or hash input is
+touched — UVs only.</p>
+
+<h2>Before / after</h2>
+<p>All frames: headless llvmpipe proxy renders (evidence about geometry/layout,
+never the shipped Forward+ look), seed 44, default user camera, r8.</p>
+<table>
+<tr><th>frame</th><th>native</th><th>what it shows</th></tr>
+<tr><td><code>before-fix-r8-userview.png</code> / <code>after-fix-r8-userview.png</code></td><td>B / fixed</td><td>the default user view — <b>byte-identical</b> (md5 548851063ac2… both): at this camera the mis-sampled rows land on visually similar tiles and the affected tier-1 ring is past the visible step faces, so the defect is sub-visible here. Honest record: the default view does not show the user's symptom; the wide UV census below is the view-independent proof.</td></tr>
+<tr><td><code>before-nofog-r8.png</code> / <code>after-nofog-r8.png</code> + <code>diff-amplified-r8.png</code></td><td>B / fixed</td><td>same view, fog disabled, 12×-amplified pixel diff: the ONLY pixels that change are on the far step-edge faces (top band of the frame) — exactly the fallback quads.</td></tr>
+<tr><td><code>cmp-stepface-band.png</code></td><td>B (left) / fixed (right)</td><td>zoomed 4× on the changed band: <b>left = the step face wearing a foreign pale tile</b> (the mis-sampled atlas row); <b>right = its own dirt/grass tile</b>, matching the adjacent steps. The defect class the user reported, in one crop.</td></tr>
+<tr><td><code>after-fix-r4-userview.png</code></td><td>fixed</td><td>the acceptance view: grass green, dirt brown, stone grey — clean (r4 was always clean — the defect lives on the materialized tier-1 ring past the near tier).</td></tr>
+</table>
+<p>The known-bad world positions the diff frames (from the pre-fix census): grass
+(id 1) <b>top faces at y=148 around (-67,148,41)</b> in chunk (-5,2) — "grass replaced
+with lava" in coordinates.</p>
+
+<h2>Wide UV sample (the acceptance census)</h2>
+<p>The temporary census arm (removed at closeout) audited <b>every emitted quad of every
+resident mesh</b> at r8 (155,143 quads, 113 chunks): each quad's uv center → which atlas
+tile it samples, vs the tile its (block id, face) owns (the merge strip or its original
+rect). Per-surface canvas-space detection from the material's texture height.</p>
+<table>
+<tr><th>run</th><th>native</th><th>quads</th><th>ok (strip)</th><th>ok_soft</th><th>ok_base (own tile in canvas base)</th><th>foreign_plain</th><th>foreign_strip</th><th>lava_on_nonlava</th></tr>
+<tr><td>pre-fix r8</td><td>B (served)</td><td>155,143</td><td>121,891</td><td>2,571</td><td>—</td><td><b>30,586</b></td><td>0</td><td><b>9,316</b></td></tr>
+<tr><td>pre-fix r8</td><td>A (committed 356da23)</td><td>155,750</td><td>124,301</td><td>0</td><td>—</td><td><b>31,449</b></td><td>0</td><td><b>9,322</b></td></tr>
+<tr><td>post-fix r8</td><td>fixed</td><td>155,143</td><td>121,891</td><td>2,666</td><td>30,586</td><td><b>0</b></td><td>0</td><td><b>0</b></td></tr>
+<tr><td>r4 (near tier)</td><td>B / fixed</td><td>80,969</td><td>80,969</td><td>0 / 2,513*</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+</table>
+<p>*B's r4 ok_soft = the AC-0427 extended side faces (own-tile-verified). Post-fix, the
+30,586 fallback quads classify <code>ok_base</code>: canvas-space, sampling their own
+original tile in the canvas's base region — the intended post-fix contract (the strips
+are repeat blits of the same rects, so base-region and strip-region reads are pixel-
+identical). Pre-fix fingerprint of the foreign quads: 100% single-block (corner-v span
+×1024 = 31.0), 100% valid original-1024-space UVs for their own tile
+(<code>orig_uv_foreign</code> = foreign per chunk), 2–4 distinct corner colours
+(the per-corner fallback signature) — every bad chunk carries <code>mat_h</code> = 2144
+(the merge canvas).</p>
+
+<h2>Seam closure</h2>
+<p><code>seamcensus</code> r4, run twice on the fixed .so and twice on the served B .so:
+<b>byte-identical results in all four runs</b> (rows_compared 393,216, missing_faces
+1,910, below_floor 1,307, map_anomalies 4,603, by_class F-F only) — the fix provably
+changes nothing about seam closure (UV-only; it cannot add or remove a face). The
+1,910 missing / 4,603 anomalies are <b>pre-existing on this working tree</b> (identical
+on the unmodified served build): the standing value (missing 0 / 393,216, AC-0423
+rebase 10-12) predates AC-0427's in-flight seam-V extension, whose extended rows the
+census's AC-0423-rebased reverse map does not yet model (AC-0427's own results §6
+records the seamc residual class). <b>Finding, not a re-baseline:</b> rebasing the
+census for AC-0427's extension is owed to AC-0427's closeout, which is fenced from
+this ticket.</p>
+
+<h2>Gates (my slot — the heavy set is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>exit / errors</th></tr>
+<tr><td>G0 (parse + boot, every run)</td><td>0 <code>SCRIPT ERROR</code> + 0 <code>SHADER ERROR</code> in all gate logs (census ×6, shots ×6, seamcensus ×4, battery ×3, meshprobe)</td><td>all exit 0</td></tr>
+<tr><td>smoke battery (<code>player;interact;light;fluids;genhash</code>)</td><td><code>ok: true</code>, all 5 modes (fixed .so, and again on the pristine tree after the arm removal)</td><td>exit 0, 0/0 errors</td></tr>
+<tr><td>meshprobe r4</td><td><code>match_rate 1.0</code>, <code>ok true</code>, verts_gd = verts_cpp = 247,848, 32 samples, mismatch []</td><td>exit 0</td></tr>
+<tr><td>genhash 25/25</td><td><b>byte-identical to the last verified run</b> (AC-0425 final, 10-13) — on both the fixed .so and the served B .so (the two .so builds are generation-bit-identical, so the manual g++ recipe is faithful). NOTE: the on-disk <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code> reference is STALE — it predates the deliberate generation rebases (AC-0400 documents the criterion as byte-identity with the LAST verified run, which holds).</td><td>25/25 =</td></tr>
+<tr><td>seamcensus r4</td><td>pre-fix ≡ post-fix (4 runs, identical) — the fix is seam-neutral; 1,910 pre-existing missing on this tree = the AC-0427 seam-V extension vs the AC-0423-rebased census (finding above)</td><td>exit 0</td></tr>
+</table>
+
+<h2>Deliberately not done</h2>
+<ul>
+<li><b>the black step-face at the seam</b> (visible in several frames, both pre- and
+post-fix): a separate sky-lighting artifact — its UVs verified correct, vertex sky
+term ≈ 0.078 (the AC-0420/AC-0427 seam-lighting territory). Follow-up ticket
+candidate; fenced here (AC-0427 in flight).</li>
+<li><b>the canvas pixel audit is unvalidated</b>: the r8b audit's 90.6% base / 48% strip
+pixel mismatch is a readback artifact (the imported atlas texture is sRGB-flagged while
+the canvas is a plain ImageTexture — the two <code>get_image()</code> readbacks are in
+different colour spaces). The UV-level census is unaffected and decisive, and the
+canvas content is structurally proven by the census itself (every merged quad lands
+exactly on its claimed strip; every post-fix fallback quad on its own base tile).</li>
+<li><b>the 1,910 seam-census missing faces</b> (pre-existing, AC-0427's seam-V
+extension — see above) — not chased: rebasing the instrument is AC-0427's closeout.</li>
+<li><b>no commits / pushes / TASKS.yaml edits</b> (fence) — the fix sits in the
+working tree's <code>gdext/src/mesh.cpp</code>; the Windows .dll build + the heavy gate
+set are the coordinator's.</li>
+</ul>
+
+<h2>Build-pipeline finding (recorded per the ticket)</h2>
+<div class="note">The served <code>godot/bin/libchunkio.so</code> (B, md5
+<code>369456d6…</code>) was built from the WORKING TREE (uncommitted AC-0427) while
+labelling itself with the committed hash (356da23) — the build script compiles the
+native extension from the working tree. A/B proved the shipped binary and the committed
+native differ only by AC-0427's seam changes, and BOTH carry this bug (the bug is in
+committed code predating AC-0427).</div>
+
+<h2>End state</h2>
+<p><code>godot/bin/libchunkio.so</code> = the post-fix rebuild (md5
+<code>6dc07dbc…</code>, the fence-allowed "post-fix rebuild" state — it now MATCHES the
+working tree, which carries the fix). The temporary census arm and the MSDEBUG
+instrumentation are removed; <code>harness.gd</code> and <code>world.gd</code> are
+pristine. The Windows <code>.dll</code> ships uncommitted native — the coordinator's
+heavy gates + Windows build are owed.</p>
+</body></html>
