@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-15T05:31
+  updated_at: 2026-10-15T05:33
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -26,6 +26,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0431
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -27517,6 +27518,68 @@ intake:
     code while labelling itself with a committed hash makes every subsequent report ambiguous about which
     code the user was actually running. The coordinator should build only from a clean tree, or state
     the tree state alongside the hash.
+
+    '
+  comments: []
+- id: AC-0431
+  title: black-step-faces-along-chunk-seams
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-15T05:33
+  updated_at: 2026-10-15T05:33
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A face at a terrain step should be shaded like every other face, not black. Seam
+    lines show dark patches where the terrain steps, and they read as holes in the world rather than as
+    shadowed ground.
+
+
+    2) Technical Details:
+
+    FLAGGED BY THE TICKET THAT FIXED THE CHUNK SEAMS AND THE PERIODIC HOLES, which verified the texture
+    coordinates on these faces and found them CORRECT, and explicitly recorded the darkness as a separate
+    lighting artifact needing its own ticket rather than folding it in. It appears at height steps along
+    chunk seams, which makes it visible precisely where the player is already looking for problems.
+
+    THE FIRST HYPOTHESIS TO TEST, because it is cheap and would explain everything: an earlier ticket
+    added an ambient sky term for faces that are unlit - faces whose light scalar sits at the floor -
+    and it SHIPS BEHIND A SWITCH DEFAULTING OFF. If the black step faces are simply unlit faces at the
+    light floor, then the mechanism is already understood, the fix is already written, and the work is
+    to establish whether enabling it removes the artifact and whether it does so without flattening the
+    scene. That ticket measured the ambient lift against exactly this risk - the frame mean moved by fifteen
+    hundredths of a unit and the ground band had zero differing pixels - so the evidence that it is safe
+    already exists and should be reused rather than re-derived. IF THE HYPOTHESIS IS RIGHT, the outcome
+    is a change of default rather than new code, and the acceptance is the user''s view with the switch
+    in each state.
+
+    IF IT IS NOT, the black step faces have a different cause, and the candidates are: the light scalar
+    at a step face being computed from a neighbour that disagrees, the polygon''s normal facing away so
+    it receives no light at all, the face being emitted by a different path from its neighbours and therefore
+    missing a term, or an interaction with the seam shading fix that shares corner data across the boundary.
+    Establish which by measuring the face rather than its surroundings.
+
+    THE TWO ARE NOT MUTUALLY EXCLUSIVE and the run should say so if both contribute.
+
+    ACCEPTANCE: the user''s view re-taken along a chunk seam at a terrain step, showing step faces shaded
+    like their neighbours rather than black, with the luminance of those faces before and after as numbers,
+    and a check that enabling or fixing this does not flatten the wider scene - since raising a floor
+    and lighting an unlit face are the same risk in different clothes. Also confirm nothing that should
+    be dark at night became bright.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); every look change ships behind a switch; and the recent work must keep holding
+    - the seam closure and its texture fix, the ambient lift for unlit faces, the opaque body, the sky
+    with no bottom edge, the uniform sky rate and the cloud cover variation.
 
     '
   comments: []
