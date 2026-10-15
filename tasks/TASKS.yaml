@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-14T21:34
+  updated_at: 2026-10-15T05:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27246,11 +27246,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-13T14:31
-  updated_at: 2026-10-14T05:54
-  completed_at: null
+  updated_at: 2026-10-15T05:31
+  completed_at: 2026-10-15T05:31
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The joins between chunks should be invisible - no holes to see through, and no
@@ -27461,11 +27461,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-14T21:34
-  updated_at: 2026-10-14T21:34
-  completed_at: null
+  updated_at: 2026-10-15T05:31
+  completed_at: 2026-10-15T05:31
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Terrain should look like terrain. The user''s report: "There is some kind of
