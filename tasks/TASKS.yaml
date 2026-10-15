@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-14T07:52
+  updated_at: 2026-10-14T21:34
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27451,6 +27451,72 @@ intake:
     12/12); every look change ships behind a switch defaulting conservative; the sky''s off state must
     stay byte-identical to the pre-ticket path; and this must not undo the work that made the planet opaque,
     made the cloud transition rate uniform, or varied the cloud cover across the globe.
+
+    '
+  comments: []
+- id: AC-0430
+  title: terrain-faces-wearing-the-lava-texture
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-14T21:34
+  updated_at: 2026-10-14T21:34
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Terrain should look like terrain. The user''s report: "There is some kind of
+    weird texture bug happening where grass is replaced with lava?" Their screenshot shows large flat
+    faces on grass and tree surfaces wearing the lava texture instead of grass, dirt or bark - whole side
+    faces of the stepped terrain rendered orange.
+
+
+    2) Technical Details:
+
+    REPORTED 2026-10-13 WITH A SCREENSHOT, AND THE COORDINATOR BELIEVES THIS IS A REGRESSION INTRODUCED
+    BY AN UNCOMMITTED CHANGE THAT IS ALREADY IN THE SHIPPED BUILD. This is the first thing to establish,
+    because it decides everything else.
+
+    THE BUILD PIPELINE IS THE REASON IT SHIPPED: the coordinator''s build script compiles the native extension
+    FROM THE WORKING TREE, not from the committed revision. A ticket currently in flight has uncommitted
+    changes to the mesher, and the last several builds therefore packaged them while reporting the committed
+    hash - so the served build is the committed GDScript and shaders combined with UNCOMMITTED native
+    code. Confirm that before looking anywhere else: build the same revision with and without those working-tree
+    changes and compare the frames. This is also a process failure worth recording separately, since it
+    means the served build''s reported hash has not described its native half for several rounds.
+
+    THE LIKELY MECHANISM, to be tested rather than assumed: that in-flight change makes the edge-column
+    side faces of a chunk EXTEND outward to close a seam sliver. Newly emitted side faces take their texture
+    from a face-type index. If an extended face is written with the wrong face type - or with a default,
+    or with the type of the face it was copied from rather than its own orientation - it will sample the
+    wrong tile out of the atlas, and a large flat face sampling the lava tile is exactly what the screenshot
+    shows. The fix is to make every newly emitted face carry its own orientation''s tile, and the acceptance
+    is the frame.
+
+    IF THE BUG TURNS OUT NOT TO BE THAT: the same reasoning applies to any recent mesher change, and the
+    same A/B method will find which one. What must NOT happen is a fix that patches the atlas lookup without
+    explaining why a specific tile was chosen wrongly.
+
+    ACCEPTANCE: the user''s view re-taken - terrain faces wearing their correct textures, grass green,
+    dirt brown, bark bark - plus a check that no face in a wide sample carries the lava tile where it
+    should not, and confirmation that the seam closure the uncommitted change was written for still holds,
+    since closing the texture bug by reverting the seam fix would trade one defect for another.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); and the recent work must keep holding - the seam extension itself, the ambient
+    lift for unlit faces, the opaque body, the sky with no bottom edge and the cloud cover variation.
+
+    ALSO WORTH RECORDING IN THE RESULTS, since it caused this: a build that packages uncommitted native
+    code while labelling itself with a committed hash makes every subsequent report ambiguous about which
+    code the user was actually running. The coordinator should build only from a clean tree, or state
+    the tree state alongside the hash.
 
     '
   comments: []
