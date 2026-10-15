@@ -27582,3 +27582,69 @@ intake:
 
     '
   comments: []
+- id: AC-0432
+  title: fully-lit-grass-tops-sampling-black
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-15T09:44
+  updated_at: 2026-10-15T09:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A face that is fully lit should show its texture. Right now some grass tops along
+    chunk seams render pure black even though the lighting says they are in full light, which reads as
+    holes punched in the ground.
+
+
+    2) Technical Details:
+
+    FOUND BY THE TICKET THAT INVESTIGATED THE BLACK STEP FACES, which correctly refused to ship a fix
+    that only partly worked and isolated the dominant cause for this one. THE MEASUREMENT, which is unusually
+    clean and should be used rather than repeated: a 221-pixel ray march into the black region hits a
+    SOLID BLOCK in every one of 221 samples, so this is not a void, not a missing face and not a hole
+    - the geometry is there and it is being drawn. The black pixels correspond to faces whose LIGHT SCALAR
+    IS AT OR NEAR ONE, that is fully lit, with colour values between 153 and 255, and A FULLY LIT FACE
+    CAN ONLY RENDER BLACK IF THE TEXEL IT SAMPLES IS BLACK. Those faces occupy the same position in the
+    terrain as their green neighbours and are supposed to use the same grass-top tile. Therefore the defect
+    is in how the texture is SAMPLED rather than in how the face is lit - the merged canvas path rather
+    than the lighting path.
+
+    THIS IS A DIFFERENT CASE FROM THE ONE JUST FIXED, and the distinction matters: the previous ticket
+    corrected a fallback quad path that computed texture coordinates in a shorter per-face canvas while
+    drawing into the taller merged canvas, so its faces sampled one atlas row down and grass landed on
+    lava. That was fixed and its census now reports zero. THIS is a fully lit tier-zero face reading black,
+    so whatever coordinate or index it uses is wrong in a way that lands on empty canvas rather than on
+    the wrong tile - and empty canvas is black.
+
+    WHERE TO LOOK: the merged canvas is built in the world script, which is not fenced, while the texture
+    coordinate generation and the high and low emit paths are in the mesher, WHICH THE PREVIOUS RUN MISTOOK
+    FOR FENCED AND IS NOT - a recent ticket changed that file and had it committed, so it is available
+    to you. Compare the coordinate or index computation for the affected faces against their neighbours:
+    are they emitted by a different branch, do they get a different base index, an uninitialised value,
+    an index past the end of the atlas, or a coordinate in the wrong space? The answer should be a single
+    mechanism that explains why SOME fully lit grass tops are black and the rest are correct, and a fix
+    that does not account for that split has not found it.
+
+    ACCEPTANCE: the user''s view re-taken along a chunk seam showing those faces carrying their grass
+    texture like their neighbours, with the count of pure-black fully-lit faces before and after, and
+    confirmation that the previous ticket''s fix - zero foreign and zero lava quads - still holds afterwards.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); and the recent work must keep holding - the seam closure and its atlas fix, the
+    ambient lift, the opaque body, the sky without a bottom edge and the cloud cover variation.
+
+    NOTE FOR THE COORDINATOR: the build script compiles the native extension from the working tree, so
+    a fix here must be committed before the next build or the served binary will not match its stated
+    revision.
+
+    '
+  comments: []
