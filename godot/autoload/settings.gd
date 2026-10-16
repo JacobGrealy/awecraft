@@ -248,6 +248,29 @@ const DEFAULTS := {
 	# pattern). Env-overridable (AWECRAFT_AMBSKY=0|1 at boot, world.gd —
 	# the AWECRAFT_RAMPS pattern, written WITHOUT save).
 	"ambient_sky": true,
+	# AC-0436: the MOONLIGHT switch — the night's directional light source
+	# (the sun's antipode; above the horizon exactly when the sun is not).
+	# DEFAULTS ON: the shipped night IS the reported defect (the AC-0384
+	# §29 assessment: the ground is a near-black void, the orbit planet a
+	# faint mottle, the HUD the brightest object) — the same shape as
+	# ambient_sky/cloud_gate/viewmodel_occlude, all re-ruled ON because
+	# the OFF state is what the user sees and objects to; the fix ships
+	# in, OFF is the A/B. ON: the four chunk_lit_* shaders take a
+	# per-fragment moon lambert (u_moon * dot(NORMAL, u_moon_dir) on L),
+	# the satellite body's night factor gains the moonlit hemisphere, the
+	# clouds' light march re-aims at the moon (silver lining) and their
+	# day factor lifts, the sky pass' night disc widens and reads as a
+	# full moon (u_moon flag), and the star field's quads grow out of the
+	# sub-pixel dim end (u_star_lift). OFF (AWECRAFT_MOON=0, or the saved
+	# setting) makes every consumer's added term exactly 0.0 — the
+	# pre-AC-0436 night bit-identical (0.0*x = 0.0, x + 0.0 = x,
+	# mix(x, y, 0.0) = x in IEEE 754). No apply step: world.gd
+	# _ac0401_push reads the live value every frame and pushes the chunk /
+	# cloud / sky / star uniforms (change-gated); satellite_body.gd reads
+	# it in its per-frame uniform loop. The intensity's one home is
+	# DayNight.MOON_L (core/daynight.gd). Env-overridable
+	# (AWECRAFT_MOON=0|1 at boot, world.gd — written WITHOUT save).
+	"moonlight": true,
 	# AC-0395: the noclip toggle (the user's own request — disable the
 	# player's collision so they can fly through blocks and inspect
 	# geometry). DEFAULTS OFF: the shipped state is exactly today's
@@ -494,6 +517,11 @@ func _clamp(k: String, v) -> void:
 			# switch; AC-0432 defaults it ON).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (true), never throw.
+			values[k] = AnalogTune.sanitize_bool(v)
+		"moonlight":  # AC-0436: bool (the moonlight switch; defaults ON).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (true), never throw (the ambient_sky
+			# precedent).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"noclip":  # AC-0395: bool (the player-collision switch). sanitize_bool
 			# as viewmodel_occlude: a hand-edited string in the cfg fails to

@@ -115,6 +115,17 @@ uniform float u_relief : hint_range(0.0, 1.0) = 0.0;
 // the user reported. Pushed per face by satellite_body.gd from the
 // AWECRAFT_SPEC env (0.0 shipped; 0.5 the pre-AC-0421 state, A/B only).
 uniform float u_spec : hint_range(0.0, 1.0) = 0.0;
+// AC-0436: the moonlight term (Settings "moonlight", default ON). u_moon =
+// MOON_L (world.gd) * night * switch, u_moon_dir = direction TO the moon
+// (the sun's antipode - DayNight.sun_direction, the same convention the
+// u_sun header comment describes inverted). At night u_day_gain = 0 and
+// u_day = 0.18, so without this term the whole disc sits on the flat 0.18
+// floor (measured 3.0/255 planet luma at 2600 m - "a faint mottle"); with
+// it, the hemisphere facing the moon re-weights up to 0.18 + u_moon and
+// carries the baked texture. OFF or day -> u_moon = 0.0 -> + 0.0 -> the
+// AC-0382 factor bit-identical (0.0 * x = 0.0, x + 0.0 = x in IEEE 754).
+uniform float u_moon : hint_range(0.0, 4.0) = 0.0;
+uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 
 const float INV_BAKE_SUN_RADIAL = 1.09544512; // sqrt(1.2) = 1 / L_RADIAL
 
@@ -210,6 +221,10 @@ void fragment() {
 	float haz_d = 1.0 - op;
 	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
 	float sun_l = clamp(dot(u_sun, nrm) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
+	// AC-0436: the moon's radial lambert (see the uniform block) - the same
+	// radial convention as the sun term (the body is the satellite LOD: its
+	// per-fragment slope modulation stays baked, only the radial ratio moves).
+	float moon_l = clamp(dot(u_moon_dir, nrm) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
 	// AC-0411: decode the baked sRGB bytes BEFORE the day factor. The
 	// factor (u_day - u_day_gain*(1-sun_l), in [0.18, 1.0]) is a linear
 	// light scalar, not part of the display colour, so the domain
@@ -234,7 +249,7 @@ void fragment() {
 	if (u_relief > 0.5) {
 		texv *= 1.0 + 0.4 * (texs.a - 0.5);
 	}
-	vec3 base = texv * (u_day - u_day_gain * (1.0 - sun_l));
+	vec3 base = texv * (u_day - u_day_gain * (1.0 - sun_l) + u_moon * moon_l);
 	// AC-0394: spatial outputs are ALBEDO and ALPHA - COLOR is the canvas_item
 	// (2D) output and is a read-only vertex input here, which is why the parser
 	// reported "Constants cannot be modified" at this line.

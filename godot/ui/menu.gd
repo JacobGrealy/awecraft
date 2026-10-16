@@ -97,6 +97,10 @@ var relief_check: CheckBox
 # path. (The row comment still said "default OFF" after the AC-0432
 # flip — corrected here in the AC-0435 sweep.)
 var ambient_sky_check: CheckBox
+# AC-0436: the moonlight toggle — the night's directional light source
+# (Settings "moonlight", default ON: the shipped night IS the reported
+# defect; OFF is the exact pre-AC-0436 night for the A/B).
+var moonlight_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -507,6 +511,28 @@ func _ready() -> void:
 	opt_vbox.add_child(no_sky_floor_check)
 	if hi + 19 < opt_vbox.get_child_count():
 		opt_vbox.move_child(no_sky_floor_check, hi + 20)
+	# AC-0436: the moonlight toggle (Settings "moonlight", default ON —
+	# the shipped night IS the reported defect: the ground is a
+	# near-black void, the orbit planet a faint mottle, the HUD the
+	# brightest object; the ambient_sky/cloud_gate/viewmodel_occlude
+	# re-ruling, the fix ships in and OFF is the A/B). ON lights the
+	# night with the moon (the sun's antipode): the terrain gets a
+	# directional lambert (the night landscape's slopes), the planet
+	# from orbit gets its moonlit hemisphere, the clouds get a silver
+	# lining, the sky reads its full-moon disc, and the star field
+	# grows out of the sub-pixel dim end. OFF (or AWECRAFT_MOON=0) makes
+	# every added term 0.0 — the pre-AC-0436 night bit-identical. No
+	# apply step is owed: world.gd _ac0401_push reads the live value
+	# every frame and pushes the chunk/cloud/sky/star uniforms
+	# (change-gated); satellite_body.gd reads it in its per-frame loop.
+	moonlight_check = CheckBox.new()
+	moonlight_check.name = "MoonlightCheck"
+	moonlight_check.text = "Sky: moonlight at night"
+	moonlight_check.add_theme_font_size_override("font_size", 15)
+	moonlight_check.toggled.connect(_on_moonlight_toggled)
+	opt_vbox.add_child(moonlight_check)
+	if hi + 20 < opt_vbox.get_child_count():
+		opt_vbox.move_child(moonlight_check, hi + 21)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1002,6 +1028,8 @@ func _sync_controls() -> void:
 	cloud_gate_check.button_pressed = bool(Settings.values.get("cloud_gate", false))
 	# AC-0429: the skybox-no-bottom-edge toggle (default ON - the user asked).
 	no_sky_floor_check.button_pressed = bool(Settings.values.get("no_sky_floor", true))
+	# AC-0436: the moonlight toggle (default ON).
+	moonlight_check.button_pressed = bool(Settings.values.get("moonlight", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1475,6 +1503,18 @@ func _on_ambient_sky_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("ambient_sky", on)
+
+
+# AC-0436: the moonlight toggle (default ON — the shipped night IS the
+# reported defect; OFF is the exact pre-AC-0436 night). set_value does
+# the clamp chain + the save; no apply step is owed: world.gd
+# _ac0401_push reads the live value every frame and pushes the moon
+# uniforms (change-gated; 0.0 short-circuits every consumer's added
+# term to the pre-AC-0436 bit-identical path).
+func _on_moonlight_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("moonlight", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

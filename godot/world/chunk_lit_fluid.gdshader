@@ -22,6 +22,11 @@ uniform float u_fog_far = 332.0;
 // formula bit-identical; the contract comment lives in
 // chunk_lit_opaque.gdshader).
 uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
+// AC-0436: the moonlight term (Settings "moonlight", default ON) - the
+// uniform set and the bit-identity contract (OFF/day -> u_moon = 0.0 ->
+// 0.0 * x = 0.0, x + 0.0 = x) are owned by chunk_lit_opaque.gdshader.
+uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
+uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 varying vec3 v_world_pos;
 
 
@@ -49,6 +54,9 @@ void fragment() {
 	// AC-0426: the zero-light sky-ambient fallback (the contract comment
 	// lives in chunk_lit_opaque.gdshader).
 	L += u_amb * u_day * step(m_direct, 0.08);  // AC-0426 mask: 1.0 iff m_direct <= MIN_AMB (the light floor - see chunk_lit_opaque.gdshader)
+	// AC-0436: the moon's directional lambert (see the uniform block).
+	// u_moon = 0.0 at day/OFF -> the term is 0.0 -> bit-identical.
+	L += u_moon * max(dot(NORMAL, u_moon_dir), 0.0);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;

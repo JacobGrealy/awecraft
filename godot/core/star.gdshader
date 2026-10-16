@@ -46,6 +46,17 @@ uniform vec3 u_cam_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
 uniform float u_space_sky : hint_range(0.0, 1.0) = 0.0;
 uniform float u_night : hint_range(0.0, 1.0) = 1.0;
+// AC-0436: the star-size lift (Settings "moonlight", the same switch -
+// the ticket's "star field dense enough to read as a sky" is part of the
+// night look, and OFF must be the exact pre-fix night). The 500-star
+// shell (main.gd, r=320) is a mesh fact; at ~1.2-1.3 px most quads are
+// sub-pixel and only ~68 of the 500 stars clear the sky's luma-40 census
+// at orbit (measured). The lift scales the per-star size up from
+// UV2.x (0.9-2.5) to (0.5 + 0.9*UV2.x) (1.31-2.75) - the dim end gains
+// a full centre pixel instead of a half-covered one. u_star_lift 0.0 ->
+// mix = UV2.x EXACTLY -> the AC-0235 field bit-identical; 1.0 is the
+// lifted field. Pushed by world.gd _ac0401_push (the u_sky_alt seam).
+uniform float u_star_lift : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_center;  // star center in world space (stable per star)
 
@@ -66,7 +77,8 @@ void vertex() {
 	vec3 cam_right = transpose(v) * vec3(1.0, 0.0, 0.0);       // row 0 of the view rotation = camera right (world)
 	vec3 cam_up = transpose(v) * vec3(0.0, 1.0, 0.0);          // row 1 = camera up (world)
 	// UV2.x = per-star size factor (the mesh bakes it)
-	vec3 off = (cam_right * (UV.x - 0.5) + cam_up * (UV.y - 0.5)) * quad_size * UV2.x;
+	// AC-0436: the switch-gated size lift (see the uniform block).
+	vec3 off = (cam_right * (UV.x - 0.5) + cam_up * (UV.y - 0.5)) * quad_size * mix(UV2.x, 0.5 + 0.9 * UV2.x, u_star_lift);
 	VERTEX = w + off - MODEL_MATRIX[3].xyz;                    // back to node-local (node basis = identity, origin = eye)
 }
 

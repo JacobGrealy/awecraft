@@ -4006,6 +4006,18 @@ func _ready() -> void:
 	var gte := OS.get_environment("AWECRAFT_CLOUDGATE")
 	if gte != "":
 		Settings.values["cloud_gate"] = gte == "1"
+	# AC-0436: the moonlight switch (Settings "moonlight", default ON —
+	# the shipped night IS the reported defect, so the fix ships in; OFF
+	# is the exact pre-AC-0436 night: every moon consumer's term is 0.0).
+	# Same pattern: the env overrides the STORED setting for this process
+	# only (no save, so the arms never clobber the user's cfg) and lets
+	# the render A/B both states without a save file. Read live by
+	# _ac0401_push (the chunk/cloud/sky/star/MoonLight pushes) and by
+	# satellite_body.gd's per-frame uniform push, so no boot derive is
+	# owed.
+	var mone := OS.get_environment("AWECRAFT_MOON")
+	if mone != "":
+		Settings.values["moonlight"] = mone == "1"
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -5169,6 +5181,23 @@ const AC0407_VOL_TOP_EXTEND := 50.0
 # pushes once; a full cycle re-pushes only as the colour moves).
 var _ac0406_air := Color(1.0, 1.0, 1.0, 1.0)
 var _ac0406_air_invalid := true
+# AC-0436: the moonlight push state (same seam: _ac0401_push). The moon
+# values MOVE with the day/night cycle (night = 1 - day, the direction
+# tracks the sun's antipode), so the pushes are per-frame value-gated
+# like u_vol_air / u_night (a frozen-time render pushes once; a live
+# cycle re-pushes as the values move). The chunk pushes additionally
+# gate on the material-set size (the AC-0420 pattern — the chunk
+# materials are created lazily, after the first push). OFF (or day)
+# makes every pushed value 0.0 / the OFF constants -> the pre-AC-0436
+# paths bit-identical on every consumer.
+var _ac0436_moon_i := -1.0
+var _ac0436_moon_dir := Vector3(0.0, 1.0, 0.0)
+var _ac0436_n_mats := -1
+var _ac0436_cloud_i := -1.0
+var _ac0436_cloud_w := -1.0
+var _ac0436_cloud_dir := Vector3(0.0, 1.0, 0.0)
+var _ac0436_sky_moon := -1.0
+var _ac0436_star_lift := -1.0
 # AC-0414: the bake-before-load HOLD (Settings "sat_preload" ON). While
 # a bake is in flight inside the loading window, the SIM DIAMOND (taxi
 # <= band0_r — the release set main.gd _await_sim_band awaits, the
@@ -5543,6 +5572,65 @@ func _ac0401_push() -> void:
 			sm9.set_shader_parameter("u_air", Aero.fog_display_srgb(Game.time_of_day))
 		_ac0406_air = air
 		_ac0406_air_invalid = false
+	# (6) AC-0436: the MOON — the night's directional light source
+	# (Settings "moonlight", default ON; AWECRAFT_MOON boot env preload
+	# above). ONE source (DayNight.MOON_L, the direction convention and
+	# the night gate live in core/daynight.gd — read, never restate):
+	# the chunk shaders take u_moon (the per-fragment lambert) +
+	# u_moon_dir; the cloud layers take u_moon (the night factor lift) +
+	# u_moon_w (the march re-aim gate) + u_moon_dir; the sky pass takes
+	# the u_moon DISC flag (the moon case of Aero.sky_uniforms' body
+	# flip, widened + full-brightness disc — its sun_dir already points
+	# at the moon, no separate direction owed); the star field takes
+	# u_star_lift (the size lift). The satellite body pushes its own
+	# u_moon/u_moon_dir in its per-frame loop (satellite_body.gd). All
+	# values are 0.0 / the OFF constants at day or with the switch OFF —
+	# the pre-AC-0436 paths bit-identical (0.0*x = 0.0, x + 0.0 = x,
+	# mix(x, y, 0.0) = x in IEEE 754).
+	var day_m := DayNight.day(Game.time_of_day)
+	var moon_on := bool(Settings.values.get("moonlight", true))
+	var moon_w: float = (1.0 - day_m) if moon_on else 0.0
+	var moon_i: float = DayNight.MOON_L * moon_w
+	var moon_dirv: Vector3 = DayNight.sun_direction(Game.time_of_day)
+	# The sky disc's moon case: the flip test is body.y < -0.10 in
+	# Aero.sky_uniforms with body = -sun_direction, i.e.
+	# sun_direction.y > 0.10 (the moon above the horizon band).
+	var sky_moon_v: float = (1.0 if moon_dirv.y > 0.10 else 0.0) if moon_on else 0.0
+	var star_lift_v: float = 1.0 if moon_on else 0.0
+	if (n_mats != _ac0436_n_mats or not is_equal_approx(moon_i, _ac0436_moon_i)
+			or not moon_dirv.is_equal_approx(_ac0436_moon_dir)):
+		_ac0436_n_mats = n_mats
+		_ac0436_moon_i = moon_i
+		_ac0436_moon_dir = moon_dirv
+		for k in ChunkScript._mat_cache:
+			var m6 = ChunkScript._mat_cache[k]
+			if m6 is ShaderMaterial:
+				m6.set_shader_parameter("u_moon", moon_i)
+				m6.set_shader_parameter("u_moon_dir", moon_dirv)
+	if (moon_i != _ac0436_cloud_i or moon_w != _ac0436_cloud_w
+			or not moon_dirv.is_equal_approx(_ac0436_cloud_dir)):
+		var cl6m = mn.get("cloud_layers")
+		if cl6m != null and cl6m.size() > 0:
+			for layer6 in cl6m:
+				var cm6 = layer6.get("mat")
+				if cm6 is ShaderMaterial:
+					cm6.set_shader_parameter("u_moon", moon_i)
+					cm6.set_shader_parameter("u_moon_w", moon_w)
+					cm6.set_shader_parameter("u_moon_dir", moon_dirv)
+		_ac0436_cloud_i = moon_i
+		_ac0436_cloud_w = moon_w
+		_ac0436_cloud_dir = moon_dirv
+	if sky_moon_v != _ac0436_sky_moon:
+		var sm6 = mn.get("sky_mat")
+		if sm6 is ShaderMaterial:
+			sm6.set_shader_parameter("u_moon", sky_moon_v)
+		_ac0436_sky_moon = sky_moon_v
+	if star_lift_v != _ac0436_star_lift:
+		var stn6 = mn.get_node_or_null("Stars")
+		var stm6 = stn6.material_override if stn6 != null else null
+		if stm6 is ShaderMaterial:
+			stm6.set_shader_parameter("u_star_lift", star_lift_v)
+		_ac0436_star_lift = star_lift_v
 
 
 func _process(_delta: float) -> void:

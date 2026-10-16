@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0436 plan — night is a near-black void</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem}
+code{background:#f2f2f2;padding:1px 4px;border-radius:3px}
+.box{border:1px solid #ccc;border-radius:6px;padding:.6rem 1rem;margin:1rem 0}
+h2{border-bottom:2px solid #444;padding-bottom:.2rem}
+table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:4px 8px}
+</style></head><body>
+<h1>AC-0436 — make the night a world (plan)</h1>
+
+<h2>Goal</h2>
+<p>Re-take the assessment's frames (r24 recipe: seed 44, user config R24/F83, 1280×720,
+Forward+/lavapipe, no <code>AWECRAFT_LOGIC</code>) and beat them: the night ground horizon reads
+as terrain, the night planet from orbit reads as a world, the star field reads as a sky, and the
+interface stops being the brightest object — with luminance + star counts before/after, and the
+DAY frames measured too (a fix that greys the day has failed).</p>
+
+<h2>The two named causes — confirmed how</h2>
+<div class="box">
+<ol>
+<li><strong>Tone-mapping crush — CONFIRMED PARTIALLY, CORRECTED.</strong> Measured the r24
+assessment frames (display-space luma): night ground region (y440–600) averages
+<strong>4.0/255</strong> with 90.7% of pixels below 20; day ground averages <strong>98.4/255</strong>.
+So the ~0.20 light floor does <em>not</em> literally die to 0 at 8 bits — it survives at a few
+sRGB units. What kills it: the night floor is 5× the day level <em>before</em> tone mapping, and the
+active ACES tonemap (<code>Aero.TONEMAP_MODE</code>, exposure 0.85 — note ARCHITECTURE §6's
+"Linear restored" line is stale against the code) crushes that 0.02–0.08-linear band to
+~5–11/255. Mechanism confirmed, "pure black" claim corrected to "a few units, i.e. black to the eye".
+No change to tone mapping is planned — the day is right under it and the fix must not touch it.</li>
+<li><strong>No moon at all — CONFIRMED.</strong> The only <code>DirectionalLight3D</code> is the
+sun (main.gd, fence-locked): at night <code>sun_energy</code> = 0.1 and it points below the horizon
+(light travels upward — it lights nothing). Chunk shaders scale all sky light by
+<code>u_day</code> = <code>DayNight.day(t)</code> = exactly 0.0 at night (the AC-0426
+<code>u_amb</code> term is 0.0 at night by construction). The satellite body's night factor is the
+flat 0.18 floor with no directional term (<code>u_day_gain</code> = 0). The sky pass <em>does</em>
+draw a small moon disc (Aero.sky_uniforms body-flip, <code>MOON_CORE</code>/<code>MOON_HALO</code>,
+~6 px, and at amount 0.3 the disc itself multiplies to ~0.3 brightness — a dim grey dot), but
+nothing in the lighting model answers to it. So: a moon exists as a dot; it exists as a
+<strong>light source</strong> not at all. That is what this task builds.</li>
+</ol>
+</div>
+
+<h2>What I will do — a moon with a light source, behind one switch</h2>
+<p>Setting <code>moonlight</code> (default <strong>ON</strong>; OFF = the bit-identical pre-fix
+path by IEEE construction; env <code>AWECRAFT_MOON=0|1</code>; Options row). Default ON because the
+acceptance frames are the default-setting frames and the defect IS the shipped night (the
+ambient_sky/cloud_gate precedent — the four fixes that shipped OFF were all re-ruled ON at HEAD;
+this one is filed as the disqualifying gap, so it ships in). The moon is the sun's antipode
+(same convention the sky pass's body-flip already uses), so it is above the horizon exactly when
+the sun is not. Moon convention: <code>to_moon = DayNight.sun_direction(t)</code>; light travels
+along <code>-to_moon</code>.</p>
+<table>
+<tr><th>#</th><th>Component</th><th>Change</th></tr>
+<tr><td>1</td><td>Terrain — the four <code>chunk_lit_*.gdshader</code></td>
+<td><code>L += u_moon * max(dot(NORMAL, u_moon_dir), 0.0)</code> — a per-fragment lambert from the
+mesh's face normals (the mesher already emits <code>ARRAY_NORMAL</code>, chunk.gd:1565). Night top
+faces go 0.20 → ~0.6–0.75 L. The 0.20 floor is never re-tuned. <code>u_moon = MOON_L · night ·
+switch</code> = 0.0 at day/OFF → bit-identical.</td></tr>
+<tr><td>2</td><td>Satellite body — <code>satellite_body.gdshader</code> + <code>satellite_body.gd</code></td>
+<td>Night factor <code>+ u_moon · moon_l</code> (radial lambert, the body's existing
+<code>L_RADIAL</code> convention) — the planet gets a moving moonlit hemisphere at night; the day
+factor path is untouched (×0).</td></tr>
+<tr><td>3</td><td>Clouds — <code>cloud_layer.gdshader</code></td>
+<td>Volume path: the self-shadow march, HG phase and forward-scatter glow re-aim at
+<code>mix(u_sun, u_moon_dir, u_moon_w)</code> (u_moon_w = night·switch; 0 at day →
+<code>mix(x,y,0)=x</code> bit-identical), day factor becomes <code>u_day + u_moon</code> —
+moonlit tops with a silver lining instead of the 0.18 floor. Deck path:
+<code>light += u_moon · moon_l</code>.</td></tr>
+<tr><td>4</td><td>Sky disc — <code>aero_sky_gradient.gdshader</code> (pushed from <code>world.gd</code>
+<code>_ac0401_push</code> — the established look-switch seam; main.gd stays untouched)</td>
+<td>New <code>u_moon</code> flag on the sky material (both <code>sky_off</code> and <code>sky_on</code>
+paths): the moon disc gets a slightly wider window and a full-brightness core (today its core is
+multiplied by amount 0.3 → a dim grey dot). The flag is switch-gated so OFF restores the exact
+old dot; the sun path uses the exact original constants via <code>mix(x, y, 0.0) = x</code>.
+The halo stays at amount 0.3 (bumping it in aero.gd would have broken the bit-identical OFF
+state — deviation from the first draft, recorded).</td></tr>
+<tr><td>5</td><td>Stars — <code>star.gdshader</code></td>
+<td>Vertex-stage size lift: quad <code>0.85·UV2.x</code> → <code>0.85·(0.5 + 0.9·UV2.x)</code>
+(most stars ~1.9 px instead of ~1.2 px — the sub-pixel dim end was why only ~68 of the 500 stars
+were visible at orbit). Brightness distribution untouched. 500 stars on the r=320 shell is a
+mesh fact (main.gd, fence-locked) — density comes from making the existing stars visible.</td></tr>
+<tr><td>6</td><td>Lit materials (mobs, viewmodel, drops)</td>
+<td><strong>NOT done — deliberately (deviation from the first draft, with reason):</strong> a
+moon <code>DirectionalLight3D</code> node was dropped. The chunk shaders are <code>unshaded</code>
+(they never see engine lights), and the satellite body is a <em>lit</em> spatial shader — an engine
+light node would double-light it (its ALBEDO is multiplied by the engine's
+ambient + directional terms on top of its own <code>u_day</code> re-weight), which would show up in
+the 2600 orbit acceptance frame. The moon IS the shader terms (terrain/planet/clouds lit
+directionally — that is the "show what it lights"); lit materials keep the existing 0.25 ambient
+at night (they were never the reported defect). Recorded in ARCHITECTURE.md §3.</td></tr>
+<tr><td>7</td><td>Settings wiring</td>
+<td><code>settings.gd</code> DEFAULTS + <code>sanitize_bool</code>; <code>menu.gd</code> Options row
+("Sky: moonlight at night") + toggle; <code>world.gd</code> boot env preload
+(<code>AWECRAFT_MOON</code>, no save — the AWECRAFT_AMBSKY pattern).</td></tr>
+</table>
+
+<h2>Files to touch</h2>
+<p><code>godot/core/daynight.gd</code> (<code>MOON_L</code> const + the antipode direction
+convention — one home), <code>godot/world/world.gd</code> (env preload,
+<code>_ac0401_push</code> moon pushes to the chunk / cloud / sky / star materials),
+<code>godot/world/chunk_lit_{opaque,cutout,flower,fluid}.gdshader</code>,
+<code>godot/world/satellite_body.gd</code>,
+<code>godot/core/satellite_body.gdshader</code>, <code>godot/core/cloud_layer.gdshader</code>,
+<code>godot/core/star.gdshader</code>, <code>godot/core/aero_sky_gradient.gdshader</code>,
+<code>godot/core/aero.gd</code>, <code>godot/autoload/settings.gd</code>,
+<code>godot/ui/menu.gd</code>, <code>godot/ARCHITECTURE.md</code> (MoonLight node +
+<code>moonlight</code> setting + u_moon uniform set — invariant 2, same task).
+<strong>None of the four fence-locked files (main.gd, game.gd, drop.gd, debug.gd) — not
+touched.</strong> No C++ change → no <code>.so</code> rebuild; the served binary matches the tree.</p>
+
+<h2>Harness gates (light set only — heavy is the coordinator's)</h2>
+<ol>
+<li><strong>Before frames</strong> (this tree as found — fence hunks present, my changes absent):
+the r24 recipe for ground-horizon-day/night, 2600-day/night, ground-up-night (drain 600 ground /
+120 orbit, 1200 s budget each; no <code>AWECRAFT_LOGIC</code>; check the PNG exists; Forward+
+boot line; census the log).</li>
+<li><strong>After frames</strong>: the same five + one <code>AWECRAFT_MOON=0</code> orbit-night A/B
+(proves OFF = the old look). Same recipe → before/after is an apples-to-apples A/B.</li>
+<li><strong>Measurements</strong> (<code>.scratch/AC-0436/measure.py</code>): night + day ground
+luma (UI-masked), orbit planet luma, star counts (connected components &gt; luma 40 in the sky
+region), brightest non-UI pixel, heart-row luma — before vs after.</li>
+<li><strong>G0</strong>: headless <code>--quit</code>, <code>gate_census.py</code> (zero SCRIPT ERROR
+AND zero SHADER ERROR) <strong>and the process exit status</strong> (the stochastic use-after-free
+exits 134 with a clean log — the paired check is the standing rule).</li>
+<li><strong>SMOKE</strong>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>
+(genhash owed — <code>world/*</code> was touched; generation itself is untouched so 25/25 is
+expected, a drift would be a finding).</li>
+<li><strong>PROBE</strong>: <code>meshprobe</code> (the mesh-pipeline probe; the normals are the
+input to the new term) + <code>lightstate</code> (the lighting-state canary, 0/0).</li>
+<li><strong>shaderforce</strong>: every shipped shader forced through the live Forward+ renderer
+(catches the lazy-compile blind spot — a broken <code>.gdshader</code> otherwise prints nothing).</li>
+</ol>
+
+<h2>Day-flatten guard</h2>
+<p>Every added term is multiplied by <code>night · switch</code> (or a <code>mix(..., 0.0)</code>
+that is exactly the old value), so at day (or OFF) the shaders evaluate the pre-fix expressions
+bit-for-bit. The day frames (ground-horizon-day, 2600-day) are measured before AND after: a day
+luma shift &gt; 2/255 in the ground region is a failure to report, not a re-baseline.</p>
+
+</body></html>

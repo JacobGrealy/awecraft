@@ -1011,6 +1011,26 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 		if _spec_env < 0.0:
 			_spec_env = 0.5 if OS.get_environment("AWECRAFT_SPEC") == "0.5" else 0.0
 		var u_spec: float = _spec_env
+		# AC-0436: the moon (Settings "moonlight", default ON — the boot env
+		# AWECRAFT_MOON preloads the Settings value in world.gd, so the live
+		# read below already carries it; the relief_shading pattern).
+		# u_moon = MOON_L * BODY_MOON_SCALE * night * switch (0.0 at day/OFF
+		# -> the shader's + 0.0 term is bit-identical); u_moon_dir =
+		# direction TO the moon = DayNight.sun_direction (the sun's
+		# antipode — the same vector the u_sun push negates).
+		# BODY_MOON_SCALE: this body is a LIT material — its ALBEDO is
+		# multiplied by the engine ambient (AMBIENT_TINT ×
+		# ambient_energy 0.25 ≈ 0.20 at night, main.gd) ON TOP of the
+		# shader's own 0.18 night floor (a triple product the unshaded
+		# chunks don't have), so the one-source MOON_L (0.25, tuned for
+		# the unshaded consumers) would leave the moonlit hemisphere
+		# sub-threshold (measured against the ACES pipeline: ~1/255).
+		# 8× lifts the moonlit grass to ~50/255 (vs 3.0/255 pre-AC-0436,
+		# measured) while the antipode stays dark — the moonlit
+		# hemisphere reads as a world.
+		const BODY_MOON_SCALE := 8.0
+		var moon_on := bool(Settings.values.get("moonlight", true))
+		var u_moon: float = DayNight.MOON_L * BODY_MOON_SCALE * (1.0 - day) if moon_on else 0.0
 		for m in shader_mats:
 			m.set_shader_parameter("u_fog_far", ff)
 			m.set_shader_parameter("u_render_edge", edge)
@@ -1022,6 +1042,9 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
 			m.set_shader_parameter("u_day_gain", 0.82 * day)
 			m.set_shader_parameter("u_sun", -DayNight.sun_direction(day_t))
+			# AC-0436: the moon (see the block above).
+			m.set_shader_parameter("u_moon", u_moon)
+			m.set_shader_parameter("u_moon_dir", DayNight.sun_direction(day_t))
 			# AC-0421: the relief + the specular (both A/B-able; the relief
 			# is the look switch, the specular is the reflectivity defect fix).
 			m.set_shader_parameter("u_relief", u_relief)

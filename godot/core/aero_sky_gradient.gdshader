@@ -17,6 +17,16 @@ uniform vec3 sun_dir = vec3(0.0, 1.0, 0.2);
 uniform vec3 sun_core : source_color = vec3(1.0, 1.0, 1.0);
 uniform vec3 sun_halo : source_color = vec3(1.0, 0.9647, 0.8706);
 uniform float sun_amount : hint_range(0.0, 4.0) = 1.0;
+// AC-0436: the MOON DISC flag (1.0 when Aero.sky_uniforms has flipped the
+// body to the sun's antipode - the night; 0.0 = the sun, the exact
+// pre-AC-0436 constants). The moon gets a slightly wider full-brightness
+// window (core ~1.0 deg -> ~1.3 deg) and a FULL-brightness core: the
+// sun's disc is scaled by sun_amount (0.3 for the moon's case, which
+// left the night's disc a dim grey dot - the "no moon" read), while the
+// moon is the night sky's brightest object and must read as a full moon.
+// u_moon = 0 -> mix(x, y, 0.0) = x on every constant -> bit-identical.
+// Pushed through the sky_uniforms dict (the main.gd auto-push loop).
+uniform float u_moon : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 haze_color : source_color = vec3(0.7294, 0.9137, 0.9804);
 uniform float haze_amount : hint_range(0.0, 1.0) = 0.35;
 // AC-0242: same pre-decode as the dome had - Forward+ displays
@@ -193,7 +203,10 @@ vec3 sky_off(vec3 dir) {
 	}
 	float sd = dot(dir, sun_dir);
 	float up = clamp(sd, 0.0, 1.0);
-	float disc = smoothstep(0.99894, 0.99985, sd) * sun_amount;
+	// AC-0436: the moon's disc (see the u_moon uniform block).
+	float dlo = mix(0.99894, 0.99832, u_moon);
+	float dhi = mix(0.99985, 0.99974, u_moon);
+	float disc = smoothstep(dlo, dhi, sd) * mix(sun_amount, 1.0, u_moon);
 	// the sun's GLOW is scattering - it dies with the air; the disc stays.
 	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount * (1.0 - u_space);
 	col = col + (sun_core * disc) + (sun_halo * glow);
@@ -390,7 +403,10 @@ vec3 sky_on(vec3 dir) {
 	}
 	float sd = dot(dir, sun_dir);
 	float up = clamp(sd, 0.0, 1.0);
-	float disc = smoothstep(0.99894, 0.99985, sd) * sun_amount;
+	// AC-0436: the moon's disc (see the u_moon uniform block).
+	float dlo = mix(0.99894, 0.99832, u_moon);
+	float dhi = mix(0.99985, 0.99974, u_moon);
+	float disc = smoothstep(dlo, dhi, sd) * mix(sun_amount, 1.0, u_moon);
 	// the sun's GLOW is scattering - it dies with the air; the disc stays.
 	// The fade rides the A window on the ON path (the sky is space at A).
 	float glow = (pow(up, 24.0) * 0.60 + pow(up, 5.0) * 0.22) * sun_amount * (1.0 - u_space_sky);

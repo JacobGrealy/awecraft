@@ -138,6 +138,17 @@ uniform vec3 u_cloud_tint : source_color = vec3(1.0);
 uniform vec3 u_sun = vec3(0.0, 1.0, 0.0);
 uniform float u_day : hint_range(0.0, 2.0) = 1.0;
 uniform float u_day_gain : hint_range(0.0, 2.0) = 0.82;
+// AC-0436: the moonlight (Settings "moonlight", default ON). u_moon_w is
+// the 0..1 night*switch gate that re-aims the volumetric light march from
+// the sun to the moon (mix(..., u_moon_w) returns u_sun EXACTLY when 0);
+// u_moon is the added intensity (MOON_L * night * switch, 0.0 at day/OFF);
+// u_moon_dir is the direction TO the moon (the sun's antipode -
+// DayNight.sun_direction). Contract: at day/OFF u_moon_w = 0 and u_moon =
+// 0, so every use reduces to the pre-AC-0436 expression bit-identically
+// (mix(x,y,0) = x; x + 0.0 = x; 0.0 * x = 0.0 in IEEE 754).
+uniform float u_moon_w : hint_range(0.0, 1.0) = 0.0;
+uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
+uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 // AC-0242: unshaded output needs the compat pre-decode like the chunks.
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
 // AC-0384 r5: screen scale for the noise field's distance LOD (px per
@@ -621,6 +632,15 @@ vec2 vseg2(vec3 w, vec3 rd, float rc) {
 // octaves instead of aliasing them (the r5 static cannot happen).
 vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 		float T_in, float L_in, float Lo_in, float A_in) {
+	// AC-0436: the EFFECTIVE light direction - the sun by day, the moon
+	// by night (see the u_moon uniforms). u_moon_w = 0 at day/OFF ->
+	// mix = u_sun EXACTLY (mix(x,y,0) = x, and u_sun is already
+	// normalised) -> the whole march is bit-identical to the pre-AC-0436
+	// path. At night the self-shadow march, the HG phase (cosSun) and
+	// the forward-scatter glow all follow the moon instead: a cloud top
+	// marches OUT of the cloud toward the moon (lit), an underside
+	// sample stays inside it (shadowed) - moonlit form, not a flat lift.
+	vec3 Ldir = mix(u_sun, u_moon_dir, clamp(u_moon_w, 0.0, 1.0));
 	float t0 = seg.x;
 	float t1 = seg.y;
 	float T = T_in;
@@ -653,7 +673,7 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 				if (float(k) >= u_vol_lsteps) {
 					break;
 				}
-				vec3 pk = p + u_sun * ((float(k) + 0.5) * dl_l);
+				vec3 pk = p + Ldir * ((float(k) + 0.5) * dl_l);  // AC-0436: the effective light direction (sun by day, moon by night)
 				s += vdens_coarse(vrot(pk, ca, sa));
 				if (s > 3.0) {
 					break;
@@ -682,7 +702,7 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 			// cosSun = dot(sun, view direction): < 0 when the sun is on
 			// the CAMERA side (it lights the camera-facing boundary),
 			// > 0 when it is in front (backlit silhouette).
-			float cosSun = clamp(dot(u_sun, rd), -1.0, 1.0);
+			float cosSun = clamp(dot(Ldir, rd), -1.0, 1.0);  // AC-0436: Ldir (the moon at night)
 			// Dark edge (the HZD powder role, the cheap 1-tap form): how
 			// fast the density drops TOWARD THE CAMERA. A camera-facing
 			// boundary is dark UNLESS the sun is on the camera side of
@@ -826,7 +846,13 @@ void fragment() {
 		// named candidate), NOT a bigger ambient weight. u_vol_air_lift
 		// 0.0 = the exact pre-AC-0407 ambient colour.
 		air_s = mix(air_s, vec3(1.0), u_vol_air_lift);
-		ALBEDO = u_cloud_tint * u_day * clamp(
+		// AC-0436: the effective day factor - u_day (the 0.18 floor at
+		// night, pushed by main.gd) + u_moon (MOON_L * night * switch;
+		// 0.0 at day/OFF -> u_day + 0.0 = u_day bit-identical). The form
+		// stays directional: the re-aimed march (Ldir in vmarchseg)
+		// carries the moonlit top/underside split, the phase carries the
+		// silver lining - u_moon only raises the cloud's night level.
+		ALBEDO = u_cloud_tint * (u_day + u_moon) * clamp(
 			2.5 * acc.y + 0.30 * acc.z + u_vol_amb * air_s * acc.w,
 			0.0, 1.25);
 		// AC-0417 addendum 2: the limb wash (see the uniform block) -
@@ -959,7 +985,11 @@ void fragment() {
 	// DayNight.sun_direction. Noon (sun_l=1) is unchanged; the night
 	// floor 0.18 matches the satellite's pre-AC-0382 night.
 	float sun_l = clamp(dot(n, u_sun), 0.0, 1.0);
-	float light = u_day - u_day_gain * (1.0 - sun_l);
+	// AC-0436: the moon's lambert (see the u_moon uniforms) - at night
+	// the deck path's flat floor gains the moonlit hemisphere; 0.0 at
+	// day/OFF -> bit-identical.
+	float moon_l = clamp(dot(n, u_moon_dir), 0.0, 1.0);
+	float light = u_day - u_day_gain * (1.0 - sun_l) + u_moon * moon_l;
 	// AC-0384 r6: darker undersides - the optically thicker the patch
 	// (the final alpha a), the less light leaks through it.
 	// AC-0401: the volumetric read (vol = 1.0 when u_deck is ON, else 0.0

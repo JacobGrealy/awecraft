@@ -2,6 +2,28 @@ class_name DayNight
 extends RefCounted
 
 const DAY_LEN := 600.0
+# AC-0436: the MOON — the night's directional light source, the sun's
+# antipode (above the horizon exactly when the sun is not; the same
+# vector the sky pass's body-flip disc already draws at). sun_direction(t)
+# IS the direction TO the moon: the sun sits at -sun_direction (the light
+# travels along it), so the antipode sits at +sun_direction — and
+# sun_direction.y is positive exactly when the sun is below the horizon.
+# MOON_L is the ONE-SOURCE intensity for the UNSHADED moon consumers
+# (the chunk L term in the four chunk_lit_* shaders, the cloud day
+# factor): 0.25 puts the night top faces at ~45% of the day luma (the
+# atlas greens: tex 0.185 × L 0.44 → ~45/255 after the ACES + 0.85
+# exposure + 1.1 contrast pipeline, measured against the AC-0384 r24
+# day ground 98.4 — bright enough to read as terrain, dark enough to
+# still read as night). The satellite body is a LIT material — its
+# ALBEDO is multiplied by the engine ambient (~0.20 at night,
+# AMBIENT_TINT × ambient_energy 0.25) ON TOP of the shader's 0.18 floor
+# (a triple product the unshaded chunks don't have), so satellite_body.gd
+# scales its u_moon push by its own documented BODY_MOON_SCALE; it reads
+# MOON_L from here rather than restating a base value. The night-gated
+# weight is (1 - day(t)) * switch, so at day or with the Settings
+# "moonlight" switch OFF every consumer's added term is exactly 0.0
+# (the pre-AC-0436 paths bit-identical, IEEE 754).
+const MOON_L := 0.25
 
 
 static func fog_near(render_radius: int) -> float:

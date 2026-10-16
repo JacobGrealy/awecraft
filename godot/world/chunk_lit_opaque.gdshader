@@ -22,6 +22,21 @@ uniform float u_fog_far = 332.0;
 // default OFF; world.gd _ac0401_push pushes AMB_SKY_L on change). 0.0 is
 // the shipped path bit-identical (0*x = 0, x + 0 = x in IEEE 754).
 uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
+// AC-0436: the moonlight term (Settings "moonlight", default ON). u_moon =
+// MOON_L (world.gd) * night * switch, pushed per frame by world.gd
+// _ac0401_push (the u_amb seam); u_moon_dir = direction TO the moon (the
+// sun's antipode - DayNight.sun_direction, the same convention the sky
+// pass's body-flip disc draws at). The night's directional light source -
+// the ticket's named gap: at night u_day = 0 kills every sky-light term,
+// the 0.20 floor is all a face has, and ACES crushes that to a few 8-bit
+// units (measured 4.0/255 ground luma vs 98.4 by day). A per-fragment
+// lambert off the mesh's FACE normals (ARRAY_NORMAL, chunk.gd _surface -
+// the mesher emits them) gives the night landscape its slopes. OFF or day
+// -> u_moon = 0.0 -> the added term is 0.0 -> the AC-0128/AC-0426 formula
+// bit-identical (0.0 * x = 0.0, x + 0.0 = x in IEEE 754). The 0.20 floor
+// is never re-tuned; the moon ADDS to it.
+uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
+uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 varying vec3 v_world_pos;
 
 
@@ -69,6 +84,9 @@ void fragment() {
 	// 0.0 (the shipped default) makes the added term 0.0 for every pixel:
 	// the AC-0128 formula bit-identical.
 	L += u_amb * u_day * step(m_direct, 0.08);
+	// AC-0436: the moon's directional lambert (see the uniform block).
+	// u_moon = 0.0 at day/OFF -> the term is 0.0 -> bit-identical.
+	L += u_moon * max(dot(NORMAL, u_moon_dir), 0.0);
 	float pr = clamp(u_player_light - distance(v_world_pos, u_player_pos), 0.0, u_player_radius);
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
