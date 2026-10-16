@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-15T21:52
+  updated_at: 2026-10-15T22:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27827,4 +27827,71 @@ intake:
     \ and after.\n\nKNOWN HARD CASE. At a step across a seam the crease of the two PLANES is not where\
     \ the two staircases\nmeet, which is where AC-0427's side-face extension does its real work. A half-rule\
     \ has to state what\nhappens there rather than leaving it as an unmeasured edge case.\n"
+  comments: []
+- id: AC-0435
+  title: audit-switch-defaults-for-shipped-off-fixes
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-15T22:09
+  updated_at: 2026-10-15T22:09
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Features that were built because the player asked for them should be on when
+    the player plays. Right now some of them are built, verified and shipped switched off, so the player
+    sees the defect the feature was written to fix and reasonably concludes nothing was done.
+
+
+    2) Technical Details:
+
+    THE PATTERN HAS NOW COST TWO ROUNDS AND IS WORTH SWEEPING FOR SYSTEMATICALLY. Both recent cases were
+    the same shape: a defect was investigated at length, a fix was written and measured, and the fix was
+    shipped BEHIND A SWITCH DEFAULTING OFF - so the off look WAS the reported defect. In one case the
+    ambient lift for floor-lit faces had been written, measured and parked rounds earlier, and the player
+    was still looking at black faces the whole time. In the other, a mask meant to drive that lift could
+    never fire because the value it tested for was unreachable, so the switch was off AND the code behind
+    it was dead.
+
+    TWO CANDIDATES ARE ALREADY KNOWN FROM THE COORDINATOR''S OWN INVENTORY and are the reason this ticket
+    exists: the planetary cloud-cover variation that gates whether a region has weather at all, which
+    the user explicitly asked for and which ships behind a switch defaulting off; and the viewmodel occlusion
+    that stops the held item drawing over terrain, which the user reported as a defect and which also
+    ships defaulting off. Both are fixes for reported problems, both are off, and both therefore present
+    to the player as unfixed.
+
+    WHAT TO DO: enumerate EVERY switch this project has - settings rows, environment overrides, shader
+    uniforms with a default, and any code path gated on a flag - and for each establish four things: what
+    it does, what defect or request it exists to serve, whether its off state is genuinely conservative
+    or whether the off state IS the defect, and whether anything else depends on it. Then act on the answer:
+    FLIP THE ONES WHOSE OFF STATE IS A DEFECT, saying why for each, and LEAVE ALONE the ones where off
+    is genuinely the safer or more neutral choice - a switch that disables an expensive effect for performance
+    is not a defect, and a switch whose on state is a matter of taste should stay off unless the user
+    has asked for that taste.
+
+    DO NOT FLIP ANYTHING WITHOUT A REASON THAT WOULD SURVIVE THE USER READING IT. The point is not to
+    turn everything on - it is to stop shipping the absence of a requested feature. For each switch you
+    flip, the evidence is a frame showing the defect with it off and the improvement with it on, and a
+    check that flipping it does not regress anything measured - in particular the standing gate values,
+    the night look, and the wider scene''s contrast, since several of these features work by lifting or
+    varying brightness.
+
+    ACCEPTANCE: A TABLE of every switch with its name, what it does, what it exists to serve, its current
+    default, whether that default is a defect, and the decision taken - plus before-and-after frames for
+    each one flipped, and the standing gate set green afterwards.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); and the recent work must keep holding - the seam closure and its atlas fix, the
+    ambient lift, the opaque body, the sky with no bottom edge, the uniform sky transition rate and the
+    cloud cover variation.
+
+    '
   comments: []
