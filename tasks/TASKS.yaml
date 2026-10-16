@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-16T09:43
+  updated_at: 2026-10-16T09:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28,6 +28,7 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0438
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28022,6 +28023,72 @@ intake:
 
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29, taken from a clean archive of the commit
     before this ticket.
+
+    '
+  comments: []
+- id: AC-0438
+  title: chart-seam-line-across-the-planet-disc
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-16T09:45
+  updated_at: 2026-10-16T09:45
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Looking down at the planet from orbit should show a world, not a world with a
+    thin line ruled across it. The planet is the game''s hero image and it currently has a visible seam.
+
+
+    2) Technical Details:
+
+    FOUND BY THE WHOLE-EXPERIENCE ASSESSMENT AND RANKED SECOND OF ALL REMAINING DIFFERENCES, ABOVE EVERYTHING
+    EXCEPT THE NIGHT, WHICH HAS SINCE BEEN FIXED. It is therefore the most significant visual defect left.
+
+    THE MEASUREMENT: a one to two pixel line running across the disc in the spawn nadir frame, at rows
+    357 and 358, with 254 sample points stepping by at least six luminance units and a MEAN STEP OF SIXTY-EIGHT.
+    That is a hard, narrow discontinuity rather than a gradient - sixty-eight units is a fifth of full
+    range across a single pixel row. The assessment notes it is MORE PROMINENT THAN THE PREVIOUS ROUND''S
+    EQUIVALENT, which measured seven, because the disc around it is now more saturated and the step stands
+    out more against it. So this is not a new defect but it has become a more visible one as the rest
+    of the planet improved.
+
+    WHAT IT IS LIKELY TO BE, to be established rather than assumed: the assessment calls it a chart seam,
+    and the satellite''s surface comes from a bake laid out in charts or tiles. Candidates are the boundary
+    between two charts, a texture coordinate wrap, a filtering or mip seam where neighbouring charts meet
+    with different content, an edge of the bake itself, or a pole or axis singularity if the line''s position
+    corresponds to one. The line''s exact position and orientation in the frame are evidence and should
+    be measured before anything is changed: whether it is horizontal in world terms or in screen terms
+    decides between a bake-layout cause and a projection cause, and those are entirely different fixes.
+
+    THE OBVIOUS THINGS TO CHECK FIRST: whether the line appears at the same place on the planet at different
+    viewing angles and altitudes, which distinguishes a surface feature from a screen-space artifact;
+    whether it appears in the bake''s own output before any lighting or atmosphere is applied, which separates
+    the bake from the shading; and whether neighbouring charts share a border or whether the bake leaves
+    a gap between them.
+
+    ACCEPTANCE: THE ASSESSMENT''S OWN NADIR FRAME RE-TAKEN with no line present, plus the luminance profile
+    across the same rows before and after as numbers, plus a check at a second altitude and a second viewing
+    position that the line is gone there too rather than merely moved. The planet''s overall appearance
+    must not regress - the disc''s saturation and its height-based relief are recently improved and must
+    still hold.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); every look change ships behind a switch defaulting conservative; and the recent
+    work must keep holding - the opaque body with its sort offset and relief, the sky with no bottom edge
+    and a uniform rate, the seam closure and its atlas fix, the ambient lift, the varying cloud cover
+    and the new moon.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the nadir frame it names, taken from a
+    clean archive of an earlier commit.
 
     '
   comments: []
