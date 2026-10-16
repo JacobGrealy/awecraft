@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0437 plan — interface polish: crosshair, stat-row hierarchy, inventory dim, menu dev-gate</title>
+<style>body{font:15px/1.55 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:21px}h2{font-size:16px;margin-top:26px;border-bottom:2px solid #333;padding-bottom:4px}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #bbb;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#eee}code{font:12.5px ui-monospace,monospace;background:#f2f2f2;padding:1px 4px}
+.small{font-size:12.5px;color:#444}.note{background:#fff8e1;border-left:4px solid #e6b800;padding:8px 12px;font-size:13.5px}</style></head><body>
+
+<h1>AC-0437 — plan (PLAN + IMPLEMENT in one turn)</h1>
+<p><b>Date:</b> 2026-10-16 · <b>Spec:</b> tasks/TASKS.yaml AC-0437 · <b>Found by:</b> AC-0384 §29 whole-experience
+assessment (the interface is product-shaped; it stops one polish step short; the menu still shows developer scaffolding).</p>
+
+<h2>Goal</h2>
+<p>Address exactly the four assessment findings, in the visual language that is already there — a polish pass, not a
+redesign:</p>
+<ol>
+<li><b>Crosshair</b> (nowhere in the code) — a pixel plus in the HUD's own border/label language. <b>No switch</b>
+(the ticket's stated exception: the absence of a feature in a first-person game — its presence is simply correct).</li>
+<li><b>Stat rows</b> (health + hunger rows look identical, read as debug output) — captions + the existing order
+carry the hierarchy. Behind a switch (look change).</li>
+<li><b>Inventory open</b> (the panel competes with the scene) — dim the world behind the panel. Behind a switch
+(look change).</li>
+<li><b>Menu</b> (flat black + developer scaffolding: the dev tag and a test range entry) — the developer entries
+gated out of the shipping path, the mechanism named. The assessment's menu frame is the before image.</li>
+</ol>
+
+<h2>What I found about the gating (item 4)</h2>
+<div class="note">
+<b>Finding: there is no runtime dev/shipped distinction anywhere in the code.</b>
+<code>is_debug_build()</code> has zero usages in the tree. The only dev/shipped mechanism on the shipping path is
+<b>AC-0248</b>: <code>build_windows.sh</code> rewrites the const in <code>godot/core/build_id.gd</code> from
+<code>"dev"</code> to <code>"&lt;stamp&gt; &lt;sha&gt;"</code> immediately before export (git-checkout trap restores it
+afterwards). That mechanism covers <b>the version string only</b>. Consequences:<br>
+• <code>AweCraft[dev]</code> does NOT leak into a stamped build — the assessment frame showing it is a
+<b>dev-provenance</b> render (a <code>git archive</code> of the working tree, where <code>Build.ID == "dev"</code> by
+design). The tag's gate works; the provenance just isn't a shipped build.<br>
+• The <b>Test Range button is declared unconditionally in <code>scenes/menu.tscn</code></b> and <code>menu.gd</code>
+checks no build flag — <b>no gate exists at all</b>. That is why a shipped build shows it: the gate isn't failing,
+it was never there. Nothing in the shipping path removes a UI entry.<br>
+<b>The fix reuses the project's single source of truth for "is this a shipped artifact": the build stamp.</b>
+<code>menu.gd</code> hides <code>RangeButton</code> when <code>Build.ID != "dev"</code>. Harness runs and
+dev/local-tree runs (ID <code>"dev"</code>) keep the entry; any export stamped by <code>build_windows.sh</code>
+hides it. Proof: apply the build script's exact <code>sed</code> to <code>build_id.gd</code> temporarily, capture the
+menu shot (its RESULT JSON reports <code>"build": "&lt;stamp&gt;"</code>), revert.
+</div>
+
+<h2>Approach per item</h2>
+<table>
+<tr><th>#</th><th>Item</th><th>Approach (existing language)</th><th>Switch / gate</th></tr>
+<tr><td>1</td><td>Crosshair</td>
+<td>New <code>CrossCtl</code> in <code>ui/inventory.gd</code>: a pixel plus — 6 px arms, 2 px thick, white 0.92 with
+the HUD's 1 px dark outline (the slot-border / text-outline language), 1 px clear centre so the aimed block reads.
+Screen-centre on the HUD CanvasLayer (layer 10). Shown in play with the mouse hidden; hidden while the inventory
+panel is open, on the death screen, or whenever the mouse is visible (pause/menu). Always on — no switch.</td>
+<td>none (the ticket's exception)</td></tr>
+<tr><td>2</td><td>Stat rows</td>
+<td>Two captions — "Health" beside the heart row, "Hunger" beside the food row — right-aligned to the left of each
+row, font 13 / white 0.95 / outline 3 (the exact <code>RecipeRow</code> label language). The rows keep their
+positions (health primary at the bottom, hunger above); the captions answer "which is which at a glance", the order
+carries the hierarchy.</td>
+<td><code>stat_captions</code> (Settings bool, default <b>ON</b>; <code>AWECRAFT_STATCAP=0</code> = the pre-AC-0437
+HUD for A/B)</td></tr>
+<tr><td>3</td><td>Inventory dim</td>
+<td>One 0.45-alpha black <code>ColorRect</code> added as the <b>first</b> child of the HUD CanvasLayer — it dims the
+world (below the layer) while the panel, the stat rows, the hotbar and the held-cursor item stay bright above it.
+Shown exactly when the panel is. The death screen already proves the pattern (<code>_dead_bg</code>, 0.72).</td>
+<td><code>inventory_dim</code> (Settings bool, default <b>ON</b>; <code>AWECRAFT_INVDIM=0</code> = no dim, the
+pre-AC-0437 look)</td></tr>
+<tr><td>4</td><td>Menu dev entries</td>
+<td><code>menu.gd _ready</code>: hide <code>RangeButton</code> when <code>Build.ID != "dev"</code> (comment carries
+the mechanism). The version label keeps <code>"AweCraft[" + Build.ID + "]"</code> — in a stamped export that is the
+stamp, never "dev". <b>Deliberately untouched:</b> the Developer options tab and the debug checkboxes — the
+assessment names exactly two entries (the tag, the test range button); the tab sits behind Options, not "the
+menu", and it is the project's debug-tools pattern.</td>
+<td>the build stamp (<code>Build.ID</code>), not a user setting</td></tr>
+</table>
+<p class="small"><b>Defaults — why ON, not conservative-OFF:</b> the ticket's constraint sentence says look changes
+ship behind a conservative-defaulting switch; the AC-0435 sweep (the immediately-prior ticket) refined the rule —
+when the OFF state IS the user-reported defect, the default flips ON (ambient_sky via AC-0432; cloud_gate and
+viewmodel_occlude via AC-0435; moonlight via AC-0436: "the fix ships in and OFF is the A/B"). This ticket was filed
+from the user's own whole-experience assessment, which calls the caption-less rows and the non-dimming panel the
+stopping points — the shipped-OFF state reproduces the reported look, so both switches default ON, with env A/B
+restoring the exact pre-AC-0437 HUD. The crosshair is the ticket's explicit exception (no switch at all).</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/ui/inventory.gd</code></td><td>CrossCtl + its per-frame placement/visibility; the two caption
+Labels + placement; <code>_dim_bg</code> (first child of the layer); env preloads <code>AWECRAFT_STATCAP</code> /
+<code>AWECRAFT_INVDIM</code> in <code>_ready</code> (no save — the world.gd pattern).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>Two <code>DEFAULTS</code> entries (<code>stat_captions</code>,
+<code>inventory_dim</code>, both <code>true</code> + comments) and two <code>_clamp</code> arms
+(<code>AnalogTune.sanitize_bool</code>, the standing pattern).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Two Settings-tab checkbox rows (code-created pattern, seats hi+22 /
+hi+23), two <code>_sync_controls</code> lines, two toggle handlers, and the <code>Build.ID</code> gate on
+<code>RangeButton</code> in <code>_ready</code>.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§2 Settings row (the two switches) + §3 scene-tree lines
+(<code>ui/inventory.gd</code> gains the crosshair / dim / captions — the tree line already claimed a crosshair that
+the code did not have; this makes it true; the Menu line gains the stamp gate).</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td><td>Two env rows in §2 (hand-written section): <code>AWECRAFT_STATCAP</code>,
+<code>AWECRAFT_INVDIM</code>.</td></tr>
+</table>
+<p class="small"><b>Fence check:</b> the four locked files (<code>main.gd</code>, <code>game.gd</code>,
+<code>drop.gd</code>, <code>debug.gd</code>) need no edits — the crosshair lives in <code>ui/inventory.gd</code>,
+the gate in <code>ui/menu.gd</code>, the settings in <code>autoload/settings.gd</code>. The prompt warned the
+crosshair "may need" <code>main.gd</code>; it does not. <code>tasks/AC-0067</code> / <code>AC-0384</code> /
+<code>AC-0425</code> untouched (the <code>held</code> arm rewrites its own <code>tasks/AC-0067</code> byproduct PNGs
+when it runs — the arm is the owner of those files).</p>
+
+<h2>Harness gates (mine — light, then exit; heavy set is the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Pass</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code></td>
+<td>exit 0 AND <code>gate_census.py</code>: 0 SCRIPT ERROR, 0 SHADER ERROR (exit status checked — the stochastic
+UAF leaves a clean log with signal-11)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td>all ok; <b>genhash 25/25 byte-identical</b> (nothing here touches generation)</td></tr>
+<tr><td>settings arm</td><td><code>AWECRAFT_LOGIC=settings</code></td><td>RESULT ok:true (defaults + clamp + rows —
+the two new rows sync)</td></tr>
+<tr><td>held-item probe</td><td><code>AWECRAFT_LOGIC=held</code> (xvfb/vulkan, 1280,720)</td><td>RESULT fields green
+(viewmodel assertions untouched by this work)</td></tr>
+<tr><td>shaderforce</td><td>—</td><td>N/A — no <code>.gdshader</code> changes (all GDScript CanvasItem drawing);
+stated, not skipped silently</td></tr>
+</table>
+<p class="small"><b>Acceptance frames</b> (Forward+/lavapipe, <code>AWECRAFT_SIZE=1280,720</code>,
+<code>AWECRAFT_SNAP_DRAIN=600</code> frames, 1200 s budget, file existence checked, <code>AWECRAFT_LOGIC</code> unset
+so the snapshot path fires):</p>
+<table>
+<tr><th>Frame</th><th>Recipe</th><th>Shows</th></tr>
+<tr><td>play-day</td><td><code>MENU_BOOT=1 SNAPSHOT SIZE RADIUS=4 SNAP_DRAIN=600 TIME=0.42</code></td>
+<td>crosshair in normal play; captions distinguish the rows (day contrast)</td></tr>
+<tr><td>play-night</td><td>same, <code>TIME=0.0</code></td><td>crosshair + captions readable against the dark night
+(the assessment's day/night interface warning)</td></tr>
+<tr><td>inv-open / inv-open-nodim</td><td>same + <code>AWECRAFT_INV=1</code> (and once with
+<code>AWECRAFT_INVDIM=0</code>)</td><td>panel over a visibly receded world, vs the undimmed A/B</td></tr>
+<tr><td>statcap-before</td><td>play-day + <code>AWECRAFT_STATCAP=0</code></td><td>the pre-AC-0437 identical rows
+(the A/B before)</td></tr>
+<tr><td>menu-dev / menu-stamped</td><td><code>AWECRAFT_MENU_SHOT=…</code> at <code>Build.ID=dev</code>, then again
+after the build script's exact <code>sed</code> stamp is applied (reverted after)</td><td>the before menu
+(dev entries present) vs the player's menu (Test Range gone, stamp in the version label — the gate, named and
+demonstrated; RESULT reports <code>"build"</code>)</td></tr>
+</table>
+
+</body></html>

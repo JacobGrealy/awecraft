@@ -359,6 +359,29 @@ class FoodRow extends Control:
 			draw_texture_rect(t, Rect2(Vector2(float(i) * (CELL + GAP), 0.0), Vector2(CELL, CELL)), false)
 
 
+class CrossCtl extends Control:
+	# AC-0437: the first-person crosshair. The assessment (AC-0384 §29)
+	# found NO crosshair anywhere in the code — conspicuous in a
+	# first-person game with interaction. The ticket's one exception to
+	# the switch rule: this is the absence of a FEATURE, not a look
+	# change, so its presence is simply correct (no switch).
+	# Shape: a pixel plus in the HUD's own language — 6 px arms, 2 px
+	# thick, white 0.92 with the 1 px dark outline the slot borders and
+	# text labels use (not a generic dot), arms stopped 1 px short of
+	# the centre so the aimed block reads through the middle.
+	func _draw() -> void:
+		var c := size * 0.5
+		var w := Color(1.0, 1.0, 1.0, 0.92)
+		var o := Color(0.0, 0.0, 0.0, 0.75)
+		var arm := func(px: float, py: float, aw: float, ah: float) -> void:
+			draw_rect(Rect2(Vector2(px, py), Vector2(aw, ah)), o)
+			draw_rect(Rect2(Vector2(px + 1.0, py + 1.0), Vector2(aw - 2.0, ah - 2.0)), w)
+		arm.call(c.x - 8.0, c.y - 2.0, 8.0, 4.0)   # left
+		arm.call(c.x, c.y - 2.0, 8.0, 4.0)         # right
+		arm.call(c.x - 2.0, c.y - 8.0, 4.0, 8.0)   # up
+		arm.call(c.x - 2.0, c.y, 4.0, 8.0)         # down
+
+
 class FlashCtl extends Control:
 	var tex: Texture2D = null
 	var a := 0.0
@@ -437,6 +460,21 @@ var _hunger_key := ""
 var _dead_bg: ColorRect
 var _dead_title: Label
 var _dead_btn: DeadBtn
+# AC-0437: the first-person crosshair (no switch — the ticket's stated
+# exception; the absence of a feature, not a look change).
+var _cross: CrossCtl
+# AC-0437: the HUD stat-row captions (Settings "stat_captions", default
+# ON — the assessment judged the two identical-looking red rows as debug
+# output; the AC-0435/AC-0436 re-ruling: the reported look ships in and
+# OFF is the A/B). "Health" / "Hunger" in the RecipeRow label language.
+var _health_cap: Label
+var _hunger_cap: Label
+# AC-0437: the inventory world-dim (Settings "inventory_dim", default
+# ON — the assessment judged the panel as competing with the scene).
+# A 0.45-alpha black ColorRect that is the FIRST child of the HUD layer:
+# the world (below the layer) recedes, every HUD child stays bright
+# above it — the _dead_bg pattern at a lighter weight.
+var _dim_bg: ColorRect
 
 
 func _input(event: InputEvent) -> void:
@@ -445,7 +483,28 @@ func _input(event: InputEvent) -> void:
 
 
 func _ready() -> void:
+	# AC-0437: harness env preloads for the two HUD look switches —
+	# written to Settings.values WITHOUT save so the harness never
+	# clobbers the user's cfg (the AWECRAFT_CLOUDGATE pattern, world.gd).
+	# The layer outlives the menu: _ready runs in _create_game_nodes,
+	# after Settings.load_settings, so the override holds for the
+	# process and is read live every frame below.
+	var sce := OS.get_environment("AWECRAFT_STATCAP")
+	if sce != "":
+		Settings.values["stat_captions"] = sce == "1"
+	var ide := OS.get_environment("AWECRAFT_INVDIM")
+	if ide != "":
+		Settings.values["inventory_dim"] = ide == "1"
 	layer = 10
+	# AC-0437: the world-dim is the FIRST child of the layer — it must
+	# draw under every HUD child (panel, rows, hotbar, the held-cursor
+	# item) while still covering the world below the layer. The death
+	# screen's _dead_bg (0.72) is the precedent; this one is lighter.
+	_dim_bg = ColorRect.new()
+	_dim_bg.color = Color(0.0, 0.0, 0.0, 0.45)
+	_dim_bg.visible = false
+	_dim_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_dim_bg)
 	_strip = FrameRect.new()
 	_strip.bg = STRIP_BG
 	_strip.edge = 2.0
@@ -519,6 +578,23 @@ func _ready() -> void:
 	_heart_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_heart_row.visible = false
 	add_child(_heart_row)
+	# AC-0437: the stat-row captions — the rows are identical-looking
+	# (ten red pixel icons, same size, same seat), so they carry no
+	# hierarchy and read as debug output. What varies between them is
+	# WHAT they measure; what the player needs at a glance is that.
+	# The captions name the rows (health = primary, bottom row; hunger
+	# above it — the order carries the hierarchy), in the RecipeRow
+	# label language: font 13, white 0.95, black outline 3.
+	_health_cap = _mk_stat_caption("Health")
+	_hunger_cap = _mk_stat_caption("Hunger")
+	add_child(_health_cap)
+	add_child(_hunger_cap)
+	# AC-0437: the crosshair (screen-centre; placed per frame below).
+	_cross = CrossCtl.new()
+	_cross.size = Vector2(18.0, 18.0)
+	_cross.visible = false
+	_cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_cross)
 	var fimg := Image.create_empty(128, 128, false, Image.FORMAT_RGBA8)
 	var fc := Vector2(64.0, 64.0)
 	var fmaxd := fc.length()
@@ -945,6 +1021,25 @@ func _respawn_click() -> void:
 		p.respawn()
 
 
+# AC-0437: one stat-row caption (the "Health" / "Hunger" labels). The
+# RecipeRow label language — font 13, white 0.95, black outline 3 —
+# right-aligned so the text edge sits a fixed gap from the row's first
+# icon.
+func _mk_stat_caption(t: String) -> Label:
+	var l := Label.new()
+	l.text = t
+	l.add_theme_font_size_override("font_size", 13)
+	l.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.95))
+	l.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	l.add_theme_constant_override("outline_size", 3)
+	l.size = Vector2(64.0, 16.0)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.visible = false
+	return l
+
+
 func _update_survival(p, dt: float) -> void:
 	var vs: Vector2 = get_viewport().get_visible_rect().size
 	if _flash_t > 0.0:
@@ -957,6 +1052,8 @@ func _update_survival(p, dt: float) -> void:
 	if p == null:
 		_food.visible = false
 		_heart_row.visible = false
+		_health_cap.visible = false
+		_hunger_cap.visible = false
 		_dead_bg.visible = false
 		return
 	if _damaged_node != p:
@@ -965,17 +1062,30 @@ func _update_survival(p, dt: float) -> void:
 		_damaged_node = p
 		p.damaged.connect(_on_damaged)
 	var row_w := float(HeartRow.CELL) * 10.0 + float(HeartRow.GAP) * 9.0
+	# AC-0437: the captions ride the Settings "stat_captions" switch
+	# (default ON — the assessment's reported look ships in; OFF is the
+	# exact pre-AC-0437 HUD, the AWECRAFT_STATCAP A/B). Read live every
+	# frame (the viewmodel_occlude/noclip pattern — no apply step).
+	var cap_on := bool(Settings.values.get("stat_captions", true))
+	var hx := (vs.x - row_w) * 0.5
+	var hy := vs.y - 64.0 - float(HeartRow.CELL)
 	_heart_row.visible = true
-	_heart_row.position = Vector2((vs.x - row_w) * 0.5, vs.y - 64.0 - float(HeartRow.CELL))
+	_heart_row.position = Vector2(hx, hy)
 	_heart_row.size = Vector2(row_w, float(HeartRow.CELL))
 	var hpk := str(roundf(float(p.hp) * 10.0))
 	if hpk != _hp_key:
 		_hp_key = hpk
 		_heart_row.hp = float(p.hp)
 		_heart_row.queue_redraw()
+	_health_cap.visible = cap_on
+	_health_cap.position = Vector2(hx - 10.0 - 64.0, hy + (float(HeartRow.CELL) - 16.0) * 0.5)
 	_food.visible = true
-	_food.position = Vector2((vs.x - row_w) * 0.5, vs.y - 64.0 - float(HeartRow.CELL) - float(FoodRow.CELL) - 2.0)
+	var fx := (vs.x - row_w) * 0.5
+	var fy := vs.y - 64.0 - float(HeartRow.CELL) - float(FoodRow.CELL) - 2.0
+	_food.position = Vector2(fx, fy)
 	_food.size = Vector2(row_w, float(FoodRow.CELL))
+	_hunger_cap.visible = cap_on
+	_hunger_cap.position = Vector2(fx - 10.0 - 64.0, fy + (float(FoodRow.CELL) - 16.0) * 0.5)
 	var hk := str(roundf(float(p.hunger) * 1000.0))
 	if hk != _hunger_key:
 		_hunger_key = hk
@@ -1065,6 +1175,28 @@ func _process(dt: float) -> void:
 	var p = Game.player
 	var show: bool = p != null and (String(p.ui_mode) == "inv" or String(p.ui_mode) == "table")
 	var is_table: bool = p != null and String(p.ui_mode) == "table"
+	# AC-0437: the inventory world-dim — shown while the panel is open
+	# and the "inventory_dim" switch is on (default ON — the assessment's
+	# "the panel competes with the scene" ships in; AWECRAFT_INVDIM=0 is
+	# the pre-AC-0437 look for the A/B). Read live, no apply step. The
+	# rect is the layer's first child, so only the world below the layer
+	# recedes — panel, rows, hotbar and the held-cursor item stay bright.
+	_dim_bg.visible = show and bool(Settings.values.get("inventory_dim", true))
+	_dim_bg.size = vs
+	# AC-0437: the crosshair — simply correct, no switch (the ticket's
+	# stated exception: the absence of a feature in a first-person game).
+	# Shown in play while the pointer is not the visible cursor: play
+	# runs CAPTURED (Player.start captures it) or HIDDEN (joypad /
+	# click-to-toggle), and it hides whenever the cursor is back —
+	# menu, pause, console, or the inventory's drag cursor. Also hidden
+	# while the panel is open (the cursor takes over) and on the death
+	# screen.
+	if p != null:
+		_cross.visible = not p.dead and not show \
+			and Input.mouse_mode != Input.MOUSE_MODE_VISIBLE
+	else:
+		_cross.visible = false
+	_cross.position = Vector2((vs.x - _cross.size.x) * 0.5, (vs.y - _cross.size.y) * 0.5)
 	_strip.visible = not show
 	_strip.position = Vector2(sx, sy)
 	_strip.size = Vector2(sw, sh)

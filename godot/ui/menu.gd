@@ -101,6 +101,15 @@ var ambient_sky_check: CheckBox
 # (Settings "moonlight", default ON: the shipped night IS the reported
 # defect; OFF is the exact pre-AC-0436 night for the A/B).
 var moonlight_check: CheckBox
+# AC-0437: the HUD stat-row captions toggle (Settings "stat_captions",
+# default ON — the assessment judged the two identical-looking red rows
+# as debug output; the AC-0435/AC-0436 re-ruling: the reported look
+# ships in, OFF is the A/B).
+var stat_cap_check: CheckBox
+# AC-0437: the inventory world-dim toggle (Settings "inventory_dim",
+# default ON — the assessment judged the undimmed panel as competing
+# with the scene; same re-ruling).
+var inv_dim_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns
 # everything closer; the low band runs out to the render edge).
@@ -215,6 +224,21 @@ func _apply_state() -> void:
 
 
 func _ready() -> void:
+	# AC-0437: the Test Range entry (AC-0191) is a development
+	# affordance, not a player one. The tscn used to declare it
+	# UNCONDITIONALLY — no gate existed anywhere (the code has zero
+	# is_debug_build usages; the only dev/shipped mechanism on the
+	# shipping path is build_windows.sh's build-stamp rewrite of
+	# Build.ID, which covers the version string only). That is why a
+	# shipped build showed the entry: the gate was missing, not broken.
+	# The gate now reuses the project's single source of truth for "is
+	# this a shipped artifact": the build stamp. A stamped export
+	# (Build.ID != "dev") hides the button; dev / local-tree runs and
+	# the harness (ID "dev") keep it — nothing is deleted, the entry
+	# stays reachable wherever it is needed. See
+	# tasks/AC-0437/AC-0437-results.html for the demonstration.
+	if Build.ID != "dev":
+		get_node("Layer/MainBox/Center/VBox/RangeButton").visible = false
 	main_box = get_node("Layer/MainBox")
 	pause_box = get_node("Layer/PauseBox")
 	options_box = get_node("Layer/OptionsBox")
@@ -533,6 +557,39 @@ func _ready() -> void:
 	opt_vbox.add_child(moonlight_check)
 	if hi + 20 < opt_vbox.get_child_count():
 		opt_vbox.move_child(moonlight_check, hi + 21)
+	# AC-0437: the HUD stat-row captions toggle — a "Health" / "Hunger"
+	# label beside each stat row so the two identical-looking red rows
+	# carry hierarchy instead of reading as debug output. DEFAULTS ON —
+	# the whole-experience assessment (AC-0384 §29) named the current
+	# look the stopping point, so the fix ships in and OFF is the A/B
+	# (the ambient_sky/cloud_gate/viewmodel_occlude re-ruling, AC-0435;
+	# moonlight, AC-0436). No apply step owed: ui/inventory.gd reads the
+	# live value every frame (env-overridable: AWECRAFT_STATCAP=0|1 at
+	# boot, inventory.gd _ready — written WITHOUT save).
+	stat_cap_check = CheckBox.new()
+	stat_cap_check.name = "StatCapCheck"
+	stat_cap_check.text = "HUD: label the health / hunger rows"
+	stat_cap_check.add_theme_font_size_override("font_size", 15)
+	stat_cap_check.toggled.connect(_on_stat_cap_toggled)
+	opt_vbox.add_child(stat_cap_check)
+	if hi + 22 < opt_vbox.get_child_count():
+		opt_vbox.move_child(stat_cap_check, hi + 22)
+	# AC-0437: the inventory world-dim toggle — opening the inventory
+	# dims the world behind the panel (a 0.45-alpha black rect under the
+	# HUD children — the death screen's _dead_bg pattern at a lighter
+	# weight). DEFAULTS ON — the assessment judged the undimmed panel as
+	# competing with the scene (the same re-ruling). No apply step owed:
+	# ui/inventory.gd reads the live value every frame (env-overridable:
+	# AWECRAFT_INVDIM=0|1 at boot, inventory.gd _ready — written WITHOUT
+	# save).
+	inv_dim_check = CheckBox.new()
+	inv_dim_check.name = "InvDimCheck"
+	inv_dim_check.text = "Inventory: dim the world behind the panel"
+	inv_dim_check.add_theme_font_size_override("font_size", 15)
+	inv_dim_check.toggled.connect(_on_inv_dim_toggled)
+	opt_vbox.add_child(inv_dim_check)
+	if hi + 23 < opt_vbox.get_child_count():
+		opt_vbox.move_child(inv_dim_check, hi + 23)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1030,6 +1087,9 @@ func _sync_controls() -> void:
 	no_sky_floor_check.button_pressed = bool(Settings.values.get("no_sky_floor", true))
 	# AC-0436: the moonlight toggle (default ON).
 	moonlight_check.button_pressed = bool(Settings.values.get("moonlight", true))
+	# AC-0437: the stat captions + the inventory dim (both default ON).
+	stat_cap_check.button_pressed = bool(Settings.values.get("stat_captions", true))
+	inv_dim_check.button_pressed = bool(Settings.values.get("inventory_dim", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1515,6 +1575,23 @@ func _on_moonlight_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("moonlight", on)
+
+
+# AC-0437: the HUD stat-row captions toggle — persisted like every other
+# setting (set_value does the clamp chain + the save). No apply step is
+# owed: ui/inventory.gd reads the live value every frame (the
+# viewmodel_occlude/noclip pattern).
+func _on_stat_cap_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("stat_captions", on)
+
+
+# AC-0437: the inventory world-dim toggle — same seam as the captions.
+func _on_inv_dim_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("inventory_dim", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

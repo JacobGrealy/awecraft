@@ -271,6 +271,30 @@ const DEFAULTS := {
 	# DayNight.MOON_L (core/daynight.gd). Env-overridable
 	# (AWECRAFT_MOON=0|1 at boot, world.gd — written WITHOUT save).
 	"moonlight": true,
+	# AC-0437: the HUD stat-row CAPTIONS (ui/inventory.gd) — a "Health"
+	# label beside the heart row and a "Hunger" label beside the food
+	# row, so the two identical-looking red rows stop reading as debug
+	# output. DEFAULTS ON: the whole-experience assessment (AC-0384 §29)
+	# judged the current look the defect — the shipped-OFF state IS what
+	# the user sees and objects to (the ambient_sky/cloud_gate/
+	# viewmodel_occlude re-ruling, AC-0435; moonlight, AC-0436). OFF
+	# (AWECRAFT_STATCAP=0, or the saved setting) is the exact
+	# pre-AC-0437 HUD for the A/B. No apply step: inventory.gd reads the
+	# live value every frame. Env-overridable (AWECRAFT_STATCAP=0|1 at
+	# boot, inventory.gd _ready — written WITHOUT save).
+	"stat_captions": true,
+	# AC-0437: the INVENTORY world-dim (ui/inventory.gd) — opening the
+	# inventory dims the world behind the panel (a 0.45-alpha black
+	# ColorRect, first child of the HUD layer: the world recedes, the
+	# panel and every HUD child stay bright — the _dead_bg pattern at a
+	# lighter weight). DEFAULTS ON: the assessment judged the undimmed
+	# panel as competing with the scene — the shipped-OFF state IS the
+	# reported look (the AC-0435/AC-0436 re-ruling). OFF
+	# (AWECRAFT_INVDIM=0, or the saved setting) is the exact pre-AC-0437
+	# look (no dim). No apply step: inventory.gd reads the live value
+	# every frame. Env-overridable (AWECRAFT_INVDIM=0|1 at boot,
+	# inventory.gd _ready — written WITHOUT save).
+	"inventory_dim": true,
 	# AC-0395: the noclip toggle (the user's own request — disable the
 	# player's collision so they can fly through blocks and inspect
 	# geometry). DEFAULTS OFF: the shipped state is exactly today's
@@ -521,6 +545,18 @@ func _clamp(k: String, v) -> void:
 		"moonlight":  # AC-0436: bool (the moonlight switch; defaults ON).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (true), never throw (the ambient_sky
+			# precedent).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"stat_captions":  # AC-0437: bool (the HUD stat-row captions;
+			# defaults ON — the assessment's reported look ships in).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (true), never throw (the moonlight
+			# precedent).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"inventory_dim":  # AC-0437: bool (the inventory world-dim;
+			# defaults ON — the assessment's reported look ships in).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (true), never throw (the moonlight
 			# precedent).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"noclip":  # AC-0395: bool (the player-collision switch). sanitize_bool
