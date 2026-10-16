@@ -64,15 +64,20 @@ var sky_alt_check: CheckBox
 # AC-0405: the raymarched-volumetric-clouds toggle (Settings page,
 # default ON - the user ordered the rework).
 var cloud_vol_check: CheckBox
-# AC-0428: the planetary weather-gate toggle (Settings page, default OFF -
-# conservative: the shipped look is today's uniform deck).
+# AC-0428: the planetary weather-gate toggle (Settings page). AC-0435:
+# default ON - the user ordered the variation in their own words ("some
+# kind of noise... where groups of clouds are, it should not be
+# uniformly cloudy"); the shipped-off state was the reported absence.
 var cloud_gate_check: CheckBox
 # AC-0429: the skybox-no-bottom-edge toggle (Settings page, default ON -
 # the user's correction: the sky below the local horizon is space, the
 # planet's limb is the only boundary).
 var no_sky_floor_check: CheckBox
-# AC-0394: the held-item occlusion toggle (Settings page, default OFF -
-# conservative: the user reported the SIZE, not the occlusion).
+# AC-0394: the held-item occlusion toggle (Settings page). AC-0435:
+# default ON - the user REPORTED the drawn-over-terrain behaviour as
+# the defect (the 2026-10-03 screenshot's flat tan quad over the scene;
+# AC-0421 re-adjudicated "the defect is that it draws at all"), so the
+# always-on-top shipped-off state IS the reported defect.
 var vm_occ_check: CheckBox
 # AC-0395: the noclip toggle (Settings page, default OFF - the shipped
 # state is exactly today's behaviour; the indicator + this row make an
@@ -86,9 +91,11 @@ var sat_preload_check: CheckBox
 # the sample based on the height ... like what minecraft does with its
 # maps").
 var relief_check: CheckBox
-# AC-0426: the zero-light sky-ambient toggle (Settings page, default OFF
-# — conservative: the shipped look is the floor-only path; the row lets
-# the player turn the under-canopy / enclosed-cave ambient on).
+# AC-0426: the zero-light sky-ambient toggle (Settings page). AC-0432:
+# default ON — the user's ticket was that the OFF look (the black
+# faces) IS the defect; the row lets the player restore the floor-only
+# path. (The row comment still said "default OFF" after the AC-0432
+# flip — corrected here in the AC-0435 sweep.)
 var ambient_sky_check: CheckBox
 # AC-0252: the med/low band split slider — the distance (taxi chunks)
 # where the 4x4x4 LOW avg-color band starts (the 8x8x8 MED tier owns

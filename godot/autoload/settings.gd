@@ -161,19 +161,23 @@ const DEFAULTS := {
 	# centre (verified geometry, the outer shell carries the march).
 	# Env-overridable (AWECRAFT_CLOUDVOL=0|1 at boot, world.gd).
 	"cloud_volume": true,
-	# AC-0428: the planetary WEATHER GATE. DEFAULTS OFF (conservative —
-	# the shipped look is today's uniform deck, bit-for-bit: the shader's
-	# vgate returns 1.0 at u_gate < 0.5). The user asked for it in their
-	# own words: "we need some kind of noise or something around the
-	# planet that determines where groups of clouds are, it should not be
-	# uniformly cloudy across the entire planet." ON (u_gate 1.0)
-	# multiplies the cloud cover by a low-frequency planetary field
-	# (cloud_layer.gdshader vgate - a handful of broad cloud groups with
-	# clear gaps between them); OFF is the pre-AC-0428 uniform deck.
-	# Rides world.gd _ac0401_push (u_gate on the three cloud-layer
-	# materials, change-gated). Env-overridable
+	# AC-0428: the planetary WEATHER GATE. AC-0435: DEFAULTS ON — the user
+	# asked for it in their own words: "we need some kind of noise or
+	# something around the planet that determines where groups of clouds
+	# are, it should not be uniformly cloudy across the entire planet."
+	# AC-0428 shipped the measured fix behind the switch defaulting OFF
+	# (conservative), so the shipped look was the uniform deck the user
+	# asked to remove — the OFF look IS the reported absence (the same
+	# shape as AC-0426's ambient_sky, re-ruled by AC-0432; the AC-0435
+	# sweep re-ruled this one). ON (u_gate 1.0) multiplies the cloud
+	# cover by a low-frequency planetary field (cloud_layer.gdshader
+	# vgate - a handful of broad cloud groups with clear gaps between
+	# them); OFF (AWECRAFT_CLOUDGATE=0, or the saved setting) restores
+	# the pre-AC-0428 uniform deck bit-for-bit (vgate returns 1.0 at
+	# u_gate < 0.5). Rides world.gd _ac0401_push (u_gate on the three
+	# cloud-layer materials, change-gated). Env-overridable
 	# (AWECRAFT_CLOUDGATE=0|1 at boot, world.gd).
-	"cloud_gate": false,
+	"cloud_gate": true,
 	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
 	# ("after a recent build the level of detail was not showing at all,
 	# and when they looked into it the world 'was still baking'": the
@@ -194,18 +198,24 @@ const DEFAULTS := {
 	# AC-0394: the held-item occlusion switch (the 2026-10-03 report's
 	# residual H2: every viewmodel material sets no_depth_test, so the
 	# hand draws OVER terrain and reads as floating at the correct
-	# scale). DEFAULTS OFF — conservative: the user reported SIZE, not
-	# occlusion, so the AC-0205/AC-0398 default rule applies (a look
-	# change the user has NOT asked for defaults to the pre-change
-	# look — today's always-on-top behaviour). ON re-enables the depth
-	# TEST on every viewmodel material (player.gd — fist / box / cross /
-	# sprite / the tool child materials; the depth WRITE stays
-	# DEPTH_DRAW_DISABLED in both states, the hand still never blocks
-	# the depth of anything behind it). No apply step: player.gd reads
+	# scale). AC-0435: DEFAULTS ON — the user REPORTED the drawn-over-
+	# terrain behaviour as the defect (the 2026-10-03 screenshot: the
+	# held item as a flat tan quad over the scene, read as "a sizing
+	# issue"; the AC-0421 follow-up re-adjudicated it — "the screenshot
+	# is the authority: the defect is that it draws at all" — and hid
+	# the orbit case; the on-surface case this switch owns was left
+	# behind the switch defaulting OFF, so the player still sees the
+	# reported defect: the hand floating over the terrain). ON
+	# re-enables the depth TEST on every viewmodel material (player.gd
+	# — fist / box / cross / sprite / the tool child materials; the
+	# depth WRITE stays DEPTH_DRAW_DISABLED in both states, the hand
+	# still never blocks the depth of anything behind it). OFF
+	# (AWECRAFT_VMOCC=0, or the saved setting) restores the
+	# always-on-top behaviour for A/B. No apply step: player.gd reads
 	# the live value every frame (the cloud_deck/limb_space pattern).
 	# Env-overridable (AWECRAFT_VMOCC=0|1 at boot, player.gd — the
 	# AWECRAFT_RAMPS pattern, written to Settings.values WITHOUT save).
-	"viewmodel_occlude": false,
+	"viewmodel_occlude": true,
 	# AC-0421: the height-based RELIEF on the satellite body. DEFAULTS ON —
 	# the user asked for it in their own words ("alter the color of the
 	# sample based on the height to make it more like baked lighting, like

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0435 plan — audit switch defaults for shipped-off fixes</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1050px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px}
+table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}
+code{font:13px ui-monospace,monospace;background:#f4f4f4;padding:1px 4px}
+.flip{background:#e8f5e9}.keep{background:#fafafa}</style></head><body>
+
+<h1>AC-0435 — plan: audit switch defaults for shipped-off fixes</h1>
+
+<h2>Goal</h2>
+<p>Enumerate every switch (settings rows, env overrides, shader uniforms with a default, flag-gated
+code paths). For each: what it does, what defect or request it exists to serve, whether its OFF state
+is genuinely conservative or whether the OFF state IS the defect, and what depends on it. Flip exactly
+the switches whose off state is a defect the user reported or asked about, with before/after frames and
+a regression check (standing gates, night look, scene contrast). Leave everything else alone.</p>
+<p>The deciding line (per the spec): the test is not "is this feature good" but "does the absence of
+this feature reproduce a problem the user has reported or asked about". A switch that disables an
+expensive effect for performance is fine; a taste switch stays off unless the user asked; a switch
+whose OFF state is the defect gets flipped with evidence that would survive the user reading it.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>flip <code>cloud_gate</code> and <code>viewmodel_occlude</code> in DEFAULTS (false→true) + refresh the two comment blocks (the AC-0432 pattern: "DEFAULTS ON — the user's ticket is that the OFF look IS the defect").</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>refresh the two row comments (the "user asked / user reported" rationale text); no behaviour change (the rows sync from Settings.values).</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>re-baseline the two shipped-state depth assertions to the NEW contract: <code>held</code> arm (<code>depth["sprite"]</code>) and <code>toolpose</code> arm (<code>spr_d</code>) — they assert <code>held_sprite.no_depth_test == true</code> (the old shipped always-on-top state); the new shipped state is the depth TEST on (<code>== false</code>). Precedent: AC-0113 re-established toolpose's scale expectation when the shipped contract moved. Both arms are standalone (not in the SMOKE/full battery), so no gate depends on the old value.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>the §2 Settings row records both switches with their defaults (the AC-0394/AC-0428 bullets say "default OFF") — update to default ON with the AC-0435 reason (invariant 2: the doc moves in the same task).</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> + <code>godot/HARNESS.md</code></td><td>only if the toolpose/held rows' notes state the old depth expectation as a standing value; otherwise <code>harness_doc.py --check</code> stays green and no render is owed.</td></tr>
+</table>
+<p><b>NOT touched:</b> the four fenced files (<code>main.gd</code>, <code>game.gd</code>,
+<code>drop.gd</code>, <code>debug.gd</code> — another session's uncommitted work), <code>tasks/AC-0067</code>,
+<code>tasks/AC-0384</code>, <code>tasks/AC-0425</code>, <code>gdext/</code> (no C++ change — the
+working tree is already in the state the served <code>libchunkio.so</code> was built from, so the tree
+state after this ticket is exactly the state it needs).</p>
+
+<h2>Harness gates (light set — HEAVY is the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Pass condition</th></tr>
+<tr><td>G0</td><td><code>timeout 300 $S --headless --path godot --quit</code></td><td>process exit 0 AND gate_census.py: 0 SCRIPT ERROR AND 0 SHADER ERROR (the paired check — the stochastic UAF exits 139 on a clean log).</td></tr>
+<tr><td>SMOKE</td><td><code>timeout 300 env 'AWECRAFT_BATTERY=player;interact;light;fluids;genhash' $S --headless --path godot</code></td><td>rc 0, 0/0 census, every mode's RESULT ok at the §3 standing values.</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_LOGIC=settings</code>, <code>=toolpose</code>, <code>=held</code> (standalone)</td><td>settings: the mechanism of the two flipped keys (default + clamp + row) green; toolpose/held: green against the NEW shipped depth contract (the re-baselined assertions) — this is the gate-level proof the flip is coherent, the AC-0394 pattern.</td></tr>
+<tr><td>genhash</td><td>in SMOKE</td><td>25/25 byte-identical — no generation change is owed (settings/shader-default flips only).</td></tr>
+<tr><td>shaderforce</td><td><code>xvfb-run -a env VK_ICD_FILENAMES=…lvp_icd.json AWECRAFT_LOGIC=shaderforce AWECRAFT_SIZE=1280,720 $S --path godot --rendering-driver vulkan</code></td><td>12/12 forced compiles, rc 0, 0 SHADER ERROR in the census.</td></tr>
+</table>
+
+<h2>Render evidence (xvfb + lavapipe Forward+, 1280×720, no AWECRAFT_LOGIC, SNAP_DRAIN=600, 1200 s budget)</h2>
+<table>
+<tr><th>Frame</th><th>Recipe</th><th>Shows</th></tr>
+<tr><td>cloud <b>before</b></td><td>planet preset (AWECRAFT_CAM=planet, SAT_ALT=2600, NADIR), <b>AWECRAFT_CLOUDGATE=0</b> (the current shipped default), CLOUD_T0=411200, TIME=0.5</td><td>the uniform deck — the absent variation the user ordered.</td></tr>
+<tr><td>cloud <b>after</b></td><td>same, no CLOUDGATE env (the NEW default ON)</td><td>cloud groups with clear gaps — the requested planetary variation.</td></tr>
+<tr><td>cloud <b>after, night</b></td><td>same as after + AWECRAFT_TIME=0.0</td><td>night look intact with the gate on (the gate is a time-blind field; the night check the spec demands).</td></tr>
+<tr><td>vm <b>before</b></td><td>harness fall-through + AWECRAFT_AIM=&lt;cliff pose&gt; (terrain face 0.5 m in front of the eye), <b>AWECRAFT_VMOCC=0</b> (the current shipped default)</td><td>the held block floating OVER the terrain face — the reported defect.</td></tr>
+<tr><td>vm <b>after</b></td><td>same pose, no VMOCC env (the NEW default ON)</td><td>the held block occluded by the closer terrain.</td></tr>
+<tr><td>vm <b>after, open</b></td><td>auto-aim (no AWECRAFT_AIM) + AWECRAFT_FPV_ITEM=1 (dirt), default ON</td><td>the item still fully visible against open terrain — nothing lost for the normal view.</td></tr>
+</table>
+<p>The cliff pose is found with an AweGen <code>carved_tops</code> probe (a 2+ block step near spawn);
+the pose = the air cell 0.5 m in front of the face, mid-face height, aimed straight at the face (the
+wallshot arm's 0.4 m geometry, in natural terrain). Measure side: a python census of the frames
+(cloud fraction + inter-region contrast before/after; night luminance band; vm-region pixel diff).</p>
+
+<h2>Switch inventory (initial — the full table is the results page)</h2>
+<p>26 bool settings rows + the env overrides + the shader-uniform defaults + the flag-gated code
+paths. The verdict column is the initial read; each row is answered with the four questions in the
+results table.</p>
+<table>
+<tr><th>Switch</th><th>Default</th><th>Serves</th><th>Initial verdict</th></tr>
+<tr class="flip"><td><code>cloud_gate</code></td><td>OFF</td><td>the user's explicit order: "some kind of noise… where groups of clouds are, it should not be uniformly cloudy"</td><td><b>FLIP ON</b> — the off state is the absence of a requested feature (the AC-0426/AC-0432 shape).</td></tr>
+<tr class="flip"><td><code>viewmodel_occlude</code></td><td>OFF</td><td>the user's reported defect: the held item drawn over terrain (the 2026-10-03 "sizing issue" screenshot; AC-0421 re-adjudicated "the defect is that it draws at all")</td><td><b>FLIP ON</b> — the off state is the reported defect (item floats over everything).</td></tr>
+<tr class="keep"><td><code>ambient_enabled</code></td><td>OFF</td><td>the user reported the always-on wind loop as a defect</td><td>KEEP — the off state IS the user's request.</td></tr>
+<tr class="keep"><td><code>smooth_ramps</code></td><td>OFF</td><td>an un-asked look change (taste)</td><td>KEEP — un-asked taste defaults conservative.</td></tr>
+<tr class="keep"><td><code>modern_light</code> / <code>seam_light</code> / <code>cloud_deck</code> / <code>limb_space</code> / <code>sky_altitude</code> / <code>sky_horizon</code> / <code>no_sky_floor</code> / <code>cloud_volume</code> / <code>relief_shading</code> / <code>ambient_sky</code> / <code>sat_preload</code></td><td>ON</td><td>each a user request (AC-0398/0427/0401×2/0402/0422/0429/0405/0421/0426+0432/0414)</td><td>KEEP ON — already the requested state.</td></tr>
+<tr class="keep"><td><code>noclip</code></td><td>OFF</td><td>debug tool (the user's request for the TOOL, not for it being on)</td><td>KEEP — a debug tool must not be left on.</td></tr>
+<tr class="keep"><td><code>debug_stats</code> / <code>debug_logging</code> / <code>overlay_band</code> / <code>overlay_light</code> / <code>overlay_collision</code> / <code>fullscreen</code> / <code>invert_x</code> / <code>invert_y</code></td><td>OFF</td><td>debug overlays / windowing / input defaults</td><td>KEEP — neutral defaults, no user-reported absence.</td></tr>
+<tr class="keep"><td><code>hunger_enabled</code> / <code>fog_enabled</code> / <code>dof_enabled</code> / <code>yfloor_enabled</code></td><td>ON</td><td>game defaults (survival, the fog wall contract, the camera feature, the far-tier floor)</td><td>KEEP ON — no reported absence of the ON state.</td></tr>
+</table>
+<p>Env overrides: every <code>AWECRAFT_*</code> mirror of a settings key follows its setting's default
+(unset = live value); the rest are harness instruments (A/B knobs, diagnostics, shot hooks) with
+shipped behaviour at the unset state — no product switch hides behind any of them. Shader uniforms:
+the convention is "shader default = pre-feature path, pushed live from the settings values"
+(<code>u_gate</code> / <code>u_amb</code> / <code>u_deck</code> / … all ride their setting;
+<code>u_spec</code> ships at 0.0 matte as the user-worded defect fix, no switch). Flag-gated code
+paths without a user switch (the orbit viewmodel hide, the cloud silhouette gate, the slab-decode
+guard, the save filter, the col-stage/fluid-sleep/load-bypass performance lanes) are all defect fixes
+or performance paths whose SHIPPED state is the fixed/fast one — none is a requested feature parked
+off. The full four-question answer per row is in the results table.</p>
+
+</body></html>

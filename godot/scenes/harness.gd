@@ -23957,9 +23957,18 @@ func _held_test() -> void:
 	p.sel = main._slot_of(p, 107)
 	for i in 6:
 		await get_tree().physics_frame
+	# AC-0435: the shipped viewmodel contract MOVED — viewmodel_occlude
+	# now DEFAULTS ON (the user reported the drawn-over-terrain
+	# behaviour as the defect; the always-on-top shipped-off state was
+	# the reported defect), so the shipped state is the depth TEST
+	# enabled (no_depth_test false). The old expectation (== true, the
+	# always-on-top state) tracked the AC-0394 shipped default; the arm
+	# re-baselines to the new contract (the AC-0113 re-establishment
+	# pattern — an instrument tracks the shipped state, which the
+	# ticket moved deliberately, not silently).
 	var spr_d := false
 	if p.held_sprite != null and p.held_sprite.visible:
-		spr_d = p.held_sprite.no_depth_test == true
+		spr_d = p.held_sprite.no_depth_test == false
 	depth["sprite"] = spr_d
 	var eslot := -1
 	for i in p.inv.size():
@@ -24149,7 +24158,15 @@ func _toolpose_test() -> void:
 		and (p.held_box.material_override as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
 	var fist_d := p.held_fist != null and p.held_fist.material_override is StandardMaterial3D \
 		and (p.held_fist.material_override as StandardMaterial3D).depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
-	var spr_d: bool = p.held_sprite != null and (p.held_sprite.no_depth_test == true)
+	# AC-0435: re-baselined with the `held` arm's twin assertion —
+	# viewmodel_occlude now DEFAULTS ON (the user reported the
+	# drawn-over-terrain behaviour; the always-on-top shipped-off state
+	# was the reported defect), so the shipped state is the depth TEST
+	# enabled (no_depth_test false), not the AC-0394 always-on-top
+	# state (== true) this line asserted. The tool/box/fist fields
+	# above stay on the WRITE side (DEPTH_DRAW_DISABLED in both switch
+	# states — untouched by the flip).
+	var spr_d: bool = p.held_sprite != null and (p.held_sprite.no_depth_test == false)
 	var depth_ok_all: bool = tool_d_ok and box_d and fist_d and spr_d
 	res["depth"] = {"tool": tool_d_ok, "box": box_d, "fist": fist_d, "sprite": spr_d}
 	res["depth_ok"] = depth_ok_all

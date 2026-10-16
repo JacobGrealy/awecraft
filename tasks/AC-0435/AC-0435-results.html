@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0435 results — switch-default audit: two shipped-off fixes flipped ON</title>
+<style>body{font:15px/1.55 ui-sans-serif,system-ui,sans-serif;max-width:1150px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px}h2{font-size:17px;margin-top:30px;border-bottom:2px solid #333;padding-bottom:4px}
+table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #bbb;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#eee}tr.flip td{background:#e8f5e9}tr.keep td{background:#fff}
+code{font:12.5px ui-monospace,monospace;background:#f2f2f2;padding:1px 4px}
+img{max-width:560px;border:1px solid #999;display:block;margin:8px 0}
+.pair{display:flex;gap:12px;flex-wrap:wrap}.pair>div{flex:1;min-width:300px}
+.small{font-size:12.5px;color:#444}.ok{color:#0a0;font-weight:bold}.bad{color:#a20002;font-weight:bold}
+.note{background:#fff8e1;border-left:4px solid #e6b800;padding:8px 12px;font-size:13.5px}</style></head><body>
+
+<h1>AC-0435 — audit every switch; flip the ones whose OFF state IS the defect</h1>
+<p><b>Date:</b> 2026-10-16 &nbsp;·&nbsp; <b>Verdict:</b> 46 settings keys (28 bool switches) + every <code>AWECRAFT_*</code> env
+override + every shader-uniform default + every flag-gated code path audited. <b>Exactly two switches ship their
+requested fix OFF — both flipped ON</b>: <code>cloud_gate</code> (AC-0428) and <code>viewmodel_occlude</code> (AC-0394).
+Every other switch's default is either the user-requested state, a user-reported-defect fix that is already in the
+requested state, a debug tool that must not be left on, or an un-asked taste/perf path where OFF is genuinely
+conservative. <code>ambient_sky</code> (AC-0426) is the worked precedent — it was re-ruled ON by AC-0432; it is
+cited, not re-flipped.</p>
+
+<h2>The two flips</h2>
+<table>
+<tr><th>Switch</th><th>What it does</th><th>What defect it serves</th><th>Was OFF the defect?</th><th>Decision</th></tr>
+<tr class="flip"><td><code>cloud_gate</code> (AC-0428 → <b>AC-0435</b>)</td>
+<td>Multiplies the planetary cloud cover by a low-frequency weather field (cloud_layer.gdshader <code>vgate</code>): a handful of broad cloud groups with clear gaps instead of a uniform deck. Rides <code>world._ac0401_push</code> (change-gated <code>u_gate</code> on the three cloud-layer materials).</td>
+<td>The user's explicit order (AC-0428): “we need some kind of noise or something around the planet that determines where groups of clouds are, it should not be uniformly cloudy across the entire planet.” AC-0428 measured and shipped the fix <b>behind the switch defaulting OFF</b>, so the shipped look was the uniform deck the user asked to remove.</td>
+<td class="yes"><b>YES</b> — the OFF state is the absence of a requested feature (the AC-0426/AC-0432 ambient_sky shape, verbatim).</td>
+<td><b>FLIPPED → ON</b> (settings.gd DEFAULTS + comments; menu row; ARCHITECTURE.md §2; HARNESS.md env row; AWECRAFT_CLOUDGATE=0 restores the uniform deck for A/B).</td></tr>
+<tr class="flip"><td><code>viewmodel_occlude</code> (AC-0394 → <b>AC-0435</b>)</td>
+<td>Re-enables the depth <b>TEST</b> on every viewmodel material (fist / box / cross / sprite / tool children); the depth WRITE stays <code>DEPTH_DRAW_DISABLED</code> in both states. ON = the held item is occluded by closer terrain; OFF = always-on-top.</td>
+<td>The user's reported defect: the 2026-10-03 screenshot of the held item as a flat tan quad drawn over the scene (reported as a “sizing issue”; AC-0421 re-adjudicated from the same evidence: “the defect is that it draws at all” — and hid the orbit half, leaving this on-surface half behind the switch). AC-0394 defaulted OFF on the reading “the user reported SIZE, not occlusion”; the later evidence re-adjudicates that reading.</td>
+<td class="yes"><b>YES</b> — the OFF state is the reported defect: the hand floating over the terrain the player is looking at.</td>
+<td><b>FLIPPED → ON</b> (settings.gd + comments; menu row; ARCHITECTURE.md §2; the <code>held</code>/<code>toolpose</code> harness arms re-baselined to the new shipped contract per the AC-0113 pattern; AWECRAFT_VMOCC=0 restores always-on-top for A/B).</td></tr>
+</table>
+
+<h2>Frame evidence — cloud_gate (planet nadir, 2600 m, CLOUD_T0=411200, day 0.5)</h2>
+<div class="pair">
+<div><img src="captures/ac0435-cloud-before.png" alt="before: uniform deck"><b>BEFORE</b> — <code>AWECRAFT_CLOUDGATE=0</code> (the old default): the uniform speckled deck over the whole disc, no groups, no clear regions.<br>
+<span class="small">census (disc = 585,768 px): white <b>0.2058</b> · clear-terrain <b>0.1853</b> · clearest 1/64 cell <b>0.589</b> · mean L 153.4 (σ 81.0)</span></div>
+<div><img src="captures/ac0435-cloud-after.png" alt="after: grouped clouds"><b>AFTER</b> — new default ON: cloud groups with large clear windows (centre + lower-left show terrain directly). The same cloud mass is <i>redistributed</i>, not removed.<br>
+<span class="small">census: white <b>0.2102</b> · clear-terrain <b>0.2581</b> (+39%) · clearest cell <b>0.855</b> (a 86%-clear region now exists) · mean L 146.3 (σ 84.2 — contrast up, dark clear terrain against bright cloud groups)</span></div>
+</div>
+<p class="small">The high-frequency cloud texture itself is identical (the gate modulates density amplitude, not frequency) —
+what the census shows is the redistribution: before, no disc region is clearer than 59% terrain; after, the clearest
+region is 86% clear while the remaining cloud concentrates elsewhere. That is exactly “where groups of clouds are, it
+should not be uniformly cloudy.”</p>
+
+<h2>Frame evidence — viewmodel_occlude (terrain face 0.5 m in front of the eye, held stone)</h2>
+<div class="pair">
+<div><img src="captures/ac0435-vm-before.png" alt="before: stone over the face"><b>BEFORE</b> — <code>AWECRAFT_VMOCC=0</code> (the old default): the held stone block floating <b>over</b> the dirt face — the reported defect, in natural terrain (the face is a 1-block step at (10, 8), eye 0.5 m ahead at face-centre height — the wallshot arm's 0.4 m geometry).<br>
+<span class="small">held-item region mean L <b>103.2</b> (bright stone over the dark face)</span></div>
+<div><img src="captures/ac0435-vm-after.png" alt="after: stone occluded"><b>AFTER</b> — new default ON: the same face, the stone hidden behind it. The hotbar still shows the held stack — only the 3D viewmodel obeys the depth test now.<br>
+<span class="small">held-item region mean L <b>44.2</b> (the face shows through). Pixel diff before/after: <b>56,787 px</b>, bounding box [797,461,1075,706] = exactly the stone region; the only other difference is a 293-px sliver at the stone's bottom edge where it brushes the hotbar corner (sway phase between runs — the hotbar slots are pixel-identical).</span></div>
+</div>
+<div style="margin-top:10px"><img src="captures/ac0435-vm-open.png" alt="open view: item still visible" style="max-width:720px">
+<b>Nothing lost:</b> open view (auto-aim, held dirt, new default ON) — the item is fully visible against the open field.
+Occlusion only fires where terrain is <i>closer</i> than the item, which is what the user asked for.</div>
+
+<h2>Night look + scene contrast (spec: confirm no regression)</h2>
+<table>
+<tr><th>Frame</th><th>disc mean L</th><th>σ L</th><th>reading</th></tr>
+<tr><td>cloud before (day)</td><td>153.42</td><td>81.01</td><td>uniform deck</td></tr>
+<tr><td>cloud after (day)</td><td>146.30</td><td>84.19</td><td>grouped — slightly darker (clear terrain replaces bright veil), higher contrast</td></tr>
+<tr><td><img src="captures/ac0435-cloud-night.png" alt="night" style="max-width:420px"><b>cloud after, NIGHT</b> (AWECRAFT_TIME=0.0, gate ON)</td><td>5.36 (central mask; 20.5 over the surviving disc px)</td><td>6.64</td><td>night intact: the disc is dark, the cloud groups are dimmed with the day factor (the gate is a time-blind field — it reshapes, never brightens), no blown-out clouds, 54 star pixels in the space margin (stars visible)</td></tr>
+</table>
+<p class="small">u_air (the sky's pushed air column) reads [208,241,251] day vs [48,97,109] night — the sky's own
+day/night track is untouched by either flip.</p>
+
+<h2>Gates (light set — exit status <i>and</i> census, per G0 semantics)</h2>
+<table>
+<tr><th>Gate</th><th>Command (abridged)</th><th>rc</th><th>SCRIPT/SHADER ERR</th><th>Result</th></tr>
+<tr><td>G0</td><td><code>$S --headless --path godot --quit</code></td><td class="ok">0</td><td>0 / 0</td><td>ok</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> headless</td><td class="ok">0</td><td>0 / 0</td><td>ok:true — all five modes at standing values</td></tr>
+<tr><td>genhash</td><td>(in SMOKE) vs <code>.scratch/HEAVY-r14/genhash.log</code> (coordinator's current-tree reference, 2026-10-15 21:53)</td><td colspan="2">—</td><td><b>25/25 byte-identical</b> — generation did not move (the AC-0367 ref in harness_data.yaml predates the current tree's generation state; the move is the other session's, not this ticket's — proven by matching the current-tree ref exactly)</td></tr>
+<tr><td>PROBE settings</td><td><code>AWECRAFT_LOGIC=settings</code></td><td class="ok">0</td><td>0 / 0</td><td>ok:true (the mechanism: defaults + clamp + rows)</td></tr>
+<tr><td>PROBE toolpose</td><td><code>AWECRAFT_LOGIC=toolpose</code></td><td class="ok">0</td><td>0 / 0</td><td>ok:true — <code>depth {tool,box,fist,sprite: <b>true</b>}, depth_ok true</code> against the <b>new</b> shipped contract (depth TEST on)</td></tr>
+<tr><td>PROBE held</td><td><code>AWECRAFT_LOGIC=held</code></td><td class="ok">0</td><td>0 / 0</td><td><code>depth_ok true</code> (sprite on the new contract). A/B: with both flips forced OFF via env, <code>depth.sprite</code> correctly reads false (the arm tracks the shipped state) and <code>box_ok</code> reads the same <b>pre-existing</b> false — see observation below</td></tr>
+<tr><td>shaderforce</td><td><code>xvfb + lavapipe Forward+ AWECRAFT_LOGIC=shaderforce</code></td><td class="ok">0</td><td>0 / 0</td><td>12/12 shaders verdict=ok (boot line: <code>Vulkan … Forward+ … llvmpipe</code>)</td></tr>
+</table>
+<div class="note"><b>Observation (pre-existing, A/B-proven, not caused by this ticket):</b> the <code>held</code> arm's
+<code>box_ok</code> reads false (<code>tint_top_ok</code> false — the held dirt box's top-face tint vs
+<code>Data.block_tint(1,"top")</code>). Re-running the arm with both AC-0435 switches forced OFF (<code>AWECRAFT_CLOUDGATE=0
+AWECRAFT_VMOCC=0</code>) leaves it identically false: it is data-side, on this tree, and neither flip touches it
+(neither the cloud shader's <code>u_gate</code> nor the viewmodel depth test feeds a mesh tint). Last green reading in
+the gate history is 08-24; the arm has not been re-run since. Recorded rather than absorbed — the coordinator's heavy
+set owns it.</div>
+
+<h2>Full switch inventory (the acceptance table)</h2>
+<p class="small">28 bool settings rows (46 DEFAULTS keys incl. the sliders/values), plus the env overrides, the
+shader-uniform defaults and the flag-gated code paths. “Serves” = the ticket/report it exists for; “default a defect?”
+= does the OFF state reproduce a user-reported problem; “decision” = flipped or kept (and why).</p>
+<table>
+<tr><th>Switch</th><th>Default</th><th>What it does</th><th>Serves</th><th>Default a defect?</th><th>Decision</th></tr>
+<tr class="flip"><td><code>cloud_gate</code></td><td><b>ON</b> (was OFF)</td><td>planetary weather field over the cloud cover</td><td>the user's own words (AC-0428)</td><td>YES — uniform deck is the reported absence</td><td><b>FLIPPED</b></td></tr>
+<tr class="flip"><td><code>viewmodel_occlude</code></td><td><b>ON</b> (was OFF)</td><td>depth test on the viewmodel</td><td>the user-reported drawn-over-terrain (2026-10-03; AC-0421 re-adjudication)</td><td>YES — always-on-top is the reported defect</td><td><b>FLIPPED</b></td></tr>
+<tr><td><code>ambient_sky</code></td><td>ON</td><td>sky-ambient lift for faces at the light floor</td><td>the user's black-faces ticket (AC-0426 → re-ruled by AC-0432)</td><td>no — already in the requested state</td><td>KEEP (the precedent, cited)</td></tr>
+<tr><td><code>ambient_enabled</code></td><td>OFF</td><td>the always-on wind/bed audio loop</td><td>the user reported the loop as a defect (AC-0389)</td><td>no — OFF <i>is</i> the user's request</td><td>KEEP</td></tr>
+<tr><td><code>modern_light</code></td><td>ON</td><td>modern per-vertex lighting</td><td>the user asked (AC-0398)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>seam_light</code></td><td>ON</td><td>seam-lighting continuity</td><td>the user asked (AC-0427)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>cloud_deck</code></td><td>ON</td><td>cloud deck character</td><td>the user asked (AC-0401)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>limb_space</code></td><td>ON</td><td>limb-glow altitude gate</td><td>the user asked (AC-0401)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>sky_altitude</code></td><td>ON</td><td>altitude-aware sky space blend</td><td>the user story (AC-0402)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>sky_horizon</code></td><td>ON</td><td>the sky's horizon behaviour</td><td>the user asked (AC-0422)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>no_sky_floor</code></td><td>ON</td><td>sky below the local horizon is space</td><td>the user's correction (AC-0429)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>cloud_volume</code></td><td>ON</td><td>raymarched volumetric clouds</td><td>the user ordered the rework (AC-0405)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>sat_preload</code></td><td>ON</td><td>bake the planet before the world handover</td><td>the user asked (AC-0414)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>relief_shading</code></td><td>ON</td><td>height-based satellite relief</td><td>the user asked in their own words (AC-0421)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>noclip</code></td><td>OFF</td><td>debug fly-through</td><td>the user asked for the TOOL (AC-0395)</td><td>no — a debug tool must not ship on</td><td>KEEP</td></tr>
+<tr><td><code>smooth_ramps</code></td><td>OFF</td><td>45° surface ramps</td><td>an un-asked look change (AC-0205)</td><td>no — un-asked taste defaults conservative</td><td>KEEP</td></tr>
+<tr><td><code>hunger_enabled</code></td><td>ON</td><td>the survival system</td><td>game design (AC-0072)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>fog_enabled</code></td><td>ON</td><td>the distance fog wall</td><td>the render contract</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>dof_enabled</code></td><td>ON</td><td>depth-of-field camera feature</td><td>camera character</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>yfloor_enabled</code></td><td>ON</td><td>far-tier mesh floor below sea</td><td>the far/h-only contract (AC-0332)</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>fullscreen</code></td><td>OFF</td><td>window mode</td><td>windowing default</td><td>no</td><td>KEEP</td></tr>
+<tr><td><code>debug_stats</code> / <code>debug_logging</code> / <code>overlay_band</code> / <code>overlay_light</code> / <code>overlay_collision</code></td><td>OFF</td><td>debug overlays / console tee</td><td>developer tools (AC-0170 et al.)</td><td>no — debug tools must not ship on</td><td>KEEP</td></tr>
+<tr><td><code>invert_x</code> / <code>invert_y</code></td><td>OFF</td><td>input inversion</td><td>input defaults (AC-0089 layer)</td><td>no</td><td>KEEP</td></tr>
+<tr><td>(22 sliders/values: render/sim dist, volume, resolution, seed, chunks_per_frame, fog_start_pct, low/medium start, flight speeds, DoF params, yfloor depth, worker threads, look sensitivity, deadzones, controls map)</td><td>—</td><td>continuous options</td><td>user preferences</td><td>n/a — not switches</td><td>KEEP</td></tr>
+</table>
+<p class="small"><b>Env overrides:</b> every <code>AWECRAFT_*</code> mirror of a settings key (RAMPS/MODERN/SEAMLIGHT/
+CLOUDDECK/LIMB/SKYALT/SKYHORIZON/NOSKYFLOOR/CLOUDVOL/CLOUDGATE/SATPRELOAD/VMOCC/AMBSKY/SPEC) follows its setting —
+unset = the live value, and no product switch hides behind any env that does not mirror a settings key (the rest are
+harness instruments: shot hooks, band overrides, diagnostics, the battery). <b>Shader-uniform defaults:</b> the
+convention is “shader default = the pre-feature path, pushed live from the settings values” — <code>u_gate</code>,
+<code>u_amb</code>, <code>u_deck</code>, <code>u_limb_gate</code>, <code>u_sky_alt</code>, <code>u_vol</code>,
+<code>u_no_floor</code>, <code>u_horizon</code> all ride their setting (flipping the default flips the pushed value —
+no apply step owed). <code>u_spec</code> ships at 0.0 matte with no switch — that 0.0 is the user-worded fix itself
+(“the satellite's level of detail should not be reflective”), not a parked feature. <b>Flag-gated code paths without
+a user switch:</b> the orbit viewmodel hide (AC-0421, always on — the user-worded fix, no switch by design), the cloud
+silhouette gate, the slab-decode guard, the save filter, and the col-stage / fluid-sleep / load-bypass perf lanes
+(default ON = the fast path) — all fixes or perf paths whose SHIPPED state is the fixed/fast one; none is a requested
+feature parked off.</p>
+
+<h2>What was deliberately not done</h2>
+<ul>
+<li><b>No third flip.</b> Every remaining OFF bool is a debug tool (must stay off), a user-reported-defect fix that
+is already in the requested state (<code>ambient_enabled</code> off <i>is</i> the request), or un-asked taste
+(<code>smooth_ramps</code>). Flipping any of them would fail the “survives the user reading it” test.</li>
+<li><b>No world/, data.gd, or C++ change</b> — the two flips are render-side defaults only; genhash 25/25 vs the
+current-tree reference proves it. No SCons rebuild owed; the working tree stays in the state the served
+<code>godot/bin/libchunkio.so</code> was built from (no C++ touched).</li>
+<li><b>No re-baseline of standing heavy values</b> — the light set is this ticket's; farab/ladder/meshprobe/halo/
+lightstate/r16/boundary are the coordinator's. None of them is expected to move (nothing generation-side changed).</li>
+<li><b>The <code>wallshot</code> arm was not run</b> — it writes into fenced <code>tasks/AC-0067/</code>.</li>
+<li><b>The held arm's pre-existing <code>box_ok</code> false was not fixed</b> — it is data-side and pre-existing
+(A/B-proven above); fixing a held-box tint is not this ticket's scope. Recorded for the coordinator.</li>
+<li><b>The <code>ambient_sky</code> row comment in menu.gd was corrected</b> (it still said “default OFF” after
+AC-0432's flip) — a documentation-truth fix found in the sweep, same for the ARCHITECTURE.md/HARNESS.md env rows for
+both flipped switches.</li>
+</ul>
+
+<h2>Caveats</h2>
+<p class="small">Frames are the lavapipe Forward+ proxy (llvmpipe), per HARNESS.md §2: evidence about geometry,
+layout, and colour relationships — not the shipped real-GPU look. The <code>_placed.png</code> byproducts of the
+AIM shot path were removed from <code>captures/</code> (the six named frames are the evidence).</p>
+
+<h2>Files</h2>
+<p class="small">
+<code>godot/autoload/settings.gd</code> (the two defaults + comments) · <code>godot/ui/menu.gd</code> (row comments,
+incl. the stale ambient_sky one) · <code>godot/scenes/harness.gd</code> (held/toolpose depth assertions re-baselined) ·
+<code>tasks/harness_data.yaml</code> (toolpose row note) · <code>godot/HARNESS.md</code> (re-rendered + the two env
+rows) · <code>godot/ARCHITECTURE.md</code> (§2 Settings row, three entries) · <code>tasks/AC-0435/</code>:
+<code>plan.html</code>, this page, <code>captures/</code> (6 frames), <code>continuity.md</code>. Gate logs:
+<code>.scratch/AC-0435/gates/</code>.</p>
+
+</body></html>
