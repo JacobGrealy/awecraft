@@ -3988,8 +3988,8 @@ func _ready() -> void:
 	if nofl_e != "":
 		Settings.values["no_sky_floor"] = nofl_e == "1"
 	# AC-0426: the zero-light sky-ambient switch (Settings "ambient_sky",
-	# default OFF - conservative: the shipped look is today's
-	# floor-only path, bit-identical). Same pattern: the env overrides
+	# default ON since AC-0432 - the OFF look is the user's reported
+	# black-blob defect; the env A/Bs both states). Same pattern: the env overrides
 	# the STORED setting for this process only (no save, so the arms
 	# never clobber the user's cfg) and lets the render A/B both states
 	# without a save file. Read live by _ac0401_push, so no boot derive
@@ -5214,8 +5214,8 @@ func _ac0401_push() -> void:
 			if am2 is ShaderMaterial:
 				am2.set_shader_parameter("u_fog_far", ff)
 	# (1b) AC-0426: the zero-light sky-ambient switch (Settings
-	# "ambient_sky", default OFF; AWECRAFT_AMBSKY=<0|1> env preload at
-	# boot). Same gate shape as (1): the value AND the material-set size,
+	# "ambient_sky", default ON since AC-0432; AWECRAFT_AMBSKY=<0|1> env
+	# preload at boot). Same gate shape as (1): the value AND the material-set size,
 	# so lazily built chunk materials receive the current value (the
 	# AC-0420 pattern). 0.0 (OFF) makes the shader's added term 0.0 for
 	# every pixel - the AC-0128 formula bit-identical (0*x = 0, x + 0 = x

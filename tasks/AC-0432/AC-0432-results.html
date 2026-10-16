@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0432 — results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}img{max-width:100%;border:1px solid #ccc;margin:8px 0}figure{margin:8px 0}figcaption{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0432 — results (black faces along the chunk seam)</h1>
+<p>Seed 44, r4, the user's view (spawn pose, chunk (0,−1) seam). Defect: the tree's faces
+along the seam render pure black while the open ground 200 px away renders bright.</p>
+
+<h2>1. Mechanism — the light floor under the crown (the split, explained)</h2>
+<p>The original UV→texel hypothesis is <strong>refuted</strong>: the slab-8 mesh of (0,−1) is
+complete (live == fresh, 343 = 343 quads; all 67 scan-decided trunk faces present, incl. the
+12 seam-V-extended +x faces at x≈16.6), the UVs are plain-atlas-space and correct, and the
+bound texture (ShaderMaterial param <code>tex</code>, 1024²) holds the right pixels at those
+UVs (grass top (56,108,33,255), log side (116,90,54,255)). A tf=400 ray probe in the
+<em>render</em> world confirms it at the snapshot frame: every blob ray finds its quad within
+d&lt;0.7 of the first solid cell. Geometry and texels are exonerated in both worlds.</p>
+<p>The vertex-color R channel carries the sky-light scalar s (clamped [20/255, 1] at mesh
+time). <strong>Every blob-region face sits at the floor (R = 0.0784, G = 0.0)</strong> — the
+canopy's leaves occlude the sky pull for the trunk cells and the grass tops the crown
+overhangs — while the open-ground faces 200 px away are at <strong>R = 1.0</strong>. The
+shader is <code>ALBEDO = t.rgb * COLOR.b * L</code>,
+<code>L = 0.20 + 0.80·max(u_day·R, G)</code>: floor faces render at L = 0.2627, sunlit faces
+at L = 1.0; after the tonemap, bark × 0.5647 shade × 0.26 lands at (0,0,0)–(0,23,0) on
+screen. The (0,0,0) blob pixels are those floor-rendered faces plus space sky seen through
+the canopy's cutout holes and grazing gaps. <strong>The split is sky exposure:</strong> faces
+whose column the sky pull reaches are bright; faces under the crown are black — same mesh,
+same frame, same texture, only the light scalar differs. Same trunk, same slab: the
+seam-extended +x face at x=16.6 (sky-exposed) renders bright green-brown, its floor-lit
+siblings render black.</p>
+
+<h2>2. What changed</h2>
+<p>AC-0426 had measured and shipped exactly this lift as Settings <code>ambient_sky</code>
+(pushed as <code>u_amb</code>; <code>L += u_amb·u_day·step(m_direct, 0.08)</code> — the step
+fires <em>only</em> on floor faces, so sunlit faces are bit-identical at any hour; 0.0 at
+night), but it defaulted OFF. <strong>The fix: <code>godot/autoload/settings.gd</code> —
+<code>"ambient_sky": true</code></strong> (default ON; comments refreshed in settings.gd and
+world.gd). At noon the floor faces go L 0.2627 → 0.6127 (AMB_SKY_L = 0.35, the AC-0426
+value: "dark brown, readable as bark, in-the-shade not in-the-hole"; sunlit neighbours
+untouched). Colour-only push — no mesh, no bake, no data. <code>AWECRAFT_AMBSKY=0</code> and
+the saved setting restore the OFF look per process / per user. No C++ change: the mesher is
+exonerated; all temporary debug code (harness.gd arm, world.gd tf=400 audit, mesh.cpp dbg
+hooks) was removed and the .so rebuilt + copied to <code>godot/bin</code>.</p>
+
+<h2>3. Pure-black face count, before / after</h2>
+<p>Per-face census at the blob: every quad of the tree region (62 faces, slabs 8/9 of
+(0,−1)) projected to screen at the snapshot frame, 5 sample points per face; a face counts
+pure-black when ≥4 of 5 points are exactly (0,0,0).</p>
+<table>
+<tr><th>metric</th><th>before (AMBSKY=0)</th><th>after (default ON)</th></tr>
+<tr><td>faces in census</td><td>62</td><td>62</td></tr>
+<tr><td><strong>pure-black faces (≥4/5 pts (0,0,0))</strong></td><td><strong>27</strong></td><td><strong>15</strong></td></tr>
+<tr><td>near-black faces (all pts ≤8)</td><td>26</td><td>15</td></tr>
+<tr><td>blob bbox (x 680–920, y 0–80) pure-black pixels (4800 samples)</td><td>2449 (51.0%)</td><td>2130 (44.4%)</td></tr>
+</table>
+<p>Un-occluded faces visibly lift — e.g. a grass-top face's samples go
+<code>(0,0,0)×5 → (21,7,0),(0,0,0),(10,0,0),(22,7,0),(0,17,0)</code> (dark green-brown
+texture, the AC-0426-calibrated "in the shade" look); the trunk base at (725,10) goes
+(0,0,0) → (26,10,0). The 15 residual pure-black faces are the ones whose sample points sit
+under <em>nearer</em> canopy leaf-holes (the (0,0,0) there is space sky through the cutout,
+not an unlit face — the floor-lit leaf in front and the hole are unchanged geometry, and a
+lifted face cannot sample (0,0,0) at a non-zero texel). The blob's remaining black is that
+sky-through-canopy class, which is correct rendering, not the defect.</p>
+
+<figure>
+<img src="captures/before-blob-x3.png" alt="before, 3x">
+<img src="captures/after-blob-x3.png" alt="after, 3x">
+<figcaption>3× zoom along the seam. Before: the trunk base and under-crown ground are a
+flat (0,0,0) silhouette. After: bark texture and ground read through the shade; the canopy
+holes still show the sky (cutout, as designed).</figcaption>
+</figure>
+
+<h2>4. Previous-fix evidence (AC-0430/AC-0431 residue still holds)</h2>
+<p>PROBE (<code>ac0432uv</code> arm, final run): <code>ok: true</code> over 32,165 checks —
+<code>defect_fullylit_empty: 0</code>, <code>empty_partial: 0</code> (zero fully-lit quads
+sampling black/empty texels — the foreign-texel and the black-lava-quad classes are absent);
+flora census: 864/864 leaf quads sample the leaf tile (UV-centre (336,16) is an a=0 hole —
+the cutout working as designed; probe texels grass (56,108,33,255), leaf (28,64,22,255),
+leaf hole (28,64,22,0)); slab-8 live == fresh (343 = 343) with correct UV→texel mapping.</p>
+
+<h2>5. Gates (all paired: census <code>tasks/scripts/gate_census.py</code> + exit status)</h2>
+<table>
+<tr><th>gate</th><th>rc</th><th>census</th><th>result</th></tr>
+<tr><td>G0, clean tree (post-strip)</td><td>0</td><td>0 / 0</td><td>pass</td></tr>
+<tr><td>G0, PROBE arm run</td><td>0</td><td>0 / 0</td><td>pass</td></tr>
+<tr><td>PROBE <code>ac0432uv</code></td><td>0</td><td>—</td><td>ok true (32,165 checks), defect 0/0</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td>0</td><td>0 / 0</td><td>ok true — player (jump_peak_y 142.42, on_floor, col_deferred 0), interact (drop+place), light (15/0/14, far 0→9), fluids (sea stable), 260 s</td></tr>
+<tr><td>genhash 25/25</td><td>(in battery)</td><td>—</td><td>25/25 identical vs the AC-0425 reference set; (0,0) = <code>46c20b07c95cb03b57772e1531c97f71</code> — mesher byte-identity holds</td></tr>
+<tr><td>acceptance renders (before5/after5, lavapipe r4)</td><td>0 / 0</td><td>0 / 0 each</td><td>snapshots written + verified present</td></tr>
+</table>
+<p>shaderforce: not run — the shader is unchanged (ticket condition: only if a shader
+changes). HEAVY gates (boundary r4, farab, ladder, halo, lightstate, r16, full battery) are
+the coordinator's; the change is a colour-only uniform push (no mesh/bake/data), so the
+standing values it could move are the look-level ones — flagging for the coordinator's
+heavy pass.</p>
+
+<h2>6. Deliberately not done</h2>
+<ul>
+<li>No re-tune of AMB_SKY_L (0.35 is the AC-0426 measured value; the ticket asks for the
+measured fix on, not a new magnitude). The 0.20 light floor (user-directed,
+AC-0128/AC-0135) is untouched.</li>
+<li>No mesher/light-engine change: <code>starlight.cpp</code> (fenced, test-only anyway)
+computes the sky pull; the canopy occlusion is the light model working as designed — the
+defect was that the measured mitigation shipped off.</li>
+<li>No per-face "fully lit" forcing: sunlit-look faces under a canopy would break the
+lighting model and the night path; the ambient lift is the scoped fix.</li>
+<li>No ARCHITECTURE.md change: no structural change (a settings default flip is not an
+architecture move — the switch, the push seam and the env override all pre-date this
+ticket).</li>
+<li>Residual (0,0,0) pixels in the blob = space sky through the canopy's cutout holes and
+grazing gaps — correct rendering (the before frame's sky-through-holes is the same pixels);
+not chased further.</li>
+</ul>
+
+<p>Journal: <code>tasks/AC-0432/continuity.md</code> (full probe chronology, incl. the
+refuted UV theory and the coordinate-space traps hit along the way). Plan:
+<code>tasks/AC-0432/plan.html</code> (mechanism section updated). Scratch logs:
+<code>.scratch/AC-0432/</code> (arm-top1…19, render-probe1, render-amb1/2,
+render-before5/after5, smoke-final, g0-final).</p>
+</body></html>

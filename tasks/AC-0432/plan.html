@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0432 — plan</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}</style></head><body>
+<h1>AC-0432 — plan (black faces along the chunk seam) — mechanism established</h1>
+
+<h2>Goal</h2>
+<p>Opaque faces around the tree at the (0,−1) chunk seam render pure (0,0,0) while the
+neighbouring open-ground faces render their texture. The fix must explain the
+<strong>split</strong> — why those faces are black and the rest correct — and make the
+faces carry texture like their neighbours.</p>
+
+<h2>Mechanism (established by the probes — the UV/texel candidate set below is REFUTED)</h2>
+<p>The original plan hypothesised a UV→texel miss onto empty canvas (a subset of faces
+sampling transparent atlas pixels). The probes refuted it completely:
+the mesh is complete (live == fresh, 343 = 343 quads in slab 8 of (0,−1); all 67
+scan-decided trunk faces present, incl. the 12 seam-V-extended +x faces at x≈16.6), the
+UVs are plain-atlas-space and correct (trunk → log tile, grass top → grass tile), the
+bound texture (ShaderMaterial param <code>tex</code>, 1024×1024) holds the correct pixels
+at those UVs (grass (56,108,33,255), log side (116,90,54,255)). Geometry and texels are
+exonerated in BOTH the arm and render worlds (ray probe at the snapshot frame: every
+blob ray finds its quad within d&lt;0.7 of the first solid cell).</p>
+<p><strong>The established mechanism — the light floor under the crown.</strong>
+Vertex-color channel R carries the sky-light scalar s (clamped to [20/255, 1] at mesh
+time). The blob-region faces (trunk sides + the grass tops the crown overhangs) sit at
+the floor — <strong>R = 0.0784, G = 0.0</strong> — because the canopy's leaves occlude the
+sky pull for their cells (the AC-0425/AC-0426 "black silhouette", documented in
+<code>chunk_lit_opaque.gdshader</code>). The open-ground faces 200 px away are at
+<strong>R = 1.0</strong>. The shader is
+<code>ALBEDO = t.rgb * COLOR.b * L</code> with
+<code>L = 0.20 + 0.80 * max(u_day*R, G)</code>: floor faces render at L = 0.2627,
+sunlit faces at L = 1.0. After the tonemap, bark × 0.56 shade × 0.26 lands at
+(0,0,0)–(0,23,0) on screen — the black blob; the (0,0,0) pixels are the floor-lit faces
+plus space sky seen through the canopy's cutout holes and grazing gaps. <strong>The
+split is sky exposure:</strong> faces whose column the sky pull can reach (R = 1.0) are
+bright; faces under the crown (R = 0.078) are black. Same mesh, same frame, same
+texture — only the light scalar differs.</p>
+
+<h2>Fix (AC-0432)</h2>
+<p>AC-0426 measured and shipped exactly this lift as the Settings <code>ambient_sky</code>
+switch (pushed as <code>u_amb</code> by <code>world.gd _ac0401_push</code>, colour-only:
+<code>L += u_amb * u_day * step(m_direct, 0.08)</code> — the step fires <em>only</em> on
+floor faces, sunlit faces are bit-identical at any hour; 0.0 at night). It defaulted
+OFF. <strong>AC-0432 turns it ON by default</strong>
+(<code>godot/autoload/settings.gd "ambient_sky": true</code>) — the user's ticket is that
+the OFF look <em>is</em> the defect. At noon the floor faces go L 0.2627 → 0.6127
+(AMB_SKY_L = 0.35, the AC-0426-measured value: dark brown, readable as bark,
+"in-the-shade not in-the-hole", sunlit neighbours untouched). <code>AWECRAFT_AMBSKY=0</code>
+and the saved setting still restore the OFF look per process / per user. No mesh, no
+bake, no data: genhash is untouched by construction.</p>
+
+<h2>Files touched</h2>
+<ul>
+<li><code>godot/autoload/settings.gd</code> — the default flip + comments (the fix).</li>
+<li><code>godot/scenes/harness.gd</code> — TEMPORARY <code>ac0432uv</code> diagnostic arm
+  (in, and OUT, in this task — the pristine rule).</li>
+<li><code>gdext/src/mesh.cpp</code> — TEMPORARY <code>dbgbox</code> build-report +
+  s_faces scan trace (in, and OUT, in this task; rebuilt + copied to
+  <code>godot/bin</code> after removal). No production C++ change: the mesher is
+  exonerated.</li>
+<li><code>godot/world/world.gd</code> — TEMPORARY tf=400 audit (ray probe + per-face
+  screen census) + comment refresh for the new default (the temp audit OUT at
+  closeout).</li>
+</ul>
+
+<h2>Harness gates (light set, then exit — heavy is the coordinator's)</h2>
+<ul>
+<li>G0: <code>--headless --path godot --quit</code>, ZERO SCRIPT ERROR AND ZERO SHADER ERROR
+  via <code>tasks/scripts/gate_census.py</code>, AND the process exit status checked
+  (stochastic UAF: clean log + signal-11 exit) — before AND after the temp-code removal.</li>
+<li>SMOKE battery (player;interact;light;fluids) — autoload settings touched.</li>
+<li>PROBE: the task's own <code>ac0432uv</code> arm (mesh completeness + UV/texel census)
+  — run before removal.</li>
+<li>genhash 25/25 byte-identical — mandatory per ticket (mesher involved in the
+  investigation); the fix is colour-only so the hashes must not move.</li>
+<li>shaderforce — only if a shader changes (none does).</li>
+<li>ACCEPTANCE renders (lavapipe, the shipped path): the user's view re-taken along the
+  chunk seam, before (<code>AWECRAFT_AMBSKY=0</code>) and after (default) — the blob faces
+  must carry texture; the per-face pure-black census (5 sample points per face)
+  before/after; the AC-0430/AC-0431 residue re-checked (zero foreign texels on flora
+  quads, zero lava quads in the census).</li>
+</ul>
+
+<p>Recipe: one godot at a time, <code>HOME=/tmp/dsh_home</code> first, absolute engine
+path, repo root, logs to <code>.scratch/AC-0432/</code>, <code>pgrep -af '[g]odot'</code>
+before every call; NO <code>AWECRAFT_LOGIC</code> arm on the snapshot runs;
+<code>AWECRAFT_SIZE=1280,720</code> (comma),
+<code>xvfb-run</code> + lvp ICD + <code>--rendering-driver vulkan</code>, ~1500 s budget per
+render, and CHECK THE FILE EXISTS after every shot.</p>
+
+</body></html>
