@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-16T00:41
+  updated_at: 2026-10-16T03:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27892,6 +27892,136 @@ intake:
     shaderforce 12/12); and the recent work must keep holding - the seam closure and its atlas fix, the
     ambient lift, the opaque body, the sky with no bottom edge, the uniform sky transition rate and the
     cloud cover variation.
+
+    '
+  comments: []
+- id: AC-0436
+  title: night-is-a-near-black-void
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-16T03:15
+  updated_at: 2026-10-16T03:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Night should be beautiful and readable - a moonlit landscape you can still see
+    and navigate, a sky full of stars, and a planet from orbit that reads as a world at night rather than
+    a black hole with a few dots. Right now night is a near-black void, and it is the last thing standing
+    between this game and its target.
+
+
+    2) Technical Details:
+
+    FOUND BY THE WHOLE-EXPERIENCE ASSESSMENT, WHICH CONCLUDED THAT THE DAY EXPERIENCE IS CLOSE TO TARGET
+    AND THE NIGHT EXPERIENCE IS NOT, AND THAT THE WHOLE GAME IS ONE NIGHT CYCLE AWAY. This is the largest
+    remaining gap and the only one the assessment called disqualifying.
+
+    THE MEASUREMENT: at ground level the terrain that is saturated green in daylight renders PURE BLACK
+    at night - only a tree silhouette and one white animal survive in the frame, and the interface''s
+    red stat rows are the BRIGHTEST OBJECTS IN THE ENTIRE IMAGE, which is the clearest possible statement
+    of how dark it is. From orbit the night planet is a faint mottle on black with roughly twenty to thirty
+    star pixels in the whole frame. The assessment states it has been like this since an earlier round,
+    so it is NOT a regression from recent work - it is a gap nobody had looked at with judgement.
+
+    THE NAMED CAUSE, which should be tested rather than assumed: the light floor of about zero point one
+    eight, which is what an unlit face resolves to, DIES IN THE TONE MAPPING AT EIGHT BITS - the value
+    is genuinely there in the buffer and is crushed to zero on output. There is also NO MOON AT ALL, so
+    nothing lights the night side.
+
+    WHAT TO CONSIDER, none of it prescribed: whether the tone mapping should be applied in a way that
+    preserves low values rather than crushing them, whether the floor should differ at night from the
+    day, whether night should have its own exposure or adaptation rather than sharing the day''s, a moon
+    - which would give the night a directional light, a visible disc and a reason for the landscape to
+    be lit at all, and is the standard answer - and the star density, which the assessment separately
+    calls sparse. Several recent changes work by lifting brightness, so a fix here must not simply raise
+    everything: the assessment''s own frames show the day experience is right and must stay right.
+
+    WHATEVER IS DONE MUST NOT FLATTEN THE DAY. The night and the day share a lighting model, so a change
+    that lifts the night can easily grey the day. Measure the day frames before and after, not only the
+    night ones.
+
+    ACCEPTANCE: THE SAME FRAMES THE ASSESSMENT TOOK, RE-TAKEN - the ground horizon at night readable as
+    terrain, the orbit view of the night planet reading as a world, the star field dense enough to read
+    as a sky, and the interface no longer the brightest thing in the frame. Give luminance measurements
+    for the night ground, the day ground for comparison to prove nothing was flattened, and the star counts
+    before and after. If a moon is added, show it and show what it lights.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); every look change ships behind a switch defaulting conservative; and the recent
+    work must keep holding - the sky with no bottom edge and a uniform rate, the opaque planet, the seam
+    closure and its atlas fix, the ambient lift for unlit faces, the varying cloud cover and the two switch
+    flips.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29, frames ground-horizon-night.png and 2600-night.png,
+    taken from a clean archive of the commit before this ticket.
+
+    '
+  comments: []
+- id: AC-0437
+  title: interface-polish-crosshair-hierarchy-and-menu-scaffolding
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-16T03:15
+  updated_at: 2026-10-16T03:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The interface should look like part of a finished product. It is close - the
+    hotbar, the held item view and the inventory panel are all shaped like real game furniture - but it
+    stops one polish step short, and the menu still shows developer scaffolding.
+
+
+    2) Technical Details:
+
+    FOUND BY THE WHOLE-EXPERIENCE ASSESSMENT, which judged the interface as product-shaped overall and
+    then listed exactly where it stops short. That verdict is more useful than a blank complaint and should
+    be respected: this is a POLISH ticket, not a redesign, and the existing shapes are evidently working.
+
+    THE SPECIFICS THE ASSESSMENT GAVE: there is NO CROSSHAIR anywhere in the code, which is conspicuous
+    in a first-person game with interaction. The stat rows in the interface are IDENTICAL-LOOKING to one
+    another, so they carry no hierarchy and read as debug output rather than as information. Opening the
+    inventory does not dim the world behind it, so the panel competes with the scene instead of sitting
+    over it. And the menu is flat black and still carries developer scaffolding - a development tag and
+    a test range entry - which is exactly the kind of thing a player should never see.
+
+    WHAT TO DO: address those four things in the existing visual language rather than inventing a new
+    one. A crosshair should suit the game''s look rather than being a generic dot. The stat rows need
+    distinction - what varies between them, and what hierarchy the player actually needs. The inventory
+    needs the world behind it to recede, which is a dimming or desaturation rather than a redesign. The
+    menu needs the developer entries hidden or removed from the shipping path rather than deleted from
+    the code, since the harness and the development builds may still need them - and how that is gated
+    should be stated, because a shipped build containing a test range entry suggests the gate is not working.
+
+    ACCEPTANCE: frames showing the crosshair in normal play, the stat rows distinguishable at a glance,
+    the inventory open over a visibly receded world, and the menu as a player sees it - with the developer
+    entries either absent or clearly gated, and the gating mechanism named. The assessment''s own frame
+    of the current menu is the before image.
+
+    CONSTRAINTS: G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the smoke battery, the settings arm and the held-item probe green;
+    the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate 0/0,
+    r16 all sub-flags, boundary r4 in band, shaderforce 12/12); genhash 25/25 byte-identical, since none
+    of this touches generation; every look change ships behind a switch defaulting conservative - except
+    the crosshair, which is not a look change but the absence of a feature in a first-person game, and
+    whose presence should simply be correct; and the recent work must keep holding.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29, taken from a clean archive of the commit
+    before this ticket.
 
     '
   comments: []
