@@ -28,6 +28,8 @@ queue:
 - AC-0407
 - AC-0409
 - AC-0412
+- AC-0436
+- AC-0437
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
