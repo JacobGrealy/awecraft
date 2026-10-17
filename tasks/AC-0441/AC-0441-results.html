@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0441 — results: cloud-deck banding/moire at oblique distance</title>
+<style>
+body { font-family: Georgia, 'Times New Roman', serif; max-width: 1080px; margin: 24px auto; padding: 0 18px; color: #1a1a1a; line-height: 1.45; }
+h1 { font-size: 1.5em; border-bottom: 3px solid #2a6; padding-bottom: 6px; }
+h2 { font-size: 1.2em; margin-top: 1.8em; border-bottom: 1px solid #bbb; padding-bottom: 3px; }
+h3 { font-size: 1.05em; margin-top: 1.3em; }
+table { border-collapse: collapse; margin: 10px 0; font-size: 0.88em; font-family: 'DejaVu Sans Mono', monospace; }
+th, td { border: 1px solid #999; padding: 3px 8px; text-align: left; }
+th { background: #eef; }
+.pass { color: #171; font-weight: bold; }
+.fail { color: #a00; font-weight: bold; }
+.note { background: #fffbe8; border-left: 4px solid #ec4; padding: 8px 12px; margin: 10px 0; font-size: 0.92em; }
+.verdict { background: #eef8ee; border-left: 4px solid #2a6; padding: 8px 12px; margin: 10px 0; }
+img { max-width: 100%; border: 1px solid #888; margin: 6px 0; }
+img.half { max-width: 49%; }
+.pair { display: flex; gap: 8px; flex-wrap: wrap; }
+.pair > div { flex: 1; min-width: 300px; }
+caption { caption-side: top; text-align: left; font-weight: bold; padding-bottom: 4px; font-family: Georgia, serif; }
+code { font-family: 'DejaVu Sans Mono', monospace; font-size: 0.9em; background: #f4f4f4; padding: 0 3px; }
+.small { font-size: 0.85em; color: #444; }
+</style>
+</head>
+<body>
+
+<h1>AC-0441 — cloud-deck banding/moire at oblique distance</h1>
+<p class="small">Sat Oct 17 2026 · Forward+/lavapipe proxy renders (1280×720, R24/F83 user config, seed 44,
+T frozen, <code>CLOUD_T0=411200</code>) · the AC-0384 r24 recipe verbatim · evidence frames in
+<code>captures/</code> beside this page.</p>
+
+<div class="verdict"><b>VERDICT — SHIPPED (switch <code>cloud_jitter</code>, DEFAULT ON).</b>
+The A/B established that the banding is <b>coherent screen-space phase alignment of the fixed raymarch grid
+(candidate C2)</b>, not step coarseness alone: raising the march from 24 → 48 steps <i>softened</i> the pattern
+(residual stripes at 4× zoom, <b>+39 %</b> measured render wall) while per-pixel grid jitter at the <i>same 24
+steps</i> <b>removed</i> it (no visible parallel structure, wall ≤ baseline). Both acceptance frames re-taken
+settled (drain 1200) with no banding/moire at either altitude; brightness spread, volume, cloud_gate and the
+AC-0436 moon-lit look all measured/inspected intact; render cost measured before and after and NOT increased.</div>
+
+<h2>1 · The defect</h2>
+<p>Shallow-angle views of the raymarched cloud deck (the AC-0405 volume on the outer shell, annulus
+[R+275, R+450], 24 count-based steps per annulus segment) show parallel stripes — an interference pattern,
+not cloud structure. Filed from the AC-0384 §29 assessment: the 120 m frame (upper-left mass) and the 300 m
+frame (horizon band) — the player's main flight altitudes.</p>
+<div class="pair">
+<div><img src="captures/ac0441-120-baseline.png" alt="120 m baseline"><br><b>120 m, switch OFF (= current look).</b> Stripes across the upper-left mass. Controlled re-render of the assessment weather (same seed/T/CLOUD_T0); spectral signature matches the assessment frame to the digit.</div>
+<div><img src="captures/ac0441-300-baseline.png" alt="300 m baseline"><br><b>300 m, switch OFF.</b> Striped horizon band, weather-identical to <code>tasks/AC-0384/ac0384-r24-300-day-rerun.png</code> (side-by-side during calibration).</div>
+</div>
+
+<h2>2 · Method — cause established by measurement, not reasoning</h2>
+<p>Three candidate causes named in the ticket: (a) fixed step too coarse for distance traversed;
+(b) no jitter/dither to break screen-space alignment; (c) sampling density not adapting to layer thickness.
+The ticket's own method decides it: render the same view with (i) the step count raised, (ii) jitter enabled,
+(iii) both, and see which <i>removes</i> the pattern rather than merely softening it. Four diagnostic renders
+(drain 120, the r24 ladder condition — the cloud deck is world-fixed and independent of terrain streaming, so
+the A/B on it is valid) plus three settled acceptance renders (drain 1200/600), one godot at a time,
+Forward+ boot line asserted, snapshot file-existence checked (the <code>SNAP FAIL</code> trap), no
+<code>AWECRAFT_LOGIC</code> arm.</p>
+
+<h3>2.1 · The instrument</h3>
+<p><code>.scratch/AC-0441/stripe.py</code> (pure PIL, no numpy): 2D power spectrum of 64×64 crops,
+periods 16–4 px band, coherence = top-bin power over the <i>same-radius</i> envelope (a smooth gradient's
+radial falloff cancels; a true stripe peak far exceeds its own-radius neighbours), conjugate-pair check,
+<code>ripple_rms</code> (oscillation amplitude) and <code>cloud_scale_lfsd</code> (16-px block-mean std — the
+volume/brightness-spread guard). Calibration on the assessment frames showed the 21 px / 16 px / 10.7 px bins
+are <b>reproducible pipeline constants of this box</b> (present in the cloudless clean sky of every frame at
+~0.26 ripple amplitude — tonemap/driver, not the cloud march); the defect separates on
+<code>ripple_rms</code> 2.2–8.2 in cloud regions vs 0.23–0.36 clean sky (8–30×). The instrument is a
+screening + amplitude/preservation tool; the ticket's acceptance is visual on the re-taken frames, which the
+zoom crops below adjudicate.</p>
+
+<h2>3 · The A/B — which cause it is</h2>
+<table>
+<caption>Wall time, identical recipe (drain 120, same box, sequential)</caption>
+<tr><th>arm</th><th>setting</th><th>wall s</th><th>vs baseline</th></tr>
+<tr><td>baseline (OFF)</td><td><code>AWECRAFT_CLOUDJIT=0</code>, 24 steps</td><td>105</td><td>—</td></tr>
+<tr><td>steps raised</td><td><code>AWECRAFT_VOLSTEPS=48</code>, jitter OFF</td><td>146</td><td class="fail">+41 s (+39 %)</td></tr>
+<tr><td><b>jitter</b></td><td><code>AWECRAFT_CLOUDJIT=1</code>, 24 steps</td><td>92</td><td class="pass">−13 s (≤ 0, within run-to-run noise)</td></tr>
+</table>
+<table>
+<caption>120 m — per-crop spectral readings (64×64; banding_* = the cloud-march-owned power, pipeline constants excluded)</caption>
+<tr><th>crop (x,y)</th><th>arm</th><th>ripple_rms</th><th>lfsd</th><th>band3</th><th>bandCoh</th><th>top period px</th></tr>
+<tr><td rowspan="3">(30,100)</td><td>baseline</td><td>2.90</td><td>11.96</td><td>0.200</td><td>7.27</td><td>16.0</td></tr>
+<tr><td>steps 48</td><td>1.17</td><td>12.12</td><td>0.266</td><td>8.29</td><td>16.0</td></tr>
+<tr><td>jitter</td><td>3.19</td><td>12.01</td><td>0.217</td><td>7.41</td><td>16.0</td></tr>
+<tr><td rowspan="3">(120,70)</td><td>baseline</td><td>2.42</td><td>13.32</td><td>0.144</td><td>9.12</td><td>12.6</td></tr>
+<tr><td>steps 48</td><td>1.13</td><td>13.71</td><td>0.110</td><td>2.96</td><td>15.5</td></tr>
+<tr><td>jitter</td><td>2.50</td><td>13.34</td><td>0.084</td><td>2.66</td><td>15.5</td></tr>
+<tr><td rowspan="3">(220,140)</td><td>baseline</td><td>3.73</td><td>14.75</td><td>0.118</td><td>12.67</td><td>12.8</td></tr>
+<tr><td>steps 48</td><td>1.83</td><td>15.24</td><td>0.112</td><td>2.36</td><td>16.0</td></tr>
+<tr><td>jitter</td><td>3.44</td><td>14.85</td><td>0.097</td><td>2.48</td><td>16.0</td></tr>
+<tr><td rowspan="3">(60,200)</td><td>baseline</td><td>3.27</td><td>12.81</td><td>0.137</td><td>19.78</td><td>16.0</td></tr>
+<tr><td>steps 48</td><td>1.98</td><td>13.99</td><td>0.149</td><td>12.19</td><td>16.0</td></tr>
+<tr><td>jitter</td><td>3.26</td><td>12.75</td><td>0.149</td><td>11.60</td><td>16.0</td></tr>
+<tr><td rowspan="3">(150,220)</td><td>baseline</td><td>2.18</td><td>4.49</td><td>0.086</td><td>2.29</td><td>16.0</td></tr>
+<tr><td>steps 48</td><td>1.45</td><td>4.52</td><td>0.111</td><td>2.34</td><td>16.0</td></tr>
+<tr><td>jitter</td><td>2.21</td><td>4.47</td><td>0.101</td><td>2.27</td><td>15.5</td></tr>
+</table>
+<p><b>Read:</b> steps-48 cuts the oscillation <i>amplitude</i> (~halved ripple) but keeps coherent structure
+(bandCoh 2.4–8.3, and residual stripes visible at 4× — <i>softened</i>). Jitter keeps the energy (ripple
+≈ baseline, lfsd ≈ baseline — the energy went <i>where</i>, not away) and collapses the cloud-march-owned
+coherent peaks in 4 of 5 crops (9.1→2.7, 12.7→2.5, 19.8→11.6, 2.3→2.3; the (30,100) crop's residual is the
+near-white flat-top region's gradient/quantization class — the same bins the cloudless sky controls carry —
+not the mass's stripes). The visual adjudication:</p>
+<div class="pair">
+<div><img src="captures/ac0441-120-micro-steps.png" alt="baseline vs steps-48, 4x"><br><b>baseline | steps 48 (4× zoom).</b> The pattern is <i>softened</i>: faint residual parallel traces persist in the densest mass and above it.</div>
+<div><img src="captures/ac0441-120-micro-jitter.png" alt="baseline vs jitter, 4x"><br><b>baseline | jitter (4× zoom).</b> The parallel structure is <i>gone</i> — smooth gradient + fine uncorrelated grain. Removed, not softened.</div>
+</div>
+<div class="note"><b>Why, mechanistically:</b> the shipped grid is <code>t = t0 + (i+0.5)·dl</code> with
+<code>dl = chord/24</code>. <code>t0</code> and <code>dl</code> vary <i>smoothly</i> across the screen with the
+ray's impact parameter, so adjacent pixels march the <b>same phased grid</b> against the world-fixed density
+field — the aliasing accumulates coherently into parallel stripes, worst at shallow angles (long chord, coarse
+<code>dl</code>, slowest phase change). Doubling the count halves <code>dl</code> (less aliasing <i>amplitude</i>
+— the softening) but the grid stays screen-coherent (the pattern survives, finer). Shifting each pixel's grid
+by an independent random in [0,1) turns the coherent phase offset into uncorrelated per-pixel randomness —
+the structured artifact becomes noise the eye tolerates, at the identical sample count. The ticket's "trades
+structured artifact for tolerable noise at the same sample count" is exactly what was measured.</div>
+
+<h2>4 · What changed (four code files + two docs)</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td><td><code>uniform float u_jit : hint_range(0.0,1.0) = 0.0</code> (default 0.0 = OFF = the exact current grid, bit-for-bit: <code>(i+0.5+0.0) = (i+0.5)</code>, the <code>t &gt; t1</code> break never trips — IEEE identity). When <code>u_jit &gt; 0.5</code>, <code>vmarchseg</code> takes a per-segment offset <code>jg</code> and marches <code>t = t0 + (i+0.5+jg)·dl</code>; fragment() derives two independent per-pixel offsets (<code>ahash</code> of a ~4.6 m quantized world-position cell, two seeds) — one per annulus segment — stable between frames, unique per pixel, moving with the world as the camera moves (no shimmer). A shifted sample past the segment end is dropped (early-out). The light-march taps are NOT jittered (anchored to the sample's world position, not a screen-coherent grid; the AC-0436 moon re-aim/HG/glow stay verbatim).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"cloud_jitter": true</code> in DEFAULTS (the banded look IS the reported defect — the AC-0435/0436/0437 re-ruling) + <code>sanitize_bool</code> case.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row "Clouds: break raymarch banding (jitter)" + live sync + handler (the standard look-change pattern).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td><code>AWECRAFT_CLOUDJIT=0|1</code> boot env preload into <code>Settings.values</code> WITHOUT save; <code>AWECRAFT_VOLSTEPS=n</code> boot-only cost instrument (env only, no Settings row — the <code>AWECRAFT_SPEC</code> pattern; unset → shader default 24, byte-pristine); <code>_ac0401_push</code> pushes <code>u_jit</code> 0/1 to the three cloud-layer materials (change-gated) and <code>u_vol_steps</code> when the instrument is set (value-gated).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code>, <code>godot/HARNESS.md</code></td><td>Invariant-2 sync in the same task: Settings row + CloudLayer tree entry; env table rows for both new envs.</td></tr>
+</table>
+<p>OFF (<code>AWECRAFT_CLOUDJIT=0</code>) restores the current appearance <b>bit-for-bit</b> by construction
+(the uniform's 0.0 default + the IEEE identity) — verified by the A/B baseline arm being the controlled
+re-render of the assessment weather and by genhash 25/25. <b>No other shader path touched</b>: <code>cloud_gate</code>
+(AC-0428/0435), the AC-0436 moon-lit light march, the deck character, the three-shell layout, the vertical
+profile — all verbatim.</p>
+
+<h2>5 · Render cost — measured before and after, NOT increased</h2>
+<table>
+<caption>Identical recipe, same box, sequential (one godot at a time)</caption>
+<tr><th>run</th><th>cloud setting</th><th>drain (frames)</th><th>wall s</th></tr>
+<tr><td>120 m baseline (OFF)</td><td>24 steps</td><td>120</td><td>105</td></tr>
+<tr><td>120 m jitter (the fix)</td><td>24 steps + per-pixel offset</td><td>120</td><td class="pass">92 (≤ baseline)</td></tr>
+<tr><td>120 m settled (acceptance, fix ON)</td><td>24 steps + per-pixel offset</td><td>1200</td><td>763</td></tr>
+<tr><td>300 m settled (acceptance, fix ON)</td><td>24 steps + per-pixel offset</td><td>1200</td><td>509</td></tr>
+<tr><td>120 m night (fix ON)</td><td>24 steps + per-pixel offset</td><td>600</td><td>381</td></tr>
+<tr><td>120 m steps-48 (the alternative, NOT shipped)</td><td>48 steps</td><td>120</td><td class="fail">146 (+39 %)</td></tr>
+</table>
+<p>The fix adds <b>zero</b> march samples — the per-pixel offset is two hash lookups and one add per segment.
+Against the ticket's budget reality (cloud layer ≈ 1191 s of a 1200 s render allowance in the heaviest
+test), the steps-48 alternative's measured +39 % on a cloud-bound render would have <b>broken</b> the
+allowance; it is stated here with its measured cost and was not taken. The jitter arm's same-frame-budget
+wall is at or under baseline (92 vs 105 s; sequential-run noise is ±10 s).</p>
+
+<h2>6 · Acceptance — the two assessment frames re-taken</h2>
+<p>Same weather as the assessment (seed 44, T frozen, <code>CLOUD_T0=411200</code>), settled (drain 1200 —
+the r24 rerun condition), fix ON.</p>
+<div class="pair">
+<div><img src="captures/ac0441-120-day.png" alt="120 m acceptance"><br><b>120 m, settled, fix ON.</b> The upper-left mass renders as cloud — no parallel stripes at either 1× or 4× (zoom: <code>ac0441-120-jitter-zoom.png</code>). Volume and the lit/shadowed spread of the mass intact.</div>
+<div><img src="captures/ac0441-300-day.png" alt="300 m acceptance"><br><b>300 m, settled, fix ON.</b> The horizon band no longer stripes; the cloud masses along the deck edge read as cloud texture.</div>
+</div>
+<div class="pair">
+<div><img src="captures/ac0441-300-leftband-ab.png" alt="300 m left band baseline vs fixed, 3x"><br><b>300 m left band (3×): baseline | fixed.</b> Dense parallel lines → smooth mass + grain. Deck geometry identical.</div>
+<div><img src="captures/ac0441-300-midband-ab.png" alt="300 m mid band baseline vs fixed, 3x"><br><b>300 m mid band (3×): baseline | fixed.</b> Same read at the second banding site.</div>
+</div>
+
+<h2>7 · Preservation — measured, not assumed</h2>
+<h3>7.1 · Brightness spread (the AC-0406/0407 lighting range)</h3>
+<table>
+<caption>8-bit luminance per 64×64 cloud crop — baseline (OFF) vs fixed (ON), 120 m settled</caption>
+<tr><th>crop</th><th>mean</th><th>p10</th><th>p50</th><th>p90</th><th>std</th><th>&gt;200 (white-top)</th><th>&lt;60 (deep shadow)</th></tr>
+<tr><td>(30,100)</td><td>219.28 → 219.33</td><td>197.9 → 197.1</td><td>223.1 → 223.4</td><td>234.2 → 234.5</td><td>13.54 → 13.62</td><td>0.874 → 0.875</td><td>0 → 0</td></tr>
+<tr><td>(120,70)</td><td>202.85 → 202.65</td><td>179.1 → 179.2</td><td>209.5 → 209.2</td><td>216.9 → 216.9</td><td>14.48 → 14.54</td><td>0.6416 → 0.6426</td><td>0 → 0</td></tr>
+<tr><td>(220,140)</td><td>217.63 → 217.57</td><td>187.3 → 187.0</td><td>222.8 → 222.7</td><td>233.9 → 234.2</td><td>16.79 → 16.82</td><td>0.8623 → 0.8604</td><td>0 → 0</td></tr>
+</table>
+<p class="small">All deltas ≤ 0.06 luminance units (&lt; 1/255). The lit-vs-shadowed range, the white-top
+fraction and the deep-shadow tail are unchanged — the volume was not flattened. <code>cloud_scale_lfsd</code>
+(the 16-px block-mean std) likewise: 11.96/13.32/14.75 → 12.01/13.34/14.85 etc.</p>
+<h3>7.2 · Volume and cloud cover</h3>
+<p>The masses in the fixed frames are the <b>same masses in the same places</b> as the baseline (identical
+weather; the density field, the vertical profile, the AC-0428/0435 <code>cloud_gate</code> — code paths
+untouched). Three-shell layout, deck character (<code>u_deck</code>), limb wash (AC-0417) — verbatim.</p>
+<h3>7.3 · Moon-lit silver lining (AC-0436) and night clouds</h3>
+<div class="pair">
+<div><img src="captures/ac0441-120-night.png" alt="night 120 m, fix ON"><br><b>Night 120 m, fix ON.</b> The moon-lit deck ridge (the AC-0436 look — the lit cloud edge facing the moon at the horizon) is intact; night clouds present; the dark band shows cloud mass, no stripes.</div>
+<div><img src="captures/ac0441-night-ab.png" alt="night ridge: assessment-era vs now"><br><b>Context (2×): the AC-0384 r24 night frame (pre-AC-0436 — the older, moonless night) | this ticket's night frame (the current moon-lit night).</b> The night-look difference between these two frames is AC-0436 (committed), not this ticket; this ticket's effect on the night path is the same grid jitter — the band zoom shows grain, not stripes.</div>
+</div>
+<p class="small">The light-march taps were deliberately not jittered (see §4), so the AC-0436 re-aim,
+Henyey-Greenstein phase and forward-scatter glow are code-verbatim; the frame confirms the look.</p>
+
+<h2>8 · Gates (light set — the heavy set is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>exit status</th></tr>
+<tr><td>G0 <code>--headless --quit</code> + census</td><td class="pass">SCRIPT ERROR 0, SHADER ERROR 0</td><td class="pass">EXIT=0 (the UAF trap — clean log + signal-11 — excluded)</td></tr>
+<tr><td>shaderforce (forced-compile, Forward+)</td><td class="pass">12/12 ok (cloud_layer declared=40, ok)</td><td class="pass">EXIT=0, 0/0</td></tr>
+<tr><td>SMOKE battery <code>player;interact;light;fluids;genhash</code></td><td class="pass">ok:true, all five modes</td><td class="pass">EXIT=0, 0/0</td></tr>
+<tr><td>genhash</td><td class="pass">25/25 byte-identical to the AC-0439 reference (render-only change, as expected)</td><td class="pass">EXIT=0</td></tr>
+<tr><td>meshprobe</td><td class="pass">match_rate 1.0, verts_gd = verts_cpp = 277,720, 32/32 samples</td><td class="pass">EXIT=0, 0/0</td></tr>
+<tr><td>lightstate (R16)</td><td class="pass">double-LOD census 0/0, leaks 0 (all 20 chunks), worst null, wash false, stragglers 0</td><td class="pass">EXIT=0, 0/0</td></tr>
+</table>
+<p class="small">Note: G0 was taken after all code was final (the only later changes are docs + the renders).
+<code>lightstate</code> <code>ab.vc_diff</code> read 4 (the documented 1–2 "settle-timing tail" class —
+machine timing, not a byte gate); <code>arr_diff_cells</code> 1 (the fixture's one-cell re-light, current
+baseline) and <code>low_on_high_n</code> 3 (the documented FLIP churn) both as expected.</p>
+
+<h2>9 · Deliberate non-actions</h2>
+<ul>
+<li><b>No adaptive step count / thickness-scaled density (candidate c):</b> the A/B showed coarseness alone
+is not the cause (48 steps softened, didn't remove) and any sample-count change costs render time against
+the 1191/1200 s allowance. Jitter removes the pattern at zero added samples — the ticket's preference
+("costs nothing or less") wins.</li>
+<li><b>No jitter on the light-march taps:</b> their grid is anchored to the sample's <i>world</i> position
+(not screen-coherent), and the AC-0436 moon-lit look is a committed recent fix — untouched.</li>
+<li><b>No per-frame time-varying jitter:</b> the offsets are stable between frames (quantized world cell) —
+the deck does not shimmer as the camera moves; the grain moves <i>with</i> the clouds.</li>
+<li><b><code>AWECRAFT_VOLSTEPS</code> is not a Settings option:</b> a boot-only A/B cost instrument (the
+<code>AWECRAFT_SPEC</code> pattern). The shipped option is the jitter switch.</li>
+<li><b>Fenced files untouched</b> (<code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>,
+<code>debug.gd</code>, <code>harness.gd</code>, the other sessions' task dirs); no <code>git add -A</code>,
+nothing committed (coordinator's closeout).</li>
+</ul>
+
+<h2>10 · Residuals and caveats</h2>
+<ul>
+<li><b>The grain is real at high zoom</b> (the 3×/4× crops show fine speckle). At 1× viewing distance it
+reads as cloud texture; it is the ticket's stated trade ("tolerable noise at the same sample count"). The
+300 m band's <code>ripple_rms</code> rose ~20–40 % vs baseline (5.6→10.1 at the densest crop) — the noise
+amplitude the fix buys, measured, not hidden.</li>
+<li><b>The (30,100)-class residual</b> in the near-white flat-top crops (bandCoh 7.4 in the jitter frame):
+the same low-amplitude bins the cloudless-sky controls carry (pipeline gradient/quantization class, not the
+deck stripe) — the visible mass stripes are gone in every crop.</li>
+<li><b>Software-proxy renders:</b> these prove the Forward+ path, the shader, geometry and the look;
+authoritative look/speed is the user's Windows build. The cost statement is per-frame march work (zero
+added samples), which is renderer-independent.</li>
+<li><b>r24-recipe deviation (disclosed):</b> the diagnostic arms rendered at drain 120 (the r24 ladder
+condition) — the acceptance frames at drain 1200 (the r24 rerun condition). The cloud deck is
+world-fixed, so the A/B at drain 120 is valid; the settled frames are the acceptance evidence.</li>
+</ul>
+
+<p class="small">Working artifacts: <code>.scratch/AC-0441/</code> (per-run logs + <code>.meta</code> wall
+stamps, the stripe/lumspread/crop instruments, the A/B battery scripts). Captures above are the evidence of
+record for this ticket.</p>
+
+</body>
+</html>

@@ -4018,6 +4018,25 @@ func _ready() -> void:
 	var mone := OS.get_environment("AWECRAFT_MOON")
 	if mone != "":
 		Settings.values["moonlight"] = mone == "1"
+	# AC-0441: the raymarch-grid jitter switch (Settings "cloud_jitter",
+	# DEFAULT ON — the banded deck IS the reported defect, so the fix
+	# ships in; OFF = the exact current grid, bit-for-bit: the shader's
+	# u_jit 0.0 default + the (i+0.5+0.0) identity). Same pattern: the env
+	# overrides the STORED setting for this process only (no save, so the
+	# arms never clobber the user's cfg) and lets the render A/B both
+	# states without a save file. Read live by _ac0401_push, so no boot
+	# derive is owed.
+	var cjite := OS.get_environment("AWECRAFT_CLOUDJIT")
+	if cjite != "":
+		Settings.values["cloud_jitter"] = cjite == "1"
+	# AC-0441: the A/B COST INSTRUMENT (the AWECRAFT_SPEC pattern — env
+	# only, no Settings row): AWECRAFT_VOLSTEPS=n drives the march's
+	# u_vol_steps cost knob (shipped 24 count-based steps per segment —
+	# nothing pushed it before this ticket). Unset/empty/garbage -> 0.0 ->
+	# no push, the shader default 24, byte-pristine.
+	var vste := OS.get_environment("AWECRAFT_VOLSTEPS")
+	if vste != "":
+		_ac0441_steps_env = vste.to_float()
 	# AC-0152: harness band overrides (default 4/8 per Bedrock Realms).
 	var b0e := OS.get_environment("AWECRAFT_BAND0")
 	if b0e != "":
@@ -5202,6 +5221,13 @@ var _ac0436_cloud_w := -1.0
 var _ac0436_cloud_dir := Vector3(0.0, 1.0, 0.0)
 var _ac0436_sky_moon := -1.0
 var _ac0436_star_lift := -1.0
+# AC-0441: the raymarch-grid jitter push state (same seam: _ac0401_push,
+# change-gated on the switch value) + the A/B cost-knob env value read at
+# boot (0.0 = AWECRAFT_VOLSTEPS unset — the shader's shipped 24 steps,
+# nothing pushed, byte-pristine).
+var _ac0441_jit := -1.0
+var _ac0441_steps_pushed := -1.0
+var _ac0441_steps_env := 0.0
 # AC-0414: the bake-before-load HOLD (Settings "sat_preload" ON). While
 # a bake is in flight inside the loading window, the SIM DIAMOND (taxi
 # <= band0_r — the release set main.gd _await_sim_band awaits, the
@@ -5558,6 +5584,38 @@ func _ac0401_push() -> void:
 					# ~139 m ground — the extension is upward only).
 					cm6.set_shader_parameter("u_vol_rmax", rvol + hmax + AC0407_VOL_TOP_EXTEND)
 			_ac0405_r = rvol
+	# (4b) AC-0441: the raymarch-grid JITTER (Settings "cloud_jitter",
+	# DEFAULT ON — the banded deck is the reported defect: the
+	# AC-0435/AC-0436/AC-0437 re-ruling). Same seam as u_vol:
+	# change-gated, the three cloud-layer materials, latch-only-when-
+	# landed. 0.0 (OFF) is the exact current grid bit-for-bit (the
+	# shader's (i+0.5+0.0) identity — the IEEE OFF contract); 1.0 shifts
+	# each annulus segment's fixed-count grid by an independent per-pixel
+	# random: the banding fix at the SAME sample count (no added per-ray
+	# marching — the 1191/1200 s render budget holds; the wall time is
+	# measured before/after in the ticket anyway).
+	var jit_v := 1.0 if bool(Settings.values.get("cloud_jitter", true)) else 0.0
+	if jit_v != _ac0441_jit:
+		var clj = mn.get("cloud_layers")
+		if clj != null and clj.size() > 0:
+			for layer in clj:
+				var cmj = layer.get("mat")
+				if cmj is ShaderMaterial:
+					cmj.set_shader_parameter("u_jit", jit_v)
+			_ac0441_jit = jit_v
+	# (4c) AC-0441: the A/B cost knob (AWECRAFT_VOLSTEPS — the
+	# boot-only instrument, no Settings row): value-gated (a boot
+	# constant, it never moves), pushed once the layers exist. 0.0
+	# (unset) pushes nothing — the shader's shipped 24 steps,
+	# byte-pristine.
+	if _ac0441_steps_env > 0.0 and _ac0441_steps_env != _ac0441_steps_pushed:
+		var cls = mn.get("cloud_layers")
+		if cls != null and cls.size() > 0:
+			for layer in cls:
+				var cms = layer.get("mat")
+				if cms is ShaderMaterial:
+					cms.set_shader_parameter("u_vol_steps", _ac0441_steps_env)
+			_ac0441_steps_pushed = _ac0441_steps_env
 	# (5) AC-0406: the cloud volume's ambient sky-fill colour. The
 	# SINGLE-SOURCE air colour — Aero.fog_display (the sky pass's exact
 	# h=0 output) — is the same value env.fog_light_color (main.gd) and

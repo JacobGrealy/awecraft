@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0441 — plan — cloud-deck banding and moire at oblique distance</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.5em}h2{font-size:1.2em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:.92em;vertical-align:top}
+th{background:#eee}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.85em}
+</style></head><body>
+
+<h1>AC-0441 — cloud-deck banding and moire at oblique distance — plan</h1>
+
+<h2>Goal</h2>
+<p>Remove the banding/moire the AC-0384 &sect;29 assessment found in the raymarched cloud deck at
+oblique distance — the upper-left concentric stripes in the 120 m frame and the striped horizon
+cloud band in the 300 m frame — by <strong>establishing the cause by measurement</strong> (A/B:
+steps raised vs jitter vs both, per the ticket's method) and shipping the cheapest fix that
+<strong>removes the pattern</strong> rather than softening it. The layer's volume, brightness spread
+and the AC-0436 silver lining must survive, and the frame's render cost must be measured before
+and after and <strong>not increased</strong> (the cloud layer already consumes ~1191 s of the 1200 s
+budget in the heaviest test, so a fix that doubles per-pixel cloud work is likely unrenderable).</p>
+
+<h2>Code state of the defect (why the A/B is shaped this way)</h2>
+<p>The volume path (<code>cloud_layer.gdshader</code>, <code>vmarchseg</code>, default ON via
+<code>cloud_volume</code>) marches each annulus segment with a <strong>fixed 24 count-based steps</strong>:
+<code>dl = (t1-t0)/u_vol_steps</code>, samples at <code>t = t0 + (i+0.5)*dl</code>, no jitter. The
+step is length/count, so a grazing chord (shallow angle, kilometres long) gets steps of several
+hundred metres. Two facets, one visible defect:</p>
+<ul>
+<li><strong>C1/C3 — coarseness / non-adaptive density:</strong> the same 24 samples regardless of how
+much of the layer the ray traverses; at shallow angles the step is too coarse for the field's
+fine octaves (deck at 1/3 frequency: base ~768 m, finest octave ~186 m; a 2000 m chord samples at
+~83 m — under Nyquist for the fine octaves).</li>
+<li><strong>C2 — coherent alignment:</strong> the sample positions are a deterministic function of
+(t0, dl), both of which vary smoothly across the screen with the ray's impact parameter. Adjacent
+pixels therefore march the same phased grid against the world-fixed density field → the aliasing
+is coherent across pixels → parallel stripes (banding) instead of noise (moire where two grids
+interfere). Nothing breaks the alignment today.</li>
+</ul>
+<p>The A/B separates them: <code>u_vol_steps</code> 24&rarr;48 removes the pattern only if coarseness
+is the driver; per-pixel jitter removes it only if coherent alignment is the driver; if both work,
+the cost decides (jitter &asymp; free; 48 steps &asymp; doubles the per-pixel march cost — measured,
+not assumed). If neither removes it, the contingency arm (both) runs and the finding is recorded.</p>
+
+<h2>The fix (pending the A/B verdict — expected: jitter)</h2>
+<p>Per-pixel <strong>raymarch-grid jitter</strong> in the volume branch: two per-pixel randoms in [0,1)
+hashed from the shell's world position (<code>v_wp</code> — stable between frames, unique per
+pixel, parallax-correct), one per annulus segment, shifting each segment's sample grid:
+<code>t = t0 + (i + 0.5 + j)*dl</code> (a shifted last sample past t1 is dropped — the tail is the
+Beer-attenuated end of the chord, and the density gate is radial, so out-of-annulus samples are
+~0 anyway). The coherent phase offset becomes an independent per-pixel random → the structured
+artifact becomes uncorrelated noise the eye tolerates. Cost: two 3-hash ahashes per cloudy pixel
+(&asymp;20 ALU ops) against ~500–1000 ops of the 24-step march — negligible, but the wall time is
+measured before/after anyway.</p>
+<ul>
+<li>Light-march taps (5 &times; 80 m toward the sun/moon) are NOT jittered: their grid is anchored
+to the sample's world position, not a screen-coherent grid — no coherent aliasing to break, and
+the moon re-aim (<code>Ldir</code>), the HG phase and the forward-scatter glow (the silver lining)
+stay exactly as AC-0436 shipped them.</li>
+<li>Shipped behind the switch <code>cloud_jitter</code> (Settings, <strong>DEFAULT ON</strong> — the
+banded look is the reported defect: the AC-0435/AC-0436/AC-0437 re-ruling shape), env
+<code>AWECRAFT_CLOUDJIT=0|1</code> (boot, no save), pushed <code>u_jit</code> 0/1 change-gated in
+<code>world.gd _ac0401_push</code>. <strong>OFF = the current appearance bit-for-bit</strong> (shader
+default <code>u_jit</code> 0.0; <code>x+0.0=x</code>, the shift never fires, the break never trips —
+IEEE construction, the AC-0401/AC-0428 convention).</li>
+<li><code>AWECRAFT_VOLSTEPS=n</code> stays as a boot-only cost-knob INSTRUMENT (the AWECRAFT_SPEC
+pattern — env only, no Settings row) so the 48-step arm's measured cost stays reproducible for
+the coordinator's budget work (1191/1200 s).</li>
+</ul>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/cloud_layer.gdshader</code></td>
+<td><code>u_jit</code> uniform (default 0.0 = bit-for-bit current); per-pixel grid jitter in the
+volume branch (two ahashes of a quantized <code>v_wp</code>, one per segment, into
+<code>vmarchseg</code> as a new <code>jg</code> parameter).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td>Boot env preloads: <code>AWECRAFT_CLOUDJIT=0|1</code> (Settings, no save),
+<code>AWECRAFT_VOLSTEPS=n</code> (instrument only). <code>_ac0401_push</code>: change-gated
+<code>u_jit</code> push + value-gated <code>u_vol_steps</code> push to the three cloud-layer
+materials (state vars, the cloud_layers-exist retry pattern).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td>
+<td><code>cloud_jitter</code> bool, DEFAULT TRUE + <code>sanitize_bool</code> case.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td>
+<td>Options row &ldquo;Clouds: break raymarch banding (jitter)&rdquo; at slot hi+24 + sync + toggle
+handler.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td>
+<td>AC-0441 clauses (Settings row + CloudLayer bullet) — invariant 2, same task.</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td>
+<td><code>AWECRAFT_CLOUDJIT</code> + <code>AWECRAFT_VOLSTEPS</code> env rows (hand-written &sect;2).</td></tr>
+<tr><td><code>tasks/AC-0441/</code></td>
+<td>plan.html (this), AC-0441-results.html, captures/, stripe.py metric in
+<code>.scratch/AC-0441/</code>, continuity.md journal.</td></tr>
+</table>
+<p>Fences (untouched): <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>,
+<code>debug.gd</code>; also <code>harness.gd</code> (pristine rule), <code>tasks/AC-0067</code>,
+<code>AC-0384</code>, <code>AC-0425</code>.</p>
+
+<h2>Measurement — the A/B (render plan, 7 renders &asymp; 90–110 min)</h2>
+<p>Recipe = the r24 ladder recipe verbatim (reproducible against the assessment frames):
+Forward+/lavapipe under xvfb, <code>AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83
+AWECRAFT_SEED=44 AWECRAFT_TIME_FREEZE=1 AWECRAFT_CLOUD_T0=411200 AWECRAFT_TIME=0.5
+AWECRAFT_CAM=planet</code>, NO <code>AWECRAFT_LOGIC</code>, timeout 1200 s, <code>ulimit -v
+20971520</code>, boot line asserted, SNAP file existence checked (the SNAP FAIL trap).</p>
+<table>
+<tr><th>#</th><th>Run</th><th>Alt</th><th>Variation</th><th>Drain</th><th>Purpose</th></tr>
+<tr><td>1</td><td>a0-120</td><td>120</td><td>baseline (switch ON-state = current look)</td><td>600</td>
+<td>reproduce the defect + controlled before-frame + cost baseline</td></tr>
+<tr><td>2</td><td>a1-120</td><td>120</td><td><code>AWECRAFT_VOLSTEPS=48</code> (no jitter)</td><td>600</td>
+<td>C1/C3 arm — its wall time = the MEASURED cost of the more-samples option</td></tr>
+<tr><td>3</td><td>a2-120</td><td>120</td><td><code>AWECRAFT_CLOUDJIT=1</code> (24 steps)</td><td>600</td>
+<td>C2 arm — the expected fix at same sample count</td></tr>
+<tr><td>4</td><td>a0-300</td><td>300</td><td>baseline</td><td>600</td>
+<td>reproduce the horizon-band defect + controlled before-frame</td></tr>
+<tr><td>5</td><td>final-120</td><td>120</td><td>winner (expected: jitter)</td><td>1200</td>
+<td>acceptance frame (settled, the assessment's re-take)</td></tr>
+<tr><td>6</td><td>final-300</td><td>300</td><td>winner</td><td>1200</td>
+<td>acceptance frame (settled)</td></tr>
+<tr><td>7</td><td>night-120</td><td>120</td><td>winner, night (moon up)</td><td>600</td>
+<td>silver-lining survival evidence (AC-0436)</td></tr>
+</table>
+<p>Contingency only if the A/B is inconclusive: <code>both-120</code> (jitter + 48 steps).
+<strong>Adjudication by measurement, not by eye alone</strong>: a pure-PIL stripe metric
+(<code>.scratch/AC-0441/stripe.py</code>) on line profiles across the artifact regions — detrended
+oscillation std (energy) + normalized autocorrelation peak over lags 3–40 (REGULARITY). The
+pattern is REMOVED when the regularity collapses (periodic &rarr; aperiodic); a drop in energy
+alone is &ldquo;softened&rdquo;, not &ldquo;removed&rdquo; — the trap this project hit twice.
+Render cost = per-run wall time (game-clock t at the SNAP line vs wall, same recipe) — must not
+increase for the winning arm.</p>
+
+<h2>Harness gates (light set, mine — then exit; HEAVY is the coordinator's)</h2>
+<ul>
+<li><strong>G0</strong>: <code>--headless --quit</code>, <code>gate_census.py</code> zero SCRIPT ERROR
+AND zero SHADER ERROR, <strong>and the process exit status checked</strong> (the stochastic UAF
+leaves a clean log with a signal-11 exit).</li>
+<li><strong>SMOKE</strong>: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> ok.</li>
+<li><strong>genhash</strong> 25/25 byte-identical (<code>world.gd</code> touched — expected flat:
+render-only change, no generation code).</li>
+<li><strong>shaderforce</strong> 12/12 — MANDATORY (the change is a shader; lazy compilation hides
+parse errors from G0 alone).</li>
+<li><strong>PROBE</strong>: meshprobe (match_rate 1.0) + lightstate (leaks 0) — the standing pair
+for this layer's neighbourhood.</li>
+</ul>
+
+<h2>Preservation checks (what the fix must NOT touch)</h2>
+<ul>
+<li><strong>Volume</strong>: the march, the annulus, the vertical profile, the silhouette gate —
+untouched code paths; the jitter moves sample positions only, never densities or lighting terms.
+Evidence: the acceptance frames vs the assessment frames (same weather, same structure).</li>
+<li><strong>Brightness spread</strong>: the AC-0406/AC-0407 lighting model (MS octaves, ambient
+fill, forward-scatter glow) is untouched — the day-frame cloud-pixel luma distribution (mean,
+p10/p90, &gt;200 fraction) measured before/after.</li>
+<li><strong>Silver lining</strong>: <code>Ldir</code> re-aim, HG phase, glow — untouched; the
+night-120 frame shows the moonlit cloud edges.</li>
+<li><strong>Global cover variation</strong> (<code>cloud_gate</code>): untouched (the gate is in
+<code>vgate</code>, not the march).</li>
+</ul>
+
+</body></html>

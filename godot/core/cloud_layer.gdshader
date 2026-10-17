@@ -204,6 +204,27 @@ uniform float u_vol_r : hint_range(100.0, 20000.0) = 4000.0;      // planet R
 uniform float u_vol_rmin : hint_range(0.0, 20000.0) = 4275.0;     // R+275
 uniform float u_vol_rmax : hint_range(0.0, 20000.0) = 4400.0;     // R+400
 uniform float u_vol_steps : hint_range(1.0, 64.0) = 24.0;         // view steps per segment
+// AC-0441: the raymarch-grid JITTER (Settings "cloud_jitter", DEFAULT ON;
+// world.gd _ac0401_push pushes u_jit = 1.0 when ON; the AWECRAFT_CLOUDJIT
+// env preloads it at boot). The shipped grid is t0 + (i + 0.5) * dl with a
+// FIXED step count per segment: t0 and dl vary smoothly across the screen
+// with the ray's impact parameter, so adjacent pixels march the SAME PHASED
+// grid against the world-fixed density field. At shallow angles the chord
+// is long (dl is hundreds of metres) and the phase varies slowest, so the
+// aliasing accumulates coherently across pixels: the parallel stripes the
+// AC-0384 §29 assessment found in the 120 m (upper-left masses) and 300 m
+// (horizon band) frames. 1.0 shifts each segment's grid by an independent
+// PER-PIXEL random in [0,1) (two ahashes of a quantized v_wp — stable
+// between frames, unique per pixel, moving with the world as the camera
+// moves): the coherent phase offset becomes an uncorrelated per-pixel
+// random and the structured artifact becomes noise the eye tolerates — at
+// the SAME sample count (the ticket's budget hold: the added work is two
+// hashes per cloudy pixel, no added per-ray marching). 0.0 (the shader
+// default — no push) is the exact current grid bit-for-bit:
+// (i + 0.5 + 0.0) = (i + 0.5) exactly, and the t > t1 break below never
+// trips on the un-shifted grid (the last sample sits at t1 - 0.5*dl) —
+// the IEEE OFF contract (the AC-0401/AC-0428 convention).
+uniform float u_jit : hint_range(0.0, 1.0) = 0.0;
 // AC-0407: was 6 - the light march now taps the topf field too (the
 // lumpy tops, see vdens_coarse), so one tap is trimmed to keep the
 // added skyline cost inside the render budget. 5 taps x 80 m = 400 m
@@ -631,7 +652,7 @@ vec2 vseg2(vec3 w, vec3 rd, float rc) {
 // the grain gate - at distance the march over-integrates the fine
 // octaves instead of aliasing them (the r5 static cannot happen).
 vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
-		float T_in, float L_in, float Lo_in, float A_in) {
+		float T_in, float L_in, float Lo_in, float A_in, float jg) {
 	// AC-0436: the EFFECTIVE light direction - the sun by day, the moon
 	// by night (see the u_moon uniforms). u_moon_w = 0 at day/OFF ->
 	// mix = u_sun EXACTLY (mix(x,y,0) = x, and u_sun is already
@@ -656,7 +677,21 @@ vec4 vmarchseg(vec3 ro, vec3 rd, vec2 seg, float ca, float sa,
 		if (float(i) >= u_vol_steps) {
 			break;
 		}
-		float t = t0 + (float(i) + 0.5) * dl;
+		// AC-0441: the per-pixel grid jitter (jg in [0,1) — the u_jit
+		// uniform's per-segment random, 0.0 when OFF). The shift breaks
+		// the coherent screen-space phase alignment: adjacent pixels no
+		// longer march the same phased grid, so the aliasing reads as
+		// uncorrelated noise instead of parallel stripes. jg = 0.0 makes
+		// the expression (i + 0.5) exactly (IEEE: x + 0.0 = x) and the
+		// break below never trips (the un-shifted last sample is
+		// t1 - 0.5*dl < t1) — the OFF grid bit-for-bit. A shifted sample
+		// past the segment end is dropped: the tail is the Beer-
+		// attenuated end of the chord and the radial gate (vprof2) makes
+		// out-of-annulus density ~0 anyway.
+		float t = t0 + (float(i) + 0.5 + jg) * dl;
+		if (t > t1) {
+			break;
+		}
 		vec3 p = ro + rd * t;
 		vec3 q = vrot(p, ca, sa);
 		float d = vdens(q);
@@ -799,9 +834,25 @@ void fragment() {
 		float ang = u_drift * u_cloud_time;
 		float ca = cos(ang);
 		float sa = sin(ang);
+		// AC-0441: the per-pixel march-grid jitters (see the u_jit
+		// uniform). Hashed from the shell's quantized world position:
+		// unique per pixel (a cell ~4.6 m ~ the frame's pixel footprint
+		// at these altitudes), stable between frames (the still frame
+		// carries no temporal sparkle), and moving with the world as
+		// the camera moves (screen-space decorrelation for free in
+		// motion). One random per annulus segment, so the two segments
+		// never share a phase. Both 0.0 when OFF — the marches take
+		// the exact current grid bit-for-bit.
+		float j1 = 0.0;
+		float j2 = 0.0;
+		if (u_jit > 0.5) {
+			vec3 jk = floor(v_wp * 0.217);
+			j1 = ahash(jk + vec3(3.1, 7.7, 2.3));
+			j2 = ahash(jk + vec3(19.4, 6.8, 41.2));
+		}
 		vec4 acc = vec4(1.0, 0.0, 0.0, 0.0);  // (T, L, Lo, A)
 		vec2 sg1 = vseg1(w, rd, rc);
-		acc = vmarchseg(ro, rd, sg1, ca, sa, acc.x, acc.y, acc.z, acc.w);
+		acc = vmarchseg(ro, rd, sg1, ca, sa, acc.x, acc.y, acc.z, acc.w, j1);
 		// AC-0428: the SILHOUETTE GATE (the user's "I can see all the clouds on
 		// the other side of the planet through the satellite lod - it should be
 		// opaque"). The march above already put the NEAR annulus (sg1) into the
@@ -821,7 +872,7 @@ void fragment() {
 		bool body_blocks = (rc > u_vol_rmax) && (b_hit < u_vol_r + 384.0);
 		if (acc.x > 0.004 && !body_blocks) {
 			vec2 sg2 = vseg2(w, rd, rc);
-			acc = vmarchseg(ro, rd, sg2, ca, sa, acc.x, acc.y, acc.z, acc.w);
+			acc = vmarchseg(ro, rd, sg2, ca, sa, acc.x, acc.y, acc.z, acc.w, j2);
 		}
 		float Av = 1.0 - acc.x;
 		if (Av < 0.004) {

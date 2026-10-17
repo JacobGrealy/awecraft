@@ -178,6 +178,19 @@ const DEFAULTS := {
 	# cloud-layer materials, change-gated). Env-overridable
 	# (AWECRAFT_CLOUDGATE=0|1 at boot, world.gd).
 	"cloud_gate": true,
+	# AC-0441: the raymarch-grid JITTER switch (the cloud-deck banding/
+	# moire fix — the AC-0384 §29 assessment's fifth-ranked residual:
+	# parallel stripes across the deck at oblique distance, visible in
+	# the 120 m (upper-left masses) and 300 m (horizon band) frames).
+	# DEFAULT ON — the banded look IS the reported defect (the
+	# AC-0435/AC-0436/AC-0437 re-ruling: the shipped-off state is the
+	# filed defect, so the fix ships in). OFF (AWECRAFT_CLOUDJIT=0, or
+	# the saved setting) restores the exact current grid bit-for-bit
+	# (u_jit 0.0 shader default: the (i+0.5+0.0) identity — the IEEE OFF
+	# contract). Rides world.gd _ac0401_push (u_jit on the three
+	# cloud-layer materials, change-gated). Env-overridable
+	# (AWECRAFT_CLOUDJIT=0|1 at boot, world.gd).
+	"cloud_jitter": true,
 	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
 	# ("after a recent build the level of detail was not showing at all,
 	# and when they looked into it the world 'was still baking'": the
@@ -543,6 +556,12 @@ func _clamp(k: String, v) -> void:
 		"cloud_gate":  # AC-0428: bool (the planetary weather gate).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (false), never throw.
+			values[k] = AnalogTune.sanitize_bool(v)
+		"cloud_jitter":  # AC-0441: bool (the raymarch-grid jitter;
+			# defaults ON — the banded look is the reported defect).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (true), never throw (the cloud_gate
+			# precedent).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"no_sky_floor":  # AC-0429: bool (the skybox-no-bottom-edge switch).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg

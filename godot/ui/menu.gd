@@ -102,6 +102,10 @@ var aim_wire_check: CheckBox
 # (Settings "moonlight", default ON: the shipped night IS the reported
 # defect; OFF is the exact pre-AC-0436 night for the A/B).
 var moonlight_check: CheckBox
+# AC-0441: the raymarch-grid jitter toggle (Settings "cloud_jitter",
+# default ON — the banded deck is the reported defect; OFF is the exact
+# current grid, bit-for-bit).
+var cloud_jit_check: CheckBox
 # AC-0437: the HUD stat-row captions toggle (Settings "stat_captions",
 # default ON — the assessment judged the two identical-looking red rows
 # as debug output; the AC-0435/AC-0436 re-ruling: the reported look
@@ -605,6 +609,20 @@ func _ready() -> void:
 	aim_wire_check.add_theme_font_size_override("font_size", 15)
 	aim_wire_check.toggled.connect(_on_aim_wire_toggled)
 	opt_vbox.add_child(aim_wire_check)
+	# AC-0441: the raymarch-grid jitter toggle (DEFAULT ON — the banded
+	# deck is the reported defect, so the fix ships in; OFF = the exact
+	# current grid, bit-for-bit). No apply step is owed: world.gd
+	# _ac0401_push reads the live value every frame and pushes u_jit to
+	# the three cloud-layer materials (env-overridable:
+	# AWECRAFT_CLOUDJIT=0|1 at boot, world.gd).
+	cloud_jit_check = CheckBox.new()
+	cloud_jit_check.name = "CloudJitCheck"
+	cloud_jit_check.text = "Clouds: break raymarch banding (jitter)"
+	cloud_jit_check.add_theme_font_size_override("font_size", 15)
+	cloud_jit_check.toggled.connect(_on_cloud_jit_toggled)
+	opt_vbox.add_child(cloud_jit_check)
+	if hi + 23 < opt_vbox.get_child_count():
+		opt_vbox.move_child(cloud_jit_check, hi + 24)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1108,6 +1126,9 @@ func _sync_controls() -> void:
 	# AC-0440: the aim-highlight look toggle (default ON — the wireframe
 	# outline; the reported "dark square" is the fill it replaces).
 	aim_wire_check.button_pressed = bool(Settings.values.get("aim_wire", true))
+	# AC-0441: the raymarch-grid jitter toggle (default ON — the banded
+	# deck is the reported defect).
+	cloud_jit_check.button_pressed = bool(Settings.values.get("cloud_jitter", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1593,6 +1614,17 @@ func _on_moonlight_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("moonlight", on)
+
+
+# AC-0441: the raymarch-grid jitter toggle (DEFAULT ON — the banded deck
+# is the reported defect). set_value does the clamp chain + the save; no
+# apply step is owed: world.gd _ac0401_push reads the live value and
+# pushes u_jit (OFF = the exact current grid — the shader's
+# (i+0.5+0.0) identity, the IEEE OFF contract).
+func _on_cloud_jit_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("cloud_jitter", on)
 
 
 # AC-0437: the HUD stat-row captions toggle — persisted like every other
