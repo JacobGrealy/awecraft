@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-17T03:08
+  updated_at: 2026-10-17T05:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,7 +29,6 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
-- AC-0441
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28234,11 +28233,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-17T03:08
-  updated_at: 2026-10-17T03:08
-  completed_at: null
+  updated_at: 2026-10-17T05:26
+  completed_at: 2026-10-17T05:26
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Clouds should look like clouds from every angle and altitude, not like a repeating
