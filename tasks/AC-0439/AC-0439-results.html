@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0439 — the sky must be consistent with where the player actually is</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.5em}h2{font-size:1.2em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:6px 8px;font-size:.92em;vertical-align:top}
+th{background:#eee}img{max-width:640px;border:1px solid #ccc;display:block;margin:8px 0}
+.ok{color:#060;font-weight:bold}.bad{color:#c00;font-weight:bold}.warn{color:#a60;font-weight:bold}
+code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.85em}
+</style></head><body>
+
+<h1>AC-0439 — the sky must be consistent with where the player actually is</h1>
+
+<p><b>Verdict.</b> The user's rule is now what the code does: <b>the sky is consistent with
+where the player actually is.</b> The AC-0429 floor weight <code>ws</code> — which keyed
+below-horizon space on the sky blend (<code>smoothstep(0, 0.3, w)</code>, 1 from ~630 m, deep
+INSIDE the A = 1200 m atmosphere, producing the user's "blue above, black below" frame — is now
+the player's inside/outside position: <code>Aero.sky_outside(alt)</code> =
+<code>smoothstep(A, A + 0.25A, alt)</code>, pushed per frame as <code>u_space_out</code>
+(world.gd, the same seam as <code>u_space_sky</code>). Inside the atmosphere the below-horizon
+sky is the same air as the sky above (only the planet's surface ends it); outside, space with
+the planet as the only boundary. <b>Both acceptance halves hold in the same build</b>: the
+user's 941 m frame re-taken is one consistent sky (below-horizon rows 248.4–248.8, max
+single-row step 1.43, was 37.81; zero black sky pixels), and the 2141 m outside frame still
+shows space below the horizon (rows 0.00, spread 0.00, 1624 stars) with the planet's limb the
+only boundary (the only step, 21.12). The transition happens at the A shell (1200 m radial),
+faded over the limb's own 0.25A tail [1200, 1500] m. Ships behind the existing
+<code>no_sky_floor</code> switch (default ON; OFF stays the pre-AC-0429 path — the A/B frame at
+941 m reads the same continuous-air sky, within display quantization). All light gates green:
+G0 rc 0 + 0/0, SMOKE ok, genhash 25/25 ×2 byte-identical to the current-tree reference,
+meshprobe ok, shaderforce 12/12 (sky shader 27/27 with the new uniform declared + pushed).
+Heavy gates are the coordinator's.</p>
+
+<p class="warn">Render caveat: frames are lavapipe Vulkan (the SHIPPED Forward+ path), 1280×720,
+R50, the planet preset, T=0.5, seed 44, drain 600 (+SNAP_STEPS 300/600 settle checks), no
+AWECRAFT_LOGIC. Renders on this box are a <b>proxy</b> (software GL) — geometry/layout/colour
+evidence only, not the user's Windows look. Luminance numbers are 255-scale display values from
+the same pipeline before/after, so the before-vs-after comparison is valid on the same
+instrument.</p>
+
+<h2>1. The defect, reproduced on the current build (the user's frame)</h2>
+<p>Config (the AC-0422/AC-0429 "user's frame" lineage): seed 44, T=0.5, R50, 1280×720,
+<code>AWECRAFT_CAM=planet AWECRAFT_SAT_ALT=800 AWECRAFT_CAM_HORIZON=1</code> — radial
+<b>941 m</b>, <code>u_space_sky</code> (w) = <b>0.799</b> (inside the atmosphere: A = 1200 m),
+<code>u_air</code> = [208,241,251], body LOADED. rc=0 in 229 s, boot line
+<code>- Forward+ - llvmpipe</code>, census 0/0. The sky rows settle by the s300 step (row 0:
+54.7 → 57.7 at final — the residual is the drifting cloud deck, the AC-0435 feature; the sky pass
+itself is stable).</p>
+<table>
+<tr><th>Region</th><th>BEFORE profile (row-median lum, 255)</th></tr>
+<tr><td>rows 0–220 (above the local horizon)</td><td>57.7 → 123.3 — the blue sky + sun glow</td></tr>
+<tr><td>rows 220–320 (the sky's own boundary)</td><td>121.6 → 0.0 — max single-row step 37.81 (raw): a line the sky model drew</td></tr>
+<tr><td>rows 340–520 (below the horizon)</td><td><b>0.00 flat black — the defect: space where air must be</b></td></tr>
+<tr><td>rows 540–700</td><td>0.1 → 10.3 — the planet's limb air column (faint)</td></tr>
+<tr><td>row 719</td><td>151.16 — the planet's limb/terrain: the only legitimate boundary</td></tr>
+<tr><td>thirds top/mid/bottom; step at the horizon row</td><td>98.25 / 17.19 / 9.93; 0.00 (both sides already black)</td></tr>
+</table>
+<p class="bad">Reproduced: blue above (rows 0–220), black below (rows 340–520), split by a
+boundary the sky model drew — exactly the report. The AC-0429 measurement that "passed" was this
+exact frame: flat zero below the horizon at 800 m, treated as the fix when 800 m is INSIDE the
+atmosphere.</p>
+<figure><img src="captures/before-inside-h800.png" alt="before"><figcaption>BEFORE — the user's
+frame on the current build (radial 941 m, w=0.799, inside the atmosphere).</figcaption></figure>
+
+<h2>2. Where the sky was actually doing this, and where the decision is made now</h2>
+<p>In <code>sky_on()</code> (<code>godot/core/aero_sky_gradient.gdshader</code>), the floor's
+space weight <code>ws</code> drove all three of AC-0429's changes (the below-horizon fill
+<code>belowc = mix(u_air, space, ws)</code>, the gradient's horizon anchor
+<code>anchor = mix(horizon_color, space, ws)</code>, the horizon haze band
+<code>hz *= (1-ws)</code>) and was derived <code>ws = smoothstep(0, 0.3, w)</code> from the
+sky's A-window blend — 1 from ~<b>630 m radial, deep inside the atmosphere</b> (A = 1200 m).
+The inside/outside decision was made in the shader from the sky blend, and it fired 570 m too
+early.</p>
+<p><b>Now</b>: the decision is the player's radial position about the A shell, computed in
+GDScript and pushed per frame — <code>Aero.sky_outside(alt_rad)</code> =
+<code>smoothstep(A, A + 0.25A, alt_rad)</code> → <code>u_space_out</code> (world.gd
+<code>_ac0401_push</code> block (3), the same live radial / seam / gate as <code>u_space_sky</code>).
+The shader reads <code>ws = u_space_out</code> and everything else is untouched.</p>
+
+<h2>3. What changed (4 files, one switch)</h2>
+<ul>
+<li><code>godot/core/aero.gd</code> — <code>sky_outside(alt_rad)</code> (the one home: A; the
+0.25A tail reuses the limb's <code>atmo_limb_falloff</code> fraction); the
+<code>ATMOSPHERE_HEIGHT</code> consumer list gains the new consumer.</li>
+<li><code>godot/core/aero_sky_gradient.gdshader</code> — uniform <code>u_space_out</code>
+(default 0.0 = conservative: the floor stays air, no black floor can appear on a material that
+never sees the push); <code>ws = u_space_out</code> in <code>sky_on()</code> only. Untouched:
+<code>sky_off()</code>, <code>thin = mix(mix(w*w,w,u), w*u, u_horizon)</code> (the uniform sky
+transition rate stays uniform), the limb term, sun, stars, <code>u_no_floor = 0</code> contract
+(ws unused ⇒ bit-for-bit pre-AC-0429).</li>
+<li><code>godot/world/world.gd</code> — <code>_ac0439_space_out</code> state var + the
+per-frame value-gated <code>u_space_out</code> push (render-only: no mesh, no bake, no data).</li>
+<li><code>godot/ARCHITECTURE.md</code> — the sky-pass note + the <code>no_sky_floor</code>
+description synced in the same task (invariant 2).</li>
+</ul>
+<p><b>Ships behind the existing <code>no_sky_floor</code> switch</b> (default ON, the user
+asked for it): this ticket re-keys what the switch's ON path means to the rule the user has
+been stating — a correction to the shipped look, not a new look option, so no second switch.
+OFF remains the pre-AC-0429 path bit-for-bit (the A/B reference).</p>
+
+<h2>4. The inside/outside transition: altitude and why</h2>
+<p><b>A = 1200 m radial</b> (<code>Aero.atmosphere_height()</code>, env <code>AWECRAFT_ATMO</code>
+override). Below A: INSIDE — the below-horizon sky is the same air as the sky above (the AC-0428
+continuous-air shape: fill u_air, anchor horizon_eff, haze band alive); the surface ends it.
+At/above A: OUTSIDE — the above-horizon sky is already fully space (w = 1 from A), so the floor
+is space with the planet's limb as the only boundary (the AC-0429 shape). The fade window
+<b>[A, A+0.25A] = [1200, 1500] m</b> reuses the limb's own 0.25A tail — the floor's last air is
+the grazing column the limb term already paints, and the fade runs with the player's CLIMB, not
+across the frame, so no single altitude shows a line. Why A and not the old w ≥ 0.3 (≈630 m):
+A is the sky's own space boundary — the one home for "how far up is space" that
+<code>u_space_sky</code>, the star field, the sun glow and the body already key on — and the
+rule is that the decision keys on WHERE THE PLAYER IS relative to that shell.</p>
+
+<h2>5. Acceptance — both halves, at once</h2>
+<h3>Half 1 — the user's frame re-taken (INSIDE, radial 941 m, w = 0.799)</h3>
+<table>
+<tr><th>Region (row-median lum, 255)</th><th>BEFORE</th><th>AFTER</th></tr>
+<tr><td>rows 0–220 (above the local horizon)</td><td>57.7 → 123.3</td><td>57.7 → 142.7 — the blue sky + sun glow (the upper rows are the restored haze band's neighbours; the zenith side is unchanged — row 0 identical to 2 decimals)</td></tr>
+<tr><td>rows 220–320 (the sky's own boundary)</td><td>121.6 → 0.0 — the collapse; max raw step 37.81</td><td>142.7 → 242.6 — a smooth rise into the air family; no collapse</td></tr>
+<tr><td>rows 340–520 (below the horizon)</td><td><b>0.00 flat black — the defect</b></td><td><b>248.8 → 248.4 — the air family (u_air ≈ 248 on display), spread &lt; 0.6</b></td></tr>
+<tr><td>rows 540–719</td><td>0.1 → 10.3 (faint limb), limb 151.16</td><td>248.6 → 242.4 — the fogged terrain at u_air (the surface ends the air, seamlessly)</td></tr>
+<tr><td>thirds top/mid/bottom</td><td>98.25 / 17.19 / 9.93</td><td>103.85 / 234.85 / 248.48</td></tr>
+<tr><td>max single-row step (raw / 5sm)</td><td><b>37.81</b> / 17.80 — a line the sky model drew</td><td><b>1.43</b> / 1.28 — a computed gradient, no line</td></tr>
+<tr><td>step at the horizon row (359→360)</td><td>0.00 (both sides already black)</td><td>0.21 — the AC-0428 order (a few /255, haze-covered)</td></tr>
+<tr><td>sky region (outside the R+SEA disc + 40 m)</td><td>min 0.00 / mean 76.65 (blue above, black below)</td><td>min 36.35 / mean 144.41 — <b>no black sky pixel anywhere</b></td></tr>
+</table>
+<figure><img src="captures/after-inside-h800.png" alt="after inside"><figcaption>AFTER — the
+user's frame re-taken: ONE consistent sky — the blue gradient above thins through the horizon
+haze into the same air that fills the lower frame; the planet's surface (fogged terrain at
+u_air, the disc, the limb) ends it. No black region below, no boundary drawn by the sky
+(max single-row step 1.43).</figcaption></figure>
+
+<h3>Half 2 — OUTSIDE the atmosphere (radial 2141 m, w = 1.0, limb aim — the AC-0429
+acceptance-2 config, numbers comparable). At this aim the local horizon sits ABOVE the top of
+the frame (the aim is 40.6° below it), so the whole frame is the below-horizon region.</h3>
+<table>
+<tr><th>Region</th><th>AC-0429 (the space look this must keep)</th><th>AFTER (this build)</th></tr>
+<tr><td>black-space band (row-median &lt; 5)</td><td>rows 0–~340, flat</td><td>rows 0–330; rows 0–280 are <b>exactly 0.00 (spread 0.00)</b>; the band's only lift is the limb air at row 320 (3.16)</td></tr>
+<tr><td>stars in the band (lum &gt; 40)</td><td>2945 (after-limb2000)</td><td><b>1624</b> — space with stars, as before</td></tr>
+<tr><td>max single-row step (the only boundary)</td><td>25.67 at the planet's limb</td><td><b>21.12 at row 427 — the planet's limb</b> (space → limb air → the body disc, rows 440–719 at 85–166). No other step in the frame.</td></tr>
+</table>
+<figure><img src="captures/after-outside-limb2000.png" alt="after outside"><figcaption>AFTER —
+outside the atmosphere: space below the horizon (flat zero + stars), the planet — disc, cloud
+deck, limb air — the only boundary. The AC-0429 shape holds unchanged.</figcaption></figure>
+
+<p class="ok"><b>Both halves hold in the same build, at once.</b> The user's 941 m frame (inside):
+one consistent sky, below-horizon rows at 248.4–248.8 (the air family), max single-row step
+1.43 (was 37.81), zero black sky pixels (the sky-region minimum is 36.35, the blue zenith side).
+The 2141 m frame (outside): below-horizon rows 0.00 (spread 0.00) with 1624 stars, the planet's
+limb the only boundary (21.12). The same code, the same build, both rules of the user's
+statement true — because the decision now keys on WHERE THE PLAYER IS (radial about the A
+shell), not on which side of the local horizon a ray points.</p>
+
+<h2>6. Gates (light set — the heavy set is the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 (census + exit status, the UAF pair)</td><td>rc=0, SCRIPT ERROR 0, SHADER ERROR 0</td></tr>
+<tr><td>SMOKE (player;interact;light;fluids;genhash)</td><td>rc=0, 0/0, 5/5 RESULT lines</td></tr>
+<tr><td>genhash (world.gd touched)</td><td>25/25 byte-identical to the current-tree reference
+(.scratch/HEAVY-r14/genhash.log == .scratch/AC-0311-gates/p2_genhash_r1.log), smoke run +
+standalone run, the two runs deterministic (identical)</td></tr>
+<tr><td>PROBE (meshprobe)</td><td>ok=true, c_match 1866/1866, arr_match 32/32, compact_ok 32/32, rc=0, 0/0</td></tr>
+<tr><td>shaderforce (Forward+ forced-compile)</td><td>12/12 ok, failed [], rc=0, 0/0;
+aero_sky_gradient declared=27 params=27 (u_space_out declared + pushed), verdict ok; boot line
+<code>- Forward+ - llvmpipe</code></td></tr>
+</table>
+
+<h2>7. The A/B — the OFF switch is untouched</h2>
+<p><code>AWECRAFT_NOSKYFLOOR=0</code>, the same 941 m frame (captures/ab-off-inside-h800.png):
+row 0 identical to 2 decimals (57.69), below-horizon rows 248.8–249.1 (the u_air floor — the
+pre-AC-0429 state at every altitude), max single-row step 1.43, thirds 103.62 / 232.47 / 248.48
+vs the new ON path's 103.85 / 234.85 / 248.48 — inside the atmosphere the two paths read the
+same continuous-air sky (the sub-2/255 difference is the anchor term: OFF keeps the AC-0428
+u_air-blended anchor, ON takes horizon_color at ws = 0 — display-compressed to invisibility).
+Their difference is exactly where the user said it must be: OUTSIDE, where OFF keeps the bright
+air floor (the first skybox-edge report, the A/B reference) and ON is space.</p>
+
+<h2>8. Artifacts</h2>
+<table>
+<tr><th>Path</th><th>What</th></tr>
+<tr><td class="num">tasks/AC-0439/AC-0439-results.html</td><td>this page (captures linked from captures/)</td></tr>
+<tr><td class="num">tasks/AC-0439/captures/before-inside-h800.png</td><td>the user's frame on the current build (the defect, reproduced)</td></tr>
+<tr><td class="num">tasks/AC-0439/captures/after-inside-h800.png</td><td>the user's frame re-taken (acceptance half 1)</td></tr>
+<tr><td class="num">tasks/AC-0439/captures/after-outside-limb2000.png</td><td>outside the atmosphere (acceptance half 2)</td></tr>
+<tr><td class="num">tasks/AC-0439/captures/ab-off-inside-h800.png</td><td>the OFF-switch A/B at 941 m</td></tr>
+<tr><td class="num">tasks/AC-0439/plan.html</td><td>the plan (goal, files, gates, before frame)</td></tr>
+<tr><td class="num">tasks/AC-0439/measure.py</td><td>the luminance-profile instrument (the AC-0429 copy: profile/disc/diff/skyfit)</td></tr>
+<tr><td class="num">tasks/AC-0439/skyband.py</td><td>the sky-region census (impact-parameter disc mask, spread/stars/profile)</td></tr>
+<tr><td class="num">.scratch/AC-0439/ + .scratch/AC-0439-*.log</td><td>all run logs (G0, smoke, genhash r2, meshprobe, shaderforce, the four shot logs + the three step snaps per shot)</td></tr>
+</table>
+
+<h2>9. Deliberately NOT done</h2>
+<ul>
+<li>No change to the thinning rate (<code>thin = mix(mix(w*w,w,u), w*u, u_horizon)</code> — the
+uniform sky transition rate, which must stay uniform), the limb term, the body, the clouds, the
+fog, <code>sky_off()</code>, the star field or the sun terms — the boundary decision is re-keyed,
+nothing else is redistributed.</li>
+<li>No new Settings key, env var or menu row: the look change ships behind the existing
+<code>no_sky_floor</code> switch (default ON) — the re-key is a correction to what that switch's
+ON path means (the user's stated rule, asked for three times), not a new look option; the
+conservative-default rule applies to looks the user has not asked for. The shader default
+(<code>u_space_out = 0.0</code>) is conservative in the material sense: a material that never
+sees the push keeps the air floor — no black floor can appear from an unpushed material.</li>
+<li>No frame from the transition window [1200, 1500] m: the fade is a smoothstep of the player's
+radial altitude (a function of the climb, never of the view direction), so no single altitude in
+the window shows a line by construction; both acceptance frames sit well outside the window
+(941 m: ws = 0.0 exactly; 2141 m: ws = 1.0 exactly). Reproducible for the coordinator with
+<code>AWECRAFT_SAT_ALT=1100</code> (radial 1241, mid-window) + the horizon aim if wanted.</li>
+<li>No hand edit of TASKS.yaml (the status flip is the coordinator's at closeout); no commit/push
+(fenced tree, another session's uncommitted work); fenced files (main.gd / game.gd / drop.gd /
+debug.gd) and tasks/AC-0067, AC-0384, AC-0425 untouched; heavy gates (boundary r4, ladder,
+meshprobe-full, r16, farab, halo, lightstate, shaderforce re-run in the heavy job, Windows
+build) left to the coordinator's background job.</li>
+</ul>
+
+</body></html>

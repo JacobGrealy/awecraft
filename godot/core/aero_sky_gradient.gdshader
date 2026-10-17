@@ -149,6 +149,28 @@ uniform float u_horizon : hint_range(0.0, 1.0) = 0.0;
 // haze and the limb air-column term — the planet and its air, the
 // only boundary present (the planet IS the horizon).
 uniform float u_no_floor : hint_range(0.0, 1.0) = 0.0;
+// AC-0439: the INSIDE/OUTSIDE weight of the atmosphere (one home:
+// Aero.sky_outside = smoothstep(A, A + 0.25A, alt_rad), A =
+// Aero.atmosphere_height). Pushed per frame by world.gd _ac0401_push
+// block (3) alongside u_space_sky (the same live radial, the same
+// seam). This is the FLOOR DECISION the user has been stating in three
+// reports: the sky must be consistent with WHERE THE PLAYER IS. 0.0 =
+// INSIDE (below A): the below-horizon fill stays the same air as the
+// sky above (u_air), the gradient's horizon anchor stays horizon_eff
+// and the horizon haze band stays alive — the AC-0428 continuous-air
+// shape, where only the planet's surface ends the air. 1.0 = OUTSIDE
+// (at/above A + 0.25A, where w = 1 makes the above-horizon sky space
+// exactly): the fill and the anchor are space — the AC-0429 shape, the
+// planet's limb the only boundary. It replaces AC-0429's
+// ws = smoothstep(0, 0.3, w), which reached 1 at ~630 m — deep INSIDE
+// the atmosphere (A = 1200) — and made below-horizon space at every
+// altitude: the user's "blue above, black below" frame (2026-10-16).
+// The shader default 0.0 is the conservative look (the floor stays
+// air — no black floor can appear on a material that never sees the
+// push); a real material always receives the push. Read ONLY through
+// ws on the u_no_floor = 1 path, so the u_no_floor = 0 contract
+// (pre-AC-0429 bit-for-bit) is untouched by this uniform.
+uniform float u_space_out : hint_range(0.0, 1.0) = 0.0;
 // AC-0417 clause D: the limb geometry at the atmosphere top A.
 // u_atmo_radius = R + A (the A shell's radius - the visible-tangent
 // convention u_limb_radius uses for R + SEA extends to A, so the
@@ -293,15 +315,25 @@ vec3 sky_on(vec3 dir) {
 	float below_soft = max(under_disc, smoothstep(0.0, 0.03, -hl));
 	float below = mix(below_old, below_soft, u_horizon);
 	float w = u_space_sky;
-	// AC-0429: the FLOOR'S SPACE WEIGHT - the one number that removes the
-	// lower boundary as a concept. 0.0 at the ground (w = 0: the air
-	// floor stays - the AC-0384 r8 fog seam - and every expression below
-	// reduces to its pre-ticket value), 1.0 from w >= 0.3 (alt ~630 m:
-	// the local horizon is space well before the user's 800 m frame at
-	// w = 0.8, where it is space EXACTLY). Derived from w (the A window
-	// - one number, one home, the AC-0417 principle), not a new altitude
-	// constant.
-	float ws = smoothstep(0.0, 0.3, w);
+	// AC-0439: the FLOOR'S SPACE WEIGHT is the player's INSIDE/OUTSIDE
+	// position (u_space_out = Aero.sky_outside(alt) - see the uniform):
+	// 0.0 while the player is INSIDE the A shell, 1.0 outside, the fade
+	// over the limb's own 0.25A tail [A, A+0.25A]. AC-0429 derived it
+	// from the sky blend w (1 from ~630 m — deep INSIDE the atmosphere)
+	// and made below-horizon space at EVERY altitude: the user's 800 m
+	// frame at w = 0.8 then read "blue above, black below" — a boundary
+	// the sky model drew, the third skybox-edge report (2026-10-16).
+	// The rule (three user reports): the sky must be consistent with
+	// WHERE THE PLAYER IS — inside, the below-horizon sky is the same
+	// air as the sky above (ws = 0: the fill is u_air, the anchor is
+	// horizon_eff, the haze band alive — the AC-0428 continuous-air
+	// shape, and only the planet's surface ends it); outside, space with
+	// the planet as the only boundary (ws = 1: the AC-0429 shape — at
+	// ws = 1, w = 1, so the above horizon is space exactly and nothing
+	// the sky model draws remains but the limb). At the ground
+	// (alt = 0) sky_outside = 0 and every expression below reduces to
+	// its pre-ticket value (the AC-0384 r8 fog seam, untouched).
+	float ws = u_space_out;
 	// the local-zenith gradient (the sky_off expression, re-keyed):
 	// horizon -> mid over the lower third, -> zenith over the top.
 	float u = clamp(hl, 0.0, 1.0);

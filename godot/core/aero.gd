@@ -31,7 +31,10 @@ const WASH_TOP_GLOW := 0.5
 # single home for "how far up it is space". A gameplay constant (R = 4000
 # with an Earth-like ratio would put space at ~60 km, far outside the
 # flight range). Every consumer derives from it (the AC-0386 principle):
-# the sky's space blend (smoothstep(0.25A, A, alt)), the star field's
+# the sky's space blend (smoothstep(0.25A, A, alt)), the sky's
+# inside/outside floor weight (smoothstep(A, A + 0.25A, alt) - AC-0439:
+# below A the below-horizon sky is the same air as the sky above, above
+# it space with the planet as the only boundary), the star field's
 # full-opacity point, the sun-glow fade, the satellite body's h_full
 # (satellite_body.gd - "the planet is fully established" lands with
 # "the sky is space"), and the sky's limb geometry (the tangent cone at
@@ -51,6 +54,27 @@ static func atmosphere_height() -> float:
 static func sky_space(alt_rad: float) -> float:
 	var a := atmosphere_height()
 	return smoothstep(0.25 * a, a, alt_rad)
+
+# AC-0439: the sky's INSIDE/OUTSIDE weight of the A shell - the floor
+# decision. 0.0 below A: the player is INSIDE the atmosphere and the sky
+# below the local horizon is the SAME AIR as the sky above it (the
+# AC-0428 continuous-air shape: the fill is u_air, the gradient's anchor
+# is horizon_eff, the horizon haze band is alive - the fog and the body
+# rim ARE u_air, so the surface ends the air, the sky model draws no
+# boundary). 1.0 at/above A + 0.25A: the above-horizon sky is already
+# fully space (sky_space = 1 from A) and the below-horizon fill must be
+# space with the planet's limb as the only boundary (the AC-0429 shape).
+# The fade window [A, A + 0.25A] reuses the limb's own tail
+# (atmo_limb_falloff - the same stated 0.25A fraction): the floor's last
+# air is the grazing air column the limb term already paints, and the
+# fade runs with the player's CLIMB, never across a frame, so no single
+# altitude shows a line. AC-0429 keyed this decision on the sky blend w
+# (smoothstep(0, 0.3, w) - 1 from ~630 m, deep INSIDE the atmosphere)
+# and made below-horizon space at every altitude: the "blue above, black
+# below" the user reported 2026-10-16 (the third skybox-edge report).
+static func sky_outside(alt_rad: float) -> float:
+	var a := atmosphere_height()
+	return smoothstep(a, a + 0.25 * a, alt_rad)
 
 # AC-0417 clause D / AC-0419: the sky's limb geometry at A.
 # u_atmo_radius = R + A, and the falloff is a stated fraction of A

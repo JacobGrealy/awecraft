@@ -5143,6 +5143,10 @@ var _ac0414_limb_loaded := -1.0
 var _ac0414_body_loaded := -1.0
 var _ac0402_skyalt := -1.0
 var _ac0402_skyblend := -1.0
+# AC-0439: the inside/outside floor weight push state (same seam as
+# u_space_sky — per frame, value-gated; Aero.sky_outside is the one
+# home for the A-shell decision).
+var _ac0439_space_out := -1.0
 # AC-0417: the atmosphere-height push state (same seam). The limb
 # geometry (u_atmo_radius = R + A, u_atmo_falloff = 0.25 A) moves only on
 # a planet_R / A change; the star-field A window (u_sky_alt switch,
@@ -5406,6 +5410,17 @@ func _ac0401_push() -> void:
 					if absf(ss2 - _ac0402_skyblend) > 0.001:
 						smb.set_shader_parameter("u_space_sky", ss2)
 						_ac0402_skyblend = ss2
+					# AC-0439: the INSIDE/OUTSIDE floor weight (one home -
+					# Aero.sky_outside): 0.0 while the player is INSIDE the
+					# A shell (the below-horizon sky is the same air as the
+					# sky above it), 1.0 outside (space below the horizon,
+					# the planet is the only boundary); the fade window is
+					# the limb's own 0.25A tail. Per-frame like u_space_sky
+					# (the same live radial, the same seam, the same gate).
+					var so2: float = Aero.sky_outside(alt_rad2)
+					if absf(so2 - _ac0439_space_out) > 0.001:
+						smb.set_shader_parameter("u_space_out", so2)
+						_ac0439_space_out = so2
 	# (3b) AC-0417: the rest of the A re-key.
 	# - u_atmo_radius / u_atmo_falloff: the limb geometry at the A shell
 	#   (clause D - the atmosphere's silhouette is larger than the
