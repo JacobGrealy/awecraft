@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0442 plan — script-error-in-low-lod-handoff</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:900px;line-height:1.45}
+code,pre{font-family:ui-monospace,monospace;font-size:0.92em}
+pre{background:#f4f4f4;padding:.6rem;overflow-x:auto}
+h2{border-bottom:2px solid #ccc;padding-bottom:.2rem}
+table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.3rem .5rem}
+</style></head><body>
+<h1>AC-0442 plan — the low-LOD handoff script error (key 'v')</h1>
+
+<h2>Root cause (established before any edit)</h2>
+<p>The error <code>Invalid access to property or key 'v' on a base object of type
+'Dictionary'</code> at <code>_low_handoff (res://world/world.gd:2952)</code> fires in the
+stale-tier branch of <code>_low_handoff</code> (world.gd 2949–2960). When the live band tier
+has moved since dispatch, the branch caches the worker's finished result into
+<code>c.low_cache[si]</code>, guarded only by <code>res.get("empty", false)</code> — i.e. it assumes
+every non-empty result is a COMPLETE emit carrying <code>v/i/n/c</code>. It is not:</p>
+<pre># the low-lane worker's three result shapes:
+1. full emit    {v, i, n, c, mh[, wv…]}   (C++ low_emit_avg / h_avg_emit — mesh.cpp)
+2. all-air      {"empty": true}           (no v — guarded by the "empty" check)
+3. PRE-START EARLY-OUT  {"skipped": true}  (world.gd:7302 — no v, no "empty")
+# shape 3 is what the stale-tier branch indexes with res["v"] → the error.</pre>
+<p>Shape 3 is the worker's pre-start early-out: the task was dispatched at band tier T and
+the <b>live tier moved while it sat in the queue</b>, so the worker never emitted. The
+coordinator's own run proves the chain: <code>.scratch/HEAVY-r22/r16.log</code> (the <b>r16 arm =
+the far-tier arm</b>, the one that exercises the LOD boundary hardest — its fly50 phase runs
+the player at 215 m/s through <b>97 recenters</b>; every recenter moves the tier anchor
+<code>last_pcx/last_pcz</code>, even with the ahead-offset leap). That run's RESULT carries
+<b><code>low_skip_stale_n: 1</code></b> — exactly one skipped emit — and <b>one</b> script error, at
+t≈295 s (the fly50 phase, between SATDIAG periods — the "satellite diagnostic immediately
+before" is the 2 s-periodic cloud-satellite reporter, co-incident, not causal). Backtrace:
+<code>_low_poll → threadmesh_handoff → _low_handoff:2952</code> (Godot reports the missing-key error
+on the Dictionary literal's first line, 2952; the failing access is <code>res["v"]</code> at 2956).</p>
+<p>Condition: dispatch at tier T → tier change while in flight (worker start) →
+<code>{"skipped": true}</code> → handoff still sees live tier ≠ dispatch tier → stale branch →
+<code>res["v"]</code> on the shapeless record. Rare because it needs a queued task to straddle a
+boundary move AND the tier to still differ a few ms later at handoff.</p>
+<p><b>What was "not handed off":</b> a skipped emit never produced a mesh — there is nothing
+to attach or cache. The slab was never stamped, so it stays PENDING against its live tier
+and the drain re-picks it (the non-stale path already treats a skipped record exactly this
+way at 2964). The error aborted the handoff mid-bookkeeping; the re-pick recovered it —
+but the moment carried no low placeholder for that slab (the hole/gap class), and every
+occurrence leaves a script error the arm's own verdict cannot see.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>the fix: the stale-tier branch caches only a result that
+<b>actually carries a mesh</b> (<code>res.has("v")</code> — the four indexed keys are set together by both
+emitters). A skipped record is dropped cleanly (slab stays pending, lane re-picks — identical
+treatment to the non-stale skipped path). ~3 lines + comment.</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>TEMPORARY measurement arm <code>ac0442repro</code> (branch in
+<code>run()</code> + one function) that constructs the condition deliberately: R16 pin (as the r16
+arm), then oscillate the tier knob <code>low_start</code> (8↔12, both in-band: med 5 / render 16) while
+the low lane churns, then settle, then report the worker/handoff counters. Added AND REMOVED
+in this task (scenes/AGENTS.md pristine rule — the arm is the instrument, never left behind).</td></tr>
+<tr><td><code>tasks/AC-0442/…</code></td><td>plan (this), results, continuity, captures.</td></tr>
+</table>
+<p>Not touched: the four fenced files, tasks/AC-0067, AC-0384, AC-0425. The C++ emitters need
+no change — their two shapes (full / empty) are already handled; the defect is the GDScript
+side's third-shape blind spot.</p>
+
+<h2>Reproduction (before fixing anything)</h2>
+<ol>
+<li><b>Deliberate construction</b> — the temporary <code>ac0442repro</code> arm: R16 build + settle,
+then ~20 s of <code>low_start</code> oscillation (each flip re-pends the tier-2/3 ring at the moved
+boundary and the drain dispatches it while the previous flip's tasks are still queued →
+in-flight tasks straddle the tier change → worker skips). Pre-fix expectation:
+<code>low_skip_stale_n</code> moves AND ≥1 <code>SCRIPT ERROR … key 'v'</code> in the log (census). Run twice
+for determinism.</li>
+<li><b>The real arm, at will</b> — loop <code>AWECRAFT_LOGIC=r16</code> (the far-tier arm) pre-fix until
+the error fires; count attempts (cap 6; if it does not fire in the cap, say so plainly and
+lean on the construction). ~6.6 min per run (coordinator's run wall 397 s).</li>
+</ol>
+<p><b>After the fix:</b> the same construction arm must still show <code>low_skip_stale_n</code> moving
+(the condition is still being hit) with <b>zero</b> script errors — the fix absorbs the record
+instead of choking on it.</p>
+
+<h2>Harness gates (light set only — heavy gates are the coordinator's)</h2>
+<ol>
+<li><b>G0</b>: <code>--headless --path godot --quit</code>, exit status checked,
+<code>gate_census.py</code> → zero SCRIPT ERROR + zero SHADER ERROR (pre- and post-fix).</li>
+<li><b>Reproduction pair</b> (above): construction arm pre-fix (error fires) / post-fix (no
+error, skips still counted); r16 loop pre-fix until fire (attempt count recorded).</li>
+<li><b>SMOKE</b> battery: <code>player;interact;light;fluids;genhash</code>.</li>
+<li><b>PROBE</b>: <code>ladder</code> arm (the 20 sub-probes, incl. the live boundary flip) and
+<code>boundary</code> r4 (the walk/p95 standing values, in band).</li>
+<li><b>genhash</b> 25/25 byte-identical (world/* touched — drift is a finding).</li>
+<li><b>Extended far-tier run</b>: ≥3 full r16 runs post-fix — census zero script errors on
+each, rc 0, and the LOD behaviour unchanged: <code>far_holes 0</code> in both far bands (far0/far1),
+all r16 sub-flags green, plus the ladder/boundary standing values from (4).</li>
+</ol>
+<p>One godot at a time, <code>HOME=/tmp/dsh_home</code> prefix, absolute engine path, from repo root,
+logs to repo-root <code>.scratch/AC-0442/</code>. The tree carries another session's uncommitted work
+(main.gd / game.gd / debug.gd / drop.gd + two task artifacts — exactly the fenced set);
+runs include it, and if anything in the repro or gates looks entangled with those files it
+will be reported, not worked around.</p>
+
+</body></html>

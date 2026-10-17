@@ -2948,7 +2948,14 @@ func _low_handoff(e: Dictionary, res) -> void:
 	# (the air rule is per grid resolution) — it is not terminal-marked.
 	if _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) != int(e.get("tier", 1)):
 		low_drop_stale_n += 1
-		if not bool(res.get("empty", false)):
+		# AC-0442: only a result that actually carries a mesh is cacheable.
+		# The worker's PRE-START early-out (the tier moved while the task
+		# sat in the queue — the emit never ran) returns {"skipped": true}:
+		# no v/i/n/c and no "empty" — indexing res["v"] on it was the
+		# script error. A skipped record is dropped cleanly, exactly like
+		# the non-stale path below: the slab was never stamped, so it stays
+		# PENDING against its live tier and the lane re-picks it there.
+		if not bool(res.get("empty", false)) and res.has("v"):
 			c.low_cache[si] = {
 				"tier": int(e.get("tier", 1)),
 				"dgen": int(c.data_gen),

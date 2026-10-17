@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0442 results — script-error-in-low-lod-handoff</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:980px;line-height:1.5}
+code,pre{font-family:ui-monospace,monospace;font-size:0.9em}
+pre{background:#f4f4f4;padding:.6rem;overflow-x:auto;border-left:3px solid #bbb}
+table{border-collapse:collapse;margin:1rem 0}td,th{border:1px solid #bbb;padding:.3rem .55rem;text-align:left}
+h2{border-bottom:2px solid #ccc;padding-bottom:.2rem}
+.ok{color:#0a0;font-weight:600}.bad{color:#a00;font-weight:600}
+.small{font-size:.85em;color:#444}
+</style></head><body>
+<h1>AC-0442 results — the low-LOD handoff script error (key 'v')</h1>
+
+<p><b>Conclusion: the error was reproduced at will</b> (a deliberate construction fired it
+<b>28 times in a single run, twice in a row</b>, with the exact error text and backtrace of the
+coordinator's finding), <b>the record was identified</b> — the worker's pre-start early-out
+<code>{"skipped": true}</code>, a low-emit that never ran because the band tier moved while the
+task sat in the queue — <b>and the fix (one condition in <code>_low_handoff</code>) is proven by an
+A/B through the same construction</b>: pre-fix 28/28 skips → 28 script errors; post-fix 29
+skips → <b>zero</b> script errors, the skips still happening (the lane still works). Extended
+r16 (the far-tier arm) runs clean in the census; LOD behaviour unchanged (far_holes 0/0 both
+bands, ladder 20/20, boundary r4 in band).</p>
+
+<h2>1. The error and where it fired</h2>
+<pre>SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+      at: _low_handoff (res://world/world.gd:2952)
+      GDScript backtrace: [0] _low_handoff (world.gd:2952)  [1] threadmesh_handoff (world.gd:7682)
+      [2] _low_poll (world.gd:3056)  [3] _low_step (world.gd:3257)  [4] _process (world.gd:5883)</pre>
+<p>Once, at t≈295 s of the coordinator's full <b>r16</b> run (<code>.scratch/HEAVY-r22/r16.log</code>,
+the far-tier arm — the one that exercises the LOD boundary hardest: its fly50 phase runs the
+player at 215 m/s through <b>97 recenters</b>; every recenter moves the tier anchor
+<code>last_pcx/last_pcz</code>, with the ahead-offset leap). That run's own RESULT reported
+<code>ok: true</code> and <code>low_skip_stale_n: 1</code> — exactly one skipped emit, and the arm's verdict
+stayed green: the arm does not see script errors. <b>The census against the exit status is the
+gate</b> (confirmed here: every pre-fix repro run exited 0 while logging 28 errors). The
+"satellite diagnostic immediately before" is the 2 s-periodic cloud-satellite SATDIAG reporter —
+always adjacent to anything, not causal.</p>
+
+<h2>2. What the record actually was, and why the key was missing</h2>
+<p>The low-lane worker (<code>_tm_worker_run</code>, world.gd:7300+) returns one of three shapes:</p>
+<table>
+<tr><th>shape</th><th>when</th><th>keys</th></tr>
+<tr><td>full emit</td><td>the C++ <code>low_emit_avg</code>/<code>h_avg_emit</code> ran</td><td><code>v i n c mh</code> (+ water <code>wv…</code>); mesh.cpp always sets these together</td></tr>
+<tr><td>all-air</td><td>the sample grid is all air</td><td><code>{"empty": true}</code> only</td></tr>
+<tr><td><b>pre-start early-out</b></td><td><b>the live band tier moved while the task sat in the worker queue</b> (world.gd:7307-7311 — the tier check runs at worker START, after the dispatch captured its tier)</td><td><code>{"skipped": true}</code> only — <b>no <code>v</code>, no <code>empty</code></b>: no emit ran</td></tr>
+</table>
+<p>The stale-tier branch of <code>_low_handoff</code> (world.gd:2949, pre-fix) — taken when the live
+tier differs from the dispatch tier at handoff — cached the result into <code>c.low_cache[si]</code>
+guarded only by <code>res.get("empty", false)</code>, i.e. it assumed every non-empty result was a full
+emit, and indexed <code>res["v"]</code> (the error, reported on the Dictionary literal's first line 2952;
+the failing access is at 2956). A <code>{"skipped": true}</code> record has neither key — the tier record
+that "does not carry the same fields as the full tier" (the ticket's candidate, exactly). The
+sequence: dispatch at tier T → tier moves while queued (a recenter) → worker start sees the
+moved tier → no emit → <code>{"skipped": true}</code> → handoff still sees the moved tier → stale branch →
+<code>res["v"]</code> → error. Rare, because it needs a queued task to straddle a boundary move <i>and</i>
+the tier to still differ a few ms later at handoff: the low queue caps at 64 in-flight tasks
+(<code>LOW_TASK_CAP</code>) and the drain paces dispatches (~300-480/s, <code>LOW_WAVE_PACE_MS</code>/<code>FRAME_CAP</code>)
+against an idle 4-thread pool, so the queue is nearly always empty — the r16 fly50 phase only
+ever hits it because the continuous crossing stream keeps the pool backlogged (1 in the
+coordinator's run).</p>
+<p><b>What was "not handed off":</b> a skipped emit produced no mesh — there was nothing to attach
+or cache. The slab was never stamped, so it stays PENDING against its live tier and the drain
+re-picks it (the non-stale path already treats a skipped record exactly this way,
+world.gd:2971). The error aborted the handoff mid-bookkeeping; the re-pick recovered the slab —
+but the moment carried no low placeholder for that slab (the hole/gap class the ticket warns
+about), and every occurrence leaves a script error the arm's verdict cannot see.</p>
+
+<h2>3. Reproduction at will</h2>
+<p><b>The natural arm is too rare to loop usefully</b> (one fire in the coordinator's full run; the
+skip window is sub-millisecond under an idle pool). So the condition was <b>constructed
+deliberately</b> with a temporary measurement arm (<code>ac0442repro</code> in harness.gd — added for this
+repro and <b>removed in this same task</b> per the pristine rule; zero references remain). It
+uses the real lanes end to end (the r16 pin: render 16 / med 5 / low 10 / sim 4; the real drain,
+worker pool, and handoff) and holds the one thing the game's streaming does in flight: a
+backlogged pool. Construction: flood the shared WorkerThreadPool (the SAME pool the low emits
+ride, HIGH priority) with 40 × 100 ms harness-owned dummy tasks (~1 s of full-thread busy on
+this 4-thread box) while the tier knob <code>low_start</code> flips 6↔15 every ~15 ms (the wide range
+re-pends the whole boundary ring, so the drain's dispatch supply never runs dry). The low queue
+saturates at 64 behind the dummies; when the dummies finish, the backlog's tasks START after
+the last flips — every one of them straddles a tier change and the worker's pre-start early-out
+fires on it.</p>
+<p>How the construction was found (the failed attempts are the evidence of the timing):</p>
+<table>
+<tr><th>attempt</th><th>construction</th><th>result</th></tr>
+<tr><td>1</td><td>knob flip 8↔12 every 350 ms</td><td>6389 enqueues, <b>0 skips</b> — pool idles between flips, queue holds ~1 task, every task starts within a sub-ms of dispatch</td></tr>
+<tr><td>2</td><td>knob flip 6↔15 every 3 frames</td><td>6010 enqueues, 0 skips — the re-pend storm slows frames to ~40 ms, the flip period is still ≫ the queue wait</td></tr>
+<tr><td>3</td><td>recenter oscillation ±16 chunks (the in-game call form)</td><td>0 skips — a 32-chunk crossing sweep costs ~1.7 s on the main thread; one "flip" per 2 s, and the pool backlog drains between flips (the r16-fly50 mechanism needs crossings every ~20 ms)</td></tr>
+<tr><td>4</td><td>pool thread-count reduction</td><td>not possible — <code>WorkerThreadPool</code> exposes neither <code>thread_count</code> nor <code>set_thread_count</code> to GDScript in this 4.7.1 build (probed); the attempt also exposed the arm-abort hazard (a script error in the arm leaves the process idling — noted for the record)</td></tr>
+<tr><td><b>5</b></td><td><b>dummy-task pool flood + 15 ms knob flips</b></td><td class="bad"><b>28 skips → 28 SCRIPT ERRORs, census FAIL, rc=0</b></td></tr>
+<tr><td><b>6</b></td><td>repeat of 5</td><td class="bad"><b>28 skips → 28 SCRIPT ERRORs, census FAIL, rc=0</b> — deterministic, 2/2</td></tr>
+</table>
+<pre># attempt 5 (pre-fix) — the first 4 of 28, verbatim from .scratch/AC-0442/repro_prefix_5.log:
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+… (28 total, one per skipped record)
+RESULT {…"skip_delta":28,"drop_delta":28,"flips":99,"enqueue_delta":1761,"handoff_delta":1733,
+"constructed":true,"ok":true,…}   # the arm says ok:true — the census says FAIL. Exactly the ticket's finding.</pre>
+<p>Counter arithmetic in both pre-fix runs: <code>low_skip_stale_n</code> +28 (the worker observed a moved
+tier at start 28 times) = <code>low_drop_stale_n</code> +28 (all 28 reached the stale-tier handoff branch —
+each one a script error). Attempts were counted on the construction, not hoped for: <b>attempt 5
+fired, attempt 6 confirmed</b>. The natural r16 loop was deliberately not run pre-fix — the
+construction is the ticket's sanctioned alternative ("or identify the condition and construct
+it deliberately"), and it fired on its first proper try.</p>
+
+<h2>4. The fix</h2>
+<p>One condition, <code>godot/world/world.gd</code>, <code>_low_handoff</code>, the stale-tier branch:</p>
+<pre># pre-fix:
+if not bool(res.get("empty", false)):
+    c.low_cache[si] = { …, "v": res["v"], "i": res["i"], "n": res["n"], "c": res["c"], … }
+
+# post-fix:
+if not bool(res.get("empty", false)) and res.has("v"):
+    c.low_cache[si] = { … }   # unchanged
+</pre>
+<p>Only a result that actually carries a mesh is cacheable — the four indexed keys are set
+together by both C++ emitters, so <code>res.has("v")</code> is the exact precondition. A skipped record
+(dropped, counted in <code>low_drop_stale_n</code> as before) means no emit ran: there is nothing to cache,
+and the slab — never stamped — stays PENDING against its live tier, exactly like the non-stale
+path's treatment of the same record (world.gd:2971). The drain re-picks it at the live tier.
+No other code path indexes a low result without a guard: the non-stale path checks
+<code>empty</code>/<code>skipped</code> before touching <code>v/i/n/c</code>, and the flip-back cache consumer
+(<code>_low_attach_cached</code>) only ever sees entries built with all four keys. No C++ change, no
+format change, no new switch — the pre-fix behaviour of every non-skipped shape is untouched
+(byte-for-byte the same cache decision, the same counters).</p>
+
+<h2>5. Verification</h2>
+<h3>5.1 The A/B through the construction (the fix's proof)</h3>
+<table>
+<tr><th>run</th><th>tree</th><th>skip_delta</th><th>drop_delta</th><th>SCRIPT ERROR</th><th>census</th><th>rc</th></tr>
+<tr><td>repro_prefix_5</td><td>pre-fix</td><td>28</td><td>28</td><td class="bad">28</td><td class="bad">FAIL</td><td>0</td></tr>
+<tr><td>repro_prefix_6</td><td>pre-fix</td><td>28</td><td>28</td><td class="bad">28</td><td class="bad">FAIL</td><td>0</td></tr>
+<tr><td>repro_postfix_1</td><td>post-fix</td><td>29</td><td>29</td><td class="ok">0</td><td class="ok">ok</td><td>0</td></tr>
+</table>
+<p>Post-fix the condition is <b>still being hit</b> (29 skipped emits, all dropped in the stale
+branch) — the construction is still live, so the zero is the fix's, not a quieter condition.
+The skipped slabs re-pick and land: <code>handoff_delta</code> 1882 vs <code>enqueue_delta</code> 1911 — the lane
+drained to a normal residual, no stranded work.</p>
+<h3>5.2 G0 (the standard gate: zero SCRIPT + zero SHADER ERROR via the census, exit status checked)</h3>
+<table>
+<tr><th>log</th><th>rc</th><th>SCRIPT ERROR</th><th>SHADER ERROR</th><th>census</th></tr>
+<tr><td>g0_prefix (pre-fix tree)</td><td>0</td><td>0</td><td>0</td><td class="ok">ok</td></tr>
+<tr><td>g0_postfix</td><td>0</td><td>0</td><td>0</td><td class="ok">ok</td></tr>
+<tr><td>g0_final (final tree, arm removed)</td><td>0</td><td>0</td><td>0</td><td class="ok">ok</td></tr>
+</table>
+<h3>5.3 Extended far-tier (r16) runs — one clean run proves nothing about a rare error</h3>
+<table>
+<tr><th>run</th><th>rc</th><th>SCRIPT/SHADER ERR</th><th>census</th><th>ok</th><th>far_holes far0/far1</th><th>inr holes</th><th>wave/inr</th><th>low skip/drop/kept/handoff</th><th>wall</th></tr>
+<tr><td>r16_ext_1</td><td>0</td><td>0 / 0</td><td class="ok">ok</td><td class="ok">true</td><td class="ok">0 / 0</td><td>0</td><td class="ok">true / true</td><td>0 / 107 / 43 / 45177</td><td>6 m 51 s</td></tr>
+<tr><td>r16_ext_2</td><td>0</td><td>0 / 0</td><td class="ok">ok</td><td class="ok">true</td><td class="ok">0 / 0</td><td>0</td><td class="ok">true / true</td><td>0 / 101 / 37 / 44597</td><td>6 m 45 s</td></tr>
+<tr><td>r16_ext_3</td><td>0</td><td>0 / 0</td><td class="ok">ok</td><td class="ok">true</td><td class="ok">0 / 0</td><td>0</td><td class="ok">true / true</td><td>0 / 106 / 49 / 45063</td><td>6 m 50 s</td></tr>
+</table>
+<p>Three full far-tier runs (the arm that fired the error — 2029 s of flight phases each):
+<b>zero script errors in ~20.5 min of the exact workload class that produced it</b>. The low-lane
+accounting sits in the coordinator's pre-fix neighbourhood (drop_stale 107/101/106 vs 112;
+kept 43/37/49 vs 44; handoff 45177/44597/45063 vs 44781) — the lane's normal churn is unchanged;
+the natural pre-start skip did not occur in these three (its rate is ~1 per full run and the fix
+changes nothing about when a skip happens — only how the record is handled; the construction in
+§3/§5.1 is the evidence that the handling path is correct).</p>
+<h3>5.4 Level-of-detail behaviour unchanged</h3>
+<table>
+<tr><th>standing value (HARNESS.md §3 / ticket)</th><th>coordinator's run (pre-fix)</th><th>this task</th></tr>
+<tr><td>r16 <code>far_holes</code>, both far bands (far0/far1)</td><td>0 / 0</td><td class="ok">0 / 0 (each extended run)</td></tr>
+<tr><td>r16 sub-flags (<code>inr_ok</code>/<code>wave_ok</code>/<code>height_ok</code>/<code>air_ok</code>/<code>uv_repeat_ok</code>/<code>no_downgrade_ok</code>/…)</td><td>all green, <code>ok: true</code></td><td class="ok">all green, <code>ok: true</code> (each extended run)</td></tr>
+<tr><td>ladder (the 20 sub-probes incl. the live boundary flip)</td><td><code>ok: true</code>, <code>boundary_flip_n: 90</code></td><td class="ok"><code>ok: true</code> — band A 20/20, band B 144/144, band C 90/90, <code>tier_mismatch 0</code>, <code>boundary_flip_ok: true</code> (90 flips), air/clutter/layerrank all ok</td></tr>
+<tr><td>boundary r4 (the walk, in band)</td><td><code>ok: true</code>, p95 in band</td><td class="ok"><code>ok: true</code> — crossing frame p95 36 ms / max 39 ms (in band), burst p95 5057 ms, footprint missing 0, 30 crossings</td></tr>
+<tr><td>genhash (world/* touched → owed)</td><td>25/25 byte-identical</td><td class="ok">25/25 byte-identical vs the coordinator's <code>HEAVY-r22/genhash.log</code> reference (the fix is bookkeeping-only — generation did not move)</td></tr>
+</table>
+<p>The low lane's own accounting across the extended runs (the handoff counters):
+<code>low_skip_stale_n</code> stays at the natural rate (the real-arm skip is still rare, as before — the
+fix changes nothing about WHEN a skip happens, only how the record is handled),
+<code>low_drop_stale_n</code>/<code>low_handoff_n</code> in the same neighbourhood as the coordinator's run
+(112/44781), <code>low_cache_kept_n</code> in the same neighbourhood (44) — the cache-and-keep path for
+stale-tier EMITS is untouched.</p>
+<h3>5.5 SMOKE</h3>
+<p><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> (world/* touched → genhash owed):
+rc 0, 0 script / 0 shader, census ok. player — <code>is_on_floor</code>, <code>horizontal_moved 2.82</code>,
+sprint/jump/FOV all ok; interact — mine→<code>drop_spawned true</code>, place <code>place_ok true</code>,
+<code>inv_grew {id 2, n 1}</code> (this exercises the fenced <code>drop.gd</code> from the other session's tree —
+it behaves); light — torch census <code>torch_level 14</code>, far-torch count up 0→9; fluids —
+<code>sea_stable true</code>, <code>sea_backed 320→320</code>, <code>water_delta 1</code>, lava results standing; genhash —
+<b>25/25 lines byte-identical</b> against the coordinator's <code>HEAVY-r22/genhash.log</code> reference.</p>
+
+<h2>6. Gates, with exit statuses</h2>
+<table>
+<tr><th>gate</th><th>command (abridged)</th><th>rc</th><th>result</th></tr>
+<tr><td>G0 pre-fix</td><td>headless --quit + gate_census.py</td><td>0</td><td class="ok">0/0 ok</td></tr>
+<tr><td>repro pre-fix ×2</td><td>AWECRAFT_LOGIC=ac0442repro (temporary arm)</td><td>0</td><td class="bad">28/28 errors (the repro)</td></tr>
+<tr><td>G0 post-fix / final</td><td>headless --quit + gate_census.py</td><td>0</td><td class="ok">0/0 ok</td></tr>
+<tr><td>repro post-fix</td><td>AWECRAFT_LOGIC=ac0442repro</td><td>0</td><td class="ok">29 skips, 0 errors</td></tr>
+<tr><td>r16 extended ×3</td><td>AWECRAFT_LOGIC=r16, --fixed-fps 600</td><td>0 ×3</td><td class="ok">3/3 census ok, 0 script / 0 shader each, <code>ok:true</code>, far_holes 0/0 each</td></tr>
+<tr><td>SMOKE battery</td><td>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</td><td>0</td><td class="ok">0/0 census ok, all 5 modes ok, genhash 25/25</td></tr>
+<tr><td>ladder</td><td>AWECRAFT_LOGIC=ladder, --fixed-fps 600</td><td>0</td><td class="ok">0/0 census ok, <code>ok:true</code>, 20/20 band A, boundary_flip ok</td></tr>
+<tr><td>boundary r4</td><td>AWECRAFT_LOGIC=boundary AWECRAFT_RADIUS=4</td><td>0</td><td class="ok">0/0 census ok, <code>ok:true</code>, p95 36 ms in band</td></tr>
+</table>
+<p>HEAVY gates (shaderforce, meshprobe, halo, lightstate, farab, boundary r24, the build + serve)
+are the coordinator's — not run here, per the ticket.</p>
+
+<h2>7. Deliberately not done / not verifiable here</h2>
+<ul>
+<li><b>The natural r16 fire was not looped pre-fix.</b> The ticket's acceptance offers either the
+loop or the deliberate construction; the construction fired deterministically on its first proper
+try (and again), so the loop (6.6 min/run, ~1 fire per full run) was not worth its time. The
+natural rate remains ~1 per full r16 run (the coordinator's single occurrence is the sample).
+<i>Not verifiable here: that the fix eliminates the natural fire specifically — it is the same
+code path the construction exercises (identical error, identical backtrace, identical counters),
+and the extended post-fix r16 runs (≥3) carry the natural path at its natural rate with zero
+errors.</i></li>
+<li><b>Visual confirmation of the "hole/gap" moment</b> (the one missing placeholder on the errored
+slab before its re-pick) is not captured by a frame: at 215 m/s in the far band the gap is
+sub-frame-to-tens-of-ms, and renders on this box are the software proxy anyway. The
+bookkeeping proof (the slab was never stamped → re-pended → re-landed; the counters balance) is
+the evidence; the extended runs' <code>far_holes 0/0</code> + <code>inr_*</code> hole censuses are the standing
+no-hole gates.</li>
+<li><b>The temporary repro arm is removed</b> (pristine rule) — its evidence lives in the captured
+logs, not in the tree. The pool-flood construction is therefore not a standing instrument; a
+permanent arm for it is a candidate follow-up if the coordinator wants it (it would also need a
+line in <code>tasks/harness_data.yaml</code>).</li>
+<li><b>Another session's uncommitted work</b> (main.gd / game.gd / debug.gd / drop.gd + the AC-0067/
+AC-0384 artifacts — exactly the fenced set) is in this tree; every run here included it. Nothing
+in the repro or the gates looked entangled with those files (the error path is wholly in
+world.gd's low lane; the dirty files are the drop/held-item + cloud-look work). Noted per the
+ticket's instruction rather than worked around.</li>
+<li>Nothing in <code>gdext/</code> changed — no rebuild of <code>libchunkio.so</code> was owed (the emitters' two
+shapes were already handled; the defect was GDScript-side).</li>
+</ul>
+
+<h2>9. Deviations from plan.html</h2>
+<ul>
+<li><b>The repro's construction changed during the work</b> (the plan anticipated the condition and
+a knob-oscillation arm; the tuning saga — attempts 1-4 in §3, why each failed, and the
+WorkerThreadPool API probe — is the deviation). The final construction (dummy-task pool flood +
+15 ms knob flips) is the plan's deliberate-construction step, executed with the timing the
+pacing constants (<code>LOW_WAVE_PACE_MS</code>/<code>FRAME_CAP</code>/pool size) make necessary. Everything the
+plan promised was delivered: condition identified, constructed at will, A/B through the fix.</li>
+<li><b>Gate logs live at <code>.scratch/AC-0442/</code></b> (repo root) rather than the skill's
+<code>.scratch/AC-0442-gates/</code> — the task's established scratch dir; <code>captures/</code> is the durable
+copy.</li>
+</ul>
+
+<h2>10. Harvest candidates for closeout (coordinator)</h2>
+<ul>
+<li><code>WorkerThreadPool</code> (engine singleton) exposes <b>no</b> thread-count API to GDScript in this
+4.7.1 build (<code>thread_count</code>/<code>set_thread_count</code> absent — probed) — future harness work that
+wants to throttle the pool must flood it with its own tasks instead.</li>
+<li>A script error inside a harness arm that is mid-<code>await</code> aborts the arm but <b>not the
+process</b> — the run then idles until the shell timeout kills it (attempt 4). Arm code that can
+script-error (any property read on an engine object included) needs a guard or the run needs its
+log checked, not just its rc.</li>
+<li><code>AWECRAFT_BATTERY</code> values contain semicolons — quote them in the shell or the modes become
+commands (rc 127, and the empty log census "passes" — the paired rc check is what caught it).</li>
+</ul>
+
+<h2>8. Captures</h2>
+<ul>
+<li><code>captures/repro_prefix_5.log</code> / <code>repro_prefix_6.log</code> — the pre-fix repro (28 errors each; the first error + backtrace + RESULT inline in §3)</li>
+<li><code>captures/repro_postfix_1.log</code> — the post-fix A/B (29 skips, 0 errors)</li>
+<li><code>captures/g0_prefix.log</code> / <code>g0_postfix.log</code> / <code>g0_final.log</code> — G0 at the three tree states</li>
+<li><code>captures/r16_ext_1.log</code> / <code>r16_ext_2.log</code> / <code>r16_ext_3.log</code> + <code>r16_ext_summary.txt</code> — the extended far-tier runs</li>
+<li><code>captures/smoke.log</code>, <code>captures/ladder.log</code>, <code>captures/boundary_r4.log</code> — the light set</li>
+</ul>
+<p class="small">All logs also live at the repo root under <code>.scratch/AC-0442/</code> (the canonical
+location). One godot at a time throughout; <code>HOME=/tmp/dsh_home</code>; engine
+<code>~/tools/godot/godot --path godot</code> from the repo root.</p>
+
+</body></html>

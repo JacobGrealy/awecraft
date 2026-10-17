@@ -1,0 +1,10 @@
+=== r16 ext run 1 start Sat Oct 17 07:17:59 EDT 2026 ===
+run=1 rc=0 script_err=0 shader_err=0 census=[census: ok] ok=True far0_holes=0 far1_holes=0 far0_ok_inr=0 skip_stale=0 drop_stale=107 kept=43 handoff=45177 wave_ok=True inr_ok=True low_n_far0=0 low_n_far1=247
+=== r16 ext run 1 end Sat Oct 17 07:24:50 EDT 2026 ===
+=== r16 ext run 2 start Sat Oct 17 07:24:50 EDT 2026 ===
+run=2 rc=0 script_err=0 shader_err=0 census=[census: ok] ok=True far0_holes=0 far1_holes=0 far0_ok_inr=0 skip_stale=0 drop_stale=101 kept=37 handoff=44597 wave_ok=True inr_ok=True low_n_far0=0 low_n_far1=247
+=== r16 ext run 2 end Sat Oct 17 07:31:35 EDT 2026 ===
+=== r16 ext run 3 start Sat Oct 17 07:31:35 EDT 2026 ===
+run=3 rc=0 script_err=0 shader_err=0 census=[census: ok] ok=True far0_holes=0 far1_holes=0 far0_ok_inr=0 skip_stale=0 drop_stale=106 kept=49 handoff=45063 wave_ok=True inr_ok=True low_n_far0=0 low_n_far1=247
+=== r16 ext run 3 end Sat Oct 17 07:38:25 EDT 2026 ===
+LOOP_DONE

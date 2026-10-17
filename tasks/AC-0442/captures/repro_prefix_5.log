@@ -1,0 +1,244 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SATDIAG diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=false period=2.0s band=[500,2000] | send back the file: /tmp/dsh_home/Desktop/AweCraft-satdiag.txt | /home/angrygiant/tools/godot/AweCraft-satdiag.txt
+THREADGEN on threadgen=true cap=2
+THREADMESH on threadmesh=true pool=4
+SATDIAG configure: planet_id=0 seed=44 R=4000 SEA=126 hmax=384 src=res predicate=ResourceLoader.res reason=-
+SATELLITE bake done: { "mode": "res", "cache": "res://assets/satellite/", "src_predicate": "ResourceLoader.res", "res_load_via": "import", "bake_reason": "", "wall_ms": 5188, "worker": false, "worker_ms": 0, "gen_ms": 0, "color_ms": 0, "png_ms": 0, "load_ms": 1122, "mt": false, "shards": 0, "gen_wall_ms": 0, "face_wall_ms": 0, "frames": 10, "step_ms_max": 94.54, "step_ms_mean": 102.76, "frame_ms_max": 125.0, "frame_ms_mean": 112.7, "chunks": 196196, "guard": [{ "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 179, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 182, "ok": true }, { "rows": 16, "cols": 16, "spread": 179, "ok": true }], "ship": "" }
+SATDIAG config: phase=LOADED src=res via=import reason=- textures=12/12 [1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024 1024x1024]
+SATDIAG config: shader=path=res://core/satellite_body.gdshader code_nonempty=true code_bytes=16331 mats_with_shader=12/12
+SATDIAG config: mesh faces=12 verts=1707596 aabb_custom=min=(-4126,-4126,-4126) size=(8252,8252,8252) aabb_geom=min=(0,2390,-2962) size=(2958,1772,5901) node_vis=false pos=(0,-4000,0) scale=(1.00,1.00,1.00) body_off=false
+SATDIAG file: could not write /tmp/dsh_home/Desktop/AweCraft-satdiag.txt - skipped, the report goes to the other locations (noted once)
+SATDIAG file: could not write /home/angrygiant/tools/godot/AweCraft-satdiag.txt - skipped, the report goes to the other locations (noted once)
+FCCREBUILD n=1 tex=true rects=33 tiles_so_far=0
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SCRIPT ERROR: Invalid access to property or key 'v' on a base object of type 'Dictionary'.
+          at: _low_handoff (res://world/world.gd:2952)
+          GDScript backtrace (most recent call first):
+              [0] _low_handoff (res://world/world.gd:2952)
+              [1] threadmesh_handoff (res://world/world.gd:7682)
+              [2] _low_poll (res://world/world.gd:3056)
+              [3] _low_step (res://world/world.gd:3257)
+              [4] _process (res://world/world.gd:5883)
+SATDIAG state: t=19.1 configured=1 phase=LOADED alt=0.0(player) S=0.000 h_first=132.8 h_full=1200.0 op_nadir=0.000 fog_far=236.6 render_edge=272.0 body_off=false vis=false in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=false r=4330 h=330 cov=0.562 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=false r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=20.7 configured=1 phase=LOADED alt=0.0(player) S=0.000 h_first=132.8 h_full=1200.0 op_nadir=0.000 fog_far=236.6 render_edge=272.0 body_off=false vis=false in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=false r=4330 h=330 cov=0.562 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=false r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+SATDIAG state: t=21.8 configured=1 phase=LOADED alt=0.0(player) S=0.000 h_first=132.8 h_full=1200.0 op_nadir=0.000 fog_far=236.6 render_edge=272.0 body_off=false vis=false in_tree=true pos=(0,-4000,0) scale=1.000
+SATDIAG clouds: n=3 c0{vis=true r=4400 h=400 cov=0.750 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c1{vis=false r=4330 h=330 cov=0.562 shader=true tint=(1.0, 1.0, 1.0, 1.0)} c2{vis=false r=4275 h=275 cov=0.413 shader=true tint=(1.0, 1.0, 1.0, 1.0)}
+RESULT {"build_ms":12541,"constructed":true,"drop_delta":28,"enqueue_delta":1761,"flips":99,"handoff_delta":1733,"kept_delta":0,"mode":"ac0442repro","ok":true,"skip_delta":28}
