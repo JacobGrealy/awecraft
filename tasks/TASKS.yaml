@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-17T03:06
+  updated_at: 2026-10-17T03:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0441
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28223,6 +28224,66 @@ intake:
     shaderforce 12/12); every look change ships behind a switch defaulting conservative; and the recent
     work must keep holding - the moon and the night, the sky consistent with altitude, the opaque planet,
     the seam closure and its atlas fix, the ambient lift, the varying cloud cover and the interface additions.
+
+    '
+  comments: []
+- id: AC-0441
+  title: cloud-deck-banding-and-moire-at-oblique-distance
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-17T03:08
+  updated_at: 2026-10-17T03:08
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Clouds should look like clouds from every angle and altitude, not like a repeating
+    interference pattern. Looking at the cloud layer at a shallow angle currently shows banding and moire,
+    which reads as a rendering artifact rather than as weather.
+
+
+    2) Technical Details:
+
+    FOUND BY THE WHOLE-EXPERIENCE ASSESSMENT, ranked fifth of the remaining differences, and visible in
+    two of its frames - an upper-left artifact in the 120 metre frame and a band along the horizon in
+    the 300 metre one. Those are the altitudes a player spends most of their flight time at, so this is
+    not an edge case.
+
+    THE LIKELY MECHANISM, to be established rather than assumed: the cloud layer is raymarched with a
+    fixed number of steps along the view ray. At a shallow angle the ray spends many more samples inside
+    the layer, and where the sampling pattern aligns with itself the result is banding and, where two
+    sampling grids interfere, moire. The classic causes are a fixed step size that is too coarse for the
+    distance traversed, no jitter or dither to break up the alignment, and sampling density that does
+    not adapt to how much of the layer the ray passes through. Confirm which by measurement before choosing
+    a fix: render the same view with the step count raised, with jitter enabled, and with the two combined,
+    and see which one removes the pattern rather than merely softening it - this project has twice been
+    led astray by fixes that softened an artifact rather than removing its cause.
+
+    THE BUDGET CONSTRAINT IS REAL AND MUST BE RESPECTED. The cloud layer already consumes almost the entire
+    render allowance on the verification machine - eleven hundred and ninety-one seconds of a twelve hundred
+    second budget in the heaviest test - so a fix that adds samples per ray may make the frame unrenderable
+    for everyone including the player. A DITHER OR JITTER is usually the cheapest option and often improves
+    the result at the same sample count, so prefer approaches that cost nothing or less; if a fix genuinely
+    needs more samples, say so explicitly and give the measured cost.
+
+    ACCEPTANCE: THE ASSESSMENT''S TWO FRAMES RE-TAKEN with no banding or moire visible at either altitude,
+    the cloud layer''s appearance otherwise preserved - its volume, its brightness spread and the silver
+    lining the recent moon work gave it must all still be there - and the frame''s render cost measured
+    before and after and NOT INCREASED. If a switch is used, its off state must be the current appearance.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); every look change ships behind a switch defaulting conservative; and
+    the recent work must keep holding - the varying cloud cover across the globe, the moon lighting the
+    cloud edges, the sky consistent with altitude, the opaque planet and the night look.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the 120 and 300 metre frames it names.
 
     '
   comments: []
