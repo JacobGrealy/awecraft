@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-17T13:29
+  updated_at: 2026-10-17T13:31
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0444
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28403,6 +28404,76 @@ intake:
 
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the ground-level daytime frame it names,
     taken from a clean archive of an earlier commit.
+
+    '
+  comments: []
+- id: AC-0444
+  title: teal-band-in-the-sky-above-the-ridge
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-17T13:31
+  updated_at: 2026-10-17T13:31
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The sky above a ridge should be sky - one smooth gradient, no band of a different
+    colour lying across it. A visible horizontal band of teal in an otherwise graded sky reads as a rendering
+    fault and draws the eye to the seam where it starts.
+
+
+    2) Technical Details:
+
+    FOUND INCIDENTALLY by the ticket that attributed an unexplained dark patch at the horizon, which explicitly
+    recorded it as PRE-EXISTING, CLOUD-INDEPENDENT and NOT CAUSED by its own work. It was verified to
+    be independent of the clouds, so it is a property of the sky itself. It sits ABOVE A RIDGE LINE and
+    is described as a TEAL BAND - a distinct colour region rather than a smooth variation.
+
+    THE STRUCTURAL CONCERN, which is why this ticket asks for more than another edge-case patch: THE SKY
+    HAS NOW BEEN FIXED FIVE TIMES. An earlier ticket shaded it against the world''s up axis instead of
+    the local zenith, producing a two-hundred-unit colour discontinuity across a face boundary. A second
+    found the daytime sky was literally black because the day gradient was pushed and never read. A third
+    found a hard horizon step produced by a branch switch. A fourth removed five separate things that
+    implied a lower boundary - an air floor, a gradient anchor, a blend band and an edge-on haze band.
+    A fifth found the space decision keyed on the wrong quantity, so the sky declared itself space at
+    six hundred metres inside a twelve-hundred-metre atmosphere. EACH FIX WAS CORRECT AND EACH LEFT ANOTHER
+    ARTIFACT, which suggests the model has accumulated conditions faster than it has been understood.
+    This ticket should therefore establish WHERE the band comes from and whether it is a symptom of that
+    accumulation, not merely suppress the band.
+
+    CANDIDATES TO DISTINGUISH BY MEASUREMENT: a genuine step in the gradient where two terms hand over;
+    a quantisation in the colour ramp; an interaction between the air column and the local-zenith keying;
+    the horizon-exemption boundary in the thinning weight, which was deliberately preserved in an earlier
+    fix and may be the only remaining hard-edged term; a band introduced by the haze or the limb term;
+    and anything keyed on elevation angle with a cutoff.
+
+    THE MEASUREMENT THAT DECIDES IT: a luminance and colour profile straight up the frame through the
+    band, and the same profile with each candidate term isolated or zeroed. A BAND WILL SHOW AS A STEP
+    OR A PLATEAU IN THAT PROFILE, and its position in terms of elevation angle narrows the cause immediately.
+    Record the band''s chromatic signature too - it is teal, which is a mixture of the air colour and
+    something else, and what it is mixing with is a strong clue.
+
+    ACCEPTANCE: THE BAND GONE, shown as a profile through the region before and after and a frame re-taken
+    at the same position, PLUS a statement of whether the cause was structural - that is, whether other
+    artifacts of the same kind remain latent - or a one-off. If the honest answer is that the sky model
+    needs consolidation rather than another patch, say so and describe what that would mean; a well-argued
+    recommendation is a valid outcome for this ticket.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); every look change ships behind a switch defaulting conservative; and
+    ALL FIVE PREVIOUS SKY FIXES MUST KEEP HOLDING - in space there is no horizon and the planet is the
+    boundary; inside the atmosphere the sky below the horizon is air and not black; the transition rate
+    is uniform; there is no bottom edge; and the planet remains opaque with a uniform-rate gradient.
+
+    EVIDENCE: tasks/AC-0443/AC-0443-results.html, which found this and verified it cloud-independent,
+    and tasks/AC-0384/AC-0384-results.html section 29 for the ground-level frames.
 
     '
   comments: []
