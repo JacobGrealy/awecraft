@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-16T22:20
+  updated_at: 2026-10-16T22:22
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0440
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28160,6 +28161,69 @@ intake:
     the recent work must keep holding - the moon and the night, the opaque planet, the seam closure and
     its atlas fix, the ambient lift, the varying cloud cover, the interface additions, and the uniform
     sky transition rate which must stay uniform.
+
+    '
+  comments: []
+- id: AC-0440
+  title: sixteen-metre-lighting-square-on-flat-grass
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-16T22:22
+  updated_at: 2026-10-16T22:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Flat grass should be evenly lit. A square of grass that is lighter or darker
+    than the grass beside it, with a hard edge, reads as a rendering fault rather than as terrain, and
+    grass is the surface the player looks at most.
+
+
+    2) Technical Details:
+
+    FOUND BY THE WHOLE-EXPERIENCE ASSESSMENT, which measured a SIXTEEN BY SIXTEEN LIGHTING SQUARE ON FLAT
+    GRASS with a SHARP SIXTEEN METRE BOUNDARY, and correctly identified it as the look decision left unchosen
+    by an earlier ticket rather than as a new defect. That earlier ticket measured that per-chunk vertex
+    lighting changes across a chunk boundary by up to half a unit and drew a visible line, and it listed
+    three approaches - make the lighting continuous across seams, use the near plane with a polygon offset,
+    or keep the grid and eliminate only the flicker. A later ticket took the first option for BOUNDARY
+    corners specifically and measured level twins agreeing exactly where residuals of up to a tenth of
+    a unit had been. THE SAME PROBLEM REMAINS INSIDE CHUNKS, which is what this ticket is about.
+
+    THE EVIDENCE THAT POINTS AT THE MECHANISM, to be confirmed: the world''s lighting is per-vertex at
+    one metre spacing, so a SIXTEEN METRE square is not the resolution of the lighting grid - it is sixteen
+    times it. Something is therefore storing or sharing ONE VALUE across a sixteen by sixteen region and
+    giving it a hard edge where it ends. Candidates: a light cache or bake quantised to piece or section
+    granularity; a mesh-level or merged-canvas-level colour that is written once per piece rather than
+    per vertex; a corner-lighting fallback that applies a single value across a run of vertices; an averaging
+    or smoothing pass whose window is a piece; or the smooth-lighting interpolation being computed per
+    face rather than across the surface. The square''s EXACT SIZE OF SIXTEEN IN METRES, equal to the chunk
+    width, is the strongest clue and should be checked against whatever the code does at chunk granularity
+    rather than at cell granularity.
+
+    WHAT NOT TO DO: do not simply smooth or blur the boundary. If a value is being shared across a region
+    that should vary, the fix is to make it vary, not to hide the step - and a blurred square would still
+    be a square, which is the same lesson the sky taught twice in this project.
+
+    ACCEPTANCE: THE ASSESSMENT''S FLAT GRASS FRAME RE-TAKEN with no square and no hard edge, the luminance
+    profile across the former boundary before and after as numbers, and confirmation that the seam shading
+    fix from the earlier ticket still holds - it measured one hundred and ninety of one hundred and ninety-one
+    level twins agreeing exactly, and that must not regress. The wider scene''s contrast must also be
+    checked, since anything that changes how lighting is interpolated across large flat areas changes
+    how the world reads.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); every look change ships behind a switch defaulting conservative; and the recent
+    work must keep holding - the moon and the night, the sky consistent with altitude, the opaque planet,
+    the seam closure and its atlas fix, the ambient lift, the varying cloud cover and the interface additions.
 
     '
   comments: []
