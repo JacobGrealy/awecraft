@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-17T07:56
+  updated_at: 2026-10-17T07:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28337,4 +28337,72 @@ intake:
     \ exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate\
     \ 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and\
     \ the recent work must keep holding.\n"
+  comments: []
+- id: AC-0443
+  title: attribute-the-unexplained-dark-patch-at-the-horizon
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-17T07:58
+  updated_at: 2026-10-17T07:58
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Nothing in the world should be an unexplained dark shape on the horizon. Either
+    it is a thing that belongs there and should look like it, or it is a hole and should be closed.
+
+
+    2) Technical Details:
+
+    FLAGGED BY THE WHOLE-EXPERIENCE ASSESSMENT AS THE ONLY REMAINING ITEM IT COULD NOT ACCOUNT FOR. Its
+    words: one small unattributed dark patch at the right horizon of the ground-level daytime frame, measuring
+    around thirty by twenty-seven by twenty-three on a nought-to-two-fifty-five scale, BEHIND A SHEEP,
+    and it explicitly recorded it as flagged for follow-up rather than as a defect.
+
+    WHY IT IS WORTH A TICKET DESPITE BEING SMALL: THIRTY OUT OF TWO HUNDRED AND FIFTY-FIVE IS VERY DARK
+    - darker than any lit terrain, darker than most shaded terrain, in the same range as the near-black
+    faces that turned out to need an ambient lift. In a daytime frame, something that dark at the horizon
+    is either an object that should be there, such as an animal or a tree in deep shade, or it is a HOLE
+    showing something behind the world. The difference matters enormously and the assessment could not
+    tell which it was, which is exactly what this ticket is for.
+
+    ATTRIBUTING IT IS THE WHOLE JOB, and this project has a strong method for it that has worked repeatedly:
+    locate the thing in the scene rather than reasoning from its appearance. A recent round identified
+    an apparent lighting square as a one metre aim cursor by projecting the object with the camera that
+    took the frame and matching the observed region to within two pixels on all four edges. Do the same
+    here - find what occupies that screen region, project it, and match. Candidates to consider are an
+    animal, a tree or foliage in shade, a shadow, a far-tier piece that has not received its data, a chunk
+    that failed to build, a piece of terrain at the boundary of the fog distance, and anything recently
+    changed that affects what sits at a horizon.
+
+    CHECK THE RECENT WORK AS A POSSIBLE CAUSE rather than assuming this is longstanding: the ambient lift
+    changed how unlit faces look, the low-level-of-detail handoff just fixed an error where a skipped
+    job left a slab pending, the far tier''s placement and the seam extension both touched what appears
+    at a distance, and the night work added a moon that lights things in specific directions. A hole caused
+    by a pending slab would look exactly like this.
+
+    ACCEPTANCE: THE PATCH ATTRIBUTED WITH EVIDENCE - what occupies that region, shown in a frame, ideally
+    with a second view from closer or from another angle that makes it identifiable. THEN, if it is a
+    defect, fixed, with the frame re-taken showing it gone; if it is a legitimate object, say so and show
+    why it is as dark as it is and whether that darkness is itself correct - an animal at midday rendering
+    at thirty out of two hundred and fifty-five would mean the same lighting problem that was already
+    fixed for terrain, in which case it is a defect even though the object is real.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); and the recent work must keep holding - the moon and the night, the sky consistent
+    with altitude, the opaque planet, the seam closure and its atlas fix, the ambient lift, the cloud
+    jitter, the aim outline and the low-handoff guard.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the ground-level daytime frame it names,
+    taken from a clean archive of an earlier commit.
+
+    '
   comments: []
