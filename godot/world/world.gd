@@ -5197,6 +5197,11 @@ var _ac0405_r := -1.0
 # the chunk materials are created lazily, after the first push).
 var _ac0426_amb := -1.0
 var _ac0426_n_mats := -1
+# AC-0443: the same lift on the HALO band (lod_avg.gdshader) — its a=0
+# side faces carry the 0.2 cave floor, the R24 horizon dark-patch defect
+# (the AC-0432 collapse past the tier seam). The band material is lazy
+# (world._lod_avg_mat), so latch-only-when-landed (the deck pattern).
+var _ac0443_lod_amb := -1.0
 # AC-0407: the volume's VIRTUAL top bound extends this far ABOVE the
 # topmost shell (hmax) so the vertical profile (flat base / lumpy tops
 # — the "no variance in height" fix) has room for a real skyline. The
@@ -5296,6 +5301,13 @@ func _ac0401_push() -> void:
 			var m2 = ChunkScript._mat_cache[k]
 			if m2 is ShaderMaterial:
 				m2.set_shader_parameter("u_amb", amb_v)
+	# AC-0443: the HALO band's side faces (lod_avg a=0) get the same
+	# lift (the R24 horizon dark-patch fix). The band material is lazy,
+	# so value-gated + latch-only-when-landed (cheap per-frame retry
+	# until it exists; OFF = 0.0 stays bit-identical on the shader side).
+	if _lod_avg_material != null and _ac0443_lod_amb != amb_v:
+		_lod_avg_material.set_shader_parameter("u_amb", amb_v)
+		_ac0443_lod_amb = amb_v
 	# (2) the switches - the cloud layers and the sky material exist
 	# once _setup_aero has run (before this world's first _process);
 	# the first push retries cheaply until they are visible.

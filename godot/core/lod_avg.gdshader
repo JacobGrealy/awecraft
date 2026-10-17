@@ -40,6 +40,9 @@ shader_type spatial;
 
 uniform vec4 day : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float u_fog_far = 332.0;  // env.fog_depth_end (main.gd) — the AC-0401 partition wall
+// AC-0443: the AC-0426 parity lift for the a=0 faces (Settings "ambient_sky",
+// AMB_SKY_L via world.gd _ac0401_push). 0.0 (default/OFF) is bit-identical.
+uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_world_pos;
 
@@ -60,6 +63,16 @@ void fragment() {
 	// renders at the 0.2 floor instead of full bright. ALPHA stays 1.0
 	// (the a channel is light, not transparency).
 	float lit = mix(0.2, 1.0, COLOR.a);
+	// AC-0443: the a=0 faces (COLOR.a 0.0 = "at/below the terrain top")
+	// carry the 0.2 cave floor even when the face is a sky-exposed
+	// surface cliff — the R24 horizon dark patch: a west-facing ridge
+	// flank at 130 m read (30,27,23) at midday while the BAND A
+	// (chunk_lit) flank of the same ridge reads ~(135,116,103). The
+	// AC-0426/AC-0432 "unlit terrain = shaded, not black" collapse was
+	// fixed for the chunk tiers and never crossed the tier seam. The
+	// same measured lift (AMB_SKY_L), day-gated (night ~= 1/255, OFF =
+	// bit-identical via u_amb = 0.0):
+	lit += u_amb * day.r * (1.0 - COLOR.a);
 	ALBEDO = COLOR.rgb * day.rgb * jit * lit;
 	// AC-0401: the fog-wall partition (kept — it is not fog). The
 	// satellite body owns the rule "the body is only where the world's

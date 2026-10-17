@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0443 — attribute the unexplained dark patch at the horizon</title>
+<style>
+body { font-family: Georgia, serif; max-width: 1080px; margin: 2em auto; padding: 0 1em; line-height: 1.55; color: #222; }
+h1 { font-size: 1.5em; border-bottom: 2px solid #444; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.8em; }
+img { max-width: 100%; border: 1px solid #bbb; margin: .6em 0; }
+table { border-collapse: collapse; margin: .8em 0; font-size: .92em; }
+th, td { border: 1px solid #999; padding: .35em .6em; text-align: left; }
+th { background: #eee; }
+code { background: #f2f2f2; padding: 0 .3em; font-size: .9em; }
+pre { background: #f6f6f6; border: 1px solid #ddd; padding: .8em; overflow-x: auto; font-size: .85em; }
+.verdict { background: #fdf6e3; border-left: 4px solid #b58900; padding: .7em 1em; margin: 1em 0; }
+.good { color: #1a6b1a; } .bad { color: #a02020; }
+.small { font-size: .85em; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>AC-0443 — the unexplained dark patch at the horizon</h1>
+<p><b>Frame under question:</b> <code>tasks/AC-0384/ac0384-r24-ground-west-day.png</code> (R24, FOG_PCT 83, seed 44, T=0.5 frozen, ground level at spawn facing west; clean archive of commit 56c9095, drain 3000 frames). The whole-experience assessment flagged exactly one unattributed region: a small flat dark patch at the right horizon, ≈(30,27,23)/255, behind a sheep. This page attributes it with evidence, rules in the defect, fixes it, and re-takes the frame.</p>
+
+<div class="verdict">
+<b>Verdict.</b> The patch is a <b>legitimate object — real terrain</b>: the west-facing cliff flank of the north-west ridge at ≈120–135&nbsp;m, drawn by the far LOD band (BAND&nbsp;B, 8×8×8 average, <code>lod_avg.gdshader</code>). It is not a hole, not an animal, not a tree, not a cloud, not a satellite-body leak, not a pending-slab gap. <b>But its darkness is NOT correct at midday</b>: the band's side faces carry the 0.2 "cave floor" light because the heightmap-sky rule marks every face at/below the terrain top as <code>a=0</code>, so a sky-exposed surface cliff renders at the cave floor (≈30/255) while the identical face one tier-seam closer (BAND&nbsp;A, <code>chunk_lit</code> with the AC-0426 ambient lift) reads ≈(135,116,103) — a 3.5× brightness step across the seam. That is the AC-0432 "unlit terrain = shaded, not black" collapse, fixed for the chunk tiers and never extended past the tier seam. <b>Defect, on a real object.</b> Fixed by extending the same measured lift (AMB_SKY_L = 0.35, Settings <code>ambient_sky</code>) to the band: patch box (29,29,27) → (50,40,31), frame-wide change 0.9% of pixels, all on band <code>a=0</code> faces.
+</div>
+
+<h2>1. What occupies the region</h2>
+<p>Method (AC-0440 standard): locate the occupant in the live scene, project it with the frame's own camera, match the observed region. The camera was reconstructed probe-measured (not assumed): pos_world (8.79, 143.6, 8.79), fwd (−0.99664, 0.08191, −0.00063), fov 98.99997, yaw 1.57, pitch 0.08, aspect 1280/720 — verified against two known objects (the satellite-body exit crossing and a mesh vertex both project to where the frame shows them).</p>
+
+<table>
+<tr><th>Probe finding</th><th>Value</th><th>Meaning</th></tr>
+<tr><td>Wall entries (first |P−C|−(R+H) crossing per patch pixel, 18-pixel grid)</td><td>s = 110.6–119.9&nbsp;m, H = 142.8–146.6, face 1</td><td>every patch pixel's sightline hits the planet heightmap surface at 110–120&nbsp;m — there is solid planet surface behind the patch; it is not a hole showing sky/body</td></tr>
+<tr><td>Block-data column census (16×16 per chunk, chunks (−3..1, −9..−5))</td><td>ridge/plateau x≈−25..+20, z≈−105..−80, tops 145–148 (2–5&nbsp;m above the camera eye)</td><td>the ridge is real, data-backed terrain at 93–118&nbsp;m (BAND&nbsp;A, full-LOD materialized); the build front sits just north/west of it</td></tr>
+<tr><td>Band mesh census (ring:37 = tier 2 / BAND&nbsp;B, sector 5)</td><td>400 verts at (−50, 142–158, −99..−133): side faces <code>a=0</code> (51,51,51)×82, (55,30,13), (56,31,16), (53,46,42), (48,27,11), (38,31,9); top faces <code>a=255</code> near-black greens (24,20,5), (5,18,2)</td><td>the 8×8×8 avg-LOD quad column that covers the ridge's <b>west flank</b> (taxi ≥ 9 chunks = 120–135&nbsp;m, h-only data) exists with exactly the patch's palette</td></tr>
+</table>
+
+<h2>2. Edge match (±2&nbsp;px on the four edges)</h2>
+<table>
+<tr><th>Edge</th><th>Observed</th><th>Projected occupant</th><th>Match</th></tr>
+<tr><td>Top (horizontal)</td><td>y ≈ 375–376, sharp; above = bright sky (203,246,255)</td><td>ridge-top line H≈147: the ray-tangent across the band column tops (tops 146.5–154 at (−50,·,−100..−133)); band vertex (−50,146.5,−100) → (1205, 371)</td><td class="good">y 371–376 ✓ (the top of the dark quad column is the ridge crest)</td></tr>
+<tr><td>Left (vertical)</td><td>x ≈ 1192, sharp; just left = sky (193,240,250) / canopy (0,16,0)</td><td>the 29&nbsp;m tree: probe near-hit, block 7 at (−7,143,−17), t≈29&nbsp;m, projects (1139, 397); its canopy spans x 1000–1190 in-frame</td><td class="good">x ≈ 1192 ✓ (the left edge is the tree silhouette occluding the wall; same tree as the dark canopy mass left of the patch)</td></tr>
+<tr><td>Right</td><td>x = 1279 (frame edge)</td><td>band column extends to (−50,·,−133) → projects (1373, 335), off-frame</td><td class="good">frame clip ✓ (the wall is wider than the remaining frame)</td></tr>
+<tr><td>Bottom</td><td>y ≈ 402–410, soft; below = sheep (255,254,246) at (1218,402), then grass (4,108,0)</td><td>sheep + near ground in front; band column base H≈142 → projects y≈394–397, blends into the sheep/ground row</td><td class="good">y 394–410 ✓</td></tr>
+</table>
+
+<p>Original frame, patch region (x 1050–1279, y 330–455):</p>
+<img src="captures/r24-original.png" alt="r24 frame" style="max-width:720px">
+
+<h2>3. Reproduction + the exclusion table</h2>
+<p><b>Reproduction on the current tree:</b> same pose, same env (AIM 8.5,143.62,8.5 / yaw 1.57 / pitch 0.08, R24, F83, T=0.5 frozen, CLOUD_T0 411200), drain 9000 — <code>captures/r1-base-pre-fix.png</code>. Patch box (x 1192–1279, y 376–400) average <b>(29,29,27)</b> vs r24 <b>(34,35,34)</b>; column x=1230 dark band at the same y 376–411 in both. (Both captures are in the same mid-build streaming state — drain never fully settles on this box — which is a faithful r24-equivalent capture; the attribution is state-independent because BAND&nbsp;B owns taxi 9..23 permanently, built or not.)</p>
+
+<table>
+<tr><th>Candidate</th><th>Rule-out / basis</th></tr>
+<tr><td>Clouds (volume or three-shell)</td><td class="good"><b>Render-eliminated:</b> <code>AWECRAFT_CLOUDS=0</code> (r2-cloudoff) and <code>AWECRAFT_CLOUDVOL=0</code> (r3-shell) patch boxes <b>byte-identical</b> to base: (29,29,27) in all three. Also analytically: the dense volume-cloud floor computes to ≈(108,116,120) (u_vol_air is the air <i>colour</i>, ≈white after the sRGB decode — not a density), thin cloud is transparent, the shell path reads (125–137) grey.</td></tr>
+<tr><td>Sky</td><td class="good">bright gradient (203,246,255) directly above the same pixels; the below-horizon fill is the muted band, never (30,27,23)-brown.</td></tr>
+<tr><td>Satellite body</td><td class="good">the body shader discards everything inside 332&nbsp;m (<code>smoothstep(u_fog_far, u_render_edge, d)</code>); the patch sits at 110–135&nbsp;m — the body cannot render there.</td></tr>
+<tr><td>Mob (animal)</td><td class="good">census: the only mob in the region is the white sheep <i>in front</i> of the patch ((255,254,246) at (1218,402)); nothing dark moves into the box across the A/B renders.</td></tr>
+<tr><td>Near tier (full mesh) / pending slab / build-front hole</td><td class="good">the 110–120&nbsp;m surface the rays hit is inside the full-LOD materialized band (BAND&nbsp;A, taxi ≤ 8): if it were drawn there it would be <code>chunk_lit</code> <i>unshaded</i> with the AC-0426 lift — the same face reads ≈(135,116,103) there, not (30,27,23). The patch colour is only producible by the <code>lod_avg</code> band material (below).</td></tr>
+<tr><td>Recent work as cause</td><td>not a regression: the 0.2 cave-floor light for <code>a=0</code> band faces is the original AC-0283-P3 design; the ambient-lift fix (AC-0426/AC-0432) was scoped to the chunk tiers and never crossed the tier seam. The pending-slab (AC-0442) family produces <i>missing</i> surfaces (bright sky showing through), not a flat dark quad with the band's exact palette at the heightmap surface.</td></tr>
+</table>
+
+<h2>4. Why it is dark (the colour model, verified to a few units)</h2>
+<pre>lod_avg.gdshader (pre-fix):  lit = mix(0.2, 1.0, COLOR.a)   // a=0 side face -> 0.2 "cave floor"
+ALBEDO = COLOR.rgb * day.rgb(0.7529) * jit(±6%) * lit        // material is SHADED
+engine: sun lambert(west face, noon, u_sun=(0,0.928,0.371)) = 0; ambient = 0.65 * sky ≈ 0.58
+fog at 130 m (begin 100, end 332, eased) ≈ 4% toward (161,224,246)
+
+(51,51,51)/255 * 0.7529 * 0.2 * 0.58 -> sRGB ≈ (40,35,30)      (observed 32,33,32)
+(38,31,9)/255  * 0.7529 * 0.2 * 0.58 -> sRGB ≈ (30,26,15) + fog ≈ (31,28,19)  (observed 30,27,23)
+parity: same face on the BAND A side of the seam (chunk_lit unshaded,
+L = 0.20 + 0.8*m_direct + 0.35*u_day*step(...) = 0.55) -> ≈ (135,116,103)  // 3.5x brighter</pre>
+<p>The heightmap-sky rule ("1.0 above the terrain top, 0.0 at/below") cannot tell a sky-exposed surface cliff from a cave: both are "at/below the terrain top" of their own column, so both get the 0.2 floor. The near tier has a real per-face sky pull (plus the AC-0426 lift) and reads bright; the far band does not. Result: the horizon cliff wall renders as a flat near-black mass at midday — exactly the flagged patch, exactly 30/255.</p>
+
+<h2>5. Second views (identifiability)</h2>
+<p>Same world, closer — 52&nbsp;m out on the ridge's east flank (AIM −20,150,−60 / yaw 0.566 / pitch −0.058, crosshair aimed at the band flank's location on the ridge): the ridge as real terrain (full-mesh, bright, treed, sandy crest) with the dark shadowed flank region at the crosshair. <code>captures/r4-close-second-view.png</code></p>
+<img src="captures/crop-r4-ridge.png" alt="r4 close second view of the ridge" style="max-width:900px">
+<p>Angled view from above the crest onto the flank (AIM −44,160,−96 / yaw −0.36 / pitch −0.21, post-fix): the east slope (bright full mesh) and the flank's shadowed side at the left edge. <code>captures/r6-west-angled-view.png</code></p>
+<img src="captures/crop-r6-west.png" alt="r6 angled view" style="max-width:900px">
+
+<h2>6. The fix and the re-take</h2>
+<p><b>Change (2 files, colour-only — no mesh, no bake, no data):</b></p>
+<pre>godot/core/lod_avg.gdshader
++ uniform float u_amb : hint_range(0.0, 1.0) = 0.0;   // AC-0426 parity lift; 0.0 = bit-identical
+  float lit = mix(0.2, 1.0, COLOR.a);
++ lit += u_amb * day.r * (1.0 - COLOR.a);             // a=0 faces only; day-gated (night ~= 1/255)
+  ALBEDO = COLOR.rgb * day.rgb * jit * lit;
+
+godot/world/world.gd (the AC-0426 push seam, block (1b) of _ac0401_push)
++ var _ac0443_lod_amb := -1.0
++ if _lod_avg_material != null and _ac0443_lod_amb != amb_v:
++     _lod_avg_material.set_shader_parameter("u_amb", amb_v)   // same AMB_SKY_L / ambient_sky switch
++     _ac0443_lod_amb = amb_v</pre>
+<p>Same measured constant (AMB_SKY_L = 0.35) as the chunk tiers, same Settings <code>ambient_sky</code> switch (OFF = u_amb 0.0 = bit-identical on the shader side), day-gated (at night day≈0.07 → the lift is ≈1/255: the horizon stays black at midnight), and it touches only <code>a=0</code> faces (top faces and the OFF path are bit-identical).</p>
+<p><b>A/B re-take, same pose as r24/r1:</b> <code>captures/r5-post-fix.png</code> vs <code>captures/r1-base-pre-fix.png</code> (3× crops below, 2× scaled):</p>
+<img src="captures/compare-patch-strip.png" alt="r24 | r1 pre-fix | r5 post-fix comparison strip">
+<table>
+<tr><th>Measure</th><th>Pre-fix (r1)</th><th>Post-fix (r5)</th></tr>
+<tr><td>patch box (x1192–1279, y376–400) avg</td><td>(29,29,27)</td><td><b>(50,40,31)</b> — from near-black to a readable dark-brown cliff face; "shaded, not black"</td></tr>
+<tr><td>frame-wide delta</td><td colspan="2">2032 / 230400 sampled px (0.9%) moved &gt;30 sum-delta; mean per-px sum-delta 1.75; clusters = the patch + the other BAND&nbsp;B/C <code>a=0</code> faces in frame (the same collapse, lifted everywhere — the point of the fix). Near tier, sky, ground, mobs: no measurable movement.</td></tr>
+</table>
+
+<h2>7. Gates</h2>
+<table>
+<tr><th>Gate</th><th>Exit status</th><th>Census (SCRIPT / SHADER ERROR)</th></tr>
+<tr><td>G0 (parse, <code>AWECRAFT_LOGIC=settings</code>, post arm-removal)</td><td>rc=0 <span class="good">PASS</span></td><td>0 / 0</td></tr>
+<tr><td>SMOKE (<code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code>)</td><td>rc=0, <code>"ok":true</code> <span class="good">PASS</span></td><td>0 / 0</td></tr>
+<tr><td>genhash (in SMOKE)</td><td>25/25 lines, <span class="good">byte-identical to baseline</span> (no generation moved — expected: colour-only change)</td><td>—</td></tr>
+<tr><td>PROBE (meshprobe)</td><td>rc=0, <code>ok:true</code>, match_rate 1.0, 32/32 chunks, mismatch [] <span class="good">PASS</span></td><td>0 / 0</td></tr>
+<tr><td>shaderforce (12 shipped shaders, Forward+/lavapipe)</td><td>rc=0, 12/12 <code>verdict=ok</code> (lod_avg declared=3/params=3 — the new uniform is live) <span class="good">PASS</span></td><td>0 / 0</td></tr>
+</table>
+<p class="small">Render evidence: all six renders boot Vulkan Forward+ (llvmpipe proxy — geometry/layout evidence only, per HARNESS.md §2), 0 SCRIPT/SHADER ERROR each, snapshot file present; all in the mid-build streaming state (SNAPDRAIN_TIMEOUT at 9000 frames — the R24 build does not settle within the render budget on this box; see §3). The heavy standing set (farab / ladder / halo / lightstate / r16 / boundary r4) is the coordinator's background gate job: structurally untouched by this change (no C++, no mesh, no data, no bake; genhash 25/25 + meshprobe 1.0 re-prove the generation and mesh lanes).</p>
+
+<h2>8. Deliberately not done</h2>
+<ul>
+<li><b>No C++ emit-side "sky-exposure" flag for band side faces.</b> The true fix would let the emit mark surface-exposed side faces <code>a=1</code> (as the real band does) instead of lifting the 0.2 floor — that changes the far emit's contract, the <code>farab</code> battery, and the h-only representation; the parity lift achieves the acceptance ("the darkness is correct" → "no longer collapsed") with a colour-only, switchable, gateable 2-line change. The floor-vs-exposure distinction is the honest follow-up ticket.</li>
+<li><b>No full-parity brightness (3.5× seam step remains, 2.7× post-fix).</b> The band is a shaded pipeline (engine ambient × lit) and the near tier unshaded (L is the whole); true numeric parity would need an unmeasured 1.42 lift on a tier that is deliberately low-fidelity (±6% jitter, 8×8 average). The measured AC-0426 constant (0.35) is the project's own standard for "shaded, not black" — applied, not reinvented.</li>
+<li><b>No commit/push</b> — coordinator's closeout (delegation contract: deliver results page + report).</li>
+<li><b>Not chased:</b> the muted teal sky band (66,117,118-class) that the current tree shows above the ridge where the r24 commit showed bright sky — present with clouds fully off (r2), so it is the sky shader's own below-horizon output, a separate pre-existing tree difference outside this ticket's patch region.</li>
+</ul>
+
+<p class="small">Provenance: probe logs, run logs, battery logs and analysis scripts in <code>.scratch/AC-0443/</code>; camera reconstruction, wall-entry traces, column census, band-vertex census and projections from <code>probe2..probe6.log</code>; renders r1/r2/r3/r4 (pre-fix) + r5/r6 (post-fix) in <code>captures/</code>. The temporary <code>ac0443probe</code> harness arm was removed in-task (pristine rule); harness.gd parses clean (G0 above).</p>
+
+</body>
+</html>

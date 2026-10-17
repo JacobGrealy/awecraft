@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0443 plan — attribute the unexplained dark patch at the horizon</title>
+<style>body{font:14px/1.5 system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px}
+code{background:#f2f2f2;padding:1px 4px;border-radius:3px}
+.box{border:1px solid #ccc;border-radius:6px;padding:10px 14px;margin:10px 0;background:#fafafa}
+h2{border-bottom:2px solid #444;padding-bottom:4px}</style></head>
+<body>
+<h1>AC-0443 — attribute the unexplained dark patch at the horizon</h1>
+
+<h2>Goal</h2>
+<p>Attribute the flat warm-dark region (&asymp;(30,27,23), &asymp;100&times;30 px) at the right horizon of
+<code>tasks/AC-0384/ac0384-r24-ground-west-day.png</code> &mdash; behind a sheep &mdash; by <strong>geometric
+correspondence</strong> (locate the thing in the live scene, project it with the camera that took the frame,
+match the observed region to within 2 px on all four edges; the AC-0440 standard), not by resemblance.
+Then: if it is a defect, fix it and re-take the frame; if it is a legitimate object, judge whether its
+darkness is itself correct (a midday object at 30/255 would be the AC-0432 lighting-collapse class &mdash;
+a defect even though the object is real).</p>
+
+<h2>Attribution attempt 1 (static, no engine) &mdash; what it found</h2>
+<div class="box">
+<ul>
+<li>Patch measured on the r24 frame: flat, uniform, warm-dark (25&ndash;30 across channels), left edge crisp/vertical,
+top edge soft (a blurred ~1-cell bright band), extends to the right frame edge (x&asymp;1150&ndash;1279, y&asymp;363&ndash;400;
+clipped, so &ge;90&times;37 px &asymp; &ge;37 m &times; &ge;14 m at the 332 m fog wall). A white sheep stands in front at &asymp;(1218,402).</li>
+<li>The camera (AIM recipe, yaw 1.57 = west, right = north) puts the patch on the north-west horizon.
+At the fog wall (332 m) the near tiers <em>discard</em> their fragments (AC-0401 partition at
+<code>u_fog_far</code>) and the near terrain is 100% fog colour &mdash; bright. A flat <em>dark</em> region there therefore
+cannot be near-tier terrain. Candidates narrow to: (a) the satellite body (far tier) drawing dark pixels at that
+direction, (b) a hole in the near tier that shows the body/sky behind, (c) a legitimate dark object (tree/animal)
+&mdash; unlikely: the shape is geometric, flat, clipped, and the ambient lift (AC-0432) keeps floor faces at
+L&asymp;0.61 at noon.</li>
+<li>Body-shader reading (noon, T=0.5): the horizon-facing normal gets sun_l&asymp;1 &rarr; light factor 1.0, so a body
+patch at (30,27,23) implies <strong>baked texels that are near-black at that (u,v)</strong> &mdash; a bake/data question,
+or the haze blend (haz_d toward u_air) is not the cause (that is bright). The static pass cannot decide which
+face/cell the patch ray hits &mdash; the live probe is owed.</li>
+<li>Recent-work check (ticket item): since the r24 tree (56c9095) the queue ran AC-0441 (cloud jitter &mdash; clouds
+only, the patch is not a cloud), AC-0442 (low-handoff guard &mdash; a skipped emit leaves a slab PENDING, whose hole
+would look exactly like this; the fix changed bookkeeping only, and holes at the wall render as bright fog/body by
+the no-pop design &mdash; so a pending slab is a candidate <em>cause of a hole</em>, not of a dark body pixel). The
+uncommitted fence files (drop/held-item + cloud-look work) are drop.gd/main.gd/game.gd/debug.gd &mdash; none of them
+own the body or the near-tier mesh path. Re-take on the current tree is still owed (a hole from a pending slab is
+transient; a dark bake is standing).</li>
+</ul>
+</div>
+
+<h2>Attribution attempt 2 (the probe) &mdash; design</h2>
+<p>Temporary arm <code>ac0443probe</code> in <code>godot/scenes/harness.gd</code> (in and out in this task; pristine
+rule). Headless run, exact r24 state: seed 44, <code>AWECRAFT_RADIUS=24</code>, <code>AWECRAFT_FOG_PCT=83</code>
+(fog_far=332/render_edge=400), <code>AWECRAFT_TIME=0.5</code>, <code>AWECRAFT_TIME_FREEZE=1</code>,
+<code>AWECRAFT_CLOUD_T0=411200</code>, then the r24 ground-west AIM state verbatim
+(<code>Debug.fly(true)</code>, <code>Debug.teleport(8.5, 143.62&minus;EYE, 8.5)</code>, <code>player.look(1.57, 0.08)</code>,
+<code>_await_world_build</code> 600 frames + satellite-LOADED wait + pose re-pin + 8 frames + time re-pin &mdash; the
+<code>_snapshot_finish</code> sequence). Then, for a pixel grid spanning the patch bbox and control points:</p>
+<ol>
+<li><strong>Live camera</strong>: <code>cam.global_position</code> (world + flat), basis, <code>fov</code> (fly-boosted
+&asymp;99&deg;), aspect 1280/720 &mdash; the AC-0440 &ldquo;live transform&rdquo;.</li>
+<li><strong>Near tier</strong>: DDA in the flat frame (<code>world.get_block</code>, the <code>_rayline</code> pattern)
+&mdash; first solid cells + distance per ray; for every chunk the ray crosses to &asymp;450 m: data present?
+<code>mesh_built</code>? &mdash; the pending-slab/hole census.</li>
+<li><strong>Satellite body</strong>: analytic exit of the ray from the displaced surface
+(<code>rad(s) = |P+s&middot;d &minus; C|</code> vs <code>R + H(u,v)</code>, H from <code>satellite._hgrid_load</code> via
+<code>SatelliteBakeWorker.hgrid_sample</code> + <code>SphereMath.world_to_face</code>; 2 m scan + bisection).
+At each inside&rarr;outside crossing: face, (u,v), H, the baked texel RGB+alpha from
+<code>satellite.textures[face]</code> (&plusmn;8 px neighbourhood census), the shader lighting prediction at that
+normal (sun_l, light factor, haz, predicted albedo), and the 2 m inset note.</li>
+<li><strong>Mobs</strong>: every entity&rsquo;s <code>center()</code> + key, world/flat pos, distance, projected pixel &mdash;
+locates the sheep and checks occlusion order.</li>
+</ol>
+<p>Python (offline, PIL) then projects the identified geometry (exit point, the body cell&rsquo;s corner vertices,
+the suspect chunk&rsquo;s footprint, the sheep) with the live camera and matches the observed patch edges
+(&plusmn;2 px on all four sides, the AC-0440 standard).</p>
+
+<h2>Files to touch</h2>
+<table><tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>TEMPORARY arm <code>ac0443probe</code> (dispatch + body); removed in this task, re-gated pristine</td></tr>
+<tr><td><code>tasks/AC-0443/plan.html</code>, <code>continuity.md</code>, <code>AC-0443-results.html</code>, <code>captures/</code></td><td>plan, append-only journal, self-contained results + frames</td></tr>
+<tr><td>game code (body/world/shaders)</td><td><strong>nothing, until the attribution lands</strong> &mdash; attribution first; any fix follows its own A/B</td></tr>
+</table>
+<p>Fences honoured: no edit to <code>main.gd</code>, <code>game.gd</code>, <code>drop.gd</code>, <code>debug.gd</code>
+(calls to their APIs only); <code>tasks/AC-0067</code>, <code>tasks/AC-0384</code>, <code>tasks/AC-0425</code> untouched
+(the r24 frame is read, not modified).</p>
+
+<h2>Second view (acceptance)</h2>
+<p>Once the occupant is identified: one snapshot from a closer position (or another angle) that makes it
+identifiable &mdash; e.g. a re-take at the same recipe with the camera moved &asymp;100&ndash;150 m toward the patch, plus
+the standard ground-west re-take on the current tree. Render budget: 1200 s/run, drain 600, no <code>AWECRAFT_LOGIC</code>
+(setting any arm routes to <code>_run_game</code> and kills the snapshot), <code>AWECRAFT_SIZE=1280,720</code> comma,
+xvfb + lavapipe Forward+ boot line asserted, file existence checked (SNAP FAIL prints, it does not lie).</p>
+
+<h2>Harness gates (light set, then exit &mdash; HEAVY is the coordinator&rsquo;s)</h2>
+<ul>
+<li><strong>G0</strong>: <code>--headless --quit</code> + <code>gate_census.py</code>: ZERO SCRIPT ERROR AND ZERO SHADER ERROR,
+process exit status checked (census + rc paired &mdash; the arm recently reported ok TRUE with an error in its log).</li>
+<li><strong>SMOKE</strong>: <code>player;interact;light;fluids;genhash</code> battery (genhash owed only if <code>world/*</code>
+moves &mdash; it should not; 25/25 byte-identical is the expectation).</li>
+<li><strong>PROBE</strong>: <code>meshprobe</code> (meshes built, shaders compiled &mdash; the arm that catches the lazy-compile class).</li>
+<li><strong>shaderforce</strong>: only if a shader changes (a body-shader lighting fix would trigger it).</li>
+<li>Render runs are evidence, not gates: Forward+/lavapipe boot line + 0 errors + file present per run.</li>
+</ul>
+<p>Every godot call: <code>HOME=/tmp/dsh_home</code> first, one process at a time (<code>pgrep -af '[g]odot'</code> checked),
+absolute engine path, <code>--path godot</code> from the repo root, log to repo-root <code>.scratch/AC-0443/</code>,
+ulimit-capped. Another session&rsquo;s uncommitted fence work rides in every run &mdash; noted wherever it could matter.</p>
+
+<h2>Final attribution (resolved &mdash; see AC-0443-results.html)</h2>
+<div class="box">
+<p><strong>Occupant:</strong> the west-facing cliff flank of the north-west ridge at &asymp;120&ndash;135&nbsp;m, drawn by
+BAND&nbsp;B (8&times;8&times;8 avg-LOD, <code>lod_avg.gdshader</code>, ring sector 37) &mdash; real, data-backed terrain
+(rays hit the heightmap surface at 110.6&ndash;119.9&nbsp;m; the block-data column census shows the ridge tops 145&ndash;148
+inside the full-LOD band; the band&rsquo;s quad column sits at (−50,&nbsp;142&ndash;158,&nbsp;−99..−133) with the patch&rsquo;s exact
+palette). Edge match per the AC-0440 standard: top y&asymp;375 = ridge crest H&asymp;147 (band vertex (−50,146.5,−100)
+projects (1205,371)); left x&asymp;1192 = the 29&nbsp;m tree&rsquo;s canopy (probe near-hit block 7 at (−7,143,−17) &rarr;
+(1139,397)); right = frame clip (column extends off-frame to (1373,335)); bottom y&asymp;394&ndash;410 = sheep + ground in front.</p>
+<p><strong>Not:</strong> a hole (surface is solid behind it), clouds (r2-cloudoff/r3-shell patch boxes byte-identical to
+base), the satellite body (discarded inside 332&nbsp;m), sky, a mob, or a pending-slab gap. Not a recent-work regression:
+the 0.2 cave floor for <code>a=0</code> band faces is the original AC-0283-P3 design; the AC-0426/AC-0432 ambient lift
+simply never crossed the tier seam.</p>
+<p><strong>Darkness verdict:</strong> <strong>not correct at midday</strong> &mdash; the AC-0432 "shaded, not black" collapse
+on the far tier: the heightmap-sky rule marks a sky-exposed surface cliff face <code>a=0</code> (at/below its own terrain
+top), so it renders at the 0.2 cave floor + ambient only &rarr; (30,27,23), while the same face one tier-seam closer
+(chunk_lit unshaded + lift, L&asymp;0.55) reads &asymp;(135,116,103): a 3.5&times; seam step.</p>
+<p><strong>Fix (applied, colour-only):</strong> <code>lod_avg.gdshader</code> gains <code>u_amb</code> +
+<code>lit += u_amb * day.r * (1.0 - COLOR.a)</code>; <code>world.gd</code> pushes the existing AMB_SKY_L/ambient_sky
+value to the band material in the AC-0426 seam (latch-only-when-landed for the lazy material). A/B re-take, same
+pose: patch box (29,29,27) &rarr; <strong>(50,40,31)</strong>; 0.9% of the frame moved, all on band <code>a=0</code> faces;
+OFF/night bit-identical by construction.</p>
+<p><strong>Gates (all green):</strong> G0 rc=0 0/0 (post arm-removal, pristine) &middot; SMOKE ok:true 0/0, genhash 25/25
+byte-identical &middot; meshprobe ok, match 1.0, 32/32 &middot; shaderforce 12/12 (lod_avg declared=3/params=3, the new
+uniform live). Heavy standing set = coordinator&rsquo;s job; structurally untouched (no C++/mesh/data/bake).</p>
+</div>
+</body></html>
