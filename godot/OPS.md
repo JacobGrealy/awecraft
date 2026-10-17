@@ -189,6 +189,14 @@ The user downloads it at `http://192.168.0.224:8080/AweCraft.exe` (or `127.0.0.1
   the Forward+ path (shader compilation, feature availability, layout, colour) but NOT about
   real-GPU performance or GPU-specific precision edges. The authoritative look and speed are
   the user's Windows build (AC-0241).
+- **Engine-build quirks (measured 2026-10-17, AC-0440):** (a) `StandardMaterial3D.wireframe =
+  true` is IGNORED on the Forward+/lavapipe path — the box renders as a solid fill; outline
+  looks must be real geometry (or verified on the Windows build). (b) This build's `MultiMesh`
+  is the Godot-3-style API: the mesh rides `MultiMesh.mesh` (not `base_mesh`),
+  `instance_count` (not `transform_count`), and the material rides the base mesh (see
+  `entities/particle_pool.gd` for the working pattern); `get_instance_transform()` read-back
+  returns the identity after `set_instance_transform()` — the write path renders correctly,
+  don't trust the read-back for diagnostics.
 
 ## 7. Why this file exists (rule harvest)
 

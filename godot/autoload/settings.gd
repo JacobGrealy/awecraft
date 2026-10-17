@@ -248,6 +248,23 @@ const DEFAULTS := {
 	# pattern). Env-overridable (AWECRAFT_AMBSKY=0|1 at boot, world.gd —
 	# the AWECRAFT_RAMPS pattern, written WITHOUT save).
 	"ambient_sky": true,
+	# AC-0440: the aim-highlight LOOK switch. DEFAULTS ON — the r24
+	# whole-experience assessment (AC-0384 §29.3 item 4) filed AC-0440 on
+	# the 1.02 m aim-highlight box's 28% black FILL: in the nadir
+	# ground-down frame (fly FOV 99 = 90 base x 1.10 boost, 118 px/m) it
+	# reads as a "16x16 m square of grass lit differently, sharp 16 m
+	# boundary" — a target mark mistaken for a lighting defect (terrain
+	# there is flat, every top-slab vertex R=1.0; the square is the
+	# highlight, measured within 2px on all four edges). ON: the indicator
+	# is a black WIREFRAME outline (unshaded, no transparency) — the aimed
+	# face keeps its terrain lighting, the mark reads as an outline not a
+	# differently-lit patch. OFF: the pre-AC-0440 Color(0,0,0,0.28) alpha
+	# fill bit-for-bit (the A/B). No apply step owed: player.gd
+	# _aim_wire_sync reads the live value every frame and rebuilds the
+	# material only on a flip (the viewmodel_occlude pattern).
+	# Env-overridable (AWECRAFT_AIMWIRE=0|1 at boot, player.gd _ready —
+	# the AWECRAFT_VMOCC pattern, written WITHOUT save).
+	"aim_wire": true,
 	# AC-0436: the MOONLIGHT switch — the night's directional light source
 	# (the sun's antipode; above the horizon exactly when the sun is not).
 	# DEFAULTS ON: the shipped night IS the reported defect (the AC-0384

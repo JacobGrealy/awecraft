@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0440 results — the spawn "16×16 dark square"</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:1.8rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+code,pre{background:#f2f2f2;padding:1px 4px;border-radius:3px;font-size:.92em}
+pre{padding:.6rem 1rem;overflow-x:auto}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:3px 8px;text-align:left}
+.ok{color:#0a7a0a}.bad{color:#b30000}
+img{max-width:100%;border:1px solid #ccc;margin:.4rem 0}
+.ab{display:flex;gap:1rem;flex-wrap:wrap}.ab>div{flex:1;min-width:320px}
+.ab .cap{font-size:.85em;color:#444;margin-top:.2rem}
+</style></head><body>
+
+<h1>AC-0440 — results: the spawn "16×16 m dark square" on flat grass</h1>
+<p><b>Verdict: the dark square was never a lighting fault.</b> It is the DDA aim
+highlight (the target indicator, player.gd <code>_build_highlight</code>) — a 1.02 m
+<code>BoxMesh</code> filled 28% black — drawn over the spawn cell while the r24
+assessment camera looks straight down. Shipped fix: the indicator is now a black
+<b>wireframe edge outline</b> (no filled face), behind <code>Settings "aim_wire"</code>
+(default <b>ON</b>) + <code>AWECRAFT_AIMWIRE=0|1</code> + an options-menu row. All light
+gates pass; the tree is pristine (temporary probe removed and re-gated).</p>
+
+<h2>1) What shared one value across 16 m — the mechanism</h2>
+<p><b>Nothing in the lighting.</b> The ticket's premise (a lighting value shared across
+16 m, chunk-boundary granularity) is falsified by measurement:</p>
+<ul>
+<li><b>The frame lies wholly inside chunk (0,0).</b> No seam is in the frame at all;
+there is no 16 m structure anywhere in it. The frame spans only ~10.3 m of ground
+(nadir distance 2.61 m at the live camera; 1 m ≈ 118 px).</li>
+<li><b>The terrain is flat.</b> All 25 cells of the 5×5 around spawn: top = 140, top
+block id = 1 (grass). No pit.</li>
+<li><b>The mesh is fully lit.</b> Every top-slab vertex of chunk (0,0) in the square
+region carries R=1.0, G=0.0, B=1.0 — full sun, no occlusion, no darkened data.</li>
+<li><b>The one value shared across the square is the highlight's constant 28% black
+fill</b> — over <b>1.02 m</b>, not 16 m. Measured darkening ratio inner/ring ≈ 0.73–0.80
+(the 0.28-alpha overlay in linear light is 0.72; ~0.75–0.80 after ACES at mid-tones).</li>
+</ul>
+<p>Projection proof (the decisive measurement): the r24 frame was shot in fly mode,
+where the player camera's live FOV is <b>98.99°</b> — player.tscn base 90° × the 1.10
+fly boost (the 75° figure in main.gd <code>_make_camera</code> is a different camera).
+With the live transform (pos 8.787, 143.602, 8.787; fwd −0.002, −0.997, −0.073; FOV
+98.99; aspect 1280/720), the highlight's top face projects to px (578, 321)–(701, 443);
+the observed dark square edges are (580, 320)–(703, 442) — <b>within ±2 px on all four
+sides</b>. The "16 m" reading was a scale misjudgement of a 1 m UI element; "the same
+problem remains inside chunks" is consistent — it is one cell mid-chunk by
+construction. The scene-graph census (temporary probe, reproducing the r24 AIM state)
+reports the highlight <code>visible=true</code> at world [8.78, 140.48, 8.78].</p>
+
+<h2>2) What changed + the switch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td>godot/autoload/settings.gd</td>
+<td>New key <code>"aim_wire": true</code> (default ON) with the ticket comment.</td></tr>
+<tr><td>godot/player/player.gd</td>
+<td>The indicator is a <code>MultiMeshInstance3D</code> in both states. <b>ON:</b> a hollow
+12-strip edge frame (unit-cube MultiMesh, 8 face-edge strips 1.02×0.02×0.02 + 4 corner
+pillars 0.02×1.02×0.02), unshaded opaque black — no filled faces, so the aimed face
+keeps its terrain lighting. <b>OFF:</b> 1 instance at the 1.02 scale with the exact
+pre-fix <code>Color(0,0,0,0.28)</code> alpha fill (bit-for-bit the old box). Apply-on-change
+in <code>_update_interaction</code> (rebuilt only on a flip, the viewmodel_occlude pattern);
+env preload <code>AWECRAFT_AIMWIRE=0|1</code> in <code>_ready</code> (written to Settings without
+save, the AWECRAFT_VMOCC pattern).</td></tr>
+<tr><td>godot/ui/menu.gd</td>
+<td>Options-page row "Target mark: outline (no dimming fill)" + toggle handler +
+stored-value sync.</td></tr>
+</table>
+<p><b>Default ruling:</b> the look the user reported IS the defect (AC-0384 §29.3 item 4
+called the square a rendering fault), so the fix ships in and OFF is the A/B — the same
+ruling as ambient_sky (AC-0426), cloud_gate (AC-0428), no_sky_floor (AC-0429),
+moonlight (AC-0436), stat_captions/inventory_dim (AC-0437).
+<code>AWECRAFT_AIMWIRE=0</code> restores the pre-fix look for A/B or preference.</p>
+<p><b>Why real geometry, not a wireframe material flag:</b> measured on this dev pipeline,
+<code>StandardMaterial3D.wireframe = true</code> is <b>ignored</b> — a 1.02³ box with the flag
+rendered as a solid fill (first after-capture: pitch-black square, luma 0 across the
+interior; red A/B <code>ac0440-exp-red.png</code> in <code>.scratch/AC-0440/</code>: interior (255,0,0)
+everywhere, no lines). Since the product ships on Windows, the outline is real geometry
+so it renders identically on any rasterizer.</p>
+
+<h2>3) Luminance profile across the former boundary (before/after, numbers)</h2>
+<p>r24 recipe re-taken on this tree: <code>AWECRAFT_SIZE=1280,720 AWECRAFT_RADIUS=24
+AWECRAFT_FOG_PCT=83 AWECRAFT_SEED=44 AWECRAFT_TIME_FREEZE=1 AWECRAFT_CLOUD_T0=411200
+AWECRAFT_AIM="8.5,143.62,8.5,0,-1.5" AWECRAFT_SNAP_DRAIN=600 AWECRAFT_SNAP_STEPS=300</code>,
+xvfb + llvmpipe Forward+, one hour per state. "band" = the grass frame around the
+square (x 420–900, y 200–600, excluding the square); "interior" = the square minus a
+6-px border. All luma = 8-bit grayscale of the rendered frame.</p>
+<table>
+<tr><th>hour</th><th>band before</th><th>band after</th><th>interior before</th><th>interior after</th><th>ratio before (in/band)</th><th>ratio after (in/band)</th></tr>
+<tr><td>T=0.5 (noon, the r24 hour)</td><td>82.2</td><td>82.2</td><td>59.8</td><td>79.3</td><td class="bad">0.727 (the dark patch)</td><td class="ok">0.965 (grass)</td></tr>
+<tr><td>T=0.25 (morning)</td><td>15.5</td><td>15.5</td><td>9.3</td><td>15.3</td><td class="bad">0.600 (the dark patch)</td><td class="ok">0.986 (grass)</td></tr>
+</table>
+<p>Transect across the left/right boundary at y=381 (T=0.5): before — a broad step from
+~82 (grass) down to ~52–60 across a 120-px-wide interior; after — grass values
+(52–102 texture dither) everywhere except a <b>2-px black line at x=580–581 and
+x=698–699</b> (the wireframe edges; the vertical profile shows the same 2-px lines at
+y≈320 and y≈440). The fence "do not smooth/blur the boundary" is met trivially: there
+is no boundary to blur — the patch was a UI fill, and the only edge now is the
+indicator's own 2-px outline.</p>
+<div class="ab">
+<div><img src="captures/ac0440-before-t050.png" alt="before, T=0.5">
+<div class="cap"><b>BEFORE</b> (AWECRAFT_AIMWIRE=0), T=0.5 — the reported defect: the
+1.02 m aimed cell reads as a hard-edged dark square on the grass.</div></div>
+<div><img src="captures/ac0440-after-t050.png" alt="after, T=0.5">
+<div class="cap"><b>AFTER</b> (aim_wire ON, the default), T=0.5 — the indicator is a
+thin black outline; the aimed face keeps its terrain lighting.</div></div>
+<div><img src="captures/ac0440-before-t025.png" alt="before, T=0.25">
+<div class="cap"><b>BEFORE</b>, T=0.25 — same defect under low morning sun (band luma
+15.5, patch ratio 0.600).</div></div>
+<div><img src="captures/ac0440-after-t025.png" alt="after, T=0.25">
+<div class="cap"><b>AFTER</b>, T=0.25 — outline only; interior = grass (ratio 0.986).</div></div>
+</div>
+
+<h2>4) Seam twin result (AC-0427) — holds</h2>
+<p>The extended temporary probe corner-paired the highest-y top-face vertex colours
+across the 3×3 block's 12 internal chunk-boundary seams (180 pairs measured, 145
+same-height level twins, 135 exact within 1e-4, max level step 0.9216). The AC-0427
+probe was removed in that ticket, and the mesh carries no vertex exactly on the
+nominal seam line (the seam-V edge quads overhang the seam — corners at local
+16.61/−0.61, each side), so the absolute count is not directly comparable to their
+190/191; <b>the holding check is the A/B:</b> the same measurement on the pre-fix tree
+(the 3 fix files stashed for the run) is <b>byte-identical</b>
+(<code>.scratch/AC-0440/twin-before.json == twin-after.json</code>, 0 row diffs), and the
+final-tree run (after the MultiMesh rework) reproduces it exactly. Zero mesh-path diff
++ genhash 25/25 + meshprobe 1.0 — the AC-0427 twin result holds by construction and
+by measurement.</p>
+
+<h2>5) Wider scene contrast</h2>
+<p>The second hour (T=0.25) plus the full-frame collateral diff: in BOTH hours the
+before/after pixel difference (&gt;3 luma, sampled) is confined to bbox
+(580, 322)–(700, 442) — exactly the indicator's footprint — with nothing else in the
+1280×720 frame moving (ground, clouds, sky, viewmodel, HUD). The band luma is
+unchanged (82.2/82.2, 15.5/15.5): the change touched nothing outside the target mark.</p>
+
+<h2>6) Gates + exit statuses (light set, all on the final tree; re-run after probe
+removal)</h2>
+<table>
+<tr><th>gate</th><th>command</th><th>exit</th><th>result</th><th>log</th></tr>
+<tr><td>G0</td><td><code>--headless --path godot --quit</code></td><td class="ok">0</td>
+<td class="ok">SCRIPT ERROR 0, SHADER ERROR 0 (gate_census ok)</td><td>.scratch/AC-0440/g0-pristine.log</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY="player;interact;light;fluids;genhash" --headless</code></td><td class="ok">0</td>
+<td class="ok">battery ok:true; 0 errors; 25/25 GENHASH lines; interact arm highlight_visible=true</td><td>.scratch/AC-0440/smoke-pristine.log</td></tr>
+<tr><td>PROBE</td><td><code>AWECRAFT_LOGIC=meshprobe --headless</code></td><td class="ok">0</td>
+<td class="ok">ok:true, ac0211_ok:true</td><td>.scratch/AC-0440/meshprobe-pristine.log</td></tr>
+<tr><td>shaderforce</td><td>—</td><td>—</td>
+<td>not owed: no .gdshader changed (stated, skipped)</td><td>—</td></tr>
+</table>
+<p>Render runs (not a gate): 4× <code>rc=0</code>, log carries Forward+/llvmpipe, 0 errors,
+SNAP line + file present for each (capture CHECK lines in
+<code>.scratch/AC-0440/capture-run.log</code>; per-run logs
+<code>.scratch/AC-0440/render-*.log</code>). Stochastic-UAF check: every godot call checked for
+exit status; no clean-log signal-11 hits. Pristine contract: the ac0440probe arm +
+function removed — <code>git diff</code> of harness.gd is <b>empty</b> (byte-identical to HEAD)
+and G0/SMOKE/PROBE re-ran green after removal (the "-pristine" logs above).</p>
+
+<h2>7) Frames + provenance</h2>
+<p>Captures in <code>tasks/AC-0440/captures/</code> (4 frames above). Provenance: rendered on
+the final tree (HEAD cacf99f + the 3 fix files; 39 commits past the r24 baseline
+56c9095, whose frame
+<code>tasks/AC-0384/ac0384-r24-ground-down-day.png</code> remains the assessment reference) —
+the AIMWIRE=0 re-take is the "before" on this tree; the AIMWIRE=1 frame is the
+default look. Dev pipeline = llvmpipe proxy (evidence about geometry/layout, per
+HARNESS.md §2).</p>
+
+<h2>8) What was deliberately NOT done</h2>
+<ul>
+<li>No smoothing/blur of any boundary (there is no lighting boundary — the fence is met
+by removing the fill entirely).</li>
+<li>No mesher, lighting, bake, shader or C++ change — so no .so rebuild, no standing
+gate values re-established, no generation movement (genhash 25/25 held), no
+shaderforce.</li>
+<li>No change to the highlight's 1.02 extent, its 1 cm overhang, its spawn/aim
+behaviour, the AIM recipe, the camera, or any fenced file (main.gd / game.gd /
+drop.gd / debug.gd); tasks/AC-0067, AC-0384, AC-0425 untouched.</li>
+<li>No new standing gate values; the options-menu addition is a user row, not a gate.</li>
+<li>Heavy gates left to the coordinator — this session exits after the light set.</li>
+</ul>
+
+<h2>9) Findings (harvest candidates)</h2>
+<ul>
+<li><b><code>StandardMaterial3D.wireframe</code> is ignored on this dev pipeline</b>
+(Forward+/llvmpipe, Godot 4.7.1 build): a box with the flag renders as a solid fill.
+Measure outline geometry, don't flag it, if the look must be verified on this box.</li>
+<li><b>This engine build's MultiMesh is the Godot-3-style API</b>: the mesh rides
+<code>MultiMesh.mesh</code> (not <code>base_mesh</code>), <code>instance_count</code> (not
+<code>transform_count</code>), and the <b>material rides the base mesh</b> (MultiMesh has no
+material property; the particles pool does exactly this —
+<code>godot/entities/particle_pool.gd</code>). <code>get_instance_transform()</code> read-back
+returns the identity even after <code>set_instance_transform()</code>; the write path
+renders correctly — don't trust the read-back for diagnostics.</li>
+<li>The r24 "16×16 m square" was a scale misjudgement: fly FOV 99° makes 1 m ≈ 118 px,
+so a 1.02 m UI box fills a tenth of the frame. (Also: the player camera's base FOV is
+90 in player.tscn, not the 75 in main.gd <code>_make_camera</code> — a different camera.)</li>
+</ul>
+
+<p><i>Logs: <code>.scratch/AC-0440/</code> (g0-*, smoke-*, meshprobe-*, probe-*, render-*,
+twin-{before,after}.json, profile.py, capture.sh, mmtest.gd). Analysis scripts and
+pixel forensics are in the same folder; the r24 reference frame is
+<code>tasks/AC-0384/ac0384-r24-ground-down-day.png</code>.</i></p>
+
+</body></html>

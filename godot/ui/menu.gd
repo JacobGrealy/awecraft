@@ -97,6 +97,7 @@ var relief_check: CheckBox
 # path. (The row comment still said "default OFF" after the AC-0432
 # flip — corrected here in the AC-0435 sweep.)
 var ambient_sky_check: CheckBox
+var aim_wire_check: CheckBox
 # AC-0436: the moonlight toggle — the night's directional light source
 # (Settings "moonlight", default ON: the shipped night IS the reported
 # defect; OFF is the exact pre-AC-0436 night for the A/B).
@@ -590,6 +591,20 @@ func _ready() -> void:
 	opt_vbox.add_child(inv_dim_check)
 	if hi + 23 < opt_vbox.get_child_count():
 		opt_vbox.move_child(inv_dim_check, hi + 23)
+	# AC-0440: the aim-highlight look toggle (Settings "aim_wire", default
+	# ON — the 28% black fill is the look the assessment filed as a
+	# "16x16 m square lit differently"; ON is the wireframe outline, OFF
+	# the pre-fix fill). Last row of the page: no move_child seat owed.
+	# No apply step is owed: player.gd _aim_wire_sync reads the live value
+	# every frame and rebuilds the material on a flip (the
+	# viewmodel_occlude pattern; env-overridable: AWECRAFT_AIMWIRE=0|1 at
+	# boot, player.gd _ready).
+	aim_wire_check = CheckBox.new()
+	aim_wire_check.name = "AimWireCheck"
+	aim_wire_check.text = "Target mark: outline (no dimming fill)"
+	aim_wire_check.add_theme_font_size_override("font_size", 15)
+	aim_wire_check.toggled.connect(_on_aim_wire_toggled)
+	opt_vbox.add_child(aim_wire_check)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1090,6 +1105,9 @@ func _sync_controls() -> void:
 	# AC-0437: the stat captions + the inventory dim (both default ON).
 	stat_cap_check.button_pressed = bool(Settings.values.get("stat_captions", true))
 	inv_dim_check.button_pressed = bool(Settings.values.get("inventory_dim", true))
+	# AC-0440: the aim-highlight look toggle (default ON — the wireframe
+	# outline; the reported "dark square" is the fill it replaces).
+	aim_wire_check.button_pressed = bool(Settings.values.get("aim_wire", true))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1592,6 +1610,17 @@ func _on_inv_dim_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("inventory_dim", on)
+
+
+# AC-0440: the aim-highlight look toggle (default ON — the wireframe
+# outline; the reported "16x16 m dark square" is the 28% fill it
+# replaces). set_value does the clamp chain + the save; no apply step is
+# owed: player.gd _aim_wire_sync reads the live value every frame and
+# rebuilds the material on a flip (the viewmodel_occlude pattern).
+func _on_aim_wire_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("aim_wire", on)
 
 
 # ------------------------------------------------- AC-0088 Controls tab

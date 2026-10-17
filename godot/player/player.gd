@@ -127,7 +127,7 @@ var craft_grid: Array = []
 var table_grid: Array = []
 var craft_out: Dictionary = {}
 var ui_mode := ""
-var highlight: MeshInstance3D = null
+var highlight: GeometryInstance3D = null  # AC-0440: MultiMeshInstance3D (the aim indicator)
 var hand_root: Node3D = null
 var sway_root: Node3D = null
 var _sway_phase := 0.0
@@ -209,6 +209,9 @@ var _vm_sky := 0.0
 var _vm_blk := 0.0
 var _vm_L := 1.0
 var _vm_orbit_env: int = -1  # AC-0421 A/B: AWECRAFT_VMORBIT (read once; -1 = unset = the shipped fix)
+var _aim_wire_state := false  # AC-0440: last applied state of Settings "aim_wire"
+var _aim_wire_base: Mesh = null  # AC-0440: unit-cube base of the current ON-state MultiMesh
+var _aim_wire_old_base: Mesh = null  # AC-0440: the previous base, freed on the next apply
 
 
 func _ready() -> void:
@@ -233,6 +236,15 @@ func _ready() -> void:
 	var nce := OS.get_environment("AWECRAFT_NOCLIP")
 	if nce != "":
 		Settings.values["noclip"] = nce == "1"
+	# AC-0440: harness env preload (the AWECRAFT_VMOCC pattern) —
+	# AWECRAFT_AIMWIRE=<0|1> overrides the STORED aim-highlight look for
+	# this process (written to Settings.values WITHOUT save, so the arms
+	# never clobber the user's cfg). The highlight is the player's, so the
+	# preload rides _ready here; _aim_wire_sync reads the live value every
+	# frame and applies on change, so no boot derive is owed.
+	var awe := OS.get_environment("AWECRAFT_AIMWIRE")
+	if awe != "":
+		Settings.values["aim_wire"] = awe == "1"
 	if Game.world != null:
 		# AC-0307: spawn_point() is flat; the placed world needs the
 		# sphere conversion (mm-level near the spawn, exact by contract).
@@ -1051,9 +1063,12 @@ func _init_inv() -> void:
 # fresh one while a player node can still be alive (queue_free is
 # deferred; the continue path creates the new world in the same frame),
 # so the stored reference can dangle and every aim frame hits
-# "previously freed". Rebuilding is cheap (one 1-box MeshInstance3D) and
-# re-attaches to the CURRENT world; never touch a freed node.
-func _ensure_highlight() -> MeshInstance3D:
+# "previously freed". Rebuilding is cheap (one small MultiMeshInstance3D)
+# and re-attaches to the CURRENT world; never touch a freed node.
+# AC-0440: typed GeometryInstance3D (not MeshInstance3D) — the ON look is
+# a MultiMesh edge frame, so the node is a MultiMeshInstance3D in BOTH
+# states (OFF = a 1-instance MultiMesh, the pre-AC-0440 box bit-for-bit).
+func _ensure_highlight() -> GeometryInstance3D:
 	if is_instance_valid(highlight):
 		return highlight
 	_build_highlight()
@@ -1061,20 +1076,102 @@ func _ensure_highlight() -> MeshInstance3D:
 
 
 func _build_highlight() -> void:
-	highlight = MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(1.02, 1.02, 1.02)
-	highlight.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.0, 0.0, 0.0, 0.28)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	highlight.material_override = mat
+	highlight = MultiMeshInstance3D.new()
+	_aim_wire_apply()
 	highlight.visible = false
 	if Game.world != null:
 		Game.world.add_child(highlight)
 	else:
 		add_child(highlight)
+
+
+# AC-0440: the aim-highlight look (Settings "aim_wire", default ON — the
+# 28% black FILL is the look the assessment filed as a "16x16 m square
+# lit differently" — it is the target indicator, measured; ON makes it a
+# black outline so the aimed face keeps its terrain lighting). OFF
+# rebuilds the pre-AC-0440 1.02^3 box + 28% black fill bit-for-bit.
+func _aim_wire_material(on: bool) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if on:
+		mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	else:
+		mat.albedo_color = Color(0.0, 0.0, 0.0, 0.28)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return mat
+
+
+# AC-0440: (re)build the indicator's geometry + material for the live
+# aim_wire state. ON is a hollow 12-strip edge frame (thin opaque boxes,
+# one MultiMesh draw) — NO filled faces at all, so the aimed face keeps
+# its terrain lighting. Real geometry, not the StandardMaterial3D
+# .wireframe flag: the flag is measured IGNORED on this dev pipeline (a
+# 1.02^3 box with wireframe=true renders as a solid fill — the red A/B,
+# ac0440-exp-red in .scratch/AC-0440/) and the product ships on Windows,
+# so the outline must render identically on any rasterizer. The frame
+# keeps the pre-AC-0440 1.02 extent (the 1 cm overhang that keeps it
+# clear of z-fighting). OFF is one MultiMesh instance at the 1.02 scale.
+# Engine-build note (the entities/particle_pool.gd pattern): this
+# MultiMesh is the Godot-3-style API — `mesh` (not base_mesh),
+# instance_count, transform_format, and the MATERIAL RIDES THE BASE MESH
+# (MultiMesh has no material property and the instance node's
+# material_override is not the seam to use here).
+func _aim_wire_apply() -> void:
+	var hl: MultiMeshInstance3D = highlight
+	if hl == null:
+		return
+	var on := bool(Settings.values.get("aim_wire", true))
+	_aim_wire_state = on
+	var old_mm: MultiMesh = hl.multimesh
+	var mm := MultiMesh.new()
+	var base := BoxMesh.new()  # unit cube; scaled per instance
+	_aim_wire_base = base
+	base.material = _aim_wire_material(on)
+	mm.mesh = base
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var H := 0.51  # half-extent: the 1.02 box
+	var t := 0.02  # strip thickness (~2 px at the nadir 118 px/m)
+	var o := H - t / 2.0
+	var L := H * 2.0
+	if on:
+		mm.instance_count = 12
+		var trs: Array = [
+			_aim_wire_t(L, t, t, 0.0, o, o), _aim_wire_t(L, t, t, 0.0, o, -o),
+			_aim_wire_t(t, t, L, o, o, 0.0), _aim_wire_t(t, t, L, -o, o, 0.0),
+			_aim_wire_t(L, t, t, 0.0, -o, o), _aim_wire_t(L, t, t, 0.0, -o, -o),
+			_aim_wire_t(t, t, L, o, -o, 0.0), _aim_wire_t(t, t, L, -o, -o, 0.0),
+			_aim_wire_t(t, L, t, o, 0.0, o), _aim_wire_t(t, L, t, -o, 0.0, o),
+			_aim_wire_t(t, L, t, o, 0.0, -o), _aim_wire_t(t, L, t, -o, 0.0, -o),
+		]
+		for i in range(12):
+			mm.set_instance_transform(i, trs[i])
+	else:
+		mm.instance_count = 1
+		mm.set_instance_transform(0, _aim_wire_t(L, L, L, 0.0, 0.0, 0.0))
+	hl.multimesh = mm
+	# the node no longer references the old MultiMesh; the old base mesh
+	# (which carries the old material) refcounts off via _aim_wire_base /
+	# the explicit _aim_wire_old_base when the flip went ON -> OFF.
+	if old_mm != null:
+		old_mm.free()
+	if _aim_wire_old_base != null:
+		_aim_wire_old_base.free()
+		_aim_wire_old_base = null
+
+
+func _aim_wire_t(sx: float, sy: float, sz: float, ox: float, oy: float, oz: float) -> Transform3D:
+	return Transform3D(Vector3(sx, 0.0, 0.0), Vector3(0.0, sy, 0.0),
+			Vector3(0.0, 0.0, sz), Vector3(ox, oy, oz))
+
+
+# AC-0440: apply on change (the viewmodel_occlude pattern) — the geometry
+# + material are rebuilt only when the switch flips (one comparison per
+# frame).
+func _aim_wire_sync() -> void:
+	var on := bool(Settings.values.get("aim_wire", true))
+	if _aim_wire_state != on:
+		_aim_wire_old_base = _aim_wire_base
+		_aim_wire_apply()
 
 
 func _build_held() -> void:
@@ -3044,6 +3141,7 @@ func _box_intersects_player(cell: Vector3i) -> bool:
 
 func _update_interaction(dt: float) -> void:
 	var hl := _ensure_highlight()  # AC-0309: survives the world free/recreate
+	_aim_wire_sync()  # AC-0440: the aim_wire look applies on change
 	if ui_mode != "":
 		hl.visible = false
 		return

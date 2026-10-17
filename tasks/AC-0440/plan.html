@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0440 plan — the spawn "16×16 dark square"</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:1.6rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+code,pre{background:#f2f2f2;padding:1px 4px;border-radius:3px}
+pre{padding:.6rem 1rem;overflow-x:auto}
+table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:3px 8px;text-align:left}
+.ok{color:#0a7a0a}.bad{color:#b30000}.new{background:#fff7d6}
+</style></head><body>
+
+<h1>AC-0440 — plan: the spawn "16×16 m dark square" on flat grass</h1>
+
+<h2>Goal</h2>
+<p>The assessment (AC-0384 §29.3 item 4) found "one 16×16 cell renders distinctly darker than
+its neighbours with sharp 16 m chunk boundaries" on the flat-grass ground-down-day frame and
+filed AC-0440 on the premise that a lighting value is shared across 16 m inside chunks.
+<b>Forensics on this ticket falsify the premise and identify the square:</b> it is the DDA
+<b>aim highlight</b> (player.gd <code>_build_highlight</code>, a 1.02³ <code>BoxMesh</code> with an
+unshaded <code>Color(0,0,0,0.28)</code> material — the target indicator) drawn over the spawn cell
+while the camera looks straight down. Terrain is flat (all 25 cells of the 5×5 around spawn
+top=140, grass), the top-slab vertex colours in the region are all R=1.0/B=1.0 (full sun, no
+occlusion), and the highlight's projected top face matches the observed dark rectangle within
+2 px on all four edges once the camera is modelled with its <i>live</i> transform (fly FOV
+99° = 90° base × 1.10 fly boost — the 75° figure from <code>_make_camera</code> is a different
+camera; at 99° the nadir scale is 118 px/m, so the 1.02 m box is 120 px, exactly the observed
+square). The "16 m" reading was a scale misjudgement of a 1 m UI element; the frame spans only
+~10.3 m of ground, wholly inside chunk (0,0). Measured darkening ratio inner/ring = 0.750 —
+the 0.28-alpha black overlay (linear 0.72, ~0.75 after ACES at mid-tones).</p>
+<p><b>What shared one value across 16 m: nothing in the lighting.</b> The one value shared
+across the square is the highlight's constant 28% fill — over 1.02 m, not 16 m. No lighting,
+meshing, bake or seam path is involved, and none is touched by this fix. The ticket's
+"don't smooth/blur" fence is therefore met trivially (there is no boundary to blur); the
+square disappears by making the indicator stop darkening the aimed face.</p>
+<p>Deliverable: ship the indicator as a black <b>wireframe outline</b> (no fill — the aimed
+face keeps its terrain lighting; the mark reads as an outline, not a differently-lit patch),
+behind <code>Settings "aim_wire"</code>, <b>default ON</b> (the look the user reported is the defect —
+the AC-0426/0432/0436 re-ruling: the fix ships in, OFF is the exact pre-fix 28% fill),
+env-overridable (<code>AWECRAFT_AIMWIRE=0|1</code>, the viewmodel_occlude preload pattern) and
+wired into the options menu. Re-take the r24 flat-grass frame in both states (+ one more
+hour), measure the luminance profile across the former boundary before/after, re-measure the
+AC-0427 seam twin result (190/191 level twins 0.000) with an extended temporary probe, and
+check wider-scene contrast. Light gates only; heavy gates are the coordinator's.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td>godot/autoload/settings.gd</td><td>new key <code>"aim_wire": true</code> (default ON — the reported look is the defect) + ticket comment. No default/range change of an existing key → no standing-value re-establish owed.</td></tr>
+<tr><td>godot/player/player.gd</td><td><code>_build_highlight</code> material via new <code>_aim_wire_material()</code> (ON: unshaded black wireframe, no transparency; OFF: the pre-fix <code>Color(0,0,0,0.28)</code> alpha fill bit-for-bit). New <code>_aim_wire_sync()</code> called from <code>_update_interaction</code> — rebuilds the material only on a flip (viewmodel_occlude apply-on-change pattern; old material freed). <code>_ready</code>: <code>AWECRAFT_AIMWIRE</code> env preload (written to Settings.values without save).</td></tr>
+<tr><td>godot/ui/menu.gd</td><td>options-page checkbox row (last row, after the AC-0437 inventory-dim row) + <code>_on_aim_wire_toggled</code> + sync of <code>button_pressed</code> from the stored value.</td></tr>
+<tr class="new"><td>godot/scenes/harness.gd</td><td><b>TEMPORARY</b> <code>ac0440probe</code> arm (terrain tops + top-slab vertex colours + scene census + AC-0427 twin-corner re-measure over the 3×3 block's 12 seams). <b>Removed at closeout; gates re-run after removal.</b></td></tr>
+<tr><td>tasks/AC-0440/</td><td>plan.html (this), AC-0440-results.html, continuity.md (append-only), captures/ (A/B frames + crops + profiles).</td></tr>
+</table>
+<p><b>Not touched:</b> gdext/ (no C++, no .so rebuild), any shader, godot/world/ (no mesher
+or lighting change), the fenced files (main.gd, game.gd, drop.gd, debug.gd), tasks/AC-0067,
+tasks/AC-0384, tasks/AC-0425. The working tree is left as the fix needs it; no native build
+is owed (no C++ change).</p>
+
+<h2>Harness gates (light set only — then exit)</h2>
+<ol>
+<li><b>G0</b> — <code>--headless --quit</code>: zero SCRIPT ERROR <b>and</b> zero SHADER ERROR via
+<code>tasks/scripts/gate_census.py</code>, <b>plus the process exit status checked</b> (stochastic
+clean-log SIGSEGV class — one clean re-run on a hit, per the AC-0403/AC-0420 precedent).</li>
+<li><b>SMOKE</b> — <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> (genhash 25/25
+byte-identical — mandatory since the mesher could have been touched; it is not, so 25/25 is
+expected and a movement would be a finding, not a re-baseline).</li>
+<li><b>PROBE</b> — <code>AWECRAFT_LOGIC=meshprobe</code> (ac0211_ok / 1.0) — the C++ mesh lane is
+untouched, must stay green.</li>
+<li><b>Seam twins</b> — AC-0427's 190/191 level-twin 0.000 result re-measured on the final
+tree by the extended ac0440probe (corner-paired top-vertex colours across the 3×3 block's
+12 seams), before the arm is removed.</li>
+<li><b>shaderforce</b> — NOT owed (no .gdshader changes; the highlight material is runtime
+GDScript). Stated, skipped.</li>
+<li><b>Re-runs</b> — G0 + SMOKE + PROBE re-run <b>after</b> the temporary arm is removed
+(pristine contract).</li>
+</ol>
+<p>Render evidence (not a gate, the visual acceptances): r24 recipe frames
+(<code>AWECRAFT_RADIUS=24 AWECRAFT_FOG_PCT=83 AWECRAFT_SEED=44 AWECRAFT_TIME_FREEZE=1
+AWECRAFT_CLOUD_T0=411200 AWECRAFT_SIZE=1280,720 AWECRAFT_AIM="8.5,143.62,8.5,0,-1.5"
+AWECRAFT_SNAP_DRAIN=600 AWECRAFT_SNAP_STEPS=300</code>) at <code>AWECRAFT_TIME=0.5</code> with
+<code>AWECRAFT_AIMWIRE=1</code> (after, default) and <code>AWECRAFT_AIMWIRE=0</code> (before reference),
+plus one more <code>AWECRAFT_TIME</code> hour; the luminance profile across the former boundary is
+measured from the retaken frames (and cross-checked against the probe's exact vertex
+colours, which are ground truth). One godot at a time, <code>HOME=/tmp/dsh_home</code>, xvfb +
+lavapipe Forward+, logs to repo-root <code>.scratch/AC-0440/</code>, snap-file existence checked.</p>
+
+</body></html>
