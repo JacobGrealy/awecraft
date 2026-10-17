@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-16T20:44
+  updated_at: 2026-10-16T22:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,7 +29,6 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
-- AC-0439
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28100,11 +28099,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-16T20:44
-  updated_at: 2026-10-16T20:44
-  completed_at: null
+  updated_at: 2026-10-16T22:20
+  completed_at: 2026-10-16T22:20
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The sky should be one consistent thing at any given moment, not blue in one direction
