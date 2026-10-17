@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0438 plan — chart-seam-line-across-the-planet-disc</title></head>
+<body>
+<h1>AC-0438 — chart-seam-line-across-the-planet-disc</h1>
+
+<h2>Goal</h2>
+<p>Find the <strong>true layer</strong> of the 1&ndash;2&nbsp;px hard pale line across the planet
+disc in the spawn-nadir orbit view (r24 assessment: rows 357&ndash;358, 254 pts &Delta;&ge;6,
+mean step 68), then implement a conservative fix behind a switch and verify with light gates
+only (heavy gates are the coordinator&rsquo;s). The mandate: do <em>not</em> assume the bake is at
+fault &mdash; identify the layer first.</p>
+
+<h2>Files to touch</h2>
+<ul>
+  <li><code>godot/core/satellite_body.gdshader</code> &mdash; the satellite body&rsquo;s 12-face
+      great-circle-chart fragment (the candidate layer for the disc&rsquo;s pixels).</li>
+  <li><code>godot/world/satellite_body.gd</code> &mdash; per-face material build + uniform pushes
+      (the A/B switch home, the house pattern of <code>u_srgb_pre</code>).</li>
+</ul>
+<p>No <code>world/*</code> generation file is touched by the fix (mesh <em>construction</em> is
+unchanged; only the shader&rsquo;s sample-source selection moves) &mdash; so genhash 25/25 must hold,
+and any drift is a finding.</p>
+
+<h2>Harness gates (light only)</h2>
+<ul>
+  <li><strong>G0</strong> via <code>tasks/scripts/gate_census.py</code> &mdash; zero SCRIPT ERROR +
+      zero SHADER ERROR <em>and</em> process exit status 0 (AC-0396/AC-0403 paired rule).</li>
+  <li><strong>SMOKE</strong> &mdash; dependency-mapped modes on the changed area (the body render path).</li>
+  <li><strong>genhash</strong> &mdash; 25/25 byte-identical (a move = a finding to report).</li>
+  <li><strong>shaderforce</strong> &mdash; only if a shader change lands (it does not in the
+      final tree &mdash; see results).</li>
+  <li>No <code>AWECRAFT_LOGIC</code> arm for the renders (the arm would own the shot);
+      <code>AWECRAFT_SIZE=1280,720</code> (comma), xvfb-run + lavapipe +
+      <code>--rendering-driver vulkan</code>.</li>
+</ul>
+
+<h2>Which layer + the deciding evidence</h2>
+<p><strong>The line is in the satellite body</strong> (the 12-face chart mesh), proven by the
+black-body render: setting the body&rsquo;s <code>ALBEDO</code> to zero removes the line (the
+frame&rsquo;s row 358 goes from (179,210,95) to (0,0,0)). It is <em>not</em> the fog, the
+atmosphere, the cloud shell, or the HUD.</p>
+<p><strong>The line is a sub-texel sampling artifact and is UV-independent.</strong> Three
+independent sample-UV sources were rendered at the exact r24 recipe and the disc is
+pixel-identical in all three:</p>
+<ol>
+  <li>the mesh&rsquo;s stored <code>UV</code> attribute (the pre-AC-0438 path);</li>
+  <li>a fragment-stage chart UV recomputed from the radial normal;</li>
+  <li>a vertex-stage chart UV with the <em>authoritative</em> per-face index (the exact
+      inverse of <code>SphereMath.uv_to_world</code>, face not re-derived from the normal).</li>
+</ol>
+<p>All three leave the line byte-for-byte (seam rows 357&rarr;358: 444 pts&ge;6, mean 75.5,
+max 229 &mdash; identical to r24; disc stats identical). So the line is <em>not</em> a UV-content
+error: whatever UV the sampler receives, the same 1-px row reads a bright texel.</p>
+<p>Also ruled out, each by a decisive A/B on this box:</p>
+<ul>
+  <li><strong>bake content</strong> &mdash; no face texture has a bright spike row (all 12 scanned);
+      the seam columns are identical between faces (gapless bake, mean &Delta;=0);</li>
+  <li><strong>minification aliasing</strong> &mdash; mipmaps on (12 imports flipped + re-import)
+      &rarr; frame pixel-identical to r24;</li>
+  <li><strong>haze / relief / sun light</strong> &mdash; term-field probes: <code>haz</code> uniform
+      across the disc, <code>sun_l</code> uniform, relief alpha near-flat &mdash; none spikes at row 358;</li>
+  <li><strong>stale shader cache</strong> &mdash; <code>.godot</code> wipe + re-import &rarr; byte-identical.</li>
+</ul>
+<p><strong>Verdict:</strong> the line is a sub-texel (1&nbsp;px &asymp; 5.5&nbsp;m &lt; 1 texel at the
+r24 render distance) rasterization/sampling artifact at the chart&rsquo;s coincident face seam,
+present on the llvmpipe verification box. It is in the body but is <em>not removable by any UV
+change, bake change, or shader-term change</em>. The honest resolution is a FINDING (see
+<code>AC-0438-results.html</code>): the conservative fix (computed chart UV behind a switch) was
+implemented and proven inert, then reverted to keep the tree minimal; the coordinator is asked to
+confirm on the Windows build whether the artifact is renderer-specific.</p>
+
+</body></html>

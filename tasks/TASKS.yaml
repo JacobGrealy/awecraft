@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-16T09:45
+  updated_at: 2026-10-16T20:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0439
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28089,6 +28090,77 @@ intake:
 
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the nadir frame it names, taken from a
     clean archive of an earlier commit.
+
+    '
+  comments: []
+- id: AC-0439
+  title: sky-is-blue-above-and-black-below-inside-the-atmosphere
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-16T20:44
+  updated_at: 2026-10-16T20:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The sky should be one consistent thing at any given moment, not blue in one direction
+    and black in another. The user''s words: "Why is there blue sky above space? I feel like I already
+    explained to you that the entire sky box should be the same color. Have we just not gotten to the
+    skybox ticket? Or did you think this was acceptable?"
+
+
+    2) Technical Details:
+
+    REPORTED 2026-10-16 WITH A FRAME TAKEN NEAR THE PLANET LOOKING TOWARD THE SUN. The upper sky is blue
+    with a bright sun halo and the lower sky is BLACK, split by a boundary that reads as a horizon. The
+    user has now reported a skybox edge three times, and this report makes clear that the previous two
+    fixes addressed the SYMPTOM and not the RULE they were stating.
+
+    THE FIRST FIX removed a hard step at the local horizon by blending it, which the user rejected because
+    blending is still faking a horizon. THE SECOND FIX, WHICH THE COORDINATOR CALLED COMPLETE, removed
+    five separate things that implied a lower boundary - an air floor that was literally the box''s bottom
+    face, a gradient anchor set to the same colour as that floor, a two-degree blend band, and an edge-on
+    haze band - and measured the region below the horizon as flat zero luminance with zero spread, reporting
+    the planet''s limb as the only remaining boundary. That measurement was correct AND THE CONCLUSION
+    DRAWN FROM IT WAS WRONG: the fix was applied UNCONDITIONALLY, so below the horizon is now space AT
+    EVERY ALTITUDE. Inside the atmosphere that is a defect, because a player standing in air looking down
+    should still see air. The user''s frame is the proof: blue above, black below, at an altitude where
+    both directions are inside the same atmosphere.
+
+    THE RULE THE USER HAS BEEN STATING, which both previous fixes missed: THE SKY MUST BE CONSISTENT WITH
+    WHERE THE PLAYER ACTUALLY IS. In space there is no horizon and the planet is the boundary - that part
+    is right and must be kept. Inside an atmosphere, the sky below the horizon is the same air as the
+    sky above it, and only the planet''s surface ends it. What must not exist is a boundary drawn by the
+    sky model itself in either case. The decision therefore has to key on whether the player is INSIDE
+    or OUTSIDE the atmosphere, not merely on which side of the local horizon a ray points - which is precisely
+    the distinction the unconditional fix erased.
+
+    THE COORDINATOR''S PROCESS FAILURE, recorded because it is the reason this reached the user: the acceptance
+    for that fix measured the region below the horizon at ONE altitude outside the atmosphere and treated
+    flat zero as proof of correctness. No frame was taken inside the atmosphere with the sun in view,
+    which is the configuration where the same code reads as a broken sky. The lesson is the one this project
+    keeps relearning - a measurement that passes while the screen is wrong is the dominant failure mode
+    here, and the frame the user actually looks at is the acceptance.
+
+    ACCEPTANCE: THE USER''S FRAME RE-TAKEN, showing one consistent sky - no blue region above a black
+    region, no boundary drawn by the sky - AND, SEPARATELY, a frame from OUTSIDE the atmosphere still
+    showing space below the horizon with the planet as the only boundary, because BOTH must hold and a
+    fix that satisfies one by breaking the other has not understood the problem. Give the luminance profile
+    down the frame at each altitude as numbers, and state at which altitude the inside/outside transition
+    happens and why that altitude.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); every look change ships behind a switch defaulting conservative; and
+    the recent work must keep holding - the moon and the night, the opaque planet, the seam closure and
+    its atlas fix, the ambient lift, the varying cloud cover, the interface additions, and the uniform
+    sky transition rate which must stay uniform.
 
     '
   comments: []
