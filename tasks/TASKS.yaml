@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-17T05:26
+  updated_at: 2026-10-17T05:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0442
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28285,4 +28286,56 @@ intake:
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the 120 and 300 metre frames it names.
 
     '
+  comments: []
+- id: AC-0442
+  title: script-error-in-low-lod-handoff
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-17T05:43
+  updated_at: 2026-10-17T05:43
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The world should never throw an error while building itself. A script error in\
+    \ the level-of-detail handoff is invisible to the player until it isn't - whatever that code path\
+    \ was supposed to do, it did not do.\n\n2) Technical Details:\nFOUND BY THE COORDINATOR'S HEAVY GATE\
+    \ SET, WHICH IS EXACTLY WHY THAT SET EXISTS: eight rounds of light gates passed while this error was\
+    \ present, and it surfaced in the first full heavy run since. The error is:\n    SCRIPT ERROR: Invalid\
+    \ access to property or key 'v' on a base object of type 'Dictionary'. at: _low_handoff (res://world/world.gd:2952)\n\
+    ONE OCCURRENCE in a full run of the far-tier arm, which is the arm that exercises the level-of-detail\
+    \ boundary hardest. It appeared ONCE in that run and in no other arm, so it is rare or conditional\
+    \ rather than constant.\nTHE ARM ITSELF DID NOT NOTICE, which is the more important finding for the\
+    \ process: the far-tier arm exited zero and reported okay TRUE while the error was logged. The gate\
+    \ that catches this is the error census paired against the process exit status, which is the project's\
+    \ standard G0 check and the reason it exists - an arm's own verdict does not see a script error. Anyone\
+    \ reading only the arm's RESULT would have concluded the run was clean.\nWHAT THE ERROR MEANS, to\
+    \ be established rather than assumed: something indexing a dictionary with the key 'v' got a dictionary\
+    \ that does not have it. The handoff code takes mesh or terrain records from somewhere and passes\
+    \ them along; a record arriving in a different SHAPE than expected - a partially built one, one from\
+    \ a different tier or a different code path, or one whose fields were never populated - would produce\
+    \ exactly this. Note the neighbouring satellites diagnostic printed immediately before the error,\
+    \ which suggests the handoff may be running while the far tier is mid-rebuild: a record being read\
+    \ while it is being replaced, or a record from a tier that does not carry the fields the full tier\
+    \ does, are both strong candidates.\nCANDIDATES TO CHECK, none prescribed: a rare record shape from\
+    \ the far tier that lacks the key; an ordering bug where the handoff runs before the records are populated;\
+    \ a race between the handoff and a rebuild; a fallback branch that constructs an empty dictionary;\
+    \ and any place the key is assumed present without a check.\nWHY IT MATTERS EVEN THOUGH IT IS RARE:\
+    \ whatever that record was, the code that wanted its value either skipped or silently did nothing,\
+    \ which means some chunk or tier was not handed off correctly at that moment. That is a visual defect\
+    \ waiting to be noticed as a hole, a gap or a missing invalidation.\nACCEPTANCE: the error reproduced\
+    \ AT WILL rather than hoped for - run the far-tier arm until it fires and say how many attempts it\
+    \ took, or identify the condition and construct it deliberately - then the census reading ZERO SCRIPT\
+    \ ERRORS for that arm across an extended run, with the level-of-detail behaviour unchanged otherwise\
+    \ (far_holes 0 in both bands, ladder 20/20, the boundary probe in band).\nCONSTRAINTS: genhash 25/25\
+    \ byte-identical unless generation genuinely moves, in which case that is a FINDING; G0 zero SCRIPT\
+    \ ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process exit status checked,\
+    \ because this project has a stochastic use-after-free that leaves a completely clean log with a signal-11\
+    \ exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok, lightstate\
+    \ 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce 12/12); and\
+    \ the recent work must keep holding.\n"
   comments: []
