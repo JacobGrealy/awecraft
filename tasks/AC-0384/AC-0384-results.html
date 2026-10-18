@@ -3244,5 +3244,561 @@ The capture-script snap-skip check and the relative-path snap failure were fixed
 the first 10-run attempt was scrapped because <code>SNAP FAILED</code> does not flip the exit code; file existence is
 the only reliable check).</div>
 
+<h2>28. ROUND 23 (2026-10-11) &mdash; the space view, LOOKED AT: an honest visual judgement after the AC-0411/AC-0415/0416/0417 run</h2>
+
+<p class="meta">ASSESSMENT RUN &mdash; no behaviour was changed; no game code touched (fences held). This section
+exists because the user, who has been flying these builds, said of the orbital view: <em>&ldquo;how can you think
+where you left the space stuff is acceptable&rdquo;</em> &mdash; after several rounds in which the coordinator declared
+the space view fixed on the strength of measurements (disc-centre colour cyan&rarr;green, generator hash identical,
+height probe zero mismatch). The job here was to supply the judgement those numbers cannot: fifteen fresh frames on
+the CURRENT build, all of them looked at directly, with pixel evidence for every claim. The previous assessments
+(&sect;25 r19, &sect;26 r21, &sect;27 r21-late) all assessed the <em>tangent</em> framing only &mdash; nobody had looked at the
+head-on (nadir) view since the winding fix, and that is where the view fails.</p>
+
+<h3>28.1 What was captured, how, and the one recipe deviation</h3>
+<p>Tree: HEAD <code>98a74e0</code> (AC-0417 closed) &mdash; carries the AC-0411 winding fix (<code>2196943</code>) +
+<code>u_srgb_pre</code>, AC-0415 (far tier on the engine fog), AC-0416 (far tier follows curvature) and AC-0417
+(local-zenith sky, atmosphere height A=1200 m). AC-0412 (faceting/streaks) is OPEN. User&rsquo;s configuration
+asserted per log (<code>fog_far=332.0 render_edge=400.0</code>): R24 + FOG_PCT=83. Seed 44 (canonical, shipped
+res:// textures &mdash; no bake), 1280&times;720, Forward+ via lavapipe + Xvfb (boot line asserted every run),
+<code>AWECRAFT_CAM=planet</code>, frozen time + deterministic weather (TIME_FREEZE, CLOUD_T0=411200 &mdash; the
+&sect;22&ndash;24 reference state). <strong>Deviation, recorded:</strong> <code>AWECRAFT_SNAP_DRAIN=60</code> instead of
+600 &mdash; the standing measured R24 note (HARNESS &sect;2, 2026-10-11/AC-0417: llvmpipe at R24 ~0.2&ndash;0.5 FPS,
+a 120-frame drain timed out one measured 1200 s run; sky/body are settled once the body is LOADED, which the
+preset awaits). Fill-in stability was verified, not assumed: the <code>_s30</code> companions are byte-stable vs the
+finals (max diff 1&ndash;2/765 at 2600/1600/700) &mdash; the frames are settled states, not mid-streaming.
+Every run: rc=0, Forward+ boot line, fog-pin line, zero SCRIPT/SHADER ERROR lines, body phase LOADED (4),
+planet RESULT present. 13 planned runs + 2 decomposition A/Bs, all PASS, wall 44&ndash;86 s each (box was quiet &mdash;
+no soak running, unlike the 2026-10-11 measurement).</p>
+<table>
+<tr><th>frame</th><th>alt (true)</th><th>T</th><th>framing</th><th>purpose</th></tr>
+<tr><td><code>ac0384-r23-2600-day.png</code></td><td>2600 (2741)</td><td>0.5</td><td>tangent</td><td>daylit orbit</td></tr>
+<tr><td><code>ac0384-r23-2600-dusk.png</code></td><td>2600</td><td>0.75</td><td>tangent</td><td>terminator + dusk limb</td></tr>
+<tr><td><code>ac0384-r23-2600-night.png</code></td><td>2600</td><td>0.0</td><td>tangent</td><td>night planet</td></tr>
+<tr><td><code>ac0384-r23-1600-day.png</code></td><td>1600 (1741)</td><td>0.5</td><td>tangent</td><td>daylit orbit</td></tr>
+<tr><td><code>ac0384-r23-1600-dusk.png</code></td><td>1600</td><td>0.75</td><td>tangent</td><td>terminator</td></tr>
+<tr><td><code>ac0384-r23-1600-night.png</code></td><td>1600</td><td>0.0</td><td>tangent</td><td>night planet</td></tr>
+<tr><td><code>ac0384-r23-700-day.png</code></td><td>700 (841)</td><td>0.5</td><td>tangent</td><td>closer in, atmosphere resolving</td></tr>
+<tr><td><code>ac0384-r23-{2600,1600,700}-day-cloudsoff.png</code></td><td>each</td><td>0.5</td><td>tangent</td><td>weather vs planet separation</td></tr>
+<tr><td><code>ac0384-r23-2600-day-nadir.png</code></td><td>2600</td><td>0.5</td><td>nadir (head-on)</td><td>the approach view</td></tr>
+<tr><td><code>ac0384-r23-2600-day-edge.png</code></td><td>2600</td><td>0.5</td><td>tangent, CAM_OFF=3141,0</td><td>across a face boundary (home-pair edge)</td></tr>
+<tr><td><code>ac0384-r23-1600-day-off2.png</code></td><td>1600</td><td>0.5</td><td>tangent, CAM_OFF=1500,0</td><td>second place on the sphere</td></tr>
+<tr><td><code>ac0384-r23-2600-nadir-cloudsoff.png</code> / <code>…-nadir-bodyoff.png</code></td><td>2600</td><td>0.5</td><td>nadir</td><td>pale-wash decomposition A/B (body vs volume)</td></tr>
+</table>
+
+<h3>28.2 Verdict up front</h3>
+<div class="box bad"><strong>The orbital view is poor, and the &ldquo;fixed&rdquo; claims were premature.</strong> The
+winding fix (AC-0411) was real and is visible &mdash; the disc now shows the near-side cap&rsquo;s terrain (green
+land, white ice, tan sand, blue water) instead of the pale-cyan far-side wash, and the space sky is now clean black
+with stars (AC-0417). Those two things genuinely changed. But the planet still reads as a <em>coloured disc</em>,
+not a world: the head-on view &mdash; the framing a player approaching the planet actually has &mdash; is a pale
+low-contrast ball (76% of the disc area is a featureless pale wash, avg (212,243,238), mean saturation 0.143), the
+terrain everywhere is a flat pastel 2D map with <em>no relief and no shading</em>, the atmosphere is a <em>dark navy
+halo</em> rather than a bright limb glow, and the mid-altitude sky (700 m) is a hard-banded flat colour with a 341-step
+edge. Every one of these is invisible to the measurements that passed &mdash; disc-centre colour, generator hash and
+the height probe all pass on a flat pastel disc. The user&rsquo;s complaint is justified.</div>
+
+<h3>28.3 Does the planet read as a WORLD? No &mdash; it reads as a flat pastel map, half-washed</h3>
+<p><strong>The good half (and it is real):</strong> in the tangent framing, the textured half of the disc shows
+recognisable land and water. Measured on <code>ac0384-r23-2600-day.png</code>: the right disc box (850,500,r90)
+averages (104,176,91), saturation 0.65, 74.5% of pixels are saturated terrain; the lower-centre box (640,600,r150)
+is 79.8% textured. Continent-scale shapes are there, and the colours are plausible for the terrain beneath (green
+grass, white snow/ice, tan sand, blue water &mdash; the &ldquo;pale-blue disc&rdquo; of the AC-0390 era is gone:
+that was the inside-out far side at haz=1, and it is fixed).</p>
+<p><strong>The bad half:</strong> there is no <em>world</em>. The terrain is a flat 2D colour map &mdash; no relief,
+no light modulation, no sense of mountains or valleys. The 4&times;/high-pass zooms
+(<code>.scratch/AC-0384-r23/zoom-1600-green.png</code>, <code>zoom-2600-green.png</code>, <code>zoom-1600-palewash.png</code>)
+show hard-edged flat colour patches (pure white (255,255,221&ndash;255) blobs, flat green, flat blue lakes) with a
+fine speckle grain and faint wavy contours &mdash; it looks like a zoomed-in map, not a planet. Whatever the
+underlying height field is, the body&rsquo;s bake carries no shading of it. <em>Relief you can see the shape of:
+none.</em> That is the axis the user&rsquo;s reference (NMS) is judged on, and it fails.</p>
+<p><strong>And a large pale wash dominates the disc.</strong> The spawn region is an ice/snow biome &mdash; ground
+truth: <code>ac0384-r21-descent-120.png</code> shows blocky ice, blue ponds and a farm directly below the camera &mdash;
+so the paleness is <em>partly real terrain</em>. But the bake renders that ice as a featureless smooth wash (no
+blocks, no ponds, no farm visible from orbit), and the limb-haze term (haz_a, (1&minus;cosv)&sup2; mixed toward
+u_air) adds a broad desaturation toward the limb on top. Measured: <code>ac0384-r23-1600-day.png</code> left-disc
+box (350,550,r120) is 70.2% pale (218,247,245), only 14.7% textured; the head-on <code>ac0384-r23-2600-day-nadir.png</code>
+disc (r&lt;330) is <strong>76.0% pale, 15.9% textured</strong>, average (212,243,238), mean saturation 0.143 &mdash;
+a pale mint ball with a green crescent at one edge. From the head-on view &mdash; the view of a planet you are about
+to land on &mdash; this is a coloured disc, full stop.</p>
+
+<h3>28.4 Faceting and vertical streaks (the open AC-0412 ticket) &mdash; NOT reproduced in the current build</h3>
+<p>The r19 assessment recorded &ldquo;sixteen-metre faceting and vertical streaks&rdquo;; r21 re-confirmed it;
+AC-0412 was filed on that basis. <strong>Both r19 and r21 predate the winding fix &mdash; i.e. they assessed the
+inside-out state, and nobody has checked for the streaks/faceting on the fixed mesh.</strong> This round did, with
+4&times; nearest-neighbour + high-pass zooms across the green disc at 1600 m, 2600 m, the face-boundary position and
+the nadir crescent: <strong>no regular 16 m grid and no vertical streaks are present</strong> &mdash; the texture is
+smooth, with low-frequency blotchy grain instead (the high-pass <code>zoom-1600-green-hp.png</code> shows soft
+stipple and a few faint contour lines; nothing periodic). The r19 streaks are clearly visible when the old frame is
+zoomed (<code>.scratch/AC-0384-r23/zoom-r19-2600-rim.png</code>: dark vertical striations spaced ~5&ndash;10 px) &mdash;
+they appear to have been tied to the inverted-mesh state (or its sampling), and they are gone with the fix.
+<strong>AC-0412&rsquo;s premise should be re-validated before any fix work is started</strong>: what remains of
+D-26-3 is not faceting or streaks but the flat pastel map character of &sect;28.3 (hard patch edges, speckle grain,
+no relief, low contrast) &mdash; a real, visible, load-bearing defect, just a differently-shaped one.</p>
+
+<h3>28.5 The atmosphere and the limb &mdash; a dark navy halo, not a glow</h3>
+<p>Measured on <code>ac0384-r23-2600-day.png</code>, vertical profile at x=640 from space down to the disc:
+<strong>212 px of pure black (0,0,0)</strong> &rarr; a 16 px transition &rarr; <strong>~80 px of flat (0,34,56)</strong>
+(a dark-navy plateau with <em>zero</em> gradient) &rarr; 12 px of bright cyan (86,209,247) &rarr; a hard 231-step into
+green terrain (75,163,69). The <code>cloudsoff</code> A/B is decisive: with the deck hidden the cyan band vanishes
+entirely and the profile is green disc edge &rarr; hard 214-step &rarr; the same flat (0,34,56) band &rarr; black.
+So:</p>
+<ul>
+<li><strong>The bright rim the player perceives is the CLOUD DECK</strong> (washed toward u_air at the limb,
+AC-0417 addendum 2) &mdash; neon cyan, a hard-edged 12 px band. The atmosphere itself contributes a <em>dark</em>
+navy (0,34,56) &mdash; only ~22% above the black sky on the blue channel, clamped flat from the disc edge out to the
+R+A shell (~12&deg; wide at 2600 m), with a soft ~24 px outer edge. That is a dark halo, not a limb glow: the
+AC-0400-era &ldquo;single-air-colour atmosphere&rdquo; renders as a step-function navy disc. A natural atmosphere
+(read: NMS) is a thin bright limb that decays smoothly; this is the opposite shape &mdash; a wide flat dark band with
+a hard inner edge. The A-shell dome edge (the soft arc ~12&deg; above the disc edge) also reads as a faint <em>second
+edge</em> in the sky &mdash; a double-limb effect.</li>
+<li>When clouds are thin or absent, the planet&rsquo;s silhouette against space is the hard green disc edge with a
+faint dark halo &mdash; <em>no bright limb at all</em>.</li>
+</ul>
+
+<h3>28.6 The sky in space: black and clean &mdash; but banded at the transition altitude, and the stars are sparse</h3>
+<ul>
+<li><strong>True space (both judgement altitudes, true 1741/2741 m &mdash; above A=1200):</strong> clean. 2600 m:
+pure (0,0,0) black; 1600 m: (0,0,0) with u_space 0.92. The AC-0402 &ldquo;blue dome&rdquo; wash is gone above the
+atmosphere height. No haze where there should not be. <span class="ok">Sky verdict: pass.</span></li>
+<li><strong>Stars: visible but sparse and dim.</strong> In the 2600 m sky band above the dome, 3 sampled pixels exceed
+luminance 25 (&asymp;12 at full resolution); the night frames carry a few dozen faint points across the whole sky
+region (2600-night: 11 sampled &gt;25 over a 1180&times;290 box). Stars exist and are seen, but the field is
+scatter-shot, not a starfield.</li>
+<li><strong>700 m (the &ldquo;atmosphere resolving&rdquo; altitude, true 841):</strong> the sky is hard-banded &mdash;
+profile at x=640: 32 px of (0,5,17) space &rarr; a <strong>341-step in ~8 px</strong> &rarr; ~240 px of flat
+(60,137,166) teal &rarr; a pale (159,201,214) band at the disc edge. A straight-line colour boundary in the sky &mdash;
+an artifact-shaped edge, not a smooth atmospheric gradient. Faint stars also show <em>through</em> the teal band
+(star opacity 0.65 mid-transition) &mdash; stars do not shine through atmosphere; minor physicality nit.</li>
+<li><strong>Dusk (T=0.75):</strong> the terminator reads well &mdash; lit teal side, dark night side, the limb glow
+present on the sun side and gone on the night side (designed &ldquo;die at night&rdquo;), black sky. <strong>Night
+(T=0.0):</strong> the disc is near-pitch-black &mdash; (640,500) measures (0,0,0) with only faint dark patches visible;
+the night floor (0.18) is too low to survive ACES at 8 bit. The night planet reads as a shadow against the stars:
+no city lights, no moonlit limb (neither exists in this game &mdash; a look gap, not a bug).</li>
+</ul>
+
+<h3>28.7 Two different places on the sphere &mdash; consistent; one 1 px seam at the spawn nadir</h3>
+<p>The face-boundary frame (<code>ac0384-r23-2600-day-edge.png</code>, CAM_OFF=3141,0 &mdash; the camera radial rides
+the home-pair edge, the body&rsquo;s 0/1|2&ndash;11 chart seam region) and the mid-offset frame
+(<code>ac0384-r23-1600-day-off2.png</code>, CAM_OFF=1500,0) both show the same world character as the spawn region
+&mdash; green land, white, tan, blue, same haze/dome/ring structure. <strong>No curvature or orientation artifact
+appears away from the reference point</strong>: the flat pastel character is global (it is the bake, not a
+face-boundary defect), and no seam line is visible in either offset frame. One exception, found by row-mean scan:
+at the <em>spawn</em> nadir (the 0/1 chart seam passes within ~9 m of the spawn) there is a 1-row dip,
+&Delta;&asymp;7/765 over 200 px, at the frame centre of <code>ac0384-r23-2600-nadir-cloudsoff.png</code> &mdash; a
+faint chart-seam line, visible only in head-on framing. Cosmetic.</p>
+
+<h3>28.8 Why the measurements said &ldquo;fixed&rdquo; and the view still fails</h3>
+<ul>
+<li><strong>Disc-centre colour cyan&rarr;green (AC-0411):</strong> true &mdash; but the acceptance sample box
+((640,575) in the <em>tangent</em> framing) sits ~25&deg; from the <em>true</em> nadir. The true-nadir (head-on) view
+&mdash; the one a player approaching the planet has &mdash; was never in any acceptance box, and it is a 76%-pale
+disc (&sect;28.3). The fix is real; the acceptance geometry simply cannot see the nadir.</li>
+<li><strong>Generator hash identical / height probe zero mismatch:</strong> true, and both measure world
+<em>generation</em> &mdash; they say nothing about the bake&rsquo;s shading, the haze terms, the sky&rsquo;s limb shape
+or the volume&rsquo;s nadir response. They were never instruments for &ldquo;does the view look like a world&rdquo;.</li>
+<li><strong>&sect;27&rsquo;s &ldquo;clean ladder, close to target&rdquo;:</strong> correct for the <em>tangent</em>
+ladder experience (and it is genuinely good &mdash; the handover is seamless, no artifacts). But rounds 19/21/23 all
+assessed the tangent framing; the head-on view, the dark navy dome and the banded 700 m sky were out of frame of
+every acceptance criterion. &ldquo;The space view is fixed&rdquo; was, on the evidence, premature.</li>
+</ul>
+
+<h3>28.9 What it would take to make it good &mdash; load-bearing vs cosmetic, in tackle order</h3>
+<ol>
+<li><strong>(Load-bearing) The head-on / nadir view &mdash; the &ldquo;pale ball&rdquo;.</strong> Two independent
+contributors, decomposed by the A/B frames: (a) the <em>cloud volume&rsquo;s</em> full-column nadir response &mdash;
+<code>ac0384-r23-2600-nadir-bodyoff.png</code> shows the volume alone as a saturated neon-cyan mottled disc
+(avg (28,127,165), sat 0.881): a chord-length-aware accumulation cap (or a saturation cap on the in-scatter) is
+needed so a 350 m full column does not erase the surface; (b) the <em>bake&rsquo;s</em> character over the spawn ice
+biome &mdash; farm-scale detail is lost at 1024&sup2;/face (6.1 m/px): a finer bake or relief-modulated shading in the
+body shader. Until this is addressed, the approach view &mdash; the money shot &mdash; is a pale mint ball.</li>
+<li><strong>(Load-bearing) The sky&rsquo;s limb shape.</strong> Replace the clamped full-strength navy interior
+(&sect;28.5: flat (0,34,56) from disc edge to R+A) with a smoothly decaying glow concentrated at the limb, and
+re-tune the deck&rsquo;s limb wash &mdash; the neon cyan (86,209,247) ring is more saturated than the deck seen from
+below (soft white-grey in the 120 m frame). This is the difference between &ldquo;dark halo&rdquo; and
+&ldquo;atmosphere&rdquo;.</li>
+<li><strong>(Load-bearing for the mid-altitude band) The 300&ndash;1200 m transition.</strong> The 700 m sky is a
+341-step flat teal; smooth the cone/limb blend into a gradient, and gate star opacity below A so stars do not shine
+through air (&sect;28.6).</li>
+<li><strong>(AC-0412, re-baselined) The bake character.</strong> Re-validate the ticket&rsquo;s premise first: the
+16 m faceting and vertical streaks do not reproduce on the post-fix mesh (&sect;28.4) and were likely specific to the
+inside-out state. What remains &mdash; flat pastel map, hard patch edges, speckle grain, no relief, low contrast
+(&sect;28.3) &mdash; is real and is the same D-26-3 family; the fix is relief shading / contrast / finer sampling in
+the bake or the body shader. Note the standing budget: the body is part of a build running 2&ndash;5 FPS on the
+test box, so a finer bake&rsquo;s load cost must be measured.</li>
+<li><strong>(Cosmetic) Night disc visibility</strong> (night floor 0.18 dies in ACES &mdash; raise it or add a
+moonlit limb; scope decision, not a bug), <strong>the 1 px chart-seam dip at the spawn nadir</strong> (&Delta;7/765,
+head-on only), <strong>the sparse starfield</strong> (density, not opacity), and <strong>ice hue</strong> &mdash; the
+body&rsquo;s ice renders mint-white where the live ice is blue-white (subtle).</li>
+</ol>
+
+<div class="box"><strong>Provenance.</strong> 15 frames, all rendered from working tree HEAD <code>98a74e0</code>
+(plus another session&rsquo;s fence-locked, render-neutral hunks in <code>main.gd</code>/<code>game.gd</code>/
+<code>drop.gd</code>/<code>debug.gd</code> &mdash; untouched) on Forward+/lavapipe, user config R24/F83 asserted per
+log, seed 44, T frozen, CLOUD_T0=411200, 1280&times;720, drain 60 (measured R24 note) + s30 companions. All 15 runs
+rc=0, Forward+ boot line, fog_far=332.0 render_edge=400.0, zero SCRIPT/SHADER ERROR, body phase LOADED. Captures in
+<code>tasks/AC-0384/ac0384-r23-*.png</code>; logs and zoom crops in <code>.scratch/AC-0384-r23/</code>. No game code
+edited; no commits; no TASKS.yaml edits. This section is a judgement &mdash; it changes no behaviour and closes no
+ticket; AC-0412 remains open pending the re-baselining of &sect;28.4.</div>
+
+<h2>29. ROUND 24 (2026-10-16) &mdash; whole-experience judgement: ground level, the ladder, orbit, day and night, after 39 commits of rebuild</h2>
+
+<p>Since the round-23 assessment (HEAD <code>98a74e0</code>) the experience changed substantially: the sky was rebuilt
+around the local zenith (AC-0419), the five sky bottom edges were removed so that in space the planet is the only
+horizon (AC-0429), the sky&ndash;space transition rate is uniform (AC-0428), the planet is opaque with far-side clouds
+gone (AC-0428), chunk seams were closed (AC-0420/0423/0427/0430), the atlas row that made grass sample lava was
+fixed (AC-0430), the lighting floor was lifted so unlit faces are shaded not black (AC-0432, <code>ambient_sky</code>
+ON), cloud cover now varies across the globe (AC-0435, <code>cloud_gate</code> ON), and the four fixes that shipped
+switched OFF &mdash; <code>ambient_sky</code>, <code>cloud_gate</code>, <code>viewmodel_occlude</code>,
+<code>no_sky_floor</code> &mdash; are all ON at HEAD. This round captured the whole experience at the user&rsquo;s
+configuration (radius 24, fog full at 332 m): the ground level (barely examined before), the descent and takeoff
+ladder at 2600/1600/700/300/120 m, orbit with the far side checked for bleed-through, the sky at each altitude
+including below the local horizon, and daylight and night.</p>
+
+<h3>29.0 Method and provenance</h3>
+<div class="box">
+<strong>27 runs, all PASS</strong> (rc=0, Forward+/lavapipe boot line, <code>fog_far=332.0 render_edge=400.0</code>
+asserted per log, 0 SCRIPT/SHADER ERROR, SNAP line + file present for every shot). Working tree was DIRTY (another
+session&rsquo;s fence-locked hunks in <code>main.gd</code>/<code>game.gd</code>/<code>drop.gd</code>/<code>debug.gd</code>
+plus this page&rsquo;s own uncommitted &sect;28), so per the round rule <strong>every frame renders from a clean
+<code>git archive HEAD</code> of commit <code>56c9095</code></strong> (AC-0435 closed) at
+<code>.scratch/AC-0384-r24/wt</code>, with <code>godot/bin/libchunkio.so</code> copied from the main tree (rebuilt
+00:42 today from a C++ state identical to HEAD). <strong>No frame contains uncommitted code.</strong> The uncommitted
+<code>SNAP FAIL</code> loud-fail diagnostic is therefore not in the render tree &mdash; file-existence checking was
+the pass criterion (all present). Seed 44, T frozen, CLOUD_T0=411200, 1280&times;720. <strong>Recipe deviation:</strong>
+<code>AWECRAFT_SNAP_DRAIN</code> 120 (orbit/nadir/horizon) / 600 (ground) instead of 600 &mdash; 600 times out the
+1200 s wall at R24 (&sect;28.1&rsquo;s measured 0.2&ndash;0.5 FPS); three ladder frames were re-run at drain 1200
+(no drain warning = fully quiet world) and are the settled versions for judgement:
+<code>ac0384-r24-120-day-rerun.png</code>, <code>ac0384-r24-300-day-rerun.png</code>,
+<code>ac0384-r24-120-night-rerun.png</code>. Companion stability: s60/s900 vs finals = 0 pixels &gt;12 (byte hashes
+differ, sub-threshold; visually settled). Takeoff ladder = the same five stills read in reverse (frozen-flight stills
+carry no direction; &sect;25/&sect;26 precedent).</div>
+
+<h3>29.1 What is fixed since round 23 (the worst-list, with evidence)</h3>
+<ol>
+<li><strong>The nadir pale ball: FIXED.</strong> <code>ac0384-r24-nadir-2600-day.png</code> &mdash; disc average
+(116,179,150) vs r23&rsquo;s (176,214,216); pale fraction 0.228 vs 0.588 &mdash; 61% fewer pale pixels. The disc is
+now a fully textured map: green biome centre, white/sand patches, blue ponds, ice ring near the limb, grouped clouds
+with clear gaps.</li>
+<li><strong>The five bottom edges: GONE.</strong> Same frame: every corner outside the disc is pure (0,0,0) &mdash;
+below the local horizon is space. No air floor, no tint, no seam (AC-0429 verified).</li>
+<li><strong>The navy halo plateau: GONE.</strong> <code>ac0384-r24-2600-day.png</code> &mdash; halo profile: outer
+(0,5,18) black &rarr; glow peak (55,166,204) &rarr; smooth decay. No flat navy band; the glow hugs the limb
+(r23&rsquo;s (0,34,56) plateau is black).</li>
+<li><strong>The 700 m hard-banded teal sky: GONE.</strong> <code>ac0384-r24-700-day.png</code> &mdash; the sky above
+the limb is space (pure black at y=60/150, (2,5,8) at y=280) with a smooth haze band hugging the limb; 8 steps&gt;8
+vs r23&rsquo;s 9/148 &mdash; the 341-step edge is gone.</li>
+<li><strong>Far-side bleed: none.</strong> <code>ac0384-r24-nadir-2600-off.png</code> (1500 m off the spawn radial)
+and the spawn nadir: the planet is opaque at both positions &mdash; no far-side terrain or clouds show through
+(AC-0428 verified).</li>
+<li><strong>Sky banding at 300 m: gone.</strong> <code>ac0384-r24-300-day.png</code> &mdash; smooth azure gradient
+(126,220,252)&rarr;(181,238,253)&rarr;(154,215,231); 10 steps over 300 rows.</li>
+<li><strong>Cloud cover varies across the globe.</strong> The gate produces cloud groups with clear gaps at both
+nadir positions; <code>ac0384-r24-nadir-2600-cloudsoff.png</code> isolates the clouds as a separable overlay over a
+complete terrain disc; the spawn sits in a clear-ish region at this T0 (r19/r21 had a thick deck at the same
+T0).</li>
+<li><strong>The held-item viewmodel: present at ground level.</strong> <code>ac0384-r24-ground-held-day.png</code> &mdash;
+wooden pickaxe in hand with the occlusion test ON (AC-0394/AC-0435); the AC-0421 suppression is only at/above the
+atmosphere height.</li>
+</ol>
+
+<h3>29.2 What already reads triple-A (specifics, per the brief)</h3>
+<ul>
+<li><strong>Ground level reads as a world.</strong> <code>ac0384-r24-ground-west-day.png</code> is the round&rsquo;s
+strongest frame: saturated grass, clean dirt-layer steps, canopies with real depth against trunks, red flower patches,
+a pig and sheep, a soft low cloud bank left, the crop farm hazed in the mid distance &mdash; one coherent landscape
+with depth. <code>ground-horizon-day</code> adds the crisp spawn biome; <code>ground-held-day</code> the micro-texture
+and soft shadow blobs. The lighting floor lift (AC-0432) shows directly: no black faces under canopies &mdash; bark
+and grass carry shade colour, not black.</li>
+<li><strong>The day sky reads as atmosphere, then space.</strong> Smooth gradient at 300 and 120 m, no banding; the
+zenith shows a sun core + soft halo with no floor seam under the dome (<code>ground-up-day</code>); the
+700&rarr;300 transition is space &rarr; haze &rarr; blue with no hard edge anywhere on the ladder.</li>
+<li><strong>Day orbit reads as a planet in space.</strong> <code>nadir-2600-day</code>/<code>-off</code>: textured
+disc, cloud overlay, limb glow decaying to black; clean star field outside the disc.
+<code>ac0384-r24-nadir-2600-dusk.png</code> is the round&rsquo;s most NMS-like frame: a soft, broad day/night
+terminator crossing a teal-tinted day side, the day limb glowing cyan, the night side falling to black.</li>
+<li><strong>Weather reads as weather.</strong> Cloud groups with clear gaps at both nadir positions (not a uniform
+sheet); the ground frames show a soft volumetric deck; the 300-day horizon band reads as a distant cloud layer.</li>
+<li><strong>The interface reads as a product, not a debug tool.</strong> Hotbar with selected slot + counts + held
+viewmodel (<code>ground-held-day</code>); the inventory panel (<code>ui-inventory</code>): crisp item icons, counts,
+equipment column, 2&times;2 craft with auto-filled result, a &ldquo;Craftable&rdquo; list with icons; the main menu
+(<code>ui-menu</code>): title, seed field, world slots with proper disabled states, options, and a control-hint
+footer.</li>
+</ul>
+
+<h3>29.3 Remaining differences, ranked (frame + evidence each)</h3>
+<ol>
+<li><strong>Night is a near-black void at every altitude &mdash; the largest gap.</strong>
+<code>ground-horizon-night</code>: the day-green terrain is pure black; only a tree silhouette, a white sheep and a
+few dark-red flower dots survive, and the HUD&rsquo;s red stat rows are the brightest objects in the frame.
+<code>2600-night</code>/<code>nadir-2600-night</code>: the night planet is a faint grey/tan mottle on black, no limb.
+<code>120-night-rerun</code>: the farm is a dim tan block, the rest black. <code>horizon-300-night</code>: black +
+a faint blue horizon haze. Cause: the 0.18 light floor dies in ACES at 8-bit + no moon. Standing since r23 and
+bit-identical through AC-0432 by construction &mdash; not broken this round, but NMS and triple-A both have a
+readable moonlit night.</li>
+<li><strong>A 1&ndash;2 px chart-seam line crosses the spawn nadir disc.</strong>
+<code>nadir-2600-day</code> + <code>nadir-2600-cloudsoff</code>: rows 357&ndash;358 carry 254 points &Delta;&ge;6
+(mean &Delta;68) &mdash; a continuous line across green and ice, visible from 2600 m orbit. More prominent on the
+now-saturated disc than r23&rsquo;s &Delta;7.</li>
+<li><strong>Sparse stars.</strong> <code>2600-night</code>: 111 bright pixels total &asymp; 20&ndash;30 individual
+stars in the whole orbit frame; <code>ground-up-night</code>: sparse. The sky reads empty.</li>
+<li><strong>A per-chunk lighting square on flat grass.</strong> <code>ground-down-day</code>: one 16&times;16 cell
+renders distinctly darker than its neighbours with sharp 16 m chunk boundaries (3&times; crop
+<code>.scratch/AC-0384-r24/zchunk-dark.png</code>). This is AC-0420&rsquo;s own diagnosis &mdash; &ldquo;the seams
+are lighting, and the choice is a look decision&rdquo; &mdash; left unchosen, now visible at eye level.</li>
+<li><strong>Cloud-deck banding/moir&eacute; at oblique distance.</strong> Parallel stripes across the deck in
+<code>120-day-rerun</code> (upper-left) and the <code>300-day</code>/<code>horizon-300-day</code> horizon cloud
+band (left mass).</li>
+<li><strong>Interface polish gaps.</strong> No crosshair exists in the code at all; the two stat rows are visually
+identical (health vs hunger indistinguishable); the inventory has no world dimming behind the panel; the menu is
+flat black with an &ldquo;AweCraft[dev]&rdquo; version string and a &ldquo;Test Range&rdquo; dev button. Functional
+and tidy, one polish step short of product.</li>
+<li><strong>One unattributed dark patch.</strong> <code>ground-west-day</code> right horizon: a flat warm-dark region
+&asymp;(30,27,23), &asymp;100&times;30 px, behind a sheep &mdash; candidate: light-floor blackened faces
+(AC-0432 family) or shadowed terrain. Small, partly occluded; flagged for follow-up.</li>
+</ol>
+
+<h3>29.4 Design decisions (their own category &mdash; not defects)</h3>
+<ul>
+<li><strong>Planet radius 4000 m is the user&rsquo;s</strong> (the CONTINUITY r26 horizon-scale lock) &mdash; the
+horizon at ~1 km at 120 m and the obvious curvature are the decision, not a fault; the NMS near-flat feel is a
+radius change with its save/W-R-lock/flight-band cost.</li>
+<li><strong>Atmosphere height A=1200 m</strong> &mdash; the day sky is space-dominant by 700&ndash;841 m
+(S=0.65 at 841 m): a fast sky&rarr;space ramp, as configured.</li>
+<li><strong>Fog full at 332 m (the user&rsquo;s F83) + the 128 m full-LOD band</strong> (taxi &le; 8 chunks,
+<code>_lod_tier_of</code>) &mdash; at 120&ndash;300 m altitude the whole ground sits inside the fog wall and the
+average-LOD tiers, so those frames are fog-dominated (300-day-rerun). The near ground at eye level is crisp; the
+setting behaves as configured.</li>
+<li><strong>The cloud gate makes the spawn a clear-ish region at this T0</strong> (vs the r19/r21 thick deck at the
+same T0) &mdash; a weather distribution, not a weather loss.</li>
+</ul>
+
+<h3>29.5 Verdict &mdash; is it close to target?</h3>
+<div class="box"><strong>The day experience is close to target. The night experience is not.</strong> At ground
+level, in the day sky, and in day orbit, the world now reads as one coherent place with a real
+atmosphere&rarr;space transition: <code>ground-west-day</code>, <code>ground-horizon-day</code>,
+<code>ground-held-day</code>, <code>300-day</code>, <code>700-day</code>, <code>1600-day</code>,
+<code>2600-day</code>, <code>nadir-2600-day</code>/<code>-off</code> and <code>nadir-2600-dusk</code> support that
+directly, and every item on the round-23 worst-list (pale ball, navy plateau, hard-banded sky, far-side bleed,
+bottom edges) is fixed with measured evidence (&sect;29.1). What stands between the whole experience and the target
+is (1) the night &mdash; near-black at every altitude, no moon, sparse stars: the single largest gap, standing since
+r23; (2) small standing artifacts &mdash; the nadir chart-seam line, the per-chunk lighting square, the cloud-deck
+banding; (3) interface polish (crosshair, stat-row distinction, world dimming, menu art). The 120&ndash;300 m
+ladder frames read milky under the user&rsquo;s F83 fog &mdash; configuration, not defect. In short: the day world
+arrived; the night world still needs to be built.</div>
+
+<div class="box"><strong>Provenance.</strong> 27 runs (23 capture set + 1 clouds-off A/B at 120 m + 3 settled re-runs
+at drain 1200), all rendered from the clean archive of HEAD <code>56c9095</code> &mdash; no frame contains
+uncommitted code. Forward+/lavapipe, user config R24/F83 asserted per log, seed 44, T frozen, CLOUD_T0=411200,
+1280&times;720. Captures in <code>tasks/AC-0384/ac0384-r24-*.png</code>; per-run logs, zoom crops and
+<code>analyze.py</code> in <code>.scratch/AC-0384-r24/</code>. No game code edited; no commits; no TASKS.yaml
+edits. This section is a judgement &mdash; it changes no behaviour and closes no ticket.</div>
+
+<h2>30. ROUND 25 (2026-10-18) &mdash; whole-experience judgement: the rebuilt night, the streaming edge, and whether the world is close to target</h2>
+
+<p>Since the round-24 assessment (HEAD <code>56c9095</code>) the experience changed on every front r24 flagged: night was
+rebuilt around a real moon that rises as the sun sets (AC-0436), the sky space decision was re-keyed from where the sky
+mixes to where the player actually is &mdash; inside the atmosphere, below the local horizon is air, not black
+(AC-0439), cloud sampling gained per-pixel jitter (AC-0441), the far LOD band got the ambient lift it never had
+(AC-0443), the aim cursor became a wireframe reticle (AC-0440), the interface gained a crosshair, named stat rows,
+inventory dimming and a shipped-build gate for the test range (AC-0437), and world streaming became column-atomic
+&mdash; one build pick is one entire column (AC-0445). This round captured the whole experience again at the user&rsquo;s
+configuration (radius 24, fog full at 332 m) <strong>and added the question r24 never asked: what does the streaming
+edge itself look like</strong> &mdash; the walk/fly toward unloaded world, columns as complete towers, fade vs visible
+happening, holes, floating fragments, half-built structures &mdash; plus the descent/takeoff ladder, orbit with
+far-side bleed checked, the sky at each altitude including below the local horizon inside <em>and</em> outside the
+atmosphere (the case that got wrong twice), and daylight and night.</p>
+
+<h3>30.0 Method and provenance</h3>
+<div class="box">
+<strong>41 runs, all PASS</strong> (rc=0, Forward+/lavapipe boot line, <code>fog_far=332.0 render_edge=400.0</code>
+asserted per log, 0 SCRIPT/SHADER ERROR, SNAP line + file present for every shot; the menu shot skips world boot by
+design). Working tree was DIRTY (another session&rsquo;s work, as expected), so per the round rule <strong>every
+ship-set frame renders from a clean <code>git archive</code> of commit
+<code>60f4d3e27b72a2c89aa7e1b53237baa0895426ab</code></strong> (AC-0445 closed) at
+<code>.scratch/AC-0384-r25/wt</code>, with <code>godot/bin/libchunkio.so</code> copied from the main tree (built
+02:58 from a C++ state identical to HEAD; zero gdext commits since r24). <strong>No ship-set frame contains
+uncommitted code.</strong> Seed 44, T frozen, CLOUD_T0=411200, 1280&times;720. G0 on the clean archive: rc=0,
+0 SCRIPT / 0 SHADER ERROR after <code>--import</code>.
+<br><br>
+<strong>Provenance findings carried into this round.</strong> (a) The four AC-0445 fade-variant shaders
+(<code>chunk_lit_{opaque,cutout,flower,fluid}_fade.gdshader</code>) are <strong>untracked at
+<code>60f4d3e</code></strong>: in the shipping tree <code>_fade_material</code> <code>load()</code>s null and returns
+null, so the first-enable column fade is a <strong>silent no-op</strong> &mdash; columns appear whole, with no fade.
+AC-0445&rsquo;s &ldquo;fade 102/102&rdquo; evidence was measured on the dirty tree. The two
+<code>ac0384-r25-fade-*</code> frames and four <code>ac0384-r25-nofog-fade-*</code> frames come from the archive
+<strong>plus</strong> those four uncommitted shaders &mdash; explicitly <em>not what ships</em>; they are the A/B
+supplement showing what the uncommitted fade would look like. (b) Four <code>ac0384-r25-nofog-*</code> runs use
+<code>AWECRAFT_NO_FOG=1</code> (shipping tree) as a dev diagnostic to expose the raw streaming edge the user&rsquo;s
+fog would mask; the body&rsquo;s fog-wall bridge (<code>op = smoothstep(fog_far, render_edge, d)</code>, i.e. a partial
+opacity band across [332, 400] m) is designed to blend <em>into</em> the fog, so the NO_FOG view reads it as a pale
+haz wash &mdash; a diagnostic artifact, not the shipped look. (c) Drains: 30/90/240/600 for ground-eye runs, 450 with
+<code>SNAP_STEPS=60,150,300,450</code> for the 120 m streaming sequence, 120 for orbit/nadir/horizon &mdash; the r24
+proven values; all CHECK lines green with no timeout.
+</div>
+
+<h3>30.1 The baseline: all seven r24 findings re-verified in frames</h3>
+<table>
+<tr><th>r24 finding</th><th>r25 verdict</th><th>frame evidence</th></tr>
+<tr><td><strong>1. Night = near-black void</strong> (largest gap, &rarr; AC-0436)</td>
+<td><strong>Fixed. Night now holds up.</strong></td>
+<td><code>ground-horizon-night</code>: foreground grass L 1.7&rarr;7.6 vs r24, ~9% of band pixels move out of the
+black bucket into L 20&ndash;39; terrain reads as dark green, the crop farm as warm tan, trees as rim-lit silhouettes,
+stars in the sky. <code>ground-up-night</code>: the moon reads as a moon &mdash; bright white-blue disc with a soft
+halo. <code>2600-night</code>: moonlit planet readable from orbit (biomes, ponds, snow). Residual: still on the dark
+end of the range &mdash; 76% of the ground-level night frame is L&lt;10 and side-facing faces go black (the
+top-lit-by-moon look is intentional); NMS&rsquo;s moonlit night is far more readable. See 30.4.</td></tr>
+<tr><td><strong>2. Chart-seam line across spawn nadir</strong> (rows 357&ndash;358, 254 pts &Delta;&ge;6 &rarr; AC-0438, open)</td>
+<td><strong>Still open at <code>60f4d3e</code>.</strong></td>
+<td><code>nadir-2600-day</code>: rows 355&ndash;362 across the disc carry 107&ndash;225 seam points (&Delta;&ge;18),
+max &Delta; up to 629; the faint cross is visible on the disc in day, night and dusk nadir frames alike.</td></tr>
+<tr><td><strong>3. Sparse stars</strong> (~20&ndash;30 at orbit &rarr; AC-0436 lift)</td>
+<td><strong>Improved.</strong></td>
+<td><code>2600-day</code>/<code>2600-night</code>: dozens of faint stars vs r24&rsquo;s ~20&ndash;30; stars also
+visible in the ground night views (sparse, faint) and in the mid-window sky frame.</td></tr>
+<tr><td><strong>4. Per-chunk lighting square on flat grass</strong> (&rarr; AC-0440: it was the 1 m aim cursor, fixed with wireframe)</td>
+<td><strong>Fixed.</strong></td>
+<td><code>ground-down-day</code>: the aim highlight is a thin black 1 m wireframe box + footprint rectangle that reads
+as a targeting reticle &mdash; no 28% black fill.</td></tr>
+<tr><td><strong>5. Cloud-deck banding/moir&eacute; oblique</strong> (&rarr; AC-0441 jitter)</td>
+<td><strong>Fixed.</strong></td>
+<td>Same 120-day upper-left crop: r24 = parallel horizontal lines across the cloud mass; r25 = smooth mottled grain,
+no line structure. The 300 m cloud-ceiling view (see 30.3) shows the same uncorrelated grain, no stripes.</td></tr>
+<tr><td><strong>6. Interface polish gaps</strong> (&rarr; AC-0437)</td>
+<td><strong>Verified present.</strong></td>
+<td>Crosshair = exactly 44 near-white pixels with a dark center pixel (1,8,0) &mdash; spec match. &ldquo;Hunger&rdquo;/
+&ldquo;Health&rdquo; captions visible in day and night frames. Inventory backdrop dimmed (0.45 alpha) in
+<code>ui-inventory</code>. Test Range visible in <code>ui-menu</code> &mdash; by design: <code>Build.ID</code> is
+&ldquo;dev&rdquo; in the tree under test. Note: the harness inventory shot leaves the boot menu open behind the
+inventory (harness state; the game boots to the main menu over the live world) &mdash; recorded, not a product defect.</td></tr>
+<tr><td><strong>7. Unattributed dark patch, ground-west right horizon</strong> (&#8776;(30,27,23) &rarr; AC-0443 far-tier lift)</td>
+<td><strong>Fixed.</strong></td>
+<td>Same region: r24 (29,73,30) with the core patch near (30,27,23) &rarr; r25 (83,145,128). The right edge of
+<code>ground-west-day</code> now reads as a layered tan rock cliff (the lifted far-band faces) instead of a flat dark
+hole. The residual 2.7&times; tier-seam step at the band boundary is structural (AC-0444 attribution unchanged).</td></tr>
+</table>
+
+<h3>30.2 The streaming edge &mdash; the new question</h3>
+<p><strong>Under the user&rsquo;s fog (the shipped configuration): the edge is not visible, and nothing reads as a
+machine building.</strong> Ground level: the world is complete by ~90 frames; <code>stream-ground-90</code> and
+<code>stream-ground-600</code> are identical except for mob positions &mdash; there is no arrival phase the player can
+see, because the 332 m fog wall sits inside the streaming boundary. At 120 m: <code>stream-120-steps</code> s60&rarr;
+s450 shows the farm&rsquo;s stepped structure emerging as a silhouette out of the milky fog and resolving
+(s150&rarr;final) &mdash; a soft, gradual emergence. No holes, no floating fragments, no half-built structures at any
+stage of any sequence.</p>
+<p><strong>NO_FOG diagnostics (dev knob, shipping tree): the world is complete to the horizon even 30 frames in.</strong>
+<code>nofog-ground-30</code> and <code>nofog-120-steps</code> show no missing region anywhere: the far LOD tiers and
+the body always fill the view, so the &ldquo;no-hole&rdquo; rule holds geometrically, not just through fog masking.
+The near-tier detail arrives as complete columns &mdash; no horizontal-slice popping, no partial towers, in 40+ frames
+across both altitudes and both trees. The one oddity &mdash; a pale green wash over the midground &mdash; is the body&rsquo;s
+[332, 400] m fog-wall bridge (its <code>op</code> partial-opacity band), which is designed to dissolve into the fog;
+without fog it reads as a pale haz wash. It is a diagnostic artifact of removing the fog, not a state the shipped
+configuration produces.</p>
+<p><strong>The fade (uncommitted at <code>60f4d3e</code>): imperceptible under any configuration, and absent from the
+shipping commit.</strong> The A/B pairs are byte-identical at the user&rsquo;s fog for every step
+(<code>fade-stream-120-steps_s60</code> == <code>stream-120-steps_s60</code>, and so on through s450); even NO_FOG at
+frame 30 differs by 25 pixels out of 384,000 &mdash; the initial build completes in well under half a second, inside
+the 350 ms fade window, so the fade (if shipped) would not register in stills or perceptibly. Consequence: the shipping
+experience is column-atomic arrival without fade, and at this user configuration that is observationally identical to
+the fade. The gap is documentary &mdash; the shipped commit does not do what AC-0445&rsquo;s closeout describes.</p>
+
+<h3>30.3 The sky at each altitude &mdash; inside, mid-window, outside</h3>
+<p>The AC-0439 re-key reproduces in all four acceptance positions, with the pushed uniforms logged per run:</p>
+<table>
+<tr><th>Position (radial)</th><th>Floor weight <code>u_space</code></th><th>Below the local horizon</th></tr>
+<tr><td>300 m (deep inside)</td><td>0.0</td><td>Air, continuous with the sky above &mdash; the 300 m horizon frame is a
+view from <em>inside</em> the cloud deck (the camera at 300 m sits within the 275&ndash;400 m shell): cloud ceiling with
+the layer-edge ring at ~30&deg; elevation, terrain through the gaps, sky beyond the edge. A legitimate altitude view;
+r24&rsquo;s 300-day showed the clear-view version &mdash; the deck is denser at spawn at this T.</td></tr>
+<tr><td>941 m (inside)</td><td>0.208</td><td><code>sky-inside-941-day</code>: below-horizon rows are bright cream air
+(0% black pixels, max single-row step 2) &mdash; no black, no step, no line; day and night
+(<code>sky-inside-941-night</code>: continuous dark teal, u_air (48,97,109)).</td></tr>
+<tr><td>1241 m (mid-window [1200,1500])</td><td>0.491</td><td><code>sky-mid-1241-day</code>: smooth blue&rarr;cream
+gradient through the horizon, stars in the space part above, no discontinuity.</td></tr>
+<tr><td>2141 m (outside)</td><td>1.0</td><td><code>sky-outside-2141-day</code>: below-horizon rows pure (0,0,0), max row
+step 1; the planet&rsquo;s limb is the only boundary. No air floor, no bottom edge.</td></tr>
+</table>
+<p>Orbit: 700/1600/2600 day frames read as atmosphere-then-space &mdash; clean gradient, cyan limb, textured planet,
+stars. The dark mottled band beyond the limb (the far-side cloud shell &mdash; the shell&rsquo;s back faces are drawn
+whenever the camera is outside the band, by the cull design in <code>cloud_layer.gdshader</code>) is <strong>pre-existing</strong>
+(r24&rsquo;s 2600-day has it too) and is now slightly more prominent after the AC-0436/0441 cloud work &mdash; recorded
+as a minor refinement item, not a regression. The pink-tinged mottling in the lower frame corners (near-side deck seen
+from above) is also present in r24.</p>
+
+<h3>30.4 What already works &mdash; specifically</h3>
+<ul>
+<li><strong>Ground level day reads as a world:</strong> <code>ground-horizon-day</code>/<code>ground-west-day</code> &mdash;
+crisp biome with flowers, trees, mobs, the crop farm, a layered rock cliff at the far band, a clean blue sky, and a
+product-grade interface (crosshair, named stat rows, hotbar, viewmodel, wireframe reticle). The r24 glowing-sphere
+anomaly does not reproduce at this commit in any of 40+ frames at the same framing and drain &mdash; recorded as a
+single-frame anomaly of the r24 set (it matches the user&rsquo;s own AC-0394 &ldquo;body eventually drawn&rdquo;
+symptom), not rankable without reproduction.</li>
+<li><strong>Night is a night, not the absence of day:</strong> moonlit terrain, a readable moon with halo, stars, a soft
+day/night terminator on the dusk planet (<code>nadir-2600-dusk</code>). The HUD is no longer the brightest object in
+the frame.</li>
+<li><strong>The sky is an atmosphere, then space:</strong> the below-horizon keying is correct in all four positions
+(30.3); the transition window is smooth; the planet is the only horizon outside the atmosphere.</li>
+<li><strong>The clouds read as weather:</strong> banded/moir&eacute; gone (30.1), soft mottled deck, grouped cover with
+gaps, and a legitimate from-inside-the-deck view at 300 m.</li>
+<li><strong>Streaming reads as a world arriving:</strong> no holes or fragments at any stage; detail emerges through the
+fog as whole columns; the far LOD + body keep the view complete to the horizon even mid-build.</li>
+<li><strong>The water reads as water:</strong> <code>ground-water-day</code> &mdash; calm blue-green with a visible
+waterline around the placed block.</li>
+</ul>
+
+<h3>30.5 Ranked remaining differences (most significant first)</h3>
+<ol>
+<li><strong>Night is still on the dark end of the range.</strong> <code>ground-horizon-night</code>: 76% of the
+ground-band pixels are still L&lt;10; side-facing faces go black (top-lit moon); the scene is readable up close and
+fades to near-black within ~50 m. NMS&rsquo;s moonlit night stays readable at distance. Frame:
+<code>ac0384-r25-ground-horizon-night.png</code> (histogram in 30.1 row 1).</li>
+<li><strong>Chart-seam line at the spawn nadir (AC-0438, open).</strong> ~107&ndash;225 seam points (&Delta;&ge;18) on
+rows 355&ndash;362, max &Delta; 629; faint cross visible on the disc in all three nadir times of day. Frame:
+<code>ac0384-r25-nadir-2600-day.png</code>.</li>
+<li><strong>Far-LOD tier-seam step over the horizon (AC-0444, structural).</strong> The far band reads as banded layers
+(<code>ground-west-day</code> right edge); after the AC-0443 lift the residual ~2.7&times; step at the tier boundary
+remains &mdash; the far LOD is a per-tier average surface and the step is in the model, not a bug in a shader.</li>
+<li><strong>The AC-0445 fade is not in the shipping commit.</strong> The four <code>chunk_lit_*_fade.gdshader</code>
+files are untracked at <code>60f4d3e</code>; <code>_fade_material</code> loads null and the fade is a silent no-op.
+Unobservable at this user configuration (A/B byte-identical), but the shipped behaviour diverges from what the closeout
+documented &mdash; the columns pop in whole without a fade. Frame evidence: the byte-identical A/B pairs in 30.2.</li>
+<li><strong>Far-side cloud band beyond the limb at orbit.</strong> Pre-existing by design (both shell faces drawn when
+the camera is outside), now slightly more prominent after AC-0436/0441; reads as a dark mottled smudge against space in
+<code>2600-day</code>, partially eroding the AC-0428 &ldquo;planet is the only horizon&rdquo; intent.</li>
+<li><strong>The moon&rsquo;s halo is a little strong</strong> &mdash; a broad blue glow (~200 px radius) around the disc
+in <code>ground-up-night</code>; sprite-like rather than atmospheric. Minor.</li>
+</ol>
+
+<h3>30.6 Deliberate design decisions (user&rsquo;s, not defects)</h3>
+<ul>
+<li><strong>Planet radius 4000 m</strong> &mdash; obvious curvature, ~1 km horizon at 120 m; the nadir and orbit frames
+are a small, intimate planet.</li>
+<li><strong>Fast atmosphere (A = 1200 m)</strong> &mdash; the sky is mostly space-color by ~1500 m; at 941 m the sky
+blend is already w&asymp;0.8.</li>
+<li><strong>Fog full at 332 m (F83)</strong> &mdash; the 120&ndash;300 m ladder frames read milky under it and the
+streaming edge is fully masked; the 120 m flight view is largely fog. Configuration, not defect.</li>
+</ul>
+
+<h3>30.7 Verdict: is the experience close to target?</h3>
+<div class="box">
+<strong>Yes &mdash; at the user&rsquo;s configuration the experience is close to the No Man&rsquo;s Sky-style
+target, and the round-24 verdict (&ldquo;day close, night not&rdquo;) no longer holds.</strong> The largest r24 gap &mdash;
+the night void &mdash; is resolved: night is a moonlit world with a readable moon, stars and a soft terminator. The sky
+keying that got wrong twice is now correct in all four positions. The streaming edge &mdash; never judged before &mdash;
+reads as a world arriving (complete to the horizon, whole columns, soft emergence through the fog), not a machine
+building. The interface reads as a product. What remains is refinement, not structure: night could be brighter, the
+chart seam and the tier-seam step are known open/structural items, and the AC-0445 fade needs to actually ship to match
+its documentation. Supporting frames: <code>ground-horizon-day</code>, <code>ground-horizon-night</code>,
+<code>ground-up-night</code>, <code>sky-inside-941-day</code>, <code>sky-outside-2141-day</code>,
+<code>stream-ground-90</code>/<code>stream-120-steps_s150</code>/<code>final</code>, <code>nadir-2600-dusk</code>,
+<code>2600-day</code>, <code>ui-inventory</code>.
+</div>
+
+<p>41 runs; captures in <code>tasks/AC-0384/ac0384-r25-*.png</code> (ship set from clean archive of
+<code>60f4d3e</code>; <code>fade-*</code> supplements from the archive + four uncommitted shaders; <code>nofog-*</code>
+from the shipping tree with the dev NO_FOG knob). Per-run logs, zoom crops and analysis in
+<code>.scratch/AC-0384-r25/</code>. No game code edited; no commits; no TASKS.yaml edits. This section is a judgement &mdash;
+it changes no behaviour and closes no ticket.</p>
+
 </body>
 </html>
