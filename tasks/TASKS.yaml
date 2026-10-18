@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-18T08:42
+  updated_at: 2026-10-18T08:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0447
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28689,6 +28690,87 @@ intake:
     EVIDENCE: tasks/AC-0444/AC-0444-results.html for the diagnosis and its elimination chain, tasks/AC-0443/AC-0443-results.html
     for the partial parity and its numbers, and tasks/AC-0384/AC-0384-results.html section 30 for the
     assessment that ranked this.
+
+    '
+  comments: []
+- id: AC-0447
+  title: night-is-readable-but-still-too-dark
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T08:44
+  updated_at: 2026-10-18T08:44
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Night should be dark and beautiful, not merely legible. Standing under the moon
+    you should be able to see the land - its shape, its texture, where the drop is - and it should look
+    like a moonlit night rather than a dim copy of the day.
+
+
+    2) Technical Details:
+
+    THE REMAINING GAP THE WHOLE-EXPERIENCE ASSESSMENT RANKED FIRST. A previous ticket added a real moon
+    and took night from an unreadable void to a readable landscape - ground luminance rose from about
+    one and a half to about seven and a half - and then recorded honestly that it remains on the darker
+    end, with roughly three quarters of ground pixels still below ten out of two hundred and fifty-five.
+    That is legible but not good: the assessment''s words were that the largest gap is resolved but not
+    up to the reference standard the project is measured against.
+
+    MEASURE AT TRUE MIDNIGHT, AND THIS IS THE SINGLE MOST IMPORTANT INSTRUCTION IN THIS TICKET. A later
+    ticket discovered that the hour which reads as dusk in the capture recipe still carries a day factor
+    of roughly a third - so any night measurement taken at that hour was measuring DUSK, and a fix tuned
+    against it would be tuned against the wrong light. The time parameter''s zero is true midnight and
+    is where the day factor is exactly zero. Establish the actual hour-and-day-factor curve first and
+    state which hours you used. If the previous round''s night numbers were taken during dusk, say so
+    plainly - a corrected baseline is worth more than a fast fix.
+
+    THE LIKELY CEILING IS THE TONE MAPPER, which an earlier investigation already implicated: its toe
+    and contrast create a DEAD ZONE below roughly a quarter of full luminance, and the light floor that
+    unlit faces resolve to comes out of the mapper as literally zero. The moon was the right answer for
+    giving the night a light source; the next question is whether the values the moon produces are being
+    preserved or crushed. Measure what goes into the mapper at night and what comes out of it - if the
+    input has structure and the output is zero, the problem is the mapping and no amount of extra moonlight
+    will fix it without blowing out the day.
+
+    WHAT TO CONSIDER, none prescribed: the moon''s intensity, which was calibrated by eye at a quarter
+    after four tenths read as dusk rather than night - the calibration was a judgement and could legitimately
+    be revisited with better measurements; an exposure or adaptation term that differs between day and
+    night, which is the standard answer in games where the night is genuinely dark but readable; the ambient
+    contribution at night; the fog''s behaviour in the dark, since fog that reads as atmosphere in daylight
+    can read as milk or as nothing at night; and whether the moon''s colour should differ from the sun''s,
+    since a moonlit scene is shifted toward blue in reality and that is a large part of why moonlit photographs
+    read as night.
+
+    THE RISKS: the day is currently right and must not change - a shared exposure or tone curve is the
+    obvious way to break it, so prove the day is untouched with before and after numbers rather than asserting
+    it. And night being BETTER must not mean night being FLATTER: the assessment''s earlier finding was
+    that lifting brightness uniformly is how a scene loses its depth, and a moonlit landscape should still
+    have a dark foreground and a lit ridge.
+
+    ACCEPTANCE: THE ASSESSMENT''S NIGHT FRAME RE-TAKEN AT TRUE MIDNIGHT with the ground readable, the
+    histogram of ground luminance before and after as numbers rather than a claim of improvement, the
+    day frames shown unchanged to within measurement noise, and a wide shot proving the night still has
+    depth - a dark foreground and a lit ridge, not an evenly grey scene. If the honest conclusion is that
+    the tone mapper is the binding constraint and the fix belongs there, say so with the input and output
+    measurements to support it.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); every look change ships behind a switch defaulting conservative; and
+    the recent work must keep holding - the moon as the sun''s antipode, the sky consistent with altitude,
+    the opaque planet, the seam closure and its atlas fix, the ambient lift, the cloud jitter, the interface
+    additions, the column-atomic streaming and the new far-tier seam closure.
+
+    EVIDENCE: tasks/AC-0384/AC-0384-results.html section 30 for the assessment''s verdict and its night
+    frames, tasks/AC-0436/AC-0436-results.html for the moon and its calibration, and tasks/AC-0446/AC-0446-results.html
+    for the discovery that the dusk hour is not midnight.
 
     '
   comments: []
