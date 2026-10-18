@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AweCraft — Why the frame spikes got worse (performance review)</title>
+<style>
+:root{
+  --bg:#120f0a; --bg2:#171310; --panel:#1c1712; --panel2:#211b14;
+  --edge:#3a332a; --edge2:#4a4133;
+  --ink:#e8ddc9; --dim:#a4937a; --faint:#6f6350;
+  --amber:#d9a441; --rust:#c96a3d; --steel:#7fa0c4; --crimson:#d4585f;
+  --teal:#58a8a0; --moss:#8a9a5b; --ocean:#4f86a8;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink);
+  font:16.5px/1.68 var(--serif);
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(217,164,65,.05), transparent 55%),
+    repeating-linear-gradient(180deg,
+      transparent 0 118px, rgba(217,164,65,.022) 118px 120px,
+      transparent 120px 258px, rgba(79,134,168,.02) 258px 261px,
+      transparent 261px 388px, rgba(138,154,91,.02) 388px 391px),
+    linear-gradient(180deg, var(--bg2), var(--bg) 340px);
+}
+body::after{
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='1'/></svg>");
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+::selection{background:var(--amber);color:#171310}
+
+header{padding:52px 0 30px;border-bottom:1px solid var(--edge)}
+.specline{
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  font:10.5px/1.6 var(--mono);letter-spacing:.22em;color:var(--faint);
+  text-transform:uppercase;margin-bottom:34px;
+}
+.specline b{color:var(--dim);font-weight:400}
+h1{
+  font:700 clamp(32px,5vw,58px)/1.04 var(--mono);
+  letter-spacing:.02em;text-transform:uppercase;
+}
+h1 .thin{font-weight:300;color:var(--dim)}
+.subtitle{
+  font:italic 20px/1.5 var(--serif);color:var(--dim);
+  max-width:64ch;margin-top:18px;
+}
+.subtitle em{color:var(--amber);font-style:italic}
+.meta-plate{
+  display:flex;gap:26px;flex-wrap:wrap;margin-top:30px;
+  font:11.5px/1.9 var(--mono);color:var(--dim);
+  border:1px solid var(--edge);background:rgba(28,23,18,.6);padding:14px 18px;
+}
+.meta-plate div{min-width:150px;flex:1}
+.meta-plate .k{display:block;color:var(--faint);letter-spacing:.18em;font-size:9.5px;text-transform:uppercase}
+.meta-plate .v{color:var(--ink)}
+.meta-plate .v.amber{color:var(--amber)}
+.stratabar{height:6px;margin-top:34px;background:linear-gradient(90deg,
+  var(--crimson) 0 14%, var(--amber) 14% 34%, var(--moss) 34% 56%,
+  var(--steel) 56% 78%, var(--ocean) 78% 100%);opacity:.85}
+
+nav.toc{border-bottom:1px solid var(--edge);padding:22px 0 26px}
+nav.toc .toc-title{font:10.5px/1 var(--mono);letter-spacing:.3em;color:var(--faint);text-transform:uppercase;margin-bottom:16px}
+nav.toc ol{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:4px 44px}
+nav.toc a{color:var(--dim);text-decoration:none;font:13px/1.7 var(--mono);display:flex;align-items:baseline;gap:10px;padding:2px 0}
+nav.toc a .no{color:var(--faint);font-size:10.5px;letter-spacing:.1em}
+nav.toc a .dots{flex:1;border-bottom:1px dotted var(--edge2);transform:translateY(-4px)}
+nav.toc a:hover{color:var(--amber)}
+@media(max-width:760px){nav.toc ol{grid-template-columns:1fr}}
+
+section{padding:54px 0 8px;border-bottom:1px solid var(--edge)}
+section:last-of-type{border-bottom:none}
+.sec-head{display:flex;align-items:baseline;gap:18px;margin-bottom:26px}
+.sec-no{font:300 44px/1 var(--mono);color:transparent;-webkit-text-stroke:1px var(--edge2);letter-spacing:.04em}
+.sec-head h2{font:600 20px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink)}
+.sec-head .rule{flex:1;height:1px;background:var(--edge);position:relative;top:-6px}
+.sec-head .rule::after{content:"";position:absolute;right:0;top:-3px;width:7px;height:7px;background:var(--amber);transform:rotate(45deg)}
+section p{margin:0 0 16px;max-width:82ch}
+section h3{font:600 13px/1.3 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:30px 0 8px}
+section h4{font:600 12px/1.3 var(--mono);letter-spacing:.1em;color:var(--ink);margin:22px 0 6px}
+section ul{margin:0 0 16px 22px;max-width:82ch}
+section ol.steps{margin:0 0 16px 22px;max-width:84ch}
+section li{margin:5px 0}
+strong{color:var(--amber);font-weight:600}
+a{color:var(--steel)}
+code,.mono{font-family:var(--mono)}
+p code,li code,td code{font-size:.86em;background:#262017;border:1px solid #332b20;color:#e3c98f;padding:1px 5px;border-radius:3px;white-space:nowrap}
+
+pre.code{background:#14100c;border:1px solid var(--edge);border-left:3px solid var(--amber);
+  padding:16px 18px 14px;margin:18px 0 24px;overflow-x:auto;
+  font:12.5px/1.75 var(--mono);color:#d8c9a8;}
+pre.code .ln{color:#4a4133;display:inline-block;width:4.2ch;text-align:right;margin-right:14px;user-select:none}
+pre.code .cm{color:#6f6350;font-style:italic}
+pre.code .kw{color:var(--steel)}
+pre.code .st{color:#a8c48a}
+pre.code .num{color:#e0a458}
+
+table{border-collapse:collapse;width:100%;margin:18px 0 26px;font:12.5px/1.6 var(--mono)}
+th{text-align:left;color:var(--faint);font-weight:400;letter-spacing:.16em;text-transform:uppercase;font-size:10px;border-bottom:1px solid var(--edge2);padding:8px 10px}
+td{border-bottom:1px solid var(--edge);padding:8px 10px;color:var(--dim);vertical-align:top}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:rgba(217,164,65,.05)}
+td .nm{color:var(--ink)}
+td.hl{color:var(--amber)}
+.tbl-scroll{overflow-x:auto}
+
+.layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px;margin:24px 0 10px}
+.layer{background:var(--panel);border:1px solid var(--edge);border-top:3px solid var(--lc,var(--amber));padding:16px 18px 12px;transition:transform .18s,border-color .18s}
+.layer:hover{transform:translateY(-3px);border-color:var(--edge2);border-top-color:var(--lc,var(--amber))}
+.layer h3{font:600 13.5px/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--lc,var(--amber));margin:0 0 4px}
+.layer .purpose{font:italic 14px/1.5 var(--serif);color:var(--dim);margin:6px 0 12px}
+.layer .rows{font:11.5px/1.95 var(--mono);color:var(--faint)}
+.layer .rows b{color:var(--dim);font-weight:400;display:inline-block;min-width:10ch}
+.layer .rows .vv{color:var(--ink)}
+
+figure{margin:26px 0 30px;background:#0f0c08;border:1px solid var(--edge);padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{font:11px/1.7 var(--mono);color:var(--faint);letter-spacing:.06em;padding-top:12px;border-top:1px dashed var(--edge);margin-top:10px}
+figcaption b{color:var(--dim);font-weight:400}
+
+.callout{border:1px solid var(--edge);border-left:3px solid var(--steel);background:rgba(79,134,168,.06);padding:14px 18px;margin:20px 0;font:14px/1.6 var(--serif);color:var(--dim);max-width:88ch}
+.callout b{color:var(--steel);font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;display:block;margin-bottom:6px}
+.note{border-left-color:var(--amber);background:rgba(217,164,65,.06)}
+.note b{color:var(--amber)}
+.warn{border-left-color:var(--crimson);background:rgba(212,88,95,.06)}
+.warn b{color:var(--crimson)}
+.ok{border-left-color:var(--moss);background:rgba(138,154,91,.06)}
+.ok b{color:var(--moss)}
+
+footer{padding:34px 0 60px;font:11px/2 var(--mono);color:var(--faint);letter-spacing:.08em}
+footer b{color:var(--dim);font-weight:400}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.reveal{opacity:0;animation:rise .7s cubic-bezier(.22,.61,.36,1) forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.14s}.d3{animation-delay:.24s}.d4{animation-delay:.34s}
+@media(prefers-reduced-motion:reduce){.reveal{animation:none;opacity:1}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="specline reveal d1">
+      <span><b>AweCraft</b> — performance review</span>
+      <span>read-only codebase + gate-log audit</span>
+      <span>2026-09-18</span>
+    </div>
+    <h1 class="reveal d1">Why the <span class="thin">frame spikes</span><br>got worse</h1>
+    <p class="subtitle reveal d2">
+      The recent performance work succeeded at exactly what it measured — <em>steady-state frame
+      average</em>. It also, deliberately, made every unit of work <em>bigger</em>. Bigger units buy
+      throughput and pay for it in the tail. This is the audit of where that tail comes from.
+    </p>
+    <div class="meta-plate reveal d3">
+      <div><span class="k">Scope</span><span class="v">godot/ (GDScript + gdext) — no execution</span></div>
+      <div><span class="k">Evidence base</span><span class="v">gate logs + HARNESS standing values</span></div>
+      <div><span class="k">Headline</span><span class="v amber">avg 16.7 ms → p95 39–41 ms, max 350–660 ms</span></div>
+      <div><span class="k">Method</span><span class="v">read-only · no godot process started</span></div>
+    </div>
+    <div class="stratabar reveal d4"></div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#s1"><span class="no">01</span><span>Answer in one page</span><span class="dots"></span></a></li>
+      <li><a href="#s2"><span class="no">02</span><span>The evidence: average held, tail moved</span><span class="dots"></span></a></li>
+      <li><a href="#s3"><span class="no">03</span><span>Ranked: the five biggest areas</span><span class="dots"></span></a></li>
+      <li><a href="#s4"><span class="no">04</span><span>The physics: per-frame budget is the wrong controller</span><span class="dots"></span></a></li>
+      <li><a href="#s5"><span class="no">05</span><span>Second tier: costs that scale with render distance</span><span class="dots"></span></a></li>
+      <li><a href="#s6"><span class="no">06</span><span>Third tier: engine-side and structural</span><span class="dots"></span></a></li>
+      <li><a href="#s7"><span class="no">07</span><span>Instrumentation gaps (fix these first)</span><span class="dots"></span></a></li>
+      <li><a href="#s8"><span class="no">08</span><span>Recommended next tickets</span><span class="dots"></span></a></li>
+      <li><a href="#s9"><span class="no">09</span><span>Appendix: file map &amp; sources</span><span class="dots"></span></a></li>
+    </ol>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ============================================================ 01 -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>Answer in one page</h2><span class="rule"></span></div>
+
+  <p>You are seeing more FPS slowdowns because the last four performance tickets
+  (<code>AC-0283</code> → <code>AC-0286</code> → <code>AC-0312</code> → <code>AC-0313</code>) each
+  traded <strong>tail latency for steady-state throughput and completeness</strong>, and every one
+  of them was verified on a metric that cannot see a spike: the <em>average</em> frame time.</p>
+
+  <p>The mechanism is one sentence long: <strong>the unit of work got 24× bigger.</strong> Before
+  <code>AC-0313</code> the scheduler worked in windowed, partial-column units (the
+  <code>AC-0263</code> Y-window) and the drain was time-capped. <code>AC-0313</code> deleted the
+  window: a build "unit" is now a <strong>full 24-slab column</strong>, the load lane dispatches up
+  to 16 of them per frame under a 300 ms budget, and a band-A column lands as
+  <strong>one atomic 24-slab mesh attach</strong>. Mesh work moved to worker threads years ago —
+  but three of the costs that ride <em>behind</em> a landing never did, and they are all
+  per-slab, on the main thread.</p>
+
+  <div class="callout warn">
+    <b>The three main-thread costs that ride behind every landing</b>
+    <strong>1. Collision rebuild</strong> — <code>chunk.gd:_build_slab_collision</code> does
+    <code>mesh.surface_get_arrays(0)</code> (a full vertex+index copy), expands it into a triangle
+    list, makes a <code>ConcavePolygonShape3D</code> and a <code>StaticBody3D</code> — for the
+    destroyed <em>and</em> rebuilt mesh — then the physics server rebuilds the BVH. Measured cost
+    in the gate logs: <strong>~1 ms per slab, 101 ms worst frame at R4</strong>.<br>
+    <strong>2. Mesh upload</strong> — <code>apply_accs</code> assigns a fresh <code>ArrayMesh</code>
+    per slab instance; the render server uploads the vertex/index buffers synchronously.<br>
+    <strong>3. Node churn</strong> — each <code>_assemble_slab</code> creates/frees up to four
+    MeshInstance3Ds plus an OccluderInstance3D <em>per slab</em>.
+  </div>
+
+  <p>None of those three is measured by the profiler the team has been steering with. The stage
+  ring (<code>World._wprof</code>) has no <code>COLLIDE</code> stage at all — collision time lands in
+  <code>MISC</code>, which is the residual bucket, so the only signal it can give is "the frame was
+  slow and I don't know why".</p>
+
+  <div class="callout note">
+    <b>The honest headline</b>
+    <code>HARNESS.md</code> already records the trade-off, in the boundary row: walking p95
+    <strong>22 → 39 ms</strong>, max <strong>128 → 357 ms</strong> (later re-measured at
+    <strong>660 ms</strong>) as the price of <code>AC-0313</code>'s full-column order — "the tail is
+    the price of fewer/bigger dispatch units — an honest, user-directed trade-off (recorded, not
+    smoothed)". So the regression was <em>known</em>; what it was never converted into is a budget.
+    A 350 ms frame is a 25-frame hitch at 60 fps. That is the slowdown you feel.
+  </div>
+
+  <p>The single most valuable next step is not an optimisation at all — it is a
+  <strong>frame-time p99/max budget gate</strong> with per-cause attribution (§07), because right now
+  nothing in the harness would fail if a change doubled the worst frame.</p>
+</section>
+
+<!-- ============================================================ 02 -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>The evidence: average held, tail moved</h2><span class="rule"></span></div>
+
+  <p>Everything below is read out of the repo's own committed gate logs and standing values. The
+  <code>AC-0314-gates/</code> and <code>AC-0312-profgen</code> artifacts are the newest WPROF
+  samples; <code>HARNESS.md</code> §3 carries the rebased standing values.</p>
+
+  <h3>2.1 The standing value that moved</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>boundary r4 walk</th><th>AC-0286 (pre)</th><th>AC-0313 (post)</th><th>AC-0314 (now)</th></tr></thead>
+    <tbody>
+      <tr><td>p50</td><td>14 ms</td><td>13 ms</td><td>13 ms</td></tr>
+      <tr><td class="hl">p95</td><td>22 ms</td><td class="hl">39 ms</td><td class="hl">39 ms</td></tr>
+      <tr><td class="hl">max</td><td>128 ms</td><td class="hl">357–824 ms</td><td class="hl">660 ms</td></tr>
+      <tr><td>built_final / in_radius_built</td><td>43 / 41</td><td>61 / 56</td><td>62 / 57</td></tr>
+      <tr><td>staged_dropped (collision backlog drops)</td><td>707</td><td>1518–1678</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Read the first column against the second: <strong>steady state is flat, the tail doubled and the
+  worst frame nearly tripled.</strong> That is precisely the signature of "fewer, bigger units".
+  <code>staged_dropped</code> more than doubling is the collision lane telling you it is
+  over-subscribed — it gives up on columns rather than build them (see §03.1).</p>
+
+  <h3>2.2 The profiler's own numbers</h3>
+  <p><code>AC-0312</code>'s <code>profgen</code> samples at <strong>R50</strong> (your default
+  <code>render_dist</code> is 50), 60 fps pace, 180-frame rolling window:</p>
+
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>stage (R50 flight/build)</th><th>avg</th><th>p95</th><th>max</th><th>what it is</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">frame</td><td class="hl">17.2 ms</td><td class="hl">41.2 ms</td><td class="hl">77.2 ms</td><td>the whole measured <code>_process</code></td></tr>
+      <tr><td>MISC (residual)</td><td>5.6</td><td>—</td><td>26.0</td><td>everything not bracketed — incl. collision + engine work <em>inside</em> the brackets</td></tr>
+      <tr><td>DRAIN</td><td>5.3</td><td>—</td><td class="hl">42.2</td><td><code>_drain_build_queue</code> — now full-24-slab units</td></tr>
+      <tr><td>LOW</td><td>4.2</td><td>—</td><td>6.4</td><td>the far-LOD wave</td></tr>
+      <tr><td>LOW_PICK</td><td class="hl">4.1</td><td>5.6</td><td>5.6</td><td>a 2048-entry queue scan, <em>every frame</em></td></tr>
+      <tr><td>RECENTER</td><td>1.7</td><td>—</td><td class="hl">36.5</td><td>the per-crossing queue rebuild walk</td></tr>
+      <tr><td>HANDOFF</td><td>0.3</td><td>—</td><td>5.4</td><td>landing worker meshes (apply + collision + nodes)</td></tr>
+      <tr><td>STAR (light)</td><td>~0.1</td><td>—</td><td>2.6</td><td>the starlight relaxation step</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Three things fall out of that table:</p>
+  <ul>
+    <li><strong>Average ≈ 17 ms, p95 ≈ 41 ms.</strong> One frame in twenty is a
+    <em>2.4× hitch</em>. The tuning target ("16.7 ms, 60 fps") is met on the average and missed on
+    one frame in twenty — which is the only thing a player perceives as a stutter.</li>
+    <li><strong>The per-frame floor is large.</strong> LOW + LOW_PICK + DRAIN = <strong>~9.6 ms of
+    every frame</strong> is scheduler bookkeeping, before any mesh is even built. At R16 it is still
+    ~5 ms (<code>DRAIN 5.3</code> + <code>LOW 4.2</code>). That is a floor that scales with queue
+    depth, not with visible work.</li>
+    <li><strong>The measured spikes live in DRAIN and RECENTER</strong> (42 ms and 36 ms maxima).
+    Those are the two places where "one unit" became "24 slabs".</li>
+  </ul>
+
+  <h3>2.3 The R16 walk/flight numbers</h3>
+  <p><code>gate_16_r16.log</code> (the newest, <code>AC-0314</code>):</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>phase</th><th>p50</th><th>p95</th><th>max</th><th>fps min</th></tr></thead>
+    <tbody>
+      <tr><td>static (600 frames)</td><td>14 ms</td><td>21 ms</td><td>66 ms</td><td>15</td></tr>
+      <tr><td>walk 17 m/s (4800 frames)</td><td>14 ms</td><td class="hl">28 ms</td><td class="hl">621 ms</td><td class="hl">2</td></tr>
+      <tr><td>flight 215 m/s (1200 frames)</td><td>12 ms</td><td>39 ms</td><td>164 ms</td><td>6</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>A <strong>621 ms frame while walking</strong> — with <code>ho_cap_max</code> 3, i.e. three
+  mesh landings that frame. Three landings cannot cost 621 ms by themselves; the cost is what each
+  landing <em>drags</em> (collision + physics + node churn), which is why §03.1 is the top item.</p>
+
+  <figure>
+    <svg viewBox="0 0 900 250" role="img" aria-label="Bar chart comparing steady-state average frame time against tail latency before and after the recent tickets">
+      <line x1="70" y1="200" x2="870" y2="200" stroke="#3a332a" stroke-width="1"/>
+      <line x1="70" y1="40" x2="70" y2="200" stroke="#3a332a" stroke-width="1"/>
+      <text x="66" y="204" fill="#6f6350" font-family="monospace" font-size="10" text-anchor="end">0</text>
+      <text x="66" y="150" fill="#6f6350" font-family="monospace" font-size="10" text-anchor="end">40</text>
+      <text x="66" y="100" fill="#6f6350" font-family="monospace" font-size="10" text-anchor="end">80</text>
+      <text x="66" y="50" fill="#6f6350" font-family="monospace" font-size="10" text-anchor="end">120</text>
+      <text x="66" y="228" fill="#6f6350" font-family="monospace" font-size="10" text-anchor="end">ms</text>
+
+      <rect x="120" y="183" width="52" height="17" fill="#8a9a5b"/>
+      <rect x="182" y="173" width="52" height="27" fill="#d9a441"/>
+      <rect x="244" y="140" width="52" height="60" fill="#c96a3d"/>
+      <text x="146" y="176" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">14</text>
+      <text x="208" y="166" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">22</text>
+      <text x="270" y="133" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">128</text>
+      <text x="208" y="222" fill="#6f6350" font-family="monospace" font-size="9" text-anchor="middle">BEFORE · AC-0286</text>
+
+      <rect x="400" y="184" width="52" height="16" fill="#8a9a5b"/>
+      <rect x="462" y="151" width="52" height="49" fill="#d9a441"/>
+      <rect x="524" y="55" width="52" height="145" fill="#c96a3d"/>
+      <text x="426" y="177" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">13</text>
+      <text x="488" y="144" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">39</text>
+      <text x="550" y="48" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">357</text>
+      <text x="488" y="222" fill="#6f6350" font-family="monospace" font-size="9" text-anchor="middle">AFTER · AC-0313</text>
+
+      <rect x="680" y="184" width="52" height="16" fill="#8a9a5b"/>
+      <rect x="742" y="151" width="52" height="49" fill="#d9a441"/>
+      <rect x="804" y="40" width="52" height="160" fill="#c96a3d"/>
+      <text x="706" y="177" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">13</text>
+      <text x="768" y="144" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">39</text>
+      <text x="830" y="33" fill="#a4937a" font-family="monospace" font-size="10" text-anchor="middle">660</text>
+      <text x="768" y="222" fill="#6f6350" font-family="monospace" font-size="9" text-anchor="middle">NOW · AC-0314</text>
+
+      <rect x="120" y="236" width="12" height="8" fill="#8a9a5b"/><text x="138" y="244" fill="#6f6350" font-family="monospace" font-size="9">p50</text>
+      <rect x="180" y="236" width="12" height="8" fill="#d9a441"/><text x="198" y="244" fill="#6f6350" font-family="monospace" font-size="9">p95</text>
+      <rect x="240" y="236" width="12" height="8" fill="#c96a3d"/><text x="258" y="244" fill="#6f6350" font-family="monospace" font-size="9">max</text>
+    </svg>
+    <figcaption><b>boundary r4 walk</b> — p50 is flat across the whole series; p95 and max carry the entire regression. Source: <code>HARNESS.md</code> §3 boundary row (AC-0286 / AC-0313 / AC-0314 rebases). The 660 ms bar is clipped by the chart; the AC-0313 run recorded 357–824 ms.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================================================ 03 -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>Ranked: the five biggest areas</h2><span class="rule"></span></div>
+
+  <div class="layers">
+    <div class="layer" style="--lc:#d4585f">
+      <h3>1 · Collision rebuilds</h3>
+      <p class="purpose">Per-slab, main-thread, physics-server — the single largest hitch source, and invisible to the profiler.</p>
+      <div class="rows">
+        <b>where</b> <span class="vv">world/chunk.gd:1631 <code>_build_slab_collision</code></span><br>
+        <b>driver</b> <span class="vv">chunk.gd:1369 <code>_post_build_collision</code> (immediate path)</span><br>
+        <b>amplifier</b> <span class="vv">chunk.gd:1212 <code>mark_all_slabs_dirty</code> on band re-entry</span><br>
+        <b>measured</b> <span class="vv">≈1 ms/slab · 101 ms max frame @R4</span><br>
+        <b>worst case</b> <span class="vv">24 slabs × 1 column = one frame</span>
+      </div>
+    </div>
+    <div class="layer" style="--lc:#c96a3d">
+      <h3>2 · Scheduler scan floor</h3>
+      <p class="purpose">Every frame scans the head of a multi-thousand-entry queue to find the handful of slabs it may dispatch.</p>
+      <div class="rows">
+        <b>where</b> <span class="vv">world.gd:3154 <code>_low_scan_slabs</code> · 3001 <code>_low_pick</code></span><br>
+        <b>cap</b> <span class="vv">LOW_SCAN_CAP 2048 entries / frame</span><br>
+        <b>measured</b> <span class="vv">LOW_PICK 4.1–4.7 ms avg, every frame</span><br>
+        <b>scale</b> <span class="vv">queue = 5 300+ entries at R50</span><br>
+        <b>payoff</b> <span class="vv">~0.3 dispatches/frame at R50 pace</span>
+      </div>
+    </div>
+    <div class="layer" style="--lc:#d9a441">
+      <h3>3 · Recenter = full queue rebuild</h3>
+      <p class="purpose">Every chunk crossing re-walks a 103×103 grid, re-scores thousands of entries and flips two band edges.</p>
+      <div class="rows">
+        <b>where</b> <span class="vv">world.gd:9402 <code>recenter</code> · 9679 <code>_recenter_slice</code> · the walk phases</span><br>
+        <b>budget</b> <span class="vv">REC_SLICE_BUDGET_MS 8 · 2048 units/frame</span><br>
+        <b>measured</b> <span class="vv">RECENTER avg 1.7 ms, max 36.5 ms</span><br>
+        <b>scale</b> <span class="vv">5 100-entry <code>chunks</code> sweep per crossing</span><br>
+        <b>cost driver</b> <span class="vv">band flips → 24-slab collision rebuilds</span>
+      </div>
+    </div>
+    <div class="layer" style="--lc:#7fa0c4">
+      <h3>4 · Per-slab node &amp; mesh churn</h3>
+      <p class="purpose">Up to 4 MeshInstance3Ds + an occluder + a body per slab, created and freed as meshes land.</p>
+      <div class="rows">
+        <b>where</b> <span class="vv">world/chunk.gd:1266 <code>_assemble_slab</code></span><br>
+        <b>measured</b> <span class="vv">8.54 MI / column; 4 287 grown in one build</span><br>
+        <b>extrapolated</b> <span class="vv">≈45 k instances at R50 (from 653 cols @R16)</span><br>
+        <b>upload</b> <span class="vv">render-server buffers re-uploaded per landing</span><br>
+        <b>already pooled</b> <span class="vv">AC-0247/AC-0257 pool the nodes — good</span>
+      </div>
+    </div>
+    <div class="layer" style="--lc:#8a9a5b">
+      <h3>5 · Light-gate coupling</h3>
+      <p class="purpose">In the real band, no slab may be meshed until its 3×3×3 light box has settled — and light drains at 3 ms/frame.</p>
+      <div class="rows">
+        <b>where</b> <span class="vv">world.gd:7388 <code>star.box_settled</code> gate (<code>_mesh_dispatch_hslab</code>)</span><br>
+        <b>budget</b> <span class="vv">STAR_STEP_BUDGET_MS 3.0</span><br>
+        <b>edit blast</b> <span class="vv">starlight.cpp:396 — 9 columns × 16 sections cleared</span><br>
+        <b>effect</b> <span class="vv">mesh dispatch defers until light converges</span><br>
+        <b>note</b> <span class="vv">surfaces as a stall, not a spike</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>3.1 Collision rebuilds — the top hitcher</h3>
+  <p>Read <code>chunk.gd:1631</code> and the cost is self-evident:</p>
+
+<pre class="code"><span class="cm"># chunk.gd:1631 — runs on the MAIN thread, per slab, every time a slab's mesh changes</span>
+<span class="kw">func</span> _build_slab_collision(s: Slab) -&gt; <span class="kw">void</span>:
+    <span class="kw">var</span> mesh: ArrayMesh = s.mesh_instance.mesh
+    <span class="kw">var</span> arrs := mesh.surface_get_arrays(<span class="num">0</span>)              <span class="cm"># full copy of verts + indices</span>
+    <span class="kw">var</span> faces := PackedVector3Array()
+    faces.resize(idx.size())
+    <span class="kw">for</span> i <span class="kw">in</span> range(idx.size()):
+        faces[i] = verts[idx[i]]                            <span class="cm"># de-index: 3 Vert3 per tri</span>
+    <span class="kw">var</span> shape := ConcavePolygonShape3D.new()
+    shape.set_faces(faces)                                  <span class="cm"># physics BVH rebuild</span>
+    <span class="kw">var</span> body := StaticBody3D.new() ... add_child(body)     <span class="cm"># scene-tree insert</span></pre>
+
+  <p>A dense 16³ slab can carry thousands of greedy-merged quads; a full column is 24 of them.
+  The counters say the rest:</p>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>gate log</th><th>collision_n</th><th>collision_ms_total</th><th>collision_max_ms</th><th>frame max</th></tr></thead>
+    <tbody>
+      <tr><td>AC-0313 perf @R4</td><td>89</td><td>358 ms</td><td>17</td><td class="hl">104 ms</td></tr>
+      <tr><td>AC-0314 perf @R4</td><td>106</td><td>350 ms</td><td>15</td><td class="hl">101 ms</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Two structural problems compound it:</p>
+  <ol class="steps">
+    <li><strong>It is per-slab.</strong> A full column landing runs the loop 24 times in one frame.
+    At even 1 ms/slab that is 24 ms; on a real terrain column with a cave system (the 15–17 ms
+    maxima observed) it is far worse. The <code>AC-0313</code> commit message records
+    <code>editperf flush_frames 9 → 50</code> and <code>perf build_ms 492 → 2483</code> —
+    that second number is <em>main-thread</em> build time and it quintupled.</li>
+    <li><strong>It thrashes on band edges.</strong> <code>_reband</code> (world.gd:9712) calls
+    <code>drop_slab_bodies()</code> when a column leaves the real band and
+    <code>mark_all_slabs_dirty()</code> when it re-enters — all 24 slabs at once, re-derived from
+    full mesh arrays. A player walking along the sim boundary oscillates columns across it. The
+    staging lane can only rebuild <strong>2</strong> columns per frame
+    (<code>_col_drain_step</code>, "&lt;=2 staged bodies per frame"), which is exactly why
+    <code>staged_dropped</code> went 707 → 1518–1678: the backlog is being dropped, not served.</li>
+  </ol>
+
+  <div class="callout warn">
+    <b>Why this is the worst offender for <em>perceived</em> smoothness</b>
+    Collision is the one cost that lands on the exact frames the player is moving into new terrain —
+    and unlike rendering, it cannot be amortised invisibly. Godot 4 runs physics on the main thread
+    by default, and <code>project.godot</code> sets no
+    <code>physics/3d/run_on_separate_thread</code>. So every one of these milliseconds is a
+    main-thread stall.
+  </div>
+
+  <h4>Cheap, high-value fixes, in order</h4>
+  <ol class="steps">
+    <li><strong>Budget it.</strong> A hard per-frame collision-time cap (e.g. 4 ms) with a debt
+    queue, the way <code>drain_budget_ms</code> already caps the build lane. This alone bounds the
+    spike without changing any geometry.</li>
+    <li><strong>Stop re-deriving from mesh arrays.</strong> The worker already has the greedy quads;
+    ship a compact triangle/box list to the main thread in the handoff result and build the shape
+    from that, skipping <code>surface_get_arrays</code> + re-indexing entirely.</li>
+    <li><strong>Don't rebuild what did not change.</strong> A landing that only changed light
+    (the remesh lane) or only one slab's geometry should not touch the other 23 bodies. Today any
+    re-assembly sets <code>col_dirty = true</code> and re-requests the whole slab's body.</li>
+    <li><strong>Keep bodies across band edges.</strong> <code>drop_slab_bodies()</code> on demote
+    plus full rebuild on re-entry is pure waste — the geometry does not change, only the band
+    bookkeeping does. Only the <code>collision_enabled</code> flag needs to move.</li>
+    <li><strong>Consider a cheaper shape.</strong> <code>ConcavePolygonShape3D</code> is the most
+    expensive option available. For greedy voxel terrain, per-slab
+    <code>ConvexPolygonShape3D</code>/box decomposition, or a merged column-level body rebuilt
+    incrementally, would be materially cheaper.</li>
+  </ol>
+
+  <h3>3.2 The scheduler scan floor</h3>
+  <p><code>_low_scan_slabs</code> and <code>_low_pick</code> walk <code>band_buckets</code> from
+  index 0 and stop at <code>LOW_SCAN_CAP = 2048</code> visited entries. At R50 the queue holds
+  <strong>5 300–5 500 entries</strong> (all of it <code>data_only</code> + build work), so the cap is
+  hit essentially every frame, which also means the "no candidate" verdict can never be cached
+  (the cache is only written on a <em>full</em> scan) and the scan repeats forever:</p>
+
+<pre class="code"><span class="cm">// world.gd:3014 — the verdict cache is only valid on a full scan</span>
+<span class="kw">if</span> best.is_empty() <span class="kw">and</span> <span class="kw">not</span> capped:
+    _low_none_key = nk          <span class="cm"># never reached at R50: always capped</span></pre>
+
+  <p>Measured: <strong>LOW_PICK 4.1–4.7 ms, p95 5.2–5.6 ms, every single frame</strong> — while the
+  wave's own pace (<code>LOW_WAVE_PACE_MS 3.5</code>) only permits ~0.3 slab dispatches per frame.
+  That is roughly <strong>7 000 queue entries examined per dispatch</strong>. The asymmetry is the
+  bug: the scan is O(queue) but the work is O(1).</p>
+  <p>Fix: make the queue a real priority structure (the entries are already scored by
+  <code>_grid_score(entry)</code> = <code>taxi*10000 + layer</code>), or maintain a per-band
+  <em>pending-slab</em> index so the wave can ask "which column has a rank-0 pending slab" in O(1)
+  instead of scanning for it. This is the highest ratio of removed-milliseconds to risk in the whole
+  codebase, and it removes a cost from <em>every</em> frame rather than the tail.</p>
+
+  <h3>3.3 Recenter: full rebuild per crossing</h3>
+  <p><code>_rec_want_step</code> walks a <code>(2*(R+1)+1)²</code> box — <strong>10 609 cells at
+  R50</strong> — and <code>_rec_merge_*</code> re-buckets the entire existing queue by the new
+  centre, at 2 048 units per frame under an 8 ms slice. Then, in the same <code>recenter</code> call,
+  the loop over <code>chunks</code> (≈5 100 columns) runs per-column band flips:
+  <code>_star_halo_evict</code>, <code>_demote_high_band_exit</code>,
+  <code>_reentry_flip_high</code>, and on the way in <code>_reband</code> →
+  <code>mark_all_slabs_dirty</code> → 24 collision rebuilds.</p>
+  <p>The comment at world.gd:9795 is honest about the design intent — "the queue is RECOMPUTED, not
+  merged" — and it fixed a real stranding bug. But it makes <em>every chunk crossing</em> a
+  multi-thousand-entry operation, and at R50 you cross ~9 columns per second while walking. The
+  36.5 ms RECENTER maximum is that work showing through. Two directions: (a) keep the recompute but
+  make the per-column state a cheap predicate instead of an object walk, and (b) decouple the band
+  flip from the collision rebuild (see 3.1.4), since that is what actually costs the frame.</p>
+
+  <h3>3.4 Per-slab node and mesh churn</h3>
+  <p>Measured at R16: <strong>653 pooled columns holding 5 574 MeshInstance3Ds — 8.54 per column</strong>,
+  with <strong>4 287 instances grown during one build pass</strong>. Scale to R50's ~5 000 resident
+  columns and the scene holds on the order of <strong>45 000 instances</strong> plus fluid, flora,
+  occluder and collision-body nodes. Each landing frees and re-creates a slab's instances (the pool
+  softens but does not remove the churn), and the render server re-uploads buffers for every new
+  <code>ArrayMesh</code> assignment synchronously.</p>
+  <p>The <code>AC-0247</code> pooling work is good and should be extended, not replaced. The higher
+  leverage idea is to <strong>stop having one instance per slab</strong> for the far draw tiers:
+  the low/avg LOD already proves a MultiMesh-style batched path works in this codebase. The next
+  question worth asking is whether band B/C (and even band A) can be a small number of
+  MultiMeshInstance3Ds per ring rather than per-column MeshInstance3Ds — that would cut both node
+  traversal and draw-call overhead at once.</p>
+
+  <h3>3.5 Light-gate coupling</h3>
+  <p>In the real band, <code>_mesh_dispatch_hslab</code> refuses to dispatch until
+  <code>star.box_settled(cx, cz, si-1, si+1)</code> is true, and the light engine only gets
+  <strong>3 ms per frame</strong> (<code>STAR_STEP_BUDGET_MS</code>). <code>starlight.cpp:396</code>
+  shows what an edit does: it clears and re-seeds <strong>9 columns × 16 sections</strong> (up to
+  144 sections ≈ 590 k cells) for a single block change — and that is per edit, not per column
+  landing.</p>
+  <p>This is the mechanism most likely behind "it hitches when I mine/place". A promotion or a new
+  real-band column also owes a whole-column seed. Because the gate is all-or-nothing per slab, one
+  unsettled section holds up <em>every</em> slab in its 3×3×3 neighbourhood. This is a latency
+  penalty rather than a direct frame spike, but when it collides with a crossing it presents as a
+  freeze. Worth measuring before fixing: the profiler's <code>STAR</code> substage reads ~0.1 ms
+  average, so the <em>cost</em> is bounded — it is the <em>waiting</em> that costs, and waiting is
+  invisible to every counter currently recorded.</p>
+</section>
+
+<!-- ============================================================ 04 -->
+<section id="s4">
+  <div class="sec-head"><span class="sec-no">04</span><h2>The physics: per-frame budget is the wrong controller</h2><span class="rule"></span></div>
+
+  <p>This is the generalisable lesson from the last four tickets, and it explains why "we made it
+  faster" and "it stutters more" are both true at once.</p>
+
+  <p>The drain is governed by a <strong>web of averages</strong>:</p>
+
+<pre class="code"><span class="cm">// world.gd:127–155 — the pacing model</span>
+<span class="kw">const</span> DRAIN_FRAME_BUDGET_US := <span class="num">30000</span>      <span class="cm"># 30 ms per frame</span>
+<span class="kw">const</span> DRAIN_UNIT_PACE_MS := <span class="num">8.0</span>           <span class="cm"># ~2 units/frame at 60 fps</span>
+<span class="kw">const</span> DRAIN_UNITS_FRAME_CAP := <span class="num">4</span>         <span class="cm"># commented "hitch spike guard"</span>
+<span class="kw">var</span> budget_us := <span class="kw">int</span>(drain_budget_ms * <span class="num">1000</span>)
+...
+<span class="kw">while</span> budget &gt; <span class="num">0</span>:
+    <span class="kw">if</span> Time.get_ticks_usec() - t0 &gt; budget_us:   <span class="cm"># checked BEFORE a unit</span>
+        <span class="kw">break</span>
+    ... dispatch one unit ...                      <span class="cm"># a unit is now a 24-slab column</span></pre>
+
+  <p>The time check happens <em>before</em> the unit, so it bounds the <strong>number</strong> of
+  overruns, not their <strong>size</strong>. When a unit was a single slab that was fine. When a
+  unit became "one full 24-slab column mesh + 24 collision bodies + 24 instance assemblies", a
+  single overrun can consume 100–350 ms — and the guard that was supposed to prevent hitches now
+  merely guarantees you get at most four of them.</p>
+
+  <div class="callout">
+    <b>The reframing</b>
+    <strong>Perceived smoothness is a tail property, not an average property.</strong> 60 fps means
+    "no frame over ~16.7 ms", not "frames average 16.7 ms". Every budget in this codebase is written
+    against the average. The <code>AC-0229</code> dynamic burst cap is the clearest example: it
+    <em>raises</em> the per-frame handoff cap up to 72 during flight because "the ahead band fills
+    well behind the player" — a throughput objective, purchased with the exact currency the user is
+    now complaining about. The knob is documented as a tuning knob, not a frame-time budget.
+  </div>
+
+  <p>Concretely, three controller changes would convert this from "trade-off" to "governed":</p>
+  <ul>
+    <li><strong>Check the budget after the unit too, and split units mid-flight.</strong> A column
+    build should be resumable at slab granularity (it already is — the probe is per-slab), so the
+    controller can stop between slabs instead of between columns.</li>
+    <li><strong>Make the unit cost visible to the controller.</strong> <code>last_build_us</code>
+    already exists and already feeds the pace selector — but it is the <em>dispatch</em> cost, not
+    the <em>landing</em> cost. The landing (apply + collision + nodes) is what spikes, and it is
+    paced by a separate, uncoordinated cap (<code>stream_ho_cap</code>).</li>
+    <li><strong>Spend spikes as a budget across frames.</strong> A weighted moving average of recent
+    frame time could throttle <code>stream_ho_cap</code> and the drain's budget jointly, which is
+    what the <code>chunks_per_frame</code> slider is manually doing today.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 05 -->
+<section id="s5">
+  <div class="sec-head"><span class="sec-no">05</span><h2>Second tier: costs that scale with render distance</h2><span class="rule"></span></div>
+
+  <p>Your default <code>render_dist</code> is <strong>50</strong> (<code>settings.gd:33</code>), and
+  a lot of the cost above is quadratic in it. The taxi-square geometry at the defaults
+  (<code>sim 4 / medium_start 8 / low_start 27 / render 50</code>):</p>
+
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>band</th><th>taxi range</th><th>columns</th><th>representation</th><th>per-column cost</th></tr></thead>
+    <tbody>
+      <tr><td class="hl">real</td><td>0–4</td><td>40</td><td>full 24-slab high mesh</td><td>heavy (24 slabs + 24 colliders)</td></tr>
+      <tr><td class="hl">A</td><td>5–8</td><td>104</td><td><strong>full LOD</strong>, materialized (AC-0312)</td><td class="hl">heavy — <em>new since AC-0312</em></td></tr>
+      <tr><td>B</td><td>9–27</td><td>~1 400</td><td>8×8 avg</td><td>light</td></tr>
+      <tr><td>C</td><td>28–49</td><td>~2 800</td><td>4×4 avg</td><td>light</td></tr>
+      <tr><td>data collar</td><td>50–51</td><td>~200</td><td>h-only, no draw</td><td>cheap</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Two observations worth acting on:</p>
+  <ul>
+    <li><strong>Band A is new heavy work in the draw path.</strong> <code>AC-0312</code> restored
+    full-LOD draw for taxi 5–8 by materializing each far column to the full 16×16×16 no-cave fill —
+    a 24-slab mesh built from a <code>generate_resl(skip=1)</code> fill, landed in a single worker
+    task. 144 columns of new high-detail geometry, each needing the full landing pipeline. It is the
+    right call for the look (that was the user's decision), but it means the set of columns that can
+    trigger a 24-slab landing grew from 40 to 144, and band-A columns are exactly the ones a walking
+    player crosses constantly. This is a prime candidate for either a lighter landing (fewer slabs
+    materialized above/below the surface) or the batched-instance treatment from §03.4.</li>
+    <li><strong>The offscreen interior cannot be trimmed cheaply today.</strong>
+    <code>y_only</code>-style vertical culling exists per column but the horizontal offscreen band is
+    the same cost as the visible one, and the engine's occlusion culling is on
+    (<code>use_occlusion_culling</code>, <code>cull_3d</code>). At R50 that means building and
+    maintaining high-detail geometry the player cannot see. The <code>in_render_circle</code> scope
+    is generous (the full taxi square), so a cheaper "keep the data, defer the mesh" tier for the
+    behind-the-player half would cut real work.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 06 -->
+<section id="s6">
+  <div class="sec-head"><span class="sec-no">06</span><h2>Third tier: engine-side and structural</h2><span class="rule"></span></div>
+
+  <h3>6.1 The unmeasured 33% of the frame</h3>
+  <p>In the R50 profile, the bracketed stages sum to ~11 ms of a 17.2 ms frame. The remainder is
+  <code>MISC</code> (5.6 ms average, 26 ms max) — and it is the residual bucket, so it silently
+  absorbs every cost that was not explicitly bracketed. On this Linux box that includes physics,
+  scene-tree work, and the render server; on your Windows build with <code>forward_plus</code>, real
+  GPU-side and driver-side cost lands there too. <strong>Roughly a third of the frame is
+  currently unattributed</strong> — that is the largest single blind spot in the whole
+  investigation.</p>
+
+  <h3>6.2 Physics is single-threaded on the main thread</h3>
+  <p><code>project.godot</code> does not set <code>physics/3d/run_on_separate_thread</code>. Given
+  the collision evidence in §03.1, enabling it is a one-line experiment with a plausible large
+  payoff — with the caveat that it changes <code>CharacterBody3D</code> behaviour timing, so it must
+  be gated by the player/interact/fluids arms.</p>
+
+  <h3>6.3 Two monoliths</h3>
+  <p><code>scenes/harness.gd</code> is 24 800 lines and <code>world/world.gd</code> is 11 900
+  (<code>ARCHITECTURE.md</code> §1 records this and tracks the split as <code>AC-0115</code>). This
+  is not a runtime cost, but it is a real performance-engineering cost: the scheduler, the
+  LOD lanes, the recenter walk, the light integration and the collision staging all live in one
+  11.9 k-line file, and every one of them is a per-frame loop over shared state. Splitting it is a
+  prerequisite for making the scheduler's data structures changeable at all.</p>
+
+  <h3>6.4 Fluid pass structure</h3>
+  <p><code>tick_fluids</code> runs at 20 Hz over the band-0 diamond and is gated by
+  <code>fluid_wet</code>, which does keep the natural ocean free. But for each wet chunk it walks
+  all 24 slabs and calls <code>slab_flat()</code> per wet slab, and <code>set_block</code> /
+  <code>_record_edit</code> mark columns wet. During any water interaction this becomes a per-tick
+  full-column decode. Cheaper: keep the flat decode on the slab object (invalidate on
+  <code>set_fl_at</code>) rather than re-deriving it from the dictionary every tick.</p>
+
+  <h3>6.5 Worker-pool sharing</h3>
+  <p><code>threadgen_pool</code>, <code>threadmesh_pool</code> and <code>io_pool</code> are the
+  <em>same</em> <code>WorkerThreadPool</code> singleton, split by count, with the loading window
+  raising the mesh cap to <code>LOAD_TM_CAP = 64</code>. The code comments already record a measured
+  pathology here ("a 24-deep gen queue … starved the 2 ms mesh tasks", <code>LOAD_TG_CAP</code> 24 →
+  8). Two in-flight coordinates deep enough to starve each other remain a structural risk worth a
+  dedicated review — particularly because the mesh tasks are the ones whose latency the player
+  feels.</p>
+</section>
+
+<!-- ============================================================ 07 -->
+<section id="s7">
+  <div class="sec-head"><span class="sec-no">07</span><h2>Instrumentation gaps (fix these first)</h2><span class="rule"></span></div>
+
+  <div class="callout note">
+    <b>Recommendation</b>
+    Before optimising anything, make the regression <em>visible in a gate</em>. The reason the tail
+    regression shipped is not that it was unknown — <code>HARNESS.md</code> records it — it is that
+    no gate <em>fails</em> when the worst frame doubles.
+  </div>
+
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>gap</th><th>consequence today</th><th>cheap fix</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="hl">No <code>COLLIDE</code> stage in <code>_wprof</code></td>
+        <td>collision time hides in <code>MISC</code>; the biggest hitcher is unattributed</td>
+        <td><code>WP_STAGES</code> + a bracket around <code>_post_build_collision</code> and <code>build_dirty_slab_bodies</code></td>
+      </tr>
+      <tr>
+        <td class="hl">No frame p99 / max budget gate</td>
+        <td>the <code>AC-0313</code> tail doubling passed as "an honest trade-off"</td>
+        <td>one standing value: <code>boundary</code> walk <code>max_ms</code> below a threshold, and <code>r16 walk max_ms</code></td>
+      </tr>
+      <tr>
+        <td class="hl">Collision budget shape is unknown</td>
+        <td><code>collision_n</code> counts <em>batches</em>, not slabs — "3.3 ms per collision" is really per-batch</td>
+        <td>count slabs, not calls; report a histogram</td>
+      </tr>
+      <tr>
+        <td class="hl"><code>staged_dropped</code> only surfaced in one row</td>
+        <td>a doubling of dropped collision work read as a footnote</td>
+        <td>make it a standing value with a threshold, next to <code>flap</code></td>
+      </tr>
+      <tr>
+        <td class="hl">No player-side view of spikes</td>
+        <td>the F3 overlay shows average FPS + CPU%; a hitch is invisible in it</td>
+        <td>add worst-frame-ms and 1-second p99 to the overlay (it already samples every 0.25 s)</td>
+      </tr>
+      <tr>
+        <td class="hl">GPU-side cost unattributed</td>
+        <td>unknown whether the Win build is CPU-bound or draw-call-bound</td>
+        <td><code>Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME</code> + <code>OBJECTS_IN_FRAME</code> in the stats overlay and the <code>r16</code> arm</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The last row matters more than it looks. <code>HARNESS.md</code> §2 is explicit that this box's
+  renders are a software-GL proxy and never evidence about the shipped <code>forward_plus</code>
+  look. That means <strong>the harness structurally cannot measure the thing you are seeing</strong>
+  if any part of it is GPU-bound. Draw calls and objects-in-frame are the two monitors that can be
+  read headlessly and would at least tell you which side of the fence the problem is on.</p>
+</section>
+
+<!-- ============================================================ 08 -->
+<section id="s8">
+  <div class="sec-head"><span class="sec-no">08</span><h2>Recommended next tickets</h2><span class="rule"></span></div>
+
+  <p>Sized for the project's own "split before you delegate" rule — one concern each, each with a
+  measurable before/after.</p>
+
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>#</th><th>ticket</th><th>why first</th><th>acceptance signal</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="hl">P0</td>
+        <td class="nm">Frame-tail instrumentation: COLLIDE stage, worst-frame gate, draw-call/objects monitors</td>
+        <td>every later fix is unfalsifiable without it; it is also the cheapest change in this list</td>
+        <td><code>boundary</code> + <code>r16</code> report attributed spike causes; a standing <code>max_ms</code> value exists</td>
+      </tr>
+      <tr>
+        <td class="hl">P1</td>
+        <td class="nm">Collision: per-frame time budget + worker-supplied triangle list + keep bodies across band edges</td>
+        <td>largest single spike source; three independent wins in one area</td>
+        <td><code>collision_max_ms</code> bounded; walk <code>max_ms</code> halved at equal <code>built_final</code></td>
+      </tr>
+      <tr>
+        <td class="hl">P2</td>
+        <td class="nm">Queue index: O(1) pending-slab lookup instead of a 2 048-entry scan per frame<br>
+        <span class="fn">— <strong>SUPERSEDED, do not file as written.</strong> <code>AC-0335</code>
+        (<code>one-work-order-one-dispatch</code>) removes the second scheduler entirely: the far lane's
+        <code>_low_scan_slabs</code> pick &mdash; and with it this per-frame scan &mdash; is deleted rather than
+        indexed, because the queue's bucket index is already ascending taxi and needs no re-ranking. Filing
+        this would be filing work that gets thrown away. If the scan somehow survives the unification,
+        re-derive the ticket from the post-unification code.</span></td>
+        <td><em>superseded by <code>AC-0335</code></em></td>
+        <td>n/a &mdash; track <code>LOW_PICK</code> removal in <code>AC-0335</code>'s gate run</td>
+      </tr>
+      <tr>
+        <td class="hl">P3</td>
+        <td class="nm">Recenter: cheap per-column band predicate; do not let a flip trigger 24 collision rebuilds</td>
+        <td>the crossing is the frame where the player is moving and therefore watching</td>
+        <td><code>RECENTER</code> max &lt; 10 ms; crossing frames show no collision batch</td>
+      </tr>
+      <tr>
+        <td class="hl">P4</td>
+        <td class="nm">Landing cost: batch far-tier draws into MultiMesh rings; lighten the band-A landing</td>
+        <td>attacks node churn + draw calls + upload together; band A is the newly-heavy tier</td>
+        <td>instances/frame and draw calls flat across a crossing; band-A look unchanged (<code>ladder</code> + <code>farab</code> green)</td>
+      </tr>
+      <tr>
+        <td class="hl">P5</td>
+        <td class="nm">Light gate: make <code>box_settled</code> finer than 3×3×3, or let an unsettled slab show its previous bake</td>
+        <td>removes the "waiting" class of stall that no counter currently shows</td>
+        <td><code>hslab_defer_settle</code> → 0 in steady play; no unlit frames (the AC-0286 contract holds)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Two of these are deliberately <em>not</em> optimisations: P0 is measurement, and P1's first
+  clause is a budget. If only one thing is done, do P0 — the reason the last four tickets produced
+  this outcome is that the instrument could not see it.</p>
+</section>
+
+<!-- ============================================================ 09 -->
+<section id="s9">
+  <div class="sec-head"><span class="sec-no">09</span><h2>Appendix: file map &amp; sources</h2><span class="rule"></span></div>
+
+  <h3>Where the hot paths live</h3>
+  <div class="tbl-scroll">
+  <table>
+    <thead><tr><th>concern</th><th>file : location</th></tr></thead>
+    <tbody>
+      <tr><td>Frame pipeline &amp; stage profiler</td><td><code>godot/world/world.gd:4666</code> <code>_process</code> · <code>:4534</code> <code>_wprof_init</code></td></tr>
+      <tr><td>Scheduler / build drain</td><td><code>godot/world/world.gd:7790</code> <code>_drain_build_queue</code></td></tr>
+      <tr><td>Per-slab high dispatch (TM pool)</td><td><code>godot/world/world.gd:7284</code> <code>_mesh_dispatch_hslab</code> · <code>:7527</code> <code>_build_unit_hslab</code></td></tr>
+      <tr><td>Mesh landing / handoff</td><td><code>godot/world/world.gd:6377</code> <code>threadmesh_handoff</code> · <code>:6190</code> <code>threadmesh_poll</code></td></tr>
+      <tr><td>Mesh assembly (nodes, materials)</td><td><code>godot/world/chunk.gd:1266</code> <code>_assemble_slab</code> · <code>:1542</code> <code>apply_accs</code></td></tr>
+      <tr><td class="hl">Collision body build</td><td><code>godot/world/chunk.gd:1631</code> <code>_build_slab_collision</code> · <code>:1369</code> <code>_post_build_collision</code> · <code>:1247</code> <code>build_dirty_slab_bodies</code></td></tr>
+      <tr><td>Collision staging drain</td><td><code>godot/world/world.gd:9068</code> <code>_col_drain_step</code> (2 columns/frame)</td></tr>
+      <tr><td>Low / far LOD lanes</td><td><code>godot/world/world.gd:3323</code> <code>_low_step</code> · <code>:3154</code> <code>_low_scan_slabs</code> · <code>:3001</code> <code>_low_pick</code></td></tr>
+      <tr><td>Recenter &amp; queue rebuild</td><td><code>godot/world/world.gd:9402</code> <code>recenter</code> · <code>:9679</code> <code>_recenter_slice</code> · <code>:9679+</code> the walk phases (<code>_rec_*_step</code>)</td></tr>
+      <tr><td>Band flip (collision dirtying)</td><td><code>godot/world/world.gd:9712</code> <code>_reband</code></td></tr>
+      <tr><td>Light engine integration</td><td><code>godot/world/world.gd:4836</code> <code>_star_step</code> · <code>:4984</code> <code>_star_seed_column</code> · <code>:4924</code> <code>_star_remesh_drain</code></td></tr>
+      <tr><td>Light engine (C++)</td><td><code>gdext/src/starlight.cpp:280</code> <code>seed_column</code> · <code>:396</code> <code>on_edit</code> · <code>:584</code> <code>box_settled</code></td></tr>
+      <tr><td>Physics / render settings</td><td><code>godot/project.godot</code></td></tr>
+      <tr><td>LOD band knobs &amp; clamps</td><td><code>godot/autoload/settings.gd:33–70</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Evidence sources</h3>
+  <ul>
+    <li><code>godot/HARNESS.md</code> §3 — boundary r4 standing value with the AC-0286 → AC-0313 → AC-0314 supersedes chain (p95 22 → 39, max 128 → 357/660).</li>
+    <li><code>.scratch/AC-0312-profgen-s2.json</code>, <code>-s3.json</code> — R50 stage profiles (frame 17.2 ms avg / 41.2 p95 / 77.2 max; <code>LOW_PICK</code> 4.1 ms; <code>DRAIN</code> max 42.2 ms; <code>RECENTER</code> max 36.5 ms).</li>
+    <li><code>.scratch/AC-0313-gates/gate_13_battery_perf.log</code> and <code>.scratch/AC-0314-gates/gate_18_battery_perf.log</code> — collision counters (89–106 batches, 350–358 ms total, 15–17 ms max) and the 101–104 ms worst frame at R4.</li>
+    <li><code>.scratch/AC-0314-gates/gate_16_r16.log</code> — walk <code>max_ms 621</code>, flight <code>max_ms 164</code>, pool growth (4 287 MIs), <code>staged_dropped</code>.</li>
+    <li>Commit messages for <code>fe26714</code> (AC-0313), <code>710e2f3</code> (AC-0312), <code>0b71ae0</code> (AC-0321), <code>a85125d</code> (AC-0322) — the recorded trade-offs.</li>
+    <li><code>docs/flight-world-epic.html</code> — the epic's before/after profile and the honest done-when verdict.</li>
+  </ul>
+
+  <div class="callout">
+    <b>Confidence notes</b>
+    Everything in §02 and the measured figures in §03 are read directly from the committed logs and
+    standing values. The extrapolation from 653 columns @R16 to ~45 000 instances @R50 is arithmetic
+    on the measured per-column instance count, not a measurement — treat it as an order of magnitude.
+    §06's observations (physics threading, fluid decode, pool sharing) are code-level findings that
+    were <em>not</em> measured in this review and are flagged as such. No godot process was started
+    during this audit.
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <b>AweCraft — performance review</b> · read-only audit of <code>godot/</code> + gate logs ·
+    2026-09-18<br>
+    Companion to <code>docs/flight-world-epic.html</code> (the epic that made these changes) and
+    <code>godot/HARNESS.md</code> §3 (the standing values it moved).<br>
+    Durable outcomes from this review belong in <code>godot/ARCHITECTURE.md</code> or
+    <code>godot/OPS.md</code> once the tickets land — this essay is the reasoning, not the contract.
+  </div>
+</footer>
+</body>
+</html>

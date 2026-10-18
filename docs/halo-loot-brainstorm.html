@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AweCraft — Halo Feel + Infinite Loot Brainstorm</title>
+<style>
+  :root{--bg:#0f1419;--card:#1a222e;--border:#2a3441;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--accent2:#f778ba;--green:#3fb950;--orange:#d29922;--purple:#bc8cff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+  header{max-width:900px;margin:0 auto;padding:48px 24px 24px}
+  header h1{font-size:2.2rem;margin:0 0 8px;letter-spacing:-0.02em}
+  header p{color:var(--muted);margin:0;font-size:1.05rem}
+  .meta{max-width:900px;margin:0 auto;padding:0 24px;display:flex;gap:12px;flex-wrap:wrap}
+  .pill{border:1px solid var(--border);background:var(--card);padding:4px 10px;border-radius:999px;font-size:0.82rem;color:var(--muted)}
+  .pill strong{color:var(--text)}
+  main{max-width:900px;margin:0 auto;padding:24px}
+  section{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:20px}
+  section h2{margin:0 0 6px;font-size:1.25rem}
+  section h3{margin:20px 0 8px;font-size:1rem;color:var(--accent)}
+  .subtitle{color:var(--muted);font-size:0.92rem;margin:0 0 14px}
+  code,pre{font-family: ui-monospace,SFMono-Regular,Consolas,monospace;font-size:0.88em}
+  pre{background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto}
+  code.inline{background:#0d1117;border:1px solid var(--border);padding:1px 6px;border-radius:6px}
+  ul{margin:8px 0 0 18px}
+  li{margin:4px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  .callout{border-left:3px solid var(--accent);padding:10px 14px;background:#0d1117;border-radius:0 8px 8px 0;margin:14px 0;color:#c9d1d9}
+  .callout.orange{border-color:var(--orange)}
+  .callout.green{border-color:var(--green)}
+  .callout.purple{border-color:var(--purple)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:0.92rem}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left}
+  th{background:#0d1117;color:var(--muted);font-weight:600}
+  .toc{columns:2;gap:24px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .kicker{font-size:0.78rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:6px}
+  footer{max-width:900px;margin:0 auto;padding:12px 24px 48px;color:var(--muted);font-size:0.85rem}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">AweCraft · Brainstorm</div>
+  <h1>Halo Feel + Infinite Level Loot System</h1>
+  <p>Procedural Halo-style weapons, infinite leveling with planet-scaled loot, and death/insurance economy — distilled from design discussion 2026-08-27.</p>
+</header>
+<div class="meta">
+  <span class="pill"><strong>Status:</strong> brainstorm — not spec</span>
+  <span class="pill"><strong>Source:</strong> Halo CE / Destiny / WoW / Extraction shooters</span>
+  <span class="pill"><strong>Doc:</strong> docs/halo-loot-brainstorm.html</span>
+</div>
+<main>
+
+<nav style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 28px;margin-bottom:20px">
+  <strong style="font-size:0.9rem">Contents</strong>
+  <div class="toc" style="margin-top:10px;font-size:0.92rem">
+    <div><a href="#feel">1. What Makes Halo Feel Like Halo</a></div>
+    <div><a href="#pistol">2. The Halo Pistol (CE M6D)</a></div>
+    <div><a href="#systems">3. Systems — Implementing Halo Shooting</a></div>
+    <div><a href="#procgen">4. Procedural Halo Weapons</a></div>
+    <div><a href="#levels">5. Infinite Levels + Planet Scaling</a></div>
+    <div><a href="#scaling">6. Destiny-Style Scaling & Clamping</a></div>
+    <div><a href="#overlevel">7. Allowing Feel To Break When Overleveled</a></div>
+    <div><a href="#death">8. Death & Grave (Minecraft + Souls)</a></div>
+    <div><a href="#insurance">9. Insurance (Extraction)</a></div>
+    <div><a href="#merchant">10. Traveling Merchant Buyback</a></div>
+    <div><a href="#softlock">11. Anti-Softlock & Fabricator</a></div>
+    <div><a href="#resources">12. Tiered Resources & Upgrading</a></div>
+     <div><a href="#pitfalls">13. Pitfalls Checklist</a></div>
+     <div><a href="#planet-loop">14. Planet Loop — Land, Clear, Build</a></div>
+     <div><a href="#lore">15. Lore — Rogue AI</a></div>
+  </div>
+</nav>
+
+<section id="feel">
+  <h2>1. What Makes Halo Feel Like Halo</h2>
+  <p class="subtitle">Single-player weapon feel — not CoD comparison.</p>
+  <h3>Golden Triangle</h3>
+  <p>Guns + Grenades + Melee are equally viable. Every fight uses all three.</p>
+  <ul>
+    <li><strong>Shield/Health split:</strong> Recharging shields + health. Two-stage duel: strip shields (any damage) → headshot for kill. Shield crack is loud/visual and resets recharge timer (~4s).</li>
+    <li><strong>Long TTK:</strong> 1.2–1.8s perfect (4-shot BR, 3-shot CE Magnum). Allows strafe, turn, and outplay.</li>
+    <li><strong>Weapon sandbox by role, not stats:</strong> Precision / Plasma / Spread / Power. No attachments; each gun has a hard job.</li>
+    <li><strong>No ADS, full move speed:</strong> Hipfire at 100% strafe. Floaty jump, strong strafe accel — duels are tracking, not recoil control.</li>
+    <li><strong>Two-weapon limit + scarce ammo:</strong> Forces rotation through sandbox (drop empty BR for Needler).</li>
+    <li><strong>Damage types:</strong> <code class="inline">kinetic / plasma / explosive / hardlight</code> with per-target <code class="inline">shield_mult</code> vs <code class="inline">health_mult</code>. Plasma 1.5–2.0× vs shields, 0.6× vs health.</li>
+  </ul>
+  <h3>Feedback > Recoil</h3>
+  <ul>
+    <li>Sound is bass-heavy and distinct per weapon; shield pop, flesh hit, and headshot ping are different cues.</li>
+    <li>Enemies flinch/stagger on shield break — weapon feels strong because target reacts.</li>
+    <li>Campaign feel: distinct faction weapons (hitscan human vs slow projectile Covenant) force leading and varied rhythm.</li>
+  </ul>
+</section>
+
+<section id="pistol">
+  <h2>2. The Halo Pistol — CE M6D as Reference</h2>
+  <p class="subtitle">The defining weapon: pocket sniper, not sidearm.</p>
+  <div class="grid">
+    <div>
+      <h3>CE M6D Stat Block</h3>
+      <ul>
+        <li>12 round mag, ~2.4 RPS, hitscan, 3-shot kill (3 headshots)</li>
+        <li>2× scope, zero bloom/spread, perfect accuracy</li>
+        <li>Almost no view kick — see §3</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Feel Breakdown</h3>
+      <ul>
+        <li><strong>Shot:</strong> Loud <code class="inline">THWACK-CRACK</code> with long tracer, sharp pad kick</li>
+        <li><strong>Accuracy:</strong> Deterministic; if dot on head, it hits. Large magnetism cone (~6–8°)</li>
+        <li><strong>Cadence:</strong> Deliberate <code class="inline">pop…pop…pop → ping → drop</code></li>
+        <li><strong>Power fantasy:</strong> AR feels weak/sprayy, then Magnum 3-taps Elites across the map</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Evolution (why other pistols feel different)</h3>
+  <table>
+    <tr><th>Game</th><th>Feel</th></tr>
+    <tr><td>Halo 2 M6C</td><td>No scope, dual-wield, 6–7 shot, high spread — tinny <code class="inline">pat-pat</code>, backup only</td></tr>
+    <tr><td>Halo 3/ODST M6G</td><td>8 mag, 5-shot (3 head), chunky <code class="inline">BOOM</code>, 0.5–1° view kick</td></tr>
+    <tr><td>Reach M6G</td><td>Adds bloom — spam punished, must pace to ~85% RPS</td></tr>
+    <tr><td>Infinite MK50</td><td>Fast 7-shot Sidekick, burst-like <code class="inline">braap</code>, tracking not tapping</td></tr>
+  </table>
+</section>
+
+<section id="systems">
+  <h2>3. Systems — What To Implement</h2>
+  <p class="subtitle">Programming checklist for Halo shooting. CE has almost zero camera kick — kick is viewmodel + reticle.</p>
+  <h3>Weapon Definition (data-driven)</h3>
+<pre>WeaponDef:
+  fire_mode: semi | auto | burst | charge | overheat
+  rps, burst_count, mag_size, reload_time, overheat_threshold
+  damage: { shield_mult, health_mult, headshot_mult }
+  projectile: hitscan | projectile(speed, gravity, lifetime)
+  accuracy: { error_angle, bloom_per_shot, bloom_decay_rate, min_error }
+  magnetism_angle, friction_scale
+  range_falloff: curve</pre>
+  <h3>Firing Pipeline</h3>
+  <ul>
+    <li>State machine: <code class="inline">Ready → Firing → Recovery → Reload/Overheat → Ready</code>. Enforce <code class="inline">fire_interval = 1.0 / RPS</code> and require button release for semi.</li>
+    <li>Raycast from <code class="inline">camera.forward</code>, spawn tracer from muzzle — avoids shooting around corners.</li>
+    <li>Heat: <code class="inline">heat += per_shot; heat -= cool_rate*delta; if heat&gt;1.0 → lockout</code>.</li>
+  </ul>
+  <h3>Accuracy: Error + Bloom, Not Recoil Pattern</h3>
+  <ul>
+    <li><code class="inline">error_angle += bloom_per_shot</code> on fire; <code class="inline">lerp(error, min_error, decay*delta)</code> at rest. CE Magnum bloom = 0.</li>
+    <li>View kick is <strong>visual only</strong> — camera rotation never changes (except tiny scoped punch). Decouple <code class="inline">camera punch</code> from <code class="inline">bullet_dir</code>.</li>
+  </ul>
+<pre>on_fire():
+  play_muzzle_flash()
+  animate_viewmodel(kick 3deg, 80ms) // viewmodel mesh only
+  // camera.rotation unchanged
+  bullet_dir = camera.forward + random_cone(error_angle)</pre>
+  <div class="callout">User observation confirmed: CE screen flash is muzzle flash + shield flash, not camera move. Later Halos add <code class="inline">viewmodel + reticle bloom</code> only; camera stays 1:1 with input. Zoomed BR is the exception — adds ~0.3–0.5° scope punch + idle sway, plus FOV 70→40 and 0.6× sensitivity.</div>
+  <h3>Aim Assist (non-negotiable for pad feel)</h3>
+  <ul>
+    <li><strong>Friction:</strong> scale <code class="inline">look_input * 0.4–0.6</code> when reticle over target.</li>
+    <li><strong>Magnetism (bullet bend):</strong> if ray missed and <code class="inline">angle_to_target &lt; magnetism_angle</code>, bend hit to head. CE ~6–8°, sniper ~2°.</li>
+  </ul>
+  <h3>Damage: Shield/Health State Machine</h3>
+<pre>on_damage(amount, type, is_headshot):
+  if shields > 0:
+    amount *= type.shield_mult
+    shields -= amount
+    if shields &lt; 0: health += shields * type.health_mult; shields = 0
+    recharge_timer = 4.0
+  else:
+    if is_headshot: amount *= headshot_mult # 2.0–3.0×, only when shields down
+    amount *= type.health_mult
+    health -= amount</pre>
+  <h3>Melee + Grenades (same priority as guns)</h3>
+  <ul>
+    <li>Melee lunge if <code class="inline">dist &lt; 2.5m &amp; in reticle</code>, 2-hit vs shields, 1-hit vs flesh.</li>
+    <li>Grenades: arc preview, bounce, plasma stick via raycast. 2 types differ in <code class="inline">fuse, radius, shield_mult</code>.</li>
+  </ul>
+</section>
+
+<section id="procgen">
+  <h2>4. Procedural Halo Weapons — Infinite Variations Without Losing Feel</h2>
+  <p class="subtitle">Generate within archetype envelopes, not pure random.</p>
+  <div class="grid">
+    <div>
+      <h3>Archetypes (fixed roles)</h3>
+      <ul>
+        <li><strong>Precision</strong> (BR/DMR/Magnum): semi/burst, hitscan, 4–5 shot, low bloom, high magnetism</li>
+        <li><strong>Plasma</strong> (Rifle/Carbine): projectile, high shield_mult, overheat</li>
+        <li><strong>Spread</strong> (Shotgun): pellets, falloff, close range</li>
+        <li><strong>Power</strong> (Rocket/Sniper/Laser): low ROF, high damage</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Modules (mutate within bounds)</h3>
+      <ul>
+        <li>Receiver / barrel / mag-core / sight / stock — each mutates stats ± bounded range</li>
+        <li>Precision barrel never gives shotgun spread</li>
+        <li>Seed drives mesh kitbash + audio + VFX + stats together</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Example Roll — Precision Envelope</h3>
+<pre>damage_per_shot = rand(12–16) # so burst*headshot = 3–4 shot kill
+rps = rand(2.0–3.5); burst = choice([1,3])
+error_min = rand(0.0–0.3°); bloom_per_shot = rand(0.2–0.6°)
+magnetism = rand(3–7°) # never 0
+damage_type = kinetic | plasma  # plasma → shield_mult 1.5–2.0
+projectile = 90% hitscan, 10% fast projectile (250 m/s)
+validate: TTK at-level must be 1.2–1.8s perfect, else re-roll</pre>
+  <h3>Constants — Do Not Proceduralize</h3>
+  <ul>
+    <li>Viewmodel+reticle kick only, magnetism+friction always present, shield/health split and headshot-only-when-shields-down.</li>
+    <li>Readability: long barrel+scope = precision; glowing core+vents = plasma/overheat; wide muzzle = spread. Color/sound tied to damage type (<code class="inline">kinetic=crack/grey, plasma=whine/purple, hardlight=zap/orange</code>).</li>
+  </ul>
+</section>
+
+<section id="levels">
+  <h2>5. Infinite Levels + Planet Scaling (WoW-like)</h2>
+  <p class="subtitle">New planet locks to your level at discovery; returning you stomp. TTK varies with level delta.</p>
+  <h3>Power Curve</h3>
+<pre>level_mult = pow(1.08, level) # ~8%/level; 10 lvls = 2.15×
+actual_damage  = base_damage  * level_mult(weapon_level)
+actual_shields = base_shields * level_mult(enemy_level)
+actual_health  = base_health  * level_mult(enemy_level)
+# at-level: mults cancel → TTK stays 1.2–1.8s by definition</pre>
+  <ul>
+    <li>Soft diminish after 100: <code class="inline">pow(1.08,100) * pow(1.02, lvl-100)</code> or periodic squish to avoid <code class="inline">1.08^200 = 3.8M×</code> float blowup.</li>
+    <li>Preserve integer breakpoints: <code class="inline">shots = ceil((shields+health)/(dmg*headshot_mult))</code>. Validate at-level shots in [4,5] for precision, else re-roll weapon.</li>
+    <li>Headshot mult never scales — stays 1.8–2.5× only when shields down.</li>
+  </ul>
+  <h3>Planet & Loot Rules</h3>
+<pre>planet.level = player_level_at_discovery  # locked forever
+enemy.level  = planet.level + rand(-1..+2) # elites +2
+loot.level   = planet.level + rand(0..+2)  # slightly above, progression</pre>
+  <ul>
+    <li>New planet: everything at your current level — fresh Halo TTK.</li>
+    <li>Old planet: never re-scales. Returning at +15 you 1–2 tap.</li>
+    <li>Store <code class="inline">planet.level</code> in save; version the curve (<code class="inline">curve_v1</code>) so patch doesn't retroactively retune saves.</li>
+  </ul>
+  <h3>Upgradability (bridge gaps, keep god rolls)</h3>
+<pre>upgrade_cost = base_cost * pow(1.25, weapon_level)
+max_upgrade  = weapon_level ≤ player_level + 5
+on_upgrade: level +=1, keep seed/parts, optionally re-roll one stat in envelope</pre>
+  <ul>
+    <li>Keep a favorite viable ~10–15 levels, then new planet drop wins. Cap at <code class="inline">base_level+10</code> to force eventual re-loot.</li>
+    <li>Require planet-specific mats so you must visit new planets to upgrade.</li>
+  </ul>
+</section>
+
+<section id="scaling">
+  <h2>6. Destiny-Style Smooth Scaling (Reference)</h2>
+  <p class="subtitle">Bungie's solution to the same problem — same Halo team.</p>
+  <ul>
+    <li>Uses <code class="inline">delta = your Power − enemy Power</code> with piecewise curve, not pure pow.</li>
+    <li>At-level = 1.0× (tuned Halo TTK). <code class="inline">+20 delta → 1.25× capped</code> (+50 still 1.25×). Being +40 doesn't give 5×.</li>
+    <li>Underleveled hurts more than overleveled helps: <code class="inline">-10 → ~0.6×</code> effective DPS.</li>
+    <li>Clamp keeps 4-shot staying 4-shot; stair-step breakpoints rarely crossed because scalar only 1.0–1.25×.</li>
+    <li>PvE vs PvP scalars separated — Crucible ignores Power.</li>
+  </ul>
+  <div class="callout green">Takeaway: Destiny keeps Halo feel by capping advantage at ~25% faster kill. Stomping old content feels strong but still 3–4 shots. That's the conservative choice; AweCraft can choose to let it break (next section).</div>
+</section>
+
+<section id="overlevel">
+  <h2>7. Allowing Halo Feel To Break When Vastly Overleveled</h2>
+  <p class="subtitle">Decision: outside the Halo window, let TTK collapse — power fantasy is intentional.</p>
+<pre>delta = weapon_level - enemy_level
+if abs(delta) ≤ 7:  # Halo window
+  mult = pow(1.06, delta) # 1.06^7=1.5× → 0.8–2.5s
+else: # power fantasy
+  mult = pow(1.06,7) * pow(1.10, abs(delta)-7) # steeper outside
+# +15 → 2.6× (2-tap/1-tap), -15 → 0.25× (10+ shots)</pre>
+  <ul>
+    <li>Inside window: preserve breakpoints, magnetism, shield→headshot loop.</li>
+    <li>Outside: let it break. 1-tap on old planet is the reward.</li>
+    <li>Still keep: hit feedback (shield pop + ping), weapon identity (burst/heat), reload — don't make every gun same 1-shot.</li>
+  </ul>
+  <h3>Underleveled Floor — Why Cap?</h3>
+  <p>WoW uses hit-table RNG (5%→17% miss vs +3 skull), not a damage scalar. FPS can't use RNG miss — perfect aim must hit. So FPS converts WoW's <code class="inline">miss chance</code> into a <code class="inline">damage scalar</code>.</p>
+  <ul>
+    <li><code class="inline">.2× floor</code> is arbitrary — just an example "5× weaker, 4-shot→20 shots, punishing but killable with skill" soft gate.</li>
+    <li>No cap / <code class="inline">.05×</code> = hard gate: <code class="inline">-30 → 0.09× → 44 shots</code>, effectively immune. Use if you want <code class="inline">level = hard wall, go away</code>.</li>
+    <li>Cap at <code class="inline">.2–.3×</code> = soft gate: skilled player can chip it down. Use if you want <code class="inline">level = strong hint but possible</code>.</li>
+  </ul>
+</section>
+
+<section id="death">
+  <h2>8. Death & Grave — Minecraft + Dark Souls Hybrid</h2>
+  <p class="subtitle">Drop until touched, then timer; second death deletes old grave.</p>
+  <ul>
+    <li><strong>Rule:</strong> Die → <code class="inline">death_bag</code> at death pos with inventory snapshot. Persists forever until interacted. On interact/open, start 5 min despawn for leftovers. Die again before retrieval → old bag deleted, new bag at new spot. Only one grave exists (Souls-like).</li>
+    <li><strong>What drops:</strong> Decide hotbar+equipped vs full inventory vs currency-only. Full drop with infinite-level purples is harsh — consider vault/prime slot that never drops.</li>
+    <li><strong>Persistence:</strong> Store <code class="inline">DeathGrave{planet_id, chunk_pos, world_pos, items[], touch_time}</code> in save, not just scene node. On planet load, respawn entity if grave matches that planet. One global grave means dying on Planet 5 while grave on 4 permanently deletes 4's loot.</li>
+    <li><strong>Edge cases:</strong> Death in void/lava → spawn at last safe ground (raycast to floor). Full inventory on pickup → leftovers stay, timer ticks — must make space. Owner-locked, no co-op steal. Die empty → no grave.</li>
+  </ul>
+<pre># save.gd sketch
+var death_grave: Dictionary = {}
+func on_death(player):
+  if death_grave.size()>0: remove_grave_entity(death_grave)
+  death_grave = {planet_id=current_planet, pos=player.pos, items=player.inventory.snapshot(), touch_time=null}
+  player.inventory.clear(); spawn_grave(death_grave)
+func on_grave_touched():
+  if death_grave.touch_time==null: death_grave.touch_time = Time.get_unix_time_from_system()
+func _process():
+  if death_grave.touch_time and Time.get_unix_time_from_system()-death_grave.touch_time > 300: erase_grave()</pre>
+  <div class="callout orange"><strong>Risk:</strong> Losing a level 85 god-roll to a second lava death with no recovery = uninstall moment. Needs insurance/buyback (next).</div>
+</section>
+
+<section id="insurance">
+  <h2>9. Insurance — Borrowed From Extraction Shooters</h2>
+  <p class="subtitle">Pre-pay to protect god rolls; not everything.</p>
+  <div class="grid">
+    <div>
+      <h3>Tiers (Tarkov-like)</h3>
+      <ul>
+        <li><strong>Base (cheap):</strong> Still drops to grave, but if grave is lost it returns via Base Mailbox after 20–30 min. You play without it until return.</li>
+        <li><strong>Prime (expensive):</strong> Doesn't drop at all — stays in inventory. For 1–2 favorites only.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Cost & Limits</h3>
+<pre>cost = base_fee * pow(1.06, level) * rarity_mult
+# common 1.0, legendary 3.0, god-roll 5.0
+# ~15–20% of weapon value for Base, ~50% for Prime
+# limited slots: Base 3–5, Prime 1–2</pre>
+      <ul>
+        <li>Pay in planet-specific mats — must farm at level, not old planet.</li>
+        <li>Expires on time (24h) or death count (3 deaths), consumed on use.</li>
+        <li>Can't insure while grave exists.</li>
+      </ul>
+    </div>
+  </div>
+<pre>on_insure(weapon, tier): weapon.insurance={tier, expires_at}; deduct_cost()
+on_grave_lost():
+  for item in lost_grave:
+    if item.insurance.tier==BASE: mailbox.queue(item, now+30min)</pre>
+</section>
+
+<section id="merchant">
+  <h2>10. Traveling Merchant — Buyback For Uninsured Losses</h2>
+  <p class="subtitle">Post-pay safety net: Lost & Found tab sells your actual lost items back.</p>
+  <ul>
+    <li><strong>Flow:</strong> Grave lost → uninsured items go to <code class="inline">merchant_pool</code> not void. Insured items go to mailbox (cheaper).</li>
+    <li><strong>Price:</strong> <code class="inline">buyback = insurable_value * 2.5</code> (no insurance = expensive). Old-planet junk <code class="inline">*0.7</code>.</li>
+    <li><strong>Merchants:</strong> Base merchant always has Lost & Found (reliable, expensive). Traveling merchant (random planet, 30 min window) same pool at ~30% discount + 1 random roll.</li>
+    <li><strong>Pool:</strong> Capped 10–15 items FIFO, 7-day expiry, then gone. Once bought/expired, permanently deleted — death still has consequence.</li>
+    <li><strong>Anti-dupe:</strong> Only <code class="inline">is_death_drop</code> items go to pool, not manual drops.</li>
+  </ul>
+  <div class="callout">Economy: <code class="inline">Insurance = pre-pay, cheap if you plan</code> vs <code class="inline">Merchant = post-pay, 2.5×, works even if you forgot</code>. Run both: skill retrieves grave, preparation uses mailbox, forgetfulness pays merchant tax.</div>
+</section>
+
+<section id="softlock">
+  <h2>11. Anti-Softlock — Going Back To Planet 4 After Losing Everything On 5</h2>
+  <p class="subtitle">Problem: 45 purples lost on 5, now on 4 with fists → can't kill 37s to get 37 drops.</p>
+  <h3>Three-Layer Net</h3>
+  <ol>
+    <li><strong>Base Fabricator — Craftable Baseline (Diamond Tier):</strong> Always craftable weapon at <code class="inline">player_level</code> for common mats. Like Minecraft diamond — deterministic, viable 4-shot, not god-roll. Enchanted procedural loot from planets can beat it but isn't required to farm. First kit after death is free.</li>
+    <li><strong>Player Level ≠ Gear Level:</strong> Player level gives +2% health/shields even naked. Level 45 player with Tier 8 grey on planet 37 is slightly <em>over</em>, not under — TTK stays ~4-shot.</li>
+    <li><strong>Vault / Prime Slot:</strong> Base vault (3–5 guns) or Prime insurance slot (1 gun) never drops — stash vs loadout split, extraction-style.</li>
+  </ol>
+  <h3>Fabricator Gating</h3>
+  <ul>
+    <li>Gate on <strong>cost + quality</strong>, not cooldown. Cooldown punishes chain deaths when you need it now.</li>
+    <li>Craftable = guaranteed 4-shot diamond baseline; loot = same level but can roll 3.2 RPS / better magnetism / plasma bonus — higher ceiling, RNG.</li>
+    <li>Upgrade path: Lvl1 random archetype → Lvl2 choose archetype → Lvl3 choose rarity. Still needs right Tier+Rarity ore (see §12).</li>
+  </ul>
+  <div class="callout green"><strong>Loop:</strong> Die on 5 → respawn base with craftable 45s + vault → stomp 4 → get 37–38 drops or farm Tier 8 mats to craft 45s → retry 5 or rebuy 45s from merchant at 2.5× tax. Never hits <code class="inline">no guns → can't kill → can't get guns</code>.</div>
+</section>
+
+<section id="resources">
+  <h2>12. Tiered Resources & Upgrading — Two Axes</h2>
+  <p class="subtitle">Planet Tier (level bracket) × Ore Rarity (copper/iron/diamond). Added 2026-08-27.</p>
+  <h3>Axis 1 — Tier.Sublevel (5 sublevels per tier)</h3>
+<pre>T1 L1 .. T1 L5  → Tier 1 planets  (old 1–5)
+T2 L1 .. T2 L5  → Tier 2 planets  (old 6–10)
+T3 L1 .. T3 L5  → Tier 3 planets  (old 11–15)
+...
+Global = (tier-1)*5 + sublevel  # for damage: pow(1.06, global)
+Display as T2 L1 rifle, cost uses T2 ore</pre>
+  <ul>
+    <li>Craft T1 L1 with T1 ore, upgrade T1 L1→L5 with T1 ore, break to T2 L1 requires T2 ore.</li>
+    <li>Hard gate — can't farm T1 planet to reach T3 L1. Must visit T3 planet.</li>
+    <li>If player is T1 L5 but hasn't found a T2 planet, they stall at T1 L5 until they explore — forces planet progression in order.</li>
+  </ul>
+  <h3>Axis 2 — Rarity = Ore Type Per Planet</h3>
+  <p>Each planet (each Tier) spawns all three rarities with different abundance:</p>
+  <table>
+    <tr><th>Ore</th><th>Abundance</th><th>Crafts/Upgrades</th></tr>
+    <tr><td>Copper</td><td>Common</td><td>Common weapons only</td></tr>
+    <tr><td>Iron</td><td>Uncommon</td><td>Uncommon weapons</td></tr>
+    <tr><td>Diamond</td><td>Rare</td><td>Rare / Legendary weapons</td></tr>
+  </table>
+  <p>So a T2 planet has <code class="inline">T2 Copper, T2 Iron, T2 Diamond</code> as separate stacks. Rare gun needs diamond even if tier matches.</p>
+<pre>can_upgrade(weapon): # T1 L5 → T2 L1 needs T2 ore
+  tier   = weapon.tier + (1 if weapon.sublevel==5 else 0)
+  rarity = weapon.rarity                    # rare → needs diamond
+  return has(ore[tier][rarity] >= cost)     # e.g. 20× T2 Diamond for T1 L5→T2 L1</pre>
+  <div class="callout orange"><strong>Matrix:</strong> 16 tiers × 3 rarities = 48 theoretical stacks, but you only carry 3 per current tier. Store as <code class="inline">{tier, rarity, qty}</code> not 80 per-level diamonds — compressed vs per-level ore.</div>
+  <h3>Conversion — Both Directions, Different Rates (Discovery-Gated)</h3>
+  <p>Higher tier ore subs for lower at 2:1 (efficient catch-up). Lower tier can combine to higher at 10:1 (inefficient grind fallback) — <em>only after you've found that ore type at the target tier</em>.</p>
+<pre># Downgrade 2:1 — higher subs for lower, fewer needed
+T3 diamond = 2× T2 diamond = 4× T1 diamond
+T1 L4→L5 (rare): 20× T1 diamond OR 10× T2 diamond OR 5× T3 diamond
+cost_higher = ceil(qty / pow(2, tier_diff))
+
+# Upgrade 10:1 — lower combines to higher, many needed
+1× T2 diamond = 10× T1 diamond
+T2 L1 craft (rare, 20× T2): pay 20× T2 OR 200× T1
+cost_lower = qty * pow(10, tier_diff)
+# 10:1 is intentionally wasteful — exploring T2 is 10× more efficient than farming T1</pre>
+  <ul>
+    <li><strong>Downgrade (high→low) 2:1:</strong> T3→T2, T2→T1 — always allowed, cheap catch-up.</li>
+    <li><strong>Upgrade (low→high) 10:1:</strong> T1→T2, T2→T3 — only after you've <em>found that ore type at target tier</em> (e.g. mined one T2 Diamond unlocks <code class="inline">10× T1 Diamond → 1× T2 Diamond</code>), and grindy. Farm old planet 10× longer vs just going to new tier.</li>
+    <li>Both require same rarity — copper can't become diamond, only tier converts.</li>
+    <li><strong>Discovery gate closes the stay-forever loophole:</strong> Can't sit on T1 and trade up to T16 — you must have mined each tier's ore once, sequentially.</li>
+  </ul>
+<pre>if has(ore[tier][rarity]): pay it
+elif has_higher(tier, rarity): pay ceil(qty / pow(2, diff))
+elif has_lower(tier, rarity): pay qty * pow(10, diff)  # 10:1 fallback</pre>
+  <div class="callout green"><strong>Result:</strong> You always need the right <code class="inline">rarity</code> (copper can't become diamond) but higher <code class="inline">tier</code> can cover lower. Never stuck going back to Planet 1 just because T1 copper ran out — spend T2 copper at 5:1 instead.</div>
+  <h3>Consideration — Named Early Tiers, Numeric After</h3>
+  <p>First X tiers (e.g. X=5) get distinct names/icons — <code class="inline">T1 Verdant, T2 Ember, T3 Void, T4 Ancient, T5 Stellar</code> — with unique ore textures and weapon skins. Creates memorable milestones like Minecraft's <code class="inline">iron → diamond → netherite</code> and attachment to <code class="inline">my first T3 Void rifle</code>.</p>
+  <ul>
+    <li>T1–T5: handcrafted names/images, hand-tuned balance.</li>
+    <li>T6+: numeric only — <code class="inline">Stellar T6, T7…</code> recolor of T5, infinite scaling. Less memorable, but workload stays bounded.</li>
+  </ul>
+  <div class="callout">Early named tiers drive identity/attachment; infinite numeric tiers after are just <code class="inline">number goes up</code> for endgame.</div>
+  <h3>Terraform — Re-Tier Any Planet (Discovery-Gated)</h3>
+  <p>Can be applied to <em>any</em> planet, not just home. Same planet, higher tier enemies/ores. Expensive — exploring a new planet is still more efficient.</p>
+<pre># Cost to raise any Planet: T1 → T2
+cost = 50× T2 Diamond + 100× T2 Iron  # ≈ one full T2 farm run
+# General: +1 tier costs mats from target tier, not current
+# Can't jump T1→T3 — one tier at a time, max +2 over original tier to force eventual exploration</pre>
+  <ul>
+    <li><strong>Effect:</strong> <code class="inline">planet.tier +=1</code>, ore nodes re-roll to new tier, enemies scale to new tier. Biome/seed/builds preserved. Works on any discovered planet.</li>
+    <li><strong>Gate:</strong> Must have <em>discovered at least one planet of target tier</em> before you can terraform any planet to that tier, plus pay target-tier mats. So T1→T2 requires you've visited a T2 planet at least once.</li>
+    <li><strong>Tradeoff:</strong> Cheap terraform → one planet forever, discovery dies. Expensive (≈2× new planet farm) → nomad exploring stays efficient, terraform is luxury to keep a liked planet relevant.</li>
+    <li><strong>Multiple planets per tier still allowed:</strong> You can have 4–5 T2 planets discovered at T2 L1–L5; terraform just lets any <em>favorite</em> keep up instead of moving.</li>
+  </ul>
+  <div class="callout purple"><strong>Loop with terraform:</strong> Explore T2 planets → farm mats → either settle new T3 planet <em>or</em> spend mats to terraform any existing planet to T3. Keeps attachment to builds without killing exploration.</div>
+</section>
+
+<section id="planet-loop">
+  <h2>14. Planet Loop — Land, Clear, Build</h2>
+  <p class="subtitle">Plain language — how a planet plays. Fixed positions, no orbits.</p>
+  <p>You fly to a new planet and land anywhere that isn't guarded by enemy anti-air guns. Those guns create no-fly zones — you can try to fly through them but you'll get shot up, so it's safer to land outside and walk in.</p>
+  <p>On foot you clear the outposts, and once they're gone you can fly freely over that area. You can always explore on foot, even before clearing — clearing just unlocks the sky. Scouting from the ship is allowed.</p>
+  <p>Each planet looks different — different ground, plants and creatures, and different ores to find. After you mine what you need, you fly to the next planet, which is a bit harder, and do it again. Planets stay in fixed positions and spin for day and night; they don't orbit.</p>
+  <ul>
+    <li>3–5 AA bubbles per planet (~500m), everything else landable (pads optional; crash outside = 20% hull, repairable).</li>
+    <li>Variance per planet: biome, wildlife, ore concentration at same tier.</li>
+    <li>Loop: land → clear on foot → mine/build → next tier.</li>
+  </ul>
+</section>
+
+<section id="lore">
+  <h2>15. Lore — Rogue AI</h2>
+  <p class="subtitle">Light lore, mechanics-first.</p>
+  <p>Enemies are robotic. A rogue AI is expanding planet by planet, taking over the system — each tier is how long the AI has held that planet (T1 fresh, T10 entrenched).</p>
+  <ul>
+    <li>AA outposts = AI defense network (clear to unlock air).</li>
+    <li>Mats = salvaged AI parts (T2 Diamond = AI core) — mining is salvaging.</li>
+    <li>Restore theme (Pokopia / BotW Malice): Malice coats higher-T planets (metal/corruption); clear outposts → malice recedes, biome restores (grey → grass/wildlife). Tier stays — visual heal, not T3→T2.</li>
+    <li>Post-clear activity: AI drops reinforcement pods every 10–15m on cleared planets so they stay farmable but less dense than inside AA bubbles.</li>
+    <li>Solar system = 9 planets (8 spheres + 1 ring world), progressively harder with distance from home; final ring world is AI hoard — entire ring made of stolen ore (all tiers, malice core).</li>
+    <li>Beating final planet unlocks mass relay → new solar system (NG+) — same 9-planet loop at higher tier offset (T10+), keep mats/guns, malice resets; original system remains accessible (return via relay).</li>
+  </ul>
+</section>
+
+<section id="pitfalls">
+  <h2>13. Pitfalls Checklist</h2>
+  <div class="grid">
+    <div>
+      <h3>Combat Feel</h3>
+      <ul>
+        <li>Breakpoint cliffs every 1–2 levels if <code class="inline">mult=1.08</code> — use 1.04–1.06 so cliffs every 4–5.</li>
+        <li>At-level Halo window is narrow; uncapped overlevel collapses strafe duels — intentional, but define window (±7).</li>
+        <li>Don't scale magnetism/bloom/error or headshot_mult with level.</li>
+      </ul>
+      <h3>Progression</h3>
+      <ul>
+        <li>Exponential blowup after 100 — soft diminish or squish.</li>
+        <li>Loot treadmill: favorite obsolete in 30 min — upgrade keeps it 10–15 levels, capped at +10.</li>
+        <li>Planet discovery gaming (scout 20 at lvl 10) — consider lock on first clear or soft re-level <code class="inline">max(planet.lvl, player-10)</code>.</li>
+        <li>Old planets boring after stomp — need cosmetics/mats or heroic re-level toggle.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Economy & Tech</h3>
+      <ul>
+        <li>Insurance too cheap → never farm; too expensive → never use. Tune Base ~15%, Prime ~50% of value.</li>
+        <li>Save bloat: procedural + level + insurance per gun; version curve, bake <code class="inline">level_mult</code> at drop.</li>
+        <li>Readability: show <code class="inline">level_diff</code> color (blue trivial / white at-level / red dangerous) + <code class="inline">shots_to_kill</code> in inspect.</li>
+        <li>Test matrix: automate <code class="inline">TTK sim</code> gate on every generated gun (95%/80%/60% hit rate at 10/30/60m).</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout purple"><strong>Core tension to hold:</strong> WoW numbers + Halo guns works only if <code class="inline">at-level duels stay in 1.2–1.8s window</code>. Let overlevel break it for power fantasy, but keep underlevel bounded so skill still matters.</div>
+</section>
+
+<section style="border-style:dashed">
+  <h2>Next Steps (if promoted from brainstorm)</h2>
+  <ul>
+    <li>Pick numbers: <code class="inline">level_mult</code> (1.06 vs 1.08), Halo window (±7?), floor (.2 vs uncapped).</li>
+    <li>Decide what drops on death: full vs hotbar-only vs currency-only.</li>
+    <li>Spec fabricator Tiers + insurance slot counts + mailbox vs merchant split.</li>
+    <li>Prototype TTK sim: generate 100 random Precision rolls at levels 10/40/80, verify at-level 1.2–1.8s holds.</li>
+  </ul>
+</section>
+
+</main>
+<footer>
+  Generated 2026-08-27 from design discussion. Not a spec — tune numbers in prototype. File: <code class="inline">docs/halo-loot-brainstorm.html</code> — open via <code class="inline">http://localhost:5180</code> tasks webui or static serve.
+</footer>
+</body>
+</html>

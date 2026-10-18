@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AweCraft — Chiseled Creature & Character System — Plan</title>
+<style>
+  :root{--bg:#fafaf7;--fg:#1d1d1f;--mut:#6b7280;--line:#e5e7eb;--accent:#d97706;--accent2:#0e7490;--card:#ffffff}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.6 ui-sans,system-ui,Segoe UI,Roboto,Helvetica,Arial;color:var(--fg);background:var(--bg)}
+  header{max-width:1000px;margin:0 auto;padding:48px 24px 24px}
+  header h1{margin:0;font-size:32px;line-height:1.2;letter-spacing:-0.02em}
+  header p.lead{color:var(--mut);max-width:720px;margin:12px 0 0}
+  .pill{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--mut);margin-top:14px}
+  main{max-width:1000px;margin:0 auto;padding:0 24px 64px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;margin:20px 0}
+  h2{margin:0 0 8px;font-size:20px;letter-spacing:-0.01em}
+  h3{margin:20px 0 8px;font-size:15px;text-transform:uppercase;letter-spacing:0.08em;color:var(--mut)}
+  ul{margin:8px 0 0 18px}
+  li{margin:6px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:800px){.grid{grid-template-columns:1fr}}
+  .kcard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fbfbfb}
+  .kcard b{font-size:13px;letter-spacing:0.06em;text-transform:uppercase;color:var(--accent2)}
+  .kcard p{margin:6px 0 0;color:var(--mut);font-size:14px}
+  code{background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:1px 6px;font-size:13px}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px}
+  th{ text-align:left;border-bottom:2px solid var(--line);padding:8px;color:var(--mut);font-weight:600}
+  td{border-bottom:1px solid var(--line);padding:10px 8px;vertical-align:top}
+  .callout{border-left:4px solid var(--accent);padding:12px 16px;background:#fffbeb;border-radius:8px;margin-top:12px}
+  .phase{border:1px dashed var(--line);border-radius:12px;padding:14px;margin-top:12px}
+  .phase h4{margin:0;font-size:14px}
+  .foot{color:var(--mut);font-size:13px;margin-top:24px}
+</style>
+</head>
+<body>
+<header>
+  <div class="pill">Plan — not yet implemented · AweCraft creature + character rig</div>
+  <h1>Chiseled Creature & Character System</h1>
+  <p class="lead">Reusable voxel rig built from the same micro-voxel + greedy + atlas stack as chiseled blocks (<code>16×16×16</code> per block, multi-block parts) — with action-figure joints and animated decals for faces. Players and creatures share the same system. Templates are authored (human) or procedural, then spawned many times.</p>
+</header>
+<main>
+
+<section>
+  <h2>Goals</h2>
+  <ul>
+    <li><b>One system for players + creatures</b> — same part format, same meshing, same save.</li>
+    <li><b>Chiseled parts, not sculpted meshes</b> — reuse block chisel tech (palette + <code>512B</code> bitset per <code>16^3</code> block).</li>
+    <li><b>Action-figure rig</b> — independent part meshes connected by joints, moved by rotating parts, not skinning voxels.</li>
+    <li><b>Expressive faces via decals</b> — mouth/eyes are animatable decals over the voxel texture, not voxels.</li>
+    <li><b>Author once, spawn many</b> — saved templates + per-instance sliders (longer/thicker) for variety.</li>
+    <li><b>Editor is tooling</b> — out-of-scope for v1, but system is built so a creature/object editor can drive it (separate tabs, same engine).</li>
+  </ul>
+  <div class="callout">v1 ships without editor. Team authors templates in a dev tool / external editor; game only loads and spawns them. Part library + symmetry + joint limits are follow-ups.</div>
+</section>
+
+<section>
+  <h2>Scope: What we decided</h2>
+  <div class="grid">
+    <div class="kcard"><b>Players too</b><p>Player avatar is a rig (head/torso/arms/legs) built from chiseled parts, same as mobs.</p></div>
+    <div class="kcard"><b>Multi-block parts</b><p>A body part can be N blocks (e.g., 1×2×1 for a leg). All blocks baked into one mesh per part on finish.</p></div>
+    <div class="kcard"><b>Ball joints now, hinges later</b><p>Balls are the minimum; hinges and per-joint angle limits are a follow-up.</p></div>
+    <div class="kcard"><b>Decals animate</b><p>Eyes/mouth must be animatable — blink, talk — via frame swaps, not voxel edits.</p></div>
+    <div class="kcard"><b>Saved templates</b><p>Templates are pre-authored or procedurally generated; many instances share one template + per-instance tweaks.</p></div>
+    <div class="kcard"><b>Tool later</b><p>Creature/object editor is a separate tab of the same tool, not v1. System is editor-ready.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Architecture — at a glance</h2>
+  <table>
+    <tr><th>Layer</th><th>What</th><th>Notes</th></tr>
+    <tr><td>Voxel part</td><td><code>Part = grid of blocks, each 16×16×16 micro-voxels</code></td><td>Single-material first; stored as <code>p=[id] + 512B bitset</code> per block, later palette growth for multi-material.</td></tr>
+    <tr><td>Mesh</td><td>Per-part greedy: one sweep over the part’s blocks, skip empty, greedy inside each <code>16^3</code> block</td><td>One <code>ArrayMesh</code> per part → one draw call per part (e.g., 6 parts = 6 calls).</td></tr>
+    <tr><td>Texture</td><td>Same block atlas tiling as terrain; UVs repeat per micro-quad</td><td>No new atlas — reuse.</td></tr>
+    <tr><td>Rig</td><td>Scene: <code>Rig(root) → Part nodes (MeshInstance3D) → Joint nodes</code></td><td>Joints are <code>Node3D</code> pivots; rotating a part moves its whole mesh.</td></tr>
+    <tr><td>Decal</td><td>Flat quad(s) on part surface with second material (eye/mouth atlas)</td><td>Anim by UV frame swap; not part of greedy.</td></tr>
+    <tr><td>Instance</td><td><code>RigInstance = template + {scale sliders, tint, decal frame}</code></td><td>Many mobs share template; per-instance sliders stretch the part.</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>Data model</h2>
+  <h3>Template (saved asset)</h3>
+  <ul>
+    <li><code>template_id, name, bounds</code></li>
+    <li><code>parts[]: {id, name, blocks: [{pos: Vector3i, p:[id], bits:512B}], pivot: Vector3, joint: {parent, anchor, type:ball, limits?}}</code></li>
+    <li><code>decals[]: {part, name:"eye_L", rect:{u,v,w,h} in decal atlas, size, offset, anim:"blink"}</code></li>
+    <li><code>rig: {skeleton: parts tree, default_pose}</code></li>
+  </ul>
+  <h3>Per-instance override</h3>
+  <ul>
+    <li><code>sliders: {length:0.8..1.4, girth:0.9..1.2}</code> — applied as non-uniform scale on the part’s <code>MeshInstance</code> or by resampling the micro grid before meshing (cheaper = node scale).</li>
+    <li><code>decal_frame: int</code> + <code>pose: {joint: quat}</code> per frame (animation drives this).</li>
+  </ul>
+  <h3>Save layout</h3>
+  <ul>
+    <li>Templates live as <code>res://creatures/templates/*.json</code> (or <code>.tres</code>) — not per-world.</li>
+    <li>World save for a spawned creature stores <code>{template_id, pos, sliders, decal_state}</code> — not the voxles. So 100 goblins share one template + 100 tiny instance rows.</li>
+  </ul>
+  <div class="callout">Forward-compatible: single-material chiseled blocks stored as <code>p=[id]</code> today; multi-material later just becomes <code>p=[stone,wood]</code> with no migration.</div>
+</section>
+
+<section>
+  <h2>Meshing</h2>
+  <ul>
+    <li>For each part, build a dense occupancy over its multi-block volume (e.g., leg = <code>16×32×16</code> = <code>2</code> blocks tall).</li>
+    <li>Greedy pass: iterate faces, merge same-material quads where light/AO matches — but only <em>inside</em> the part. Never merge across parts (they’re separate meshes).</li>
+    <li>Chiseled blocks inside a part already excluded from “full block” greedy — they’re the micro greedy inside each <code>16^3</code> (now <code>16×16×16</code>). Multi-block part just runs that micro greedy per block, then combines.</li>
+    <li>Result: one <code>ArrayMesh</code> per part. Flat walls still one quad, carved details stay detailed.</li>
+    <li>Texture: sample block atlas per micro-quad (repeat UV if merged). Decals are a second material pass — a <code>QuadMesh</code> child of the part with alpha.</li>
+  </ul>
+  <h3>LOD (follow-up)</h3>
+  <ul>
+    <li>Not v1. Later: distant creatures merge parts into one mesh (or billboard impostor) to cut draw calls for crowds.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Joints & animation</h2>
+  <ul>
+    <li><b>v1 joints:</b> ball joints (3 DOF) at anchor micro-voxel — e.g., shoulder at <code>(8,24,8)</code> of torso. No limits yet; animator just sets quats.</li>
+    <li><b>Follow-up:</b> hinge type + per-joint cone limits (min/max pitch/yaw) so elbows don’t bend backwards. Data lives on the joint: <code>{type, axis, min,max}</code>.</li>
+    <li>Animation drives <em>part transforms</em> + <em>decal frames</em>. No voxel re-mesh per frame. Walk cycle = swing leg parts ±30°, head bob, eye decal blink frame every few seconds.</li>
+    <li>Procedural creatures pick a template then randomize sliders + palette tints before spawn — so 10 goblins from one template look varied but share the mesh.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Decals</h2>
+  <ul>
+    <li>Decal atlas: small <code>256×256</code> with eye/mouth frames (e.g., <code>32×32</code> per frame, 4 blink frames, 6 mouth shapes).</li>
+    <li>Each decal is a <code>Decal</code> or <code>Sprite3D</code>-style quad pinned to a part face (offset + normal). Upper material, alpha-cut.</li>
+    <li>Anim: swap <code>rect</code> per frame; timer drives blink (random 2-5s) and lip-sync (phoneme → mouth frame). No geometry change.</li>
+    <li>Follow-up: additional decal layers (scars, paint) with tint — same system, just extra quads.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Tooling (out of scope, but design for it)</h2>
+  <ul>
+    <li>Separate creature/object editor — tabs share the same chisel backend. Object tab edits a single part (chair), creature tab edits a rig of parts.</li>
+    <li>Editor reuses in-game chisel tools: add/remove micro-voxels, box fill, symmetry mirror (follow-up).</li>
+    <li>Export button → writes <code>templates/*.json</code> with preview PNG.</li>
+    <li>Part library: save a chiseled arm to library, instantiate in another creature, tweak sliders per instance (longer/thicker).</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Phased plan</h2>
+  <div class="phase">
+    <h4>Phase 1 — Core (v1)</h4>
+    <ul>
+      <li>Multi-block part format + single-material <code>16^3</code> storage + greedy per-part bake.</li>
+      <li>Ball joints as <code>Node3D</code> pivots, rig loader, pose driver.</li>
+      <li>Decal quad + animatable frame swap (eyes/mouth).</li>
+      <li>Template load + instance sliders (scale) — many spawns share template.</li>
+      <li>Player rig uses same path (swap current capsule for rig).</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <h4>Phase 2 — Follow-ups</h4>
+    <ul>
+      <li>Symmetry mirror while chiseling a limb.</li>
+      <li>Part library + per-instance length/girth sliders that resample voxels (not just node scale).</li>
+      <li>Joint constraints (hinge + cone limits).</li>
+      <li>Extra decal layers (scars/paint, tint).</li>
+      <li>LOD: merge parts to one mesh at distance / crowd impostors.</li>
+      <li>Multi-material chiseled block (palette growth) — no save break.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>Open answers captured</h2>
+  <ul>
+    <li>Players use the same rig — yes.</li>
+    <li>Editor not in v1; plan for a shared creature/object tool later.</li>
+    <li>Parts can be multi-block, baked to one mesh per part.</li>
+    <li>Balls now, hinges/limits later.</li>
+    <li>Decals must animate.</li>
+    <li>Templates saved, many instances share mesh; procedural generation picks template + randomizes sliders.</li>
+    <li>Symmetry → follow-up; part library yes + sliders; decal layers yes; LOD follow-up.</li>
+  </ul>
+  <h3>Risks</h3>
+  <ul>
+    <li>Too many parts → draw calls. Mitig: keep rigs to ~6-8 parts max for v1, batch by material.</li>
+    <li>Micro-mesh scale: <code>16^3</code> per block is heavier than <code>8^3</code> — ok for parts (small) but not for terrain slabs (keep terrain at <code>16^3</code> per <em>block</em> only where chiseled).</li>
+    <li>Decal Z-fighting on curved chiseled faces — offset decals slightly outward.</li>
+  </ul>
+  <p class="foot">File: <code>docs/creature-chisel-plan.html</code> — share via <code>python3 -m http.server</code> or OpenCode local-share. Ready to turn into tickets (core + each follow-up) when you green-light.</p>
+</section>
+
+</main>
+</body>
+</html>
