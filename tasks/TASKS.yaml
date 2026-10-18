@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-17T13:31
+  updated_at: 2026-10-17T16:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0445
 - AC-0434
 - AC-0433
 - AC-0130
@@ -28476,4 +28477,148 @@ intake:
     and tasks/AC-0384/AC-0384-results.html section 29 for the ground-level frames.
 
     '
+  comments: []
+- id: AC-0445
+  title: column-atomic-build-and-fade-in
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-17T13:37
+  updated_at: 2026-10-17T16:57
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story:\n\nA 16 m chunk column should arrive COMPLETE, not in strips. Today the world\
+    \ is generated a whole\ncolumn at a time but MESHED one 16-block slab at a time, ordered by how near\
+    \ each slab is to the\nplayer's current altitude. The player sees the consequence at the edge of the\
+    \ streamed world: the\nhorizon fills in horizontal slices, a tower that is half built is a tower full\
+    \ of holes, and the\nsilhouette climbs toward you instead of appearing. The user's model - and the\
+    \ thing this ticket makes\ntrue - is: prepare the entire chunk column off the main thread, then switch\
+    \ the whole column on at\nonce, with a slight fade-in so it arrives softly instead of blinking.\n\n\
+    Changing altitude alone must never cost anything. Right now a pure up/down move of 16 blocks fires\
+    \ a\nFULL recenter (player.gd:3310 - the Y term is in the trigger): the whole streaming walk runs,\
+    \ every\ncolumn's cached pending-slab probe is invalidated, and the build queue is throttled to 1\
+    \ unit/frame\nfor 1.5 s - all to republish a build priority that only exists because the mesh order\
+    \ is anchored to\nthe player's altitude. Once the column is the unit of work, that anchor has no reason\
+    \ to exist: the\nvertical axis leaves the streaming decision entirely, and flying up or down is as\
+    \ cheap as standing\nstill.\n\nThe fade-in is a visual nicety, not a switchable feature: no Options\
+    \ toggle is added (user\n2026-10-17: toggles are for visual elements only, and only when explicitly\
+    \ asked for). The ramp\nduration is a constant in code, not a setting.\n\n\n2) Technical Details:\n\
+    \nGOAL. One build pick = one COLUMN (all 24 slabs) = one frame-visible tower. The two lanes then share\n\
+    the same unit: the data lane is already column-atomic (chunk.gd:810 slabs_landed(ds, fs) lands the\n\
+    whole column; gen_mask chunk.gd:169/1929), and the build lane becomes column-atomic too.\n\nWHAT THIS\
+    \ DELETES (this is the point of the ticket, not a side effect):\n  - world.gd:611 last_wy, :613-614\
+    \ _player_slab(), :639-645 _layer_rank_of().\n  - the player-slab element of BOTH probe-cache fingerprints:\
+    \ world.gd:740\n    (_entry_best_pending_cached, [data_gen, fl_gen, _player_slab(), tier]) and :818\n\
+    \    (_hslab_best_pending_cached, same shape) - the caches become altitude-stable, so climbing no\n\
+    \    longer flushes 1000+ cached probes.\n  - _grid_score's layer term (world.gd:904-939): the score\
+    \ becomes taxi (+ the AC-0399 view bias,\n    :923-937) with NO layer tiebreak. The layer rank existed\
+    \ only to order slabs WITHIN a tower;\n    with the tower atomic there is nothing to order.\n  - the\
+    \ wy parameter of World.recenter (world.gd:11336 signature, :11385-11386 the only consumer) and\n\
+    \    every caller that passes it (player.gd:3321, main.gd:626/:643, harness.gd:17931/:19974/:19987/\n\
+    \    :19991/:20622/:23673/:27107/:27201).\n  - player _chunk_y (player.gd:97 declared, :257 seeded,\
+    \ :3313 written) and the Y term of the\n    recenter trigger (player.gd:3310) -> AC-0234's Y-crossing\
+    \ trigger is REPEALED. _chunk_y's only\n    reader is the trigger itself.\n\nTHE TRIGGER'S BLAST RADIUS\
+    \ TODAY (why repealing it is worth this ticket): a Y-only crossing runs the\nfull synchronous sweep\
+    \ (AC-0348: crossing_burst p50 6.9 / p95 8.4 / max 9.1 ms at R24), re-arms\n_sm_move_until = now +\
+    \ SMALL_MOVE_BUDGET_MS (world.gd:11402 with the const at :3359) which clamps the\ndrain to 1 unit/frame\
+    \ (:9487), and bumps _pool_touch() at the walk's merge swap (:12107) - the ONLY\nreason the recenter\
+    \ is needed at all, because _pool_key (:585-591) keys the cached pick on _pool_ver,\nmaxb, last_pcx/pcz,\
+    \ band0_r and the quantized view but NOT on last_wy.\n\nWHY IT IS TRACTABLE - the whole-column path\
+    \ already exists and is proven. AweMesh.build_accs takes a\nslab RANGE (si0, si1) - world.gd:7462\
+    \ - and the band-A MATERIALIZATION dispatch already hands it the\nentire column: world.gd:8708 builds\
+    \ the task as {\"hslab\": true, \"si0\": 0 if is_mat else si, \"si1\": -1\nif is_mat else si}, with\
+    \ the column's eff cached (_band_a_eff_for, the sky eff) instead of a per-slab\neff. The landing side\
+    \ already iterates a range: :8032\nfor si_e in range(int(res.get(\"si0\", 0)), int(res.get(\"si1\"\
+    , 0)) + 1) and :7875 si1_m from the result.\nSo the machinery is: (a) the C++ range emit, (b) a column-level\
+    \ eff, (c) a range landing/attach. This\nticket generalizes that path from band A to the real band\
+    \ and makes the attach ATOMIC.\n\nRUN-1 MUST SETTLE THESE BEFORE CODING (they decide the shape, do\
+    \ not guess):\n  1. THE SETTLE GATE. The real band dispatches through _mesh_dispatch_hslab's per-slab\
+    \ box_settled\n     gate (the never-show-unlit contract). A column-atomic dispatch must wait until\
+    \ ALL 24 slabs'\n     boxes are settled, or the tower becomes visible partially lit - the exact class\
+    \ the gate exists\n     to prevent. Decide: gate on the whole column, or emit the whole column and\
+    \ drop the\n     not-yet-settled slabs at land time (a partial tower would then be a HOLE, which is\
+    \ worse -\n     no-hole is a hard rule). This is the highest-risk item in the ticket.\n  2. THE PER-FRAME\
+    \ BUDGET. 24 slabs is 24x the old unit. drain_budget_ms, threadmesh_max (4) and the\n     chunks_per_frame\
+    \ cap must bound COLUMNS in flight, not slabs, and the enable step (attach up to\n     24 MeshInstance3Ds\
+    \ + up to 24 collision bodies on the main thread) must not become the frame\n     spike the AC-0340\
+    \ staged-collision lane was built to prevent. Measure the enable cost; a whole\n     tower attaching\
+    \ in one frame is the new worst case.\n  3. COLLISION ATOMICITY. The StaticBody3D mirrors the MESH,\
+    \ never the data (chunk.gd\n     _build_slab_collision). The tower's bodies must attach WITH its meshes,\
+    \ or the player walks into\n     a visually-solid tower and falls through it. The footing guarantee\
+    \ stays _col_immediate_for\n     (Chebyshev <= 1 + column 0,0, the immediate lane).\n  4. THE FAR\
+    \ / LOW LANE STAYS SLAB-GRANULAR (recommended): _low_dispatch_slab (:2816) is a different\n     representation\
+    \ (the far emit / 4x4 avg) with its own cache and its own tier flip. Do NOT convert\n     it in this\
+    \ ticket unless Run-1 shows it falls out for free - it would put the halo's behaviour at\n     risk\
+    \ for no gain to the user-visible complaint.\n  5. THE FADE. A per-column enable stamp driving a ramp\
+    \ on the chunk material (the merged-atlas\n     material, AC-0117). Constraints: the settled state\
+    \ must be exactly today's opaque draw (the\n     transparent pass only WHILE ramping, or the whole\
+    \ world moves to the sorted transparent queue);\n     the fade must not break the never-show-unlit\
+    \ contract; a far column promoted to full (AC-0286)\n     must not double-fade over the halo it replaces;\
+    \ and the ramp must be frame-rate independent.\n     Writes to a material uniform per column are the\
+    \ cheap way; Run-1 picks the mechanism and states\n     the cost.\n\nGATES OWED (and the two that\
+    \ must be REWRITTEN because they assert the order this ticket deletes):\n  - harness.gd:19801-19805\
+    \ ladder's layerrank_ok asserts _layer_rank_of(pys)==0, (pys-1)==1,\n    (pys+1)==2, (pys-2)==3, (pys+2)==4\
+    \ -> rewrite to the column-atomic contract.\n  - harness.gd:20066-20178 r16's layer_monotone_ok asserts\
+    \ the wave's (taxi, layer) keys are\n    monotone -> rewrite to tower order (a column's slabs are\
+    \ all dispatched under one unit and its\n    enable is all-or-nothing).\n  - NEW assertions: one build\
+    \ pick dispatches exactly one column's full pending slab set (counts);\n    no partially-visible column\
+    \ in any frame (census the resident set: every visible column has all\n    its owed slabs attached);\
+    \ the fade completes within its constant; and a vertical-flight arm\n    proving ZERO recenters across\
+    \ a >16 m pure-Y sweep (the repealed AC-0234 trigger) - that arm is\n    the direct regression test\
+    \ for the bug this ticket fixes.\n  - UNCHANGED and must stay green: genhash 25/25 byte-identical\
+    \ (terrain and light are untouched -\n    this is a scheduling/attach change, so any genhash drift\
+    \ is a bug, not a re-baseline), meshprobe\n    match_rate 1.0, battery green, lightstate canaries,\
+    \ brightslab, halo, starlighttest 0, and\n    boundary r4 + the standing values in HARNESS.md §3 re-established\
+    \ (wprof drain stages and r16\n    baselines WILL move - the unit changed).\n\nDOCS IN THE SAME TASK.\
+    \ ARCHITECTURE.md §3 (build-lane granularity, the two lanes' units), §5 (tier /\ndraw contract if\
+    \ the fade touches the pass) and §6 (the walk and the bake order - the layer rank and\nlast_wy are\
+    \ architectural and are being deleted). The `recenter` contract's Y argument and the\nAC-0234 trigger\
+    \ are documented in the world.gd and player.gd headers; both headers change.\n\nNOT IN SCOPE: the\
+    \ save format (untouched), the far/low lane's granularity (item 4), the data lane\n(already column-atomic),\
+    \ and any Options switch (none - see the user story).\n\n\n\nSCOPE ACROSS THE FIVE LOD TIERS (user\
+    \ 2026-10-17: \"will this apply to all lods?\").\n_lod_tier_of (world.gd:1965-1981, the semantics\
+    \ at :1952-1961) has five tiers. The ticket\nabove scoped ATOMICITY to the high lane only; this note\
+    \ records the full matrix and splits the\nwork.\n\n  tier 0  taxi <= band0_r (_is_real_col :1949)\
+    \   full fidelity, per-slab, caves      HIGH lane, per slab (_mesh_dispatch_hslab :8619)\n  tier 1\
+    \  (band0_r, medium_start_r]              full LOD, materialized from the far payload (skip=1 fill)\n\
+    \                                                                                      HIGH lane,\
+    \ PER COLUMN ALREADY (si0=0, si1=-1 at :8708)\n  tier 2  (medium_start_r, low_start_r]          8x8\
+    \ avg                             LOW lane, per slab (_low_dispatch_slab :2816)\n  tier 3  (low_start_r,\
+    \ render_radius)           4x4 avg                             LOW lane, per slab\n  tier 4  >= render_radius\
+    \                       nothing drawn, data only            none\n\nTWO DIFFERENT QUESTIONS, TWO DIFFERENT\
+    \ ANSWERS:\n\n(A) THE ALTITUDE ANCHOR - GONE ON ALL FIVE, AND NOT OPTIONAL. Both pending-slab probes\
+    \ walk\noutward from the player's slab: the low/far probe _entry_best_pending (:658-799, pys at :661)\
+    \ and\nthe high probe _hslab_best_pending (:767-799, pys at :781). They are the ONLY two consumers\
+    \ of\n_player_slab(), so deleting it re-bases both. There is no \"keep the anchor for the far band\"\
+    \noption that does not also keep last_wy and therefore the Y-crossing recenter alive. The recenter\n\
+    fix therefore lands on every LOD by construction.\n\n(B) THE ATOMIC ENABLE - tiers 0 and 1 only AS\
+    \ FILED. Tier 1 is already column-atomic (the band-A\nmat path is the very path this ticket generalizes),\
+    \ so the real change is tier 0. Tiers 2/3 were\ndeliberately left slab-granular (item 4 above) and\
+    \ this note REVISES that: they should be atomic\ntoo, as P2, because -\n\n  - THE FAR BAND IS MOST\
+    \ OF THE SCREEN. If the symptom is \"a column appears in pieces\", the avg\n    bands are where it\
+    \ is most visible; leaving them out fixes the complaint where it is least\n    likely to be seen and\
+    \ keeps it where it is most likely.\n  - ATOMICITY REMOVES A MIXED-LOD CLASS WITHIN ONE TOWER. AC-0257's\
+    \ cache-and-keep holds \"the last\n    tier-matching mesh\" PER SLAB, so after a low_start/medium_start\
+    \ move one tower can show an 8x8\n    top over a 4x4 bottom until the per-slab re-emit lands. A whole-tower\
+    \ emit cannot show mixed\n    LODs inside a tower.\n\nP2 RISKS THAT ARE WHY IT IS A SEPARATE PIECE\
+    \ (settle these in P2's own Run-1, not P1's):\n  - ATTACH COST PER COLUMN. A low attach is ~0.2 ms\
+    \ (the lane's own accounting, :1233), so a\n    floor-to-top far tower is ~3 ms of main-thread attach\
+    \ in ONE frame. The `chunks_per_frame`\n    slider and LOW_TASK_CAP (:1183, 64 in-flight EMITS) both\
+    \ currently count SLABS; both must be\n    re-derived to count COLUMNS (or attach cost) or a single\
+    \ frame eats the budget.\n  - A FAR TOWER IS INTENTIONALLY PARTIAL. AC-0331's far-tier mesh floor\
+    \ means a far column's\n    \"whole column\" begins at the floor, not at bedrock - \"atomic\" must\
+    \ mean \"every slab this\n    column owes\", never a fixed 24.\n  - THE TIER-FLIP MACHINERY IS PER\
+    \ SLAB. low_cache is keyed per slab per tier per dgen/fgen, the\n    handoff drops a result when the\
+    \ live tier moved, and flip-back is an attach. Atomicity has to\n    state what a mid-flight tier\
+    \ move does to a whole tower (recommendation: the tower re-emits as\n    a unit - which is the mixed-LOD\
+    \ fix above, not a regression).\n  - AC-0286 PROMOTION must not double-fade over the halo it replaces.\n\
+    \nPLAN: one ticket, two pieces, gated in sequence (per the filing skill's split rule) -\n  P1 = the\
+    \ anchor removal (A) + tier 0/1 atomic enable + the fade. This is the recenter fix and\n       the\
+    \ near-band tower; it is independently shippable and gate-green on its own.\n  P2 = tiers 2/3 atomic\
+    \ (B), with its own Run-1 settling the four risks above."
   comments: []

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0444 plan — the teal band in the sky above the ridge</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1060px;margin:24px auto;padding:0 16px;line-height:1.45}
+h1{font-size:1.4em}h2{font-size:1.15em;border-bottom:2px solid #444;padding-bottom:4px;margin-top:28px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #999;padding:5px 8px;font-size:.9em;vertical-align:top}
+th{background:#eee}code{background:#f4f4f4;padding:1px 4px}
+pre{background:#f4f4f4;padding:8px;overflow-x:auto;font-size:.82em}
+</style></head><body>
+
+<h1>AC-0444 plan — the teal band in the sky above the ridge</h1>
+
+<h2>Goal</h2>
+<p>Establish <b>where the teal band comes from</b> — a colour+luminance profile straight up through
+the band, with each candidate term isolated or zeroed — decide whether the cause is a
+one-off or a symptom of the five-fix accumulation, and either remove the band with a
+conservative-switched change or hand the coordinator a well-argued consolidation
+recommendation. The five previous sky fixes (AC-0417 world-up keying, AC-0419 black day sky,
+AC-0422 hard horizon step, AC-0429 bottom edges, AC-0439 wrong space decision) must all keep
+holding, checked at the altitudes where each would show.</p>
+
+<h2>The profile through the band (measured, AC-0443 frames, 1280×720, fov 98.99997, camera
+(8.79,143.6,8.79) yaw 1.57 pitch 0.08, T=0.5, seed 44, R24/F83)</h2>
+<p>Column x=1200 (above the west ridge), row → local-elevation (hl = angle above the local
+horizontal; the local horizon sits at row ≈ 393):</p>
+<pre>
+hl (deg)   r1 current tree          r24 archive (56c9095)
+ +15.9      ( 58,206,255) bright     ( 58,206,255)  identical to y≈240
+ +11.6      (126,226,255)            (186,243,255)  bright
+ +7.4       (107,204,237)            (196,246,255)  bright
+ +3.9       ( 59,100,109) TEAL       (203,248,255)  bright
+ +1.4       ( 35, 72, 86) TEAL       (204,247,255)  bright
+ -1.0       ( 28, 57, 68) TEAL       (113,168,185)→(35,41,43) patch (terrain)
+ -3.5       ( 35, 43, 45)            (dark patch = BAND B terrain, not sky)
+</pre>
+<p>Signature: the current tree's sky <b>darkens smoothly from its normal brightness toward the
+horizon</b> — the <i>opposite</i> of the A-window thinning (which darkens the zenith first,
+<code>thin = w·u</code> grows with elevation). Chromatic signature of the band:
+<b>R ≈ 0.4–0.5 × G ≈ B</b> (teal, e.g. (46,113,113) at x=1250) — a mixture of the day-air
+cyan (95,198,234) pulled toward space (2,3,10). The r24 archive is bright there, so the band is
+a tree difference introduced after 56c9095 (the only sky-path commits since: AC-0436 moon
+— bit-identical at T=0.5; AC-0439 <code>u_space_out</code> re-key — 0 at the ground; plus the
+AC-0441/AC-0443 world.gd pushes — terrain-only). Cloud-independence of the band region verified
+directly: byte-identical r1 vs r2 (clouds off) in the band columns (AC-0443 had verified it
+only in the terrain patch box). The committed <code>sky_on</code> evaluated in Python at the
+confirmed pushes (player alt 142 m per SATDIAG → w = 0, ws = 0) predicts a bright sky
+(~(205,240,250)) in the whole band region — so the live uniforms must differ from the
+expected; a temporary env-gated probe dumps the actual sky-material uniforms at snapshot time
+(reverted at closeout, the pristine rule).</p>
+
+<h2>Candidates to distinguish by measurement</h2>
+<table>
+<tr><th>#</th><th>Candidate</th><th>Lever for the A/B run</th></tr>
+<tr><td>1</td><td>The pushed space weights (w = <code>u_space_sky</code>, ws =
+<code>u_space_out</code>) — the probe decides; if w is live-high, the band is the A-window
+thinning reading the wrong altitude (the AC-0439 class: a decision keyed on the wrong
+quantity)</td><td>probe read-back; <code>AWECRAFT_ATMO</code> cross-check</td></tr>
+<tr><td>2</td><td>The below-branch fill (<code>belowc</code>) if the local horizon sits where
+the band is and ws has made the fill space — the AC-0429/AC-0439 floor decision</td>
+<td><code>AWECRAFT_NOSKYFLOOR=0</code>, <code>AWECRAFT_SKYHORIZON=0</code></td></tr>
+<tr><td>3</td><td>The horizon haze band / the <code>u</code>-exempt thinning
+(<code>thin = w·u</code>) — the only known hard-edged term (its exemption boundary at u=0)</td>
+<td>haze via <code>AWECRAFT_GRADE_*</code> is out (grade ≠ model); isolated by profile
+position in elevation</td></tr>
+<tr><td>4</td><td>The limb term (air-column glow) — gated to 0 at the ground on the ON path,
+but the gate mix and the <code>air</code> chord are worth one zeroed run</td>
+<td><code>AWECRAFT_LIMB=0</code></td></tr>
+<tr><td>5</td><td>A non-sky layer (body / far LOD / wash) — already excluded: body discards
+&lt;332 m, far LOD has nothing above the crest, wash is a 3% uniform additive, clouds
+byte-excluded</td><td>n/a</td></tr>
+</table>
+<p><b>Which term the band comes from: PENDING the probe read-back + the A/B battery</b> (runs
+below); the answer lands in the results page. Prediction to test: the live <code>u_space_sky</code>
+or <code>u_space_out</code> is not 0 at the ground — i.e. the radial the push reads is not the
+player's radial — or one of the switches is arriving OFF.</p>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — temporary env-gated SKYPROBE (REVERTED at closeout).</li>
+<li><code>godot/core/aero_sky_gradient.gdshader</code> / <code>godot/core/aero.gd</code> — the
+fix, if the probe identifies a sky-model cause (behind a switch defaulting conservative, per
+the standing rule); <i>or no code change at all if the cause is a push/state defect fixed at
+the seam, or if the honest answer is consolidation</i>.</li>
+<li><code>godot/ARCHITECTURE.md</code> — only if structure/conventions change.</li>
+</ul>
+<p>Fences: <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+<code>entities/drop.gd</code>, <code>autoload/debug.gd</code> untouched (another session's
+uncommitted work — verified the diffs are particle/controls-only, no sky-state impact).
+AC-0067 / AC-0384 / AC-0425 untouched.</p>
+
+<h2>Render A/B battery (same pose, R24/F83, T=0.5 frozen, 1280×720, drain 3000)</h2>
+<pre>
+pre-band        base (probe ON)            — the "before" frame + uniform read-back
+ab-atmo100      AWECRAFT_ATMO=100          — w=1, ws=1 forced (A-window full-space test)
+ab-afloor0      AWECRAFT_NOSKYFLOOR=0      — AC-0429 shape off
+ab-horiz0       AWECRAFT_SKYHORIZON=0      — AC-0422 shape off
+ab-limb0        AWECRAFT_LIMB=0            — limb term zeroed
+ab-skyalt0      AWECRAFT_SKYALT=0          — sky_off (world-Y) path
+</pre>
+<p>After the term is identified: <b>after</b> frame + profile at the same pose, plus the
+five-fix regression frames: ground (this pose), 941 m inside (AC-0439's frame,
+<code>AWECRAFT_CAM=planet AWECRAFT_SAT_ALT=800 AWECRAFT_CAM_HORIZON=1</code>), ~1441 m in the
+fade window, 2141 m outside (AC-0439's space frame), and a nadir/limb check at 2000 m
+(AC-0419's boundary views). Each fix's contract checked in the frame where it would show.</p>
+
+<h2>Harness gates (light set, then exit — heavy is the coordinator's)</h2>
+<ul>
+<li>G0 via <code>tasks/scripts/gate_census.py</code>: zero SCRIPT ERROR and zero SHADER ERROR,
+<b>and the process exit status checked</b> (the stochastic UAF leaves a clean log with a
+signal-11 exit).</li>
+<li>SMOKE, PROBE, genhash (25/25 byte-identical — world.gd touched: the probe revert must be
+exact, re-verify genhash on the reverted file), shaderforce (the sky is a shader).</li>
+<li>Standing values only if the fix touches fog/world math — the planned change is
+sky-shader/push-local, so the full standing battery is the coordinator's heavy job; record
+the delta honestly.</li>
+</ul>
+
+</body></html>

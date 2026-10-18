@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC-0444 — the teal band in the sky: it is the far LOD tier, not the sky</title>
+<style>
+  :root { --ink:#16202b; --mut:#5b6b7a; --line:#d7dee6; --bg:#f6f8fa; --card:#fff;
+          --teal:#0f766e; --tealbg:#e6f4f2; --red:#b3261e; --redbg:#fbeae9;
+          --ok:#1b7f3b; --okbg:#e7f5ec; --warn:#8a5a00; --warnbg:#fdf3dd; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:var(--ink); background:var(--bg); }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 22px 72px; }
+  h1 { font-size:26px; line-height:1.25; margin:0 0 6px; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  h3 { font-size:15.5px; margin:20px 0 6px; }
+  p { margin:8px 0; }
+  .sub { color:var(--mut); font-size:14px; margin-bottom:22px; }
+  code { font-family:var(--mono); font-size:13px; background:#eef1f5; padding:1px 5px; border-radius:4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:14px 0; }
+  .verdict { background:var(--tealbg); border:1px solid #9ed4cc; border-radius:10px; padding:16px 18px; margin:18px 0; }
+  .verdict h2 { border:0; margin-top:0; color:var(--teal); }
+  .bad { background:var(--redbg); border:1px solid #e7b3ae; border-radius:10px; padding:14px 16px; margin:14px 0; }
+  .ok  { background:var(--okbg); border:1px solid #a9dcb9; border-radius:10px; padding:14px 16px; margin:14px 0; }
+  .warn{ background:var(--warnbg); border:1px solid #ecd39a; border-radius:10px; padding:14px 16px; margin:14px 0; }
+  .tag { display:inline-block; font:600 11px/1 var(--mono); letter-spacing:.04em; text-transform:uppercase; padding:4px 8px; border-radius:5px; margin-right:6px; }
+  .tag.gone { background:#dbeafe; color:#1e40af; }
+  .tag.struct { background:var(--redbg); color:var(--red); }
+  .tag.oneoff { background:var(--okbg); color:var(--ok); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:760px){ .grid{ grid-template-columns:1fr; } }
+  figure { margin:0; }
+  figure img { width:100%; border:1px solid var(--line); border-radius:8px; display:block; }
+  figcaption { font-size:13px; color:var(--mut); margin-top:7px; }
+  figcaption b { color:var(--ink); }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; margin:10px 0; }
+  th,td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#eef1f5; font-weight:600; }
+  td.mono, .mono { font-family:var(--mono); font-size:12.5px; }
+  .pill { display:inline-block; font:600 11px/1 var(--mono); padding:3px 7px; border-radius:20px; }
+  .pill.pass { background:var(--okbg); color:var(--ok); }
+  .pill.fail { background:var(--redbg); color:var(--red); }
+  .pill.stale { background:var(--warnbg); color:var(--warn); }
+  ul { margin:8px 0; padding-left:20px; } li { margin:4px 0; }
+  .kv { font:13px/1.6 var(--mono); }
+  footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); color:var(--mut); font-size:13px; }
+  .arrow { color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>AC-0444 — the teal band in the sky above the ridge</h1>
+<div class="sub">
+  <b>Verdict:</b> the band is <b>not the sky</b> — it is the <code>lod_avg</code> far LOD tier
+  (the med/low average-colour placeholder), specifically its <b>a=0 (unlit/side) faces</b>,
+  which are the AC-0443 “R24 horizon dark patch.” It is a <b>far-LOD / tier-seam</b> artifact,
+  <b>not</b> a symptom of the five accumulated sky fixes. Those five fixes are correct and keep
+  holding; none of them touches the far tier’s face shading, which is where the band actually comes from.
+</div>
+
+<div class="verdict">
+  <h2>Where the band comes from</h2>
+  <p><span class="tag struct">structural · far-LOD</span>
+  <span class="tag oneoff">one-off · sky</span></p>
+  <p>The band is a horizontal strip of the <b>distant placeholder terrain</b> that curves up into the
+  view above the local horizon. At the grazing angle the camera sees the <b>vertical sides</b> of the
+  far terrain boxes — the <b>a=0 faces</b> (the heightmap “sky” channel is 0 at/below the terrain top,
+  i.e. unlit). Those faces render at the cave-floor brightness
+  <code>lit = 0.2 + u_amb·day.r</code> (u_amb = AMB_SKY_L = 0.35, the AC-0443 lift) multiplied by
+  <code>day.rgb</code> (the sky display colour — a teal tint) and a ±6% jitter, so they read as a
+  <b>dark teal</b> band far darker than the shaded flank of the same ridge in the near (chunk_lit) tier.
+  That brightness gap across the tier boundary <i>is</i> the AC-0443 “R24 horizon dark patch,” which
+  AC-0443 lifted partially (u_amb) but never fully closed.</p>
+  <p>It is <b>fog-gated</b>: the far tier is a distance placeholder built and rendered only while the
+  engine environment fog is on (it fills the distance out to the fog wall, u_fog_far = 332 m). With fog
+  off the band region is empty sky.</p>
+</div>
+
+<h2>The decisive measurement — the band is the far tier, proven by colour injection</h2>
+<p>The sky model predicts a <b>bright</b> colour exactly where the band sits, and the band is
+<b>dark</b>. So the band cannot be the sky pass. The injection probes then name the producing geometry:</p>
+
+<div class="grid">
+  <figure>
+    <img src="captures/pre-band.png" alt="the band, natural">
+    <figcaption><b>pre-band.</b> The dark-teal band across the right sky (x≈1100–1280, y≈330–400),
+    above the ridge. Measured band pixel (1200,342) = <span class="mono">(41,62,69)</span>; the aero sky
+    model at that elevation computes <span class="mono">(208,240,250)</span> — bright. The left side
+    brightens normally toward the horizon; the right darkens (the artifact).</figcaption>
+  </figure>
+  <figure>
+    <img src="captures/probe-magenta.png" alt="band forced magenta">
+    <figcaption><b>probe-magenta.</b> Forcing <code>lod_avg.gdshader</code> ALBEDO to magenta turns
+    <b>the entire band magenta</b>. The band is the <code>lod_avg</code> far tier — not the sky, not the
+    body, not the clouds.</figcaption>
+  </figure>
+  <figure>
+    <img src="captures/probe-ab.png" alt="a=0 magenta / a=1 cyan">
+    <figcaption><b>probe-ab.</b> Splitting the far tier by face class: a=1 (top) → cyan, a=0
+    (unlit/side) → magenta. The big dark band is <b>magenta (a=0)</b>; the a=1 tops are only scattered
+    cyan specks. The band is the <b>a=0 side faces</b> of the distant boxes, seen edge-on.</figcaption>
+  </figure>
+  <figure>
+    <img src="captures/probe-ab-fog0.png" alt="a=0 magenta, fog off">
+    <figcaption><b>probe-ab-fog0.</b> Same a=0→magenta injection, but with <code>AWECRAFT_NO_FOG=1</code>:
+    the right-side magenta band is <b>gone</b> (empty sky, one tiny speck). The far tier — and hence the
+    band — is only present when env fog is on.</figcaption>
+  </figure>
+</div>
+
+<h2>Is it a symptom of the five accumulated sky fixes? — No</h2>
+<div class="bad">
+  <p><b>The band is not the sky pass.</b> At the band’s elevation the aero sky shader (live uniforms
+  <span class="mono">w=0, ws=0, u_horizon=1, u_no_floor=1</span>, T=0.5) computes a bright gradient
+  <span class="mono">(208,240,250)</span> at (1200,342); the band renders <span class="mono">(41,62,69)</span>.
+  No value of the space weights <i>w</i>/<i>ws</i> makes the sky pass dark there, and the aero-off path
+  (sky_off, default colours) also renders bright. The band is opaque terrain drawn in the sky region.</p>
+</div>
+<p>Byte-measured A/B exclusion chain (each re-rendered at the same pinned aim, same world seed):</p>
+<table>
+  <tr><th>Candidate</th><th>Switch</th><th>Band result</th><th>Conclusion</th></tr>
+  <tr><td>Sky pass (aero gradient)</td><td><code>AWECRAFT_AERO=0</code></td><td>band persists (values shift)</td><td>not the sky</td></tr>
+  <tr><td>Clouds / cloud shell</td><td><code>AWECRAFT_CLOUDS=0</code></td><td>excluded (AC-0443, byte-identical)</td><td>not clouds</td></tr>
+  <tr><td>Satellite body (+ atmosphere)</td><td><code>AWECRAFT_SAT_BODY=0</code></td><td>band pixel byte-identical</td><td>not the body</td></tr>
+  <tr><td>Sky limb glow</td><td><code>AWECRAFT_LIMB=0</code></td><td>band byte-identical</td><td>not the limb term</td></tr>
+  <tr><td>Fog colour (bright u_air)</td><td>—</td><td>fog is bright (208,241,251); band is dark</td><td>not a fog colour</td></tr>
+  <tr><td>Far terrain presence</td><td><code>AWECRAFT_RADIUS=4</code></td><td>right band gone; left persists</td><td>right band needs the far tier</td></tr>
+  <tr><td><b>Far tier a=0 faces</b></td><td><code>lod_avg</code> → magenta</td><td><b>band → magenta</b></td><td><b>THIS is the band</b></td></tr>
+</table>
+<p>The five sky fixes (AC-0417 world-up→local-zenith keying, AC-0419 black day sky, AC-0422 hard horizon
+step, AC-0429 five bottom edges, AC-0439 wrong-space decision) are all <b>sky-model</b> fixes. Each was
+correct; each is orthogonal to the far tier’s a=0 face shading. The structural concern in the ticket —
+that the sky model has accumulated conditions faster than it has been understood — <b>does not apply to
+this band</b>, because the band is not the sky. The real accumulation is at the <b>tier seam</b>: the far
+tier’s unlit faces have always been darker than the near tier’s shaded faces, and the AC-0443 u_amb lift
+was a partial parity, not a closure.</p>
+
+<h2>The five previous sky fixes keep holding</h2>
+<p>Verified at the altitude where each shows, with the planet camera (fog + clouds off to isolate the sky
+model). Live sky uniforms are carried in each frame’s RESULT.</p>
+<table>
+  <tr><th>Fix</th><th>Frame (altitude, aim)</th><th>What holds</th><th>Evidence</th></tr>
+  <tr><td>AC-0417</td><td class="mono">reg-a1200-limb (A=1200, limb)</td><td>local-zenith keying: smooth sky above the limb, no face-boundary step, not black</td><td>smooth gradient; <span class="mono">u_space_sky=1.0</span></td></tr>
+  <tr><td>AC-0419</td><td class="mono">all frames</td><td>day sky not black; planet opaque</td><td>bright cyan sky; nadir = opaque green/white/blue disc</td></tr>
+  <tr><td>AC-0422</td><td class="mono">reg-a941/1441/2141-hz</td><td>continuous horizon, no hard step</td><td>centre-left == centre-right, <span class="mono">dL=(0,0,0)</span></td></tr>
+  <tr><td>AC-0429</td><td class="mono">reg-a2141-hz + nadir</td><td>below-horizon = space, no bottom edge, planet is the boundary</td><td>smooth space below the horizon; <span class="mono">u_space=1.0 @2141</span></td></tr>
+  <tr><td>AC-0439</td><td class="mono">reg-a941-hz (inside A)</td><td>below-horizon = AIR (bright), not black</td><td><span class="mono">(205,250,250)</span>; <span class="mono">u_space=0.335</span></td></tr>
+</table>
+<div class="grid">
+  <figure><img src="captures/reg-a1200-limb.png" alt="limb at A"><figcaption><b>AC-0417</b> — limb at altitude A: smooth sky, no discontinuity.</figcaption></figure>
+  <figure><img src="captures/reg-a941-hz.png" alt="horizon inside A"><figcaption><b>AC-0439/0422</b> — horizon inside A: below = bright air, continuous.</figcaption></figure>
+  <figure><img src="captures/reg-a2141-hz.png" alt="horizon outside A"><figcaption><b>AC-0429</b> — horizon outside A: below = smooth space, no bottom edge.</figcaption></figure>
+  <figure><img src="captures/reg-a2000-nadir.png" alt="nadir"><figcaption><b>AC-0419/0429</b> — nadir: opaque planet disc, space in the corners.</figcaption></figure>
+</div>
+
+<h2>Consolidation recommendation (the valid outcome the ticket allows)</h2>
+<div class="warn">
+  <p><b>Do not consolidate the sky model for this band — there is no sky defect to consolidate.</b>
+  The honest answer: the band is a <b>far-LOD / tier-seam</b> artifact (the a=0 faces of the
+  <code>lod_avg</code> placeholder), pre-existing and cloud-independent, and it is the AC-0443 “R24
+  horizon dark patch.” The fix belongs to a <b>far-LOD ticket</b>, not this sky ticket, and should <b>not</b>
+  be a suppression patch. Two legitimate shapes:</p>
+  <ul>
+    <li><b>Close the tier seam properly:</b> shade the far tier’s a=0 faces to match the chunk_lit shaded
+    brightness at the same ridge flank (the u_amb lift is a partial parity — raise/retarget it so an a=0
+    far face and an a=0 near face of the same slope read the same). This removes the band at its source
+    for every grazing-angle ridge, not just this one.</li>
+    <li><b>Or accept it as a known far-LOD limit</b> and document it as the standing R24 dark patch, so a
+    future far-LOD pass (real far terrain, or a seam-blend between the tier and the body’s haz_d rim)
+    owns it — rather than re-patching the sky, which does not cause it.</li>
+  </ul>
+  <p>Either way: the five sky fixes stay as they are; the sky model is <b>not</b> the accumulated-conditions
+  liability the ticket fears, for this feature.</p>
+</div>
+
+<h2>Gates (light set; the heavy set is the coordinator’s)</h2>
+<table>
+  <tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+  <tr><td>SMOKE battery</td><td class="mono">AWECRAFT_BATTERY=player;interact;light;fluids;genhash --headless</td><td><span class="pill pass">rc=0</span> 0 SCRIPT/SHADER ERROR, all 5 arms ok, ok:true</td></tr>
+  <tr><td>genhash 25/25</td><td class="mono">AWECRAFT_LOGIC=genhash --headless</td><td><span class="pill pass">25/25 identical</span> to HEAVY-r22 (2026-10-17), AC-0441, AC-0439-r2</td></tr>
+  <tr><td>shaderforce</td><td class="mono">AWECRAFT_LOGIC=shaderforce (xvfb vulkan)</td><td><span class="pill pass">rc=0</span> ok:true, 12/12 shaders verdict=ok, 0 real SHADER/SCRIPT ERROR</td></tr>
+  <tr><td>G0 (census + rc)</td><td class="mono">tasks/scripts/gate_census.py &lt;8 gate logs&gt;</td><td><span class="pill pass">census ok, exit 0</span> 0 SCRIPT/SHADER ERROR, every rc=0</td></tr>
+</table>
+<div class="warn">
+  <p><b>genhash note.</b> The 25/25 is byte-identical to the <b>current</b> baselines (HEAVY-r22, AC-0441,
+  AC-0439-r2). The AC-0367 reference the task carried is <span class="pill stale">stale</span>: the genhash
+  legitimately moved between AC-0367 (2026-09-27) and AC-0439 as other world/light tickets landed. This
+  task’s tree is clean (<code>git diff --stat</code> empty on the world files) and its genhash matches the
+  immediately-prior ticket’s baseline — <b>no drift was introduced here</b>. Treat the genhash baseline as a
+  moving target re-anchored to the last ticket that touched world/*.</p>
+</div>
+
+<h2>Deliberate non-actions</h2>
+<ul>
+  <li><b>No patch.</b> The ticket accepts a well-argued consolidation recommendation as a valid outcome and
+  explicitly rejects a symptom-hiding patch. The band is a known far-LOD artifact; its fix is a far-LOD
+  ticket, not this one.</li>
+  <li><b>Fences untouched:</b> <code>scenes/main.gd</code>, <code>autoload/game.gd</code>,
+  <code>entities/drop.gd</code>, <code>autoload/debug.gd</code>; and <code>tasks/AC-0067</code>,
+  <code>AC-0384</code>, <code>AC-0425</code>.</li>
+  <li><b>Pristine rule kept:</b> every temporary probe (world.gd, satellite_body.gd, lod_avg.gdshader) is
+  reverted; <code>git diff --stat</code> is empty on all three; both .gd files parse with 0 Parse Error;
+  genhash re-verified clean.</li>
+  <li><b>No commit / push</b> (per the mandate).</li>
+</ul>
+
+<h2>Harness observations (harvest candidates)</h2>
+<ul>
+  <li><code>Node.find_children()</code> returns <b>empty</b> for every pattern/type (even “*” / “”) on a node
+  with ~1468 children on this build — hand-walk <code>get_children()</code> recursively.</li>
+  <li><code>ArrayMesh.aabb</code> is read-only; <code>ArrayMesh</code> has no <code>get_surface_material</code>
+  (guard with <code>has_method</code>); <code>Basis</code> has no <code>.columns</code> (use
+  <code>cb * Vector3.UP</code>); <code>is_ray_intersect</code> is unreliable on degenerate-aabb and the
+  satellite body mesh — treat a manual raycast as corroborating and the A/B isolations as ground truth.</li>
+  <li>Under llvmpipe hitches <code>_physics_process</code> runs ~6 physics steps per engine frame
+  (max-physics-steps catch-up): a drain counted in <code>physics_frame</code> awaits is only ~500 engine
+  frames. There is no freeze and no node replacement — a process-phase probe simply never reached its next
+  print before the run ended.</li>
+  <li>The sky is <code>Environment.BG_SKY</code> with a custom <code>sky_material</code>; with aero off the
+  shader runs its defaults (<code>u_sky_alt=0</code> → the sky_off world-Y path), so an aero-off A/B still
+  renders a (different) sky, not a flat background.</li>
+</ul>
+
+<footer>
+  AC-0444 · AweCraft · proxy render (llvmpipe Vulkan Forward+) — geometry/layout/colour-shape evidence only.
+  Captures in <code>captures/</code>; full journal in <code>continuity.md</code>; logs in
+  <code>.scratch/AC-0444/</code>.
+</footer>
+
+</div>
+</body>
+</html>
