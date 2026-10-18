@@ -36,6 +36,10 @@
 // annulus at the wall so the near tiers never draw over the body's own
 // displaced terrain — and stays. The full r8/AC-0399/AC-0400/AC-0404
 // history lives in those results pages (tasks/AC-0399, AC-0400, AC-0404).
+//
+// AC-0446: this file is the OFF path of the far-seam parity switch —
+// UNCHANGED (bit-identical). ON swaps the material to
+// lod_avg_seam.gdshader (world._ac0446_apply_shader).
 shader_type spatial;
 
 uniform vec4 day : source_color = vec4(1.0, 1.0, 1.0, 1.0);

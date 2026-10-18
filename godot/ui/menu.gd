@@ -106,6 +106,11 @@ var moonlight_check: CheckBox
 # default ON — the banded deck is the reported defect; OFF is the exact
 # current grid, bit-for-bit).
 var cloud_jit_check: CheckBox
+# AC-0446: the far-seam parity toggle (Settings "far_seam", default OFF
+# — conservative: the shipped look is the current partial parity,
+# bit-identical; ON makes the far average band shade with the near
+# tier's own light model — the tier-seam step the user reported).
+var far_seam_check: CheckBox
 # AC-0437: the HUD stat-row captions toggle (Settings "stat_captions",
 # default ON — the assessment judged the two identical-looking red rows
 # as debug output; the AC-0435/AC-0436 re-ruling: the reported look
@@ -623,6 +628,27 @@ func _ready() -> void:
 	opt_vbox.add_child(cloud_jit_check)
 	if hi + 23 < opt_vbox.get_child_count():
 		opt_vbox.move_child(cloud_jit_check, hi + 24)
+	# AC-0446: the far-seam parity toggle (Settings "far_seam", default
+	# OFF — conservative: the shipped look is the current partial parity,
+	# bit-identical). ON closes the TIER SEAM: the far average band
+	# (8x8/4x4) is a SHADED material — the engine ambient/direct
+	# multiplies onto a light model the near tier (unshaded) has no, so
+	# the same face reads ~3x darker through the band (AC-0443's R24
+	# frame: (50,40,31) vs (135,116,103)). ON swaps the band's material
+	# to the unshaded variant (core/lod_avg_seam.gdshader) that runs the
+	# near tier's own L model on the band's data; the lift's
+	# day-gating, the band's fog wall and the fog's depth cue are the
+	# near tier's own by construction (tasks/AC-0446). Last row of the
+	# page: no move_child seat owed. No apply step is owed: world.gd
+	# _ac0401_push reads the live value every frame and swaps the
+	# material's shader on change (env-overridable:
+	# AWECRAFT_FARSEAM=0|1 at boot, world.gd).
+	far_seam_check = CheckBox.new()
+	far_seam_check.name = "FarSeamCheck"
+	far_seam_check.text = "Distance terrain: match the near-tier light at the seam"
+	far_seam_check.add_theme_font_size_override("font_size", 15)
+	far_seam_check.toggled.connect(_on_far_seam_toggled)
+	opt_vbox.add_child(far_seam_check)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1129,6 +1155,9 @@ func _sync_controls() -> void:
 	# AC-0441: the raymarch-grid jitter toggle (default ON — the banded
 	# deck is the reported defect).
 	cloud_jit_check.button_pressed = bool(Settings.values.get("cloud_jitter", true))
+	# AC-0446: the far-seam parity toggle (default OFF — the current
+	# partial-parity look, bit-identical).
+	far_seam_check.button_pressed = bool(Settings.values.get("far_seam", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1625,6 +1654,17 @@ func _on_cloud_jit_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("cloud_jitter", on)
+
+
+# AC-0446: the far-seam parity toggle (default OFF — the current
+# partial-parity look is bit-identical). set_value does the clamp chain
+# + the save; no apply step is owed: world.gd _ac0401_push reads the
+# live value every frame and swaps the band material's shader on change
+# (OFF = the original lod_avg.gdshader, bit-identical).
+func _on_far_seam_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("far_seam", on)
 
 
 # AC-0437: the HUD stat-row captions toggle — persisted like every other

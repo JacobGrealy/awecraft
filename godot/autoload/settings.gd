@@ -191,6 +191,22 @@ const DEFAULTS := {
 	# cloud-layer materials, change-gated). Env-overridable
 	# (AWECRAFT_CLOUDJIT=0|1 at boot, world.gd).
 	"cloud_jitter": true,
+	# AC-0446: the far-seam PARITY switch (the tier-seam shading step —
+	# the same ridge face reads ~3x darker through the far average band
+	# than one tier closer: the band is a SHADED material, so the engine
+	# ambient/direct multiplies onto a light model the near tier
+	# (unshaded) has no, plus a day-gray tint it has no either — see
+	# tasks/AC-0446/plan.html for the measured shape). DEFAULT OFF —
+	# conservative: the shipped look is the current partial parity
+	# (the AC-0443 lift on the same band), bit-identical. ON swaps the
+	# band's material to the unshaded near-tier-parity variant
+	# (core/lod_avg_seam.gdshader — render_mode can't be a uniform, so
+	# world._ac0446_apply_shader does the material-shader swap on
+	# change); the lift's day-gating and the band's fog wall are the
+	# near tier's own by construction. Rides world.gd _ac0401_push
+	# (change-gated shader swap + the u_day/u_moon pushes).
+	# Env-overridable (AWECRAFT_FARSEAM=0|1 at boot, world.gd).
+	"far_seam": false,
 	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
 	# ("after a recent build the level of detail was not showing at all,
 	# and when they looked into it the world 'was still baking'": the
@@ -562,6 +578,12 @@ func _clamp(k: String, v) -> void:
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (true), never throw (the cloud_gate
 			# precedent).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"far_seam":  # AC-0446: bool (the far-seam parity switch;
+			# defaults OFF — the current partial-parity look is
+			# bit-identical; the cloud_gate precedent).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (false), never throw.
 			values[k] = AnalogTune.sanitize_bool(v)
 		"no_sky_floor":  # AC-0429: bool (the skybox-no-bottom-edge switch).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg

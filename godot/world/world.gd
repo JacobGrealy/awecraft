@@ -1582,11 +1582,38 @@ func _lod_fcc_get() -> PackedFloat32Array:
 # that; it defaults to white so a fresh material is never black).
 func _lod_avg_mat() -> ShaderMaterial:
 	if _lod_avg_material == null:
-		var sh := load("res://core/lod_avg.gdshader")
 		_lod_avg_material = ShaderMaterial.new()
-		_lod_avg_material.shader = sh
 		_lod_avg_material.set_shader_parameter("day", Color(1.0, 1.0, 1.0))
+		# AC-0446: pick the active far-seam shader by the live setting.
+		# OFF (default) = the original lod_avg.gdshader (bit-identical);
+		# ON = the unshaded near-tier-parity variant (render_mode is a
+		# render state, not a uniform — the switch is a shader swap on
+		# the material, see _ac0446_apply_shader).
+		_ac0446_apply_shader()
 	return _lod_avg_material
+
+# AC-0446: the far-seam parity shader swap (Settings "far_seam", default
+# OFF; AWECRAFT_FARSEAM=0|1 at boot). Every draw site (the ring sectors'
+# surface 0, the slot's material_override) holds the SAME material
+# object, so swapping its `shader` re-shades the whole band at once and
+# no instance re-assignment is owed. The stored uniform values ride the
+# material (AC-0415's finding: the render server ignores undeclared
+# ones, and the new shader's declared uniforms read the store) — the
+# value latches below are re-armed so the active shader receives the
+# live values on the next frame; u_fog_far rides main.gd's per-frame
+# push either way. The OFF path is the original shader untouched —
+# bit-identical, including the night.
+func _ac0446_apply_shader() -> void:
+	var on := bool(Settings.values.get("far_seam", false))
+	var v: float = 1.0 if on else 0.0
+	if v == _ac0446_seam:
+		return
+	_lod_avg_material.shader = load("res://core/lod_avg_seam.gdshader" if on else "res://core/lod_avg.gdshader")
+	_ac0446_seam = v
+	_ac0446_u_day = -1.0
+	_ac0446_moon_i = -1.0
+	_ac0446_moon_dir = Vector3(0.0, 1.0, 0.0)
+	_ac0443_lod_amb = -1.0
 
 # =====================================================================
 # AC-0338 — the ring-level far batch (bands B/C draw batching)
@@ -3195,8 +3222,11 @@ func _low_step() -> void:
 	# The sky color changes slowly, so the per-frame set is skipped when
 	# unchanged (set_shader_parameter touches the material — keep it out of
 	# the hot main-thread LOW stage). AC-0336: read the sky directly (the
-	# old carrier was the fog material, gone with the fog wave).
-	if _lod_avg_material != null:
+	# old carrier was the fog material, gone with the fog wave). AC-0446:
+	# the day-gray is the OFF shader's brightness driver — the ON variant
+	# is unshaded and rides u_day (pushed in _ac0401_push), exactly as the
+	# near tier has no day tint at all.
+	if _lod_avg_material != null and _ac0446_seam == 0.0:
 		var sdc := DayNight.sky_display(Game.time_of_day)
 		var dl := (sdc.r + sdc.g + sdc.b) / 3.0
 		var day_c := Color(dl, dl, dl)
@@ -3996,6 +4026,15 @@ func _ready() -> void:
 	var ambe := OS.get_environment("AWECRAFT_AMBSKY")
 	if ambe != "":
 		Settings.values["ambient_sky"] = ambe == "1"
+	# AC-0446: the far-seam parity switch (Settings "far_seam", default
+	# OFF — conservative: the shipped look is the current partial parity,
+	# bit-identical). Same pattern: the env overrides the STORED setting
+	# for this process only (no save, so the arms never clobber the
+	# user's cfg). Read live by _ac0401_push (the material-shader swap),
+	# so no boot derive is owed.
+	var fse := OS.get_environment("AWECRAFT_FARSEAM")
+	if fse != "":
+		Settings.values["far_seam"] = fse == "1"
 	# AC-0428: the planetary weather-gate switch (Settings "cloud_gate",
 	# default OFF - conservative: the shipped look is today's uniform
 	# deck, bit-identical). Same pattern: the env overrides the STORED
@@ -5194,6 +5233,18 @@ var _ac0426_n_mats := -1
 # (the AC-0432 collapse past the tier seam). The band material is lazy
 # (world._lod_avg_mat), so latch-only-when-landed (the deck pattern).
 var _ac0443_lod_amb := -1.0
+# AC-0446: the far-seam parity push state (same seam: _ac0401_push).
+# _ac0446_seam latches the ACTIVE band shader (0.0 = the original
+# lod_avg.gdshader, 1.0 = the unshaded near-tier-parity variant —
+# render_mode can't be a uniform, so the switch is a material-shader
+# swap, _ac0446_apply_shader). u_day moves with the day/night cycle
+# (per-frame value-gated like u_space_sky); the moon pair moves with it
+# (the AC-0436 pattern). All three are inert unless the material
+# exists AND the seam is ON (OFF = the original shader, bit-identical).
+var _ac0446_seam := -1.0
+var _ac0446_u_day := -1.0
+var _ac0446_moon_i := -1.0
+var _ac0446_moon_dir := Vector3(0.0, 1.0, 0.0)
 # AC-0407: the volume's VIRTUAL top bound extends this far ABOVE the
 # topmost shell (hmax) so the vertical profile (flat base / lumpy tops
 # — the "no variance in height" fix) has room for a real skyline. The
@@ -5300,6 +5351,23 @@ func _ac0401_push() -> void:
 	if _lod_avg_material != null and _ac0443_lod_amb != amb_v:
 		_lod_avg_material.set_shader_parameter("u_amb", amb_v)
 		_ac0443_lod_amb = amb_v
+	# (1c) AC-0446: the far-seam parity switch (Settings "far_seam",
+	# default OFF; AWECRAFT_FARSEAM=0|1 at boot). The switch is a
+	# MATERIAL-SHADER swap (render_mode can't be a uniform) —
+	# _ac0446_apply_shader does it on change (a cheap per-frame compare).
+	# The ON variant is UNSHADED and mirrors the near tier's L model on
+	# the band's binary a channel: u_day (per-frame, value-gated — moves
+	# with the clock like u_space_sky) + the shared u_amb push above +
+	# the moon pair in (6). The OFF variant declares no u_day/u_moon —
+	# those sets ride the material as stored no-ops (the AC-0415
+	# finding), and its day-gray above stays exactly as it was.
+	if _lod_avg_material != null:
+		_ac0446_apply_shader()
+	if _ac0446_seam == 1.0 and _lod_avg_material != null:
+		var dsev := DayNight.day(Game.time_of_day)
+		if not is_equal_approx(dsev, _ac0446_u_day):
+			_lod_avg_material.set_shader_parameter("u_day", dsev)
+			_ac0446_u_day = dsev
 	# (2) the switches - the cloud layers and the sky material exist
 	# once _setup_aero has run (before this world's first _process);
 	# the first push retries cheaply until they are visible.
@@ -5691,6 +5759,20 @@ func _ac0401_push() -> void:
 			if m6 is ShaderMaterial:
 				m6.set_shader_parameter("u_moon", moon_i)
 				m6.set_shader_parameter("u_moon_dir", moon_dirv)
+	# AC-0446: the far band's parity moon term (the ON variant only — the
+	# OFF shader declares no u_moon; the set would be a stored no-op, so
+	# gate it). The band mesh carries world-space face normals (the ring
+	# merge's per-column rotation, AC-0416), so it runs the same
+	# per-fragment lambert the near tier does — the seam stays closed at
+	# night, and by day / with "moonlight" OFF moon_i = 0.0 makes the
+	# term exactly 0.0 (parity with the near tier at every hour).
+	if _ac0446_seam == 1.0 and _lod_avg_material != null:
+		if not is_equal_approx(moon_i, _ac0446_moon_i) \
+				or not moon_dirv.is_equal_approx(_ac0446_moon_dir):
+			_lod_avg_material.set_shader_parameter("u_moon", moon_i)
+			_lod_avg_material.set_shader_parameter("u_moon_dir", moon_dirv)
+			_ac0446_moon_i = moon_i
+			_ac0446_moon_dir = moon_dirv
 	if (moon_i != _ac0436_cloud_i or moon_w != _ac0436_cloud_w
 			or not moon_dirv.is_equal_approx(_ac0436_cloud_dir)):
 		var cl6m = mn.get("cloud_layers")

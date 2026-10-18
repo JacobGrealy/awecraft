@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0446 — close the far LOD tier seam (results)</title>
+<style>
+body{font:15px/1.5 "Segoe UI",system-ui,sans-serif;max-width:1080px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:24px;border-bottom:3px solid #333;padding-bottom:8px}
+h2{font-size:19px;margin-top:32px;border-bottom:1px solid #bbb;padding-bottom:4px}
+table{border-collapse:collapse;margin:12px 0;font-size:14px}
+th,td{border:1px solid #999;padding:4px 10px;text-align:left}
+th{background:#eee}
+img{max-width:100%;border:1px solid #555;display:block;margin:8px 0}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.row .col{flex:1;min-width:340px}
+caption{text-align:left;font-weight:bold;padding:4px 0;color:#333}
+.ok{color:#0a0;font-weight:bold}.warn{color:#a60;font-weight:bold}.bad{color:#a00;font-weight:bold}
+code{background:#f2f2f2;padding:1px 5px;border-radius:3px;font-size:13px}
+.note{background:#f7f4ec;border-left:4px solid #c9a227;padding:10px 14px;margin:12px 0}
+</style></head><body>
+
+<h1>AC-0446 — close the far LOD tier seam</h1>
+<p><b>Status: DAY SEAM CLOSED (behind a conservative switch, default OFF). Full closure at
+low light is not achievable with the band's current color data — evidenced below, per the
+ticket's escape-hatch clause. No brightness dial was used.</b></p>
+
+<h2>1. The shape of the difference (measured, not assumed)</h2>
+<p>The near tier (<code>chunk_lit_*.gdshader</code>) is <code>render_mode unshaded</code>:
+<code>ALBEDO = tex × COLOR.b × L</code> with <code>L = 0.20 + 0.80·m_direct + u_amb·u_day·step(m_direct, 0.08)
++ u_moon·lambert</code>. The far band (<code>lod_avg.gdshader</code>) was <b>shaded</b>:
+<code>ALBEDO = COLOR × day-gray × lit</code>, then the engine multiplies by (sun·lambert + sky·ambient).
+So at noon the unlit (a=0) ridge face read <b>0.613</b> through the near tier vs
+<b>≈0.20</b> through the band (day-gray × lit × engine ambient) — a <b>~3× light-model gap</b>,
+plus a day-gray tint the near tier has no. It is <b>not a constant factor</b> (lit a=1 faces were
+~17% over-bright through the band), which is why a single multiplier could never close it.</p>
+<p><b>Fix (structural):</b> a new unshaded band variant that runs the near tier's own L model on the
+band's binary <code>COLOR.a</code> data: <code>m_direct = mix(20/255, u_day, COLOR.a)</code> — the 20/255
+is the exact MIN_AMB floor the near tier's unlit faces read after 8-bit packing, so the lift's
+<code>step(m_direct, 0.08)</code> fires exactly as in the near tier. The day-gray tint is dropped.
+The band's ±6% world-fixed jitter and the AC-0401 fog-wall partition are kept. <code>render_mode</code>
+is a render state, not a uniform, so the switch is a material-<b>shader</b> swap
+(<code>world._ac0446_apply_shader</code>) on the shared band material — every draw site holds the same
+object, so the swap re-shades the whole band at once; the stored uniforms ride the material (AC-0415).</p>
+<p>The player-light term is omitted in the band: at band distances the player term ≡ 0 and
+<code>max(L, 0.12)</code> is a no-op under the 0.20 floor (documented in the shader header).
+Per-vertex face normals are already world-space on the band mesh (the ring merge's per-column
+rotation, AC-0416), so the moon lambert works as-is.</p>
+
+<h2>2. What changed + switch status</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/core/lod_avg_seam.gdshader</code> <span class="bad">(NEW)</span></td>
+<td>The unshaded near-tier-parity band variant (L model + jitter + fog wall above).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td>
+<td><code>_ac0446_apply_shader()</code> (the material-shader swap, change-gated, latches re-armed on
+swap); <code>u_day</code> push (per-frame, value-gated) + band <code>u_moon</code>/<code>u_moon_dir</code> push in
+<code>_ac0401_push</code> (the AC-0436 latch pattern); the day-gray push guarded to the OFF shader;
+<code>AWECRAFT_FARSEAM=0|1</code> boot env (no save, the AMBSKY pattern). The OFF path loads the
+original <code>lod_avg.gdshader</code> — bit-identical (that file got a comment header only).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"far_seam": false</code> + <code>sanitize_bool</code> clamp case.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row + sync + toggled handler.</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§2 settings row + §3 WorldEnvironment bullet synced.</td></tr>
+</table>
+<p><b>Switch:</b> <code>Settings "far_seam"</code>, <b>default OFF (conservative — the shipped look stays
+the current partial parity, bit-identical)</b>; menu checkbox; <code>AWECRAFT_FARSEAM=0|1</code> at boot
+without save. Re-ruling the default ON is the coordinator/user's step (the AC-0432 pattern).</p>
+
+<h2>3. Same face through both tiers — before/after (the AC-0443 R24/F83 ridge pose, 1280×720, seed 44, noon)</h2>
+<div class="row">
+<div class="col"><img src="captures/r1-day-ridge.png">
+<caption>BEFORE (default OFF): the band's west flank reads (50.6, 40.0, 31.4) — luma 41.6 —
+vs the near tier's flank of the same ridge (67.2, 71.5, 7.2) — luma 66.5. The dark step.</caption></div>
+<div class="col"><img src="captures/r2-day-ridge.png">
+<caption>AFTER (<code>FARSEAM=1</code>): the same band flank reads (115.6, 73.2, 36.1) — luma 79.5 —
+sitting inside the near tier's 66–86 range. The cliff reads as lit terrain.</caption></div>
+</div>
+<table>
+<tr><th></th><th>Band flank (patch box 1192–1279 × 376–400)</th><th>Near flank (1160–1260 × 425–455)</th><th>Band/near luma</th></tr>
+<tr><td>BEFORE (day)</td><td>(50.6, 40.0, 31.4) — 41.6</td><td>(67.2, 71.5, 7.2) — 66.5</td><td class="bad">0.63 (the 2.5× step the ticket reported; the BEFORE frame reproduces AC-0443's (50,40,31) exactly)</td></tr>
+<tr><td>AFTER (day)</td><td>(115.6, 73.2, 36.1) — 79.5</td><td>(59.4, 83.1, 13.0) — 73.0 (mid-build state varies ±10; streaming, not shading)</td><td class="ok">1.09 — closed (residual = the band's 8×8 color average + fog at band distance, its representation limit)</td></tr>
+</table>
+<p>Full frames: <code>captures/ac0446-r1-before-day.png</code> / <code>captures/ac0446-r2-after-day.png</code>.
+Pixel diff of the A/B pair: the sky is bit-identical (mean |Δ| 0.000); the terrain below the band is
+bit-identical; all other diffs are inside the band mass plus two animal sprites (entity positions at
+capture — the SNAP fired on the drain timeout in both runs, so sim-time drift is expected; not terrain).</p>
+
+<h2>4. Boundary profile (daytime, no step)</h2>
+<p>Per-column contrast across the tier boundary (band zone y 378–400 vs near zone y 428–450),
+x 1100–1279:</p>
+<table>
+<tr><th>Frame</th><th>Cliff columns x 1184–1268 (near − band luma)</th><th>Reading</th></tr>
+<tr><td>BEFORE</td><td>+23 to +34 (band darker at every column — the visible step)</td><td class="bad">step present</td></tr>
+<tr><td>AFTER</td><td>−3 to −15 (band within the near tier's own texture range, marginally brighter)</td><td class="ok">no dark step; the boundary is now a texture/depth transition, not a shading step</td></tr>
+</table>
+<p>Largest remaining contrast (AFTER, 77 luma, x≈1132) is where the near terrain is the bright grass
+crest (near = 120.8) — terrain albedo contrast, present in BEFORE too (87), not a tier artifact.</p>
+
+<h2>5. Depth kept (the wide shot)</h2>
+<div class="row">
+<div class="col"><img src="captures/r1-day-horizon.png"><caption>BEFORE: the dark cliff fades up into the bright air.</caption></div>
+<div class="col"><img src="captures/r2-day-horizon.png"><caption>AFTER: the lit cliff still fades up into the air — the engine fog (smoothstep 100→332 m at R24/F83) governs the unshaded band exactly as before (never <code>fog_disabled</code>).</caption></div>
+</div>
+<p>Luma along the ridge from the band face toward the horizon (column x=1240 zones), air reference
+(sky strip) = 203.6 in both frames:</p>
+<table>
+<tr><th>Frame</th><th>Band face</th><th>Band mid</th><th>Band far (horizon-ward)</th><th>Monotone fade to air?</th></tr>
+<tr><td>BEFORE</td><td>41.6</td><td>58.9</td><td>87.6</td><td class="ok">yes (face→air 161.9 &gt; far→air 115.9)</td></tr>
+<tr><td>AFTER</td><td>79.6</td><td>93.1</td><td>110.5</td><td class="ok">yes (face→air 124.0 &gt; far→air 93.1) — the gradient is compressed (the face is lit now) but strictly monotone; terrain stays 124 luma from air, clearly separate from the sky</td></tr>
+</table>
+
+<h2>6. Night check — the lift is day-gated; what the parity consequence costs</h2>
+<p><code>day(t) = clamp((elevation(t)+0.12)/0.35, 0, 1)</code>: <b>t=0.75 is dusk (sun on the horizon,
+day = 0.343)</b>; true night is t=0.0 (day = exactly 0). Both were rendered.</p>
+<table>
+<tr><th>Frame</th><th>Band cliff</th><th>Near dirt</th><th>Near crest</th><th>Near field</th><th>Sky</th></tr>
+<tr><td>Dusk t=0.75, OFF (r3)</td><td>(0, 0, 0)</td><td>(8.1, 7.7, 0)</td><td>(1.8, 14.0, 0)</td><td>—</td><td>(10.5, 12.9, 17.5)</td></tr>
+<tr><td>Dusk t=0.75, ON (r4)</td><td>(76.6, 42.6, 14.3)</td><td>(8.1, 7.7, 0) <i>identical</i></td><td>(24.3, 32.4, 11.5)</td><td>—</td><td>(10.5, 12.9, 17.5) <i>identical</i></td></tr>
+<tr><td>Night t=0.0, OFF (r5)</td><td>(0, 0, 0)</td><td>(0, 1.1, 0)</td><td>(0, 4.5, 0)</td><td>(0.1, 16.9, 0.1)</td><td>(0, 0, 0)</td></tr>
+<tr><td>Night t=0.0, ON (r6)</td><td>(54.7, 26.4, 3.1)</td><td>(0, 1.5, 0) <i>identical</i></td><td>(9.4, 10.9, 0)</td><td>(0.1, 16.9, 0.1) <i>identical</i></td><td>(0, 0, 0) <i>identical</i></td></tr>
+</table>
+<div class="row">
+<div class="col"><img src="captures/r5-night-off-ridge.png"><caption>Night t=0.0, OFF — the shipped look: the band is pure black; the ridge <b>disappears</b> into the black sky (no horizon, no depth cue).</caption></div>
+<div class="col"><img src="captures/r6-night-on-ridge.png"><caption>Night t=0.0, ON — the band carries the near tier's own night model (0.20 floor + moon; the lift term ×u_day is <b>exactly 0</b> — day-gating intact): the ridge returns as a dim silhouette.</caption></div>
+</div>
+<div class="note"><b>Honest low-light residual (escape-hatch clause).</b> The band's a=0 quads carry the
+region's 8×8×8 <b>average</b> color (~sRGB (145, 99, 51), back-derived from the noon frame — it includes
+exposed blocks), while the near tier's cliff <b>faces</b> carry the dark cliff texture. The L models are
+now identical, so at low light that data difference dominates: dusk band/near ≈ 1.65–6.4× (r4, warm
+silhouette vs dark foreground), true night band/near-field ≈ 2.5× (r6, dim silhouette vs faint moonlit
+field). <b>Full closure at all hours is impossible with the band's current data</b>: the cliff-dark
+component of the average does not exist in the shader (the a=0 and a=1 quads share one color — no
+C++/data change was in scope), and any multiplier that darkened the band at night would re-open the
+day seam (the "single multiplier" the ticket warned against). The shipped result is the smallest
+honest improvement: the reported daytime seam is closed, the night gains the near tier's own
+floor+moon instead of a vanished ridge, and the OFF path remains bit-identical. The trade to re-rule:
+a slightly bright far silhouette at dusk/night (the depth cue is <i>restored</i> there, not lost —
+BEFORE night had no horizon at all) vs the closed daytime seam.</div>
+
+<h2>7. Gates (light set — boundary r4 and the heavy set are the coordinator's)</h2>
+<table>
+<tr><th>Gate</th><th>Exit</th><th>Result</th></tr>
+<tr><td>G0 (<code>--headless --quit</code>) + gate_census</td><td>0</td><td class="ok">0 SCRIPT / 0 SHADER errors (re-verified after the A/B file swap)</td></tr>
+<tr><td>SMOKE battery (player;interact;light;fluids;genhash)</td><td>0</td><td class="ok">battery ok:true; every behavior field == the AC-0444 reference (only machine-timing ms fields differ); genhash 25/25 byte-identical to the AC-0444 baseline</td></tr>
+<tr><td>PROBE (meshprobe)</td><td>0</td><td class="ok">match_rate 1.0, ok true, cpp==gd all fields</td></tr>
+<tr><td>shaderforce (Forward+, llvmpipe)</td><td>0</td><td class="ok">17/17 ok (was 16 — the new variant auto-globbed from res://core and compiles clean)</td></tr>
+<tr><td>settings arm</td><td>0</td><td class="ok">ok true (no key-count assertion broken by the new key)</td></tr>
+<tr><td>farab</td><td>0</td><td class="ok">h_mismatch 0, ok true</td></tr>
+<tr><td>ladder</td><td>0</td><td class="ok">20/20 band_a_ok, ok true (its exact-path material check matches band-A instances only — unaffected; the seam is OFF)</td></tr>
+<tr><td>halo</td><td>0</td><td class="ok">ok true (mismatches 0, slabs_ok 226/226)</td></tr>
+<tr><td>lightstate</td><td>0</td><td class="ok">double-LOD census 0/0, leaks 0 (21/21 chunks), wash false, holes 0 — the standing invariants; the demoted/stragglers churn (1/3) equals the coordinator's own HEAVY-r22 run on this tree (machine-timing churn on the AC-0445-WIP tree state, not a gate field)</td></tr>
+<tr><td>r16 (<code>--fixed-fps 600</code>)</td><td>0</td><td class="ok">all lod sub-flags true, far_holes 0/0 both bands, built_all true. <span class="warn">Note:</span> top-level <code>section_first_ok=false</code> (<code>section_done_frame=-1</code>, build_frames ~5500 vs 4050) is <b>pre-existing tree state</b>: an A/B run with my four files temporarily reverted reproduced it identically (−1, 5700 frames) — it is an AC-0445-era build-ordering field on this tree's WIP, not in the ticket's sub-flag set, and not caused by this change</td></tr>
+</table>
+<p>All runs: single godot at a time, <code>HOME=/tmp/dsh_home</code>, absolute engine path,
+<code>pgrep</code> clean before each, census + exit status checked every run (the UAF watch — no
+signal-11 anywhere). Render runs additionally verified: Forward+ boot line present, 0 errors,
+file exists, 1280×720.</p>
+
+<h2>8. Captures</h2>
+<p>In <code>tasks/AC-0446/captures/</code>: full frames <code>ac0446-r1-before-day</code>,
+<code>ac0446-r2-after-day</code>, <code>ac0446-r3-before-night</code> (dusk t=0.75),
+<code>ac0446-r4-after-night</code> (dusk), <code>ac0446-r5-true-night-off</code>,
+<code>ac0446-r6-true-night-on</code> (+ <code>_placed</code> variants); crops
+<code>r1/r2-day-ridge</code>, <code>r1/r2-day-horizon</code>, <code>r3/r4-dusk-*-ridge</code>,
+<code>r5/r6-night-*-ridge</code>. Measurement script: <code>.scratch/AC-0446/measure.py</code>
+(pure-PIL; boxes: band flank 1192–1279×376–400, near flank 1160–1260×425–455 — verified against
+AC-0443's own reported numbers on its frames). All renders: the AC-0443 pose
+(AIM 8.5,143.62,8.5 / yaw 1.57 / pitch 0.08), R24/F83, seed 44, <code>SNAP_DRAIN=9000</code>
+(shots fired on the drain timeout in every run — the documented faithful mid-build state,
+identical in all six so the A/B is apples-to-apples).</p>
+
+<h2>9. Deliberately not done</h2>
+<ul>
+<li>No brightness dial / global multiplier — the fix is the light-model swap; the low-light residual is the band's color data (evidence above), which a multiplier cannot fix without re-opening the day seam.</li>
+<li>No C++/mesh data change (the band's a=0 quads carry one 8×8×8 average — the cliff-dark component doesn't exist in the data; out of scope here).</li>
+<li><code>lod_avg.gdshader</code> semantics untouched (OFF path bit-identical, day or night) — comment header only.</li>
+<li>No change to the fog wall, the limb, the body's height-based relief, the 0.20 floor, or AMB_SKY_L.</li>
+<li>Default stays OFF (conservative); re-ruling it ON is the coordinator/user's step.</li>
+<li>Boundary r4 and the heavy gate set — the coordinator's.</li>
+<li>No commits (coordinator closeout); the fenced files (<code>main.gd</code>, <code>game.gd</code>,
+<code>drop.gd</code>, <code>debug.gd</code> + <code>tasks/AC-0067</code>, <code>AC-0384</code>,
+<code>AC-0425</code>) untouched — the other session's WIP rides in <code>git diff</code> and must not
+be staged with this ticket.</li>
+</ul>
+</body></html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0446 plan — close the far LOD tier seam</title>
+<style>
+body { font: 15px/1.5 system-ui, sans-serif; max-width: 960px; margin: 2em auto; color: #1c2733; padding: 0 1em; }
+h1 { border-bottom: 3px solid #2b6cb0; padding-bottom: .2em; }
+h2 { margin-top: 1.6em; color: #2b6cb0; }
+table { border-collapse: collapse; font-size: .92em; } th, td { border: 1px solid #b8c4d0; padding: 4px 9px; text-align: left; vertical-align: top; }
+th { background: #e8eef5; } code { background: #f2f5f8; padding: 0 .3em; font-size: .9em; }
+pre { background: #f6f8fa; border: 1px solid #ccd; padding: .7em; overflow-x: auto; font-size: .82em; }
+.note { background: #fdf3d7; border-left: 4px solid #d9a400; padding: .6em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+<h1>AC-0446 plan — close the far LOD tier seam</h1>
+
+<h2>Goal</h2>
+<p>Make the far average band's shading RESULT equal the near tier's, face class by face class, so the
+tier boundary in a daytime frame shows no step — without washing out the far terrain's depth cue,
+without touching the day-gated lift's night behaviour, the fog wall, or the body's relief.</p>
+
+<h2>The shape of the difference (measured first, before the approach)</h2>
+<p>Method: read both shaders and the data that feeds them (no render needed to establish the shape —
+the prior renders, AC-0443/AC-0444, supply the pixel anchors).</p>
+<table>
+<tr><th></th><th>Near tier — <code>chunk_lit_*</code></th><th>Far band — <code>lod_avg</code></th></tr>
+<tr><td>pipeline</td><td><code>render_mode unshaded</code>: <code>ALBEDO = tex · shade · L</code>; L is the WHOLE light</td>
+<td><b>shaded</b> (default): <code>ALBEDO = COLOR · day-gray · jit · lit</code>, then the ENGINE multiplies by (sun·lambert + sky·ambient)</td></tr>
+<tr><td>light model</td><td><code>L = 0.20 + 0.80·m_direct + 0.35·u_day·step(m_direct, 0.08) + u_moon·lambert</code>, <code>m_direct = max(u_day·s, blocklight)</code>; s = baked sky scalar ∈ {20/255 floor, 1.0}</td>
+<td><code>lit = mix(0.2, 1.0, COLOR.a) + 0.35·day.r·(1−COLOR.a)</code>; COLOR.a = binary heightmap sky (1.0 top / 0.0 side — <code>mesh.cpp</code>: alpha = <code>skyp/15</code>, skyp ∈ {0,15})</td></tr>
+<tr><td>effective at noon, unlit side face (the defect face)</td><td>0.20 + 0.8·(20/255) + 0.35·1.0 = <b>0.613</b> × tex</td>
+<td>(0.2 + 0.35·0.753) · 0.753 (day-gray tint) · ≈0.58 (engine sky ambient) = <b>≈0.20</b> × COLOR → 3.0× darker</td></tr>
+<tr><td>effective at noon, sky top face</td><td>0.20 + 0.80·1.0 = <b>1.00</b> × tex</td><td>1.0 · 0.753 · (0.97 direct + 0.58 ambient) = <b>≈1.17</b> × COLOR → slightly OVER-bright</td></tr>
+</table>
+<p><b>Verdict — the difference is NOT a constant factor:</b> a=0 faces are ≈3× too dark (dominated by
+the shaded pipeline's engine-ambient multiplication — a term the band's model does not account for at
+all — plus the day-gray tint the near tier has no), while a=1 faces are ≈17% too bright. A single
+multiplier cannot fix both; the ticket's warning is confirmed by the models themselves. The observed
+pixels agree: (50,40,31) vs (135,116,103) ≈ 2.7–3.3× on the a=0 flank (the residual vs 3.0× is the
+8×8 averaged COLOR vs per-vertex tex, ±6% jitter, 4% fog, ACES).</p>
+<p><b>Why the approach follows:</b> the band can represent exactly the two face classes the near tier
+has at the seam — sky-exposed tops (a=1 ↔ s=1) and unlit sides (a=0 ↔ s=floor 20/255). So the fix is
+structural, not a dial: make the band UNSHADED and run the near tier's L model on that data
+(<code>m_direct = mix(20/255, u_day, COLOR.a)</code>), dropping the day-gray tint the near tier lacks.
+Every face class then computes the same L the near tier does, by construction. Depth cue: the engine
+environment fog still applies to the unshaded material (fog is not the shader's) — the wide shot
+verifies the gradient survives. Night: the lift term is ×u_day → 0 at night (day-gating intact); the
+band's night becomes the near tier's own night (0.2 floor + moon lambert) instead of near-black —
+documented as the parity consequence, with the conservative switch OFF path keeping the old night
+bit-identical.</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td><code>godot/core/lod_avg_seam.gdshader</code> <b>(NEW)</b></td><td>the ON-variant: <code>render_mode unshaded</code>; L = 0.20 + 0.80·mix(20/255, u_day, COLOR.a) + u_amb·u_day·step(…,0.08) + u_moon·max(dot(N, u_moon_dir),0); ALBEDO = COLOR.rgb · jit · L; same ±6% world-fixed jitter; same AC-0401 fog-wall discard. Player-light term omitted: at band distances pr ≡ 0 → the term degenerates to max(L, 0.12), a no-op under the 0.2 floor.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>single shared material keeps its identity; its <code>shader</code> swaps on the setting change (render_mode can't be a uniform) with re-pushed declared uniforms; per-frame pushes route to the active shader (OFF: day-gray as today; ON: u_day value-gated + u_moon/u_moon_dir moon-latched); u_amb/u_fog_far pushes unchanged (main.gd still feeds u_fog_far); AWECRAFT_FARSEAM=0|1 boot env preload (no save).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"far_seam": false</code> in DEFAULTS (conservative: OFF = the current look, bit-identical) + sanitize_bool clamp case.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options checkbox (after the cloud-jitter row, end of the page — no move_child seat owed) + sync line + toggled handler (the ambient_sky pattern).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>AC-0446 note on the lod_avg bullets (§3) + the Settings switch entry (§2) — invariant 2.</td></tr>
+</table>
+<p>NOT touched: <code>lod_avg.gdshader</code> (the OFF path, bit-identical by construction), the four
+fenced files, <code>harness.gd</code> (pristine — measurement rides the existing snapshot envs +
+offline PNG analysis), <code>tasks/AC-0067</code>, <code>AC-0384</code>, <code>AC-0425</code>,
+generation paths (genhash must be byte-identical to the AC-0444 baseline).</p>
+
+<h2>Harness gates (light set — heavy is the coordinator's)</h2>
+<ol>
+<li>G0: <code>--headless --quit</code>, <code>gate_census.py</code> → 0 SCRIPT ERROR + 0 SHADER ERROR, <b>and the process exit status</b> (the stochastic UAF class: clean log, signal 11).</li>
+<li>SMOKE: <code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> — ok true, fields match the AC-0444 current-tree reference.</li>
+<li>PROBE: <code>AWECRAFT_LOGIC=meshprobe</code> — 1.0.</li>
+<li>genhash standalone — 25/25 byte-identical to <code>.scratch/AC-0444/genhash-standalone.log</code>.</li>
+<li>shaderforce (Forward+ xvfb) — 17/17 (16 + the new variant, auto-globbed).</li>
+<li>settings arm standalone — green (new key).</li>
+<li>Standing-set light subset: farab (h_mismatch 0), ladder (20/20), halo (ok), lightstate (0/0), r16 (all sub-flags, far_holes 0/0, <code>--fixed-fps 600</code>). boundary r4 = coordinator.</li>
+</ol>
+
+<h2>Acceptance renders (Forward+ recipe; R24 / FOG_PCT 83 / seed 44; AC-0443's AIM pose; drain 6000, budget 1200 s)</h2>
+<table>
+<tr><th>run</th><th>envs</th><th>evidence</th></tr>
+<tr><td>r-before-day</td><td>FARSEAM off (default), TIME 0.5</td><td>pre-fix reference: the face box + the near-tier flank, same frame</td></tr>
+<tr><td>r-after-day</td><td>FARSEAM=1, TIME 0.5</td><td>the same face through both tiers (gap closed), the boundary profile (no step), the distance gradient across the band (depth kept)</td></tr>
+<tr><td>r-before-night</td><td>FARSEAM off, TIME 0.75</td><td>the night look as it is (OFF path untouched)</td></tr>
+<tr><td>r-after-night</td><td>FARSEAM=1, TIME 0.75</td><td>the lift still day-gated (u_day(0.75) = 0): band night = the near tier's own night (floor + moon), measured side by side</td></tr>
+</table>
+<p>Measurements offline (numpy/PIL): the AC-0443 patch box (x1192–1279, y376–400) mean RGB, a
+same-ridge near-tier flank box, the max luminance step across the tier boundary along a profile, and
+the band's luminance-vs-distance gradient (the depth cue) before/after. File existence + the
+Forward+ boot line checked on every run.</p>
+
+</body>
+</html>
