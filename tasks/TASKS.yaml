@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-18T02:57
+  updated_at: 2026-10-18T05:28
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,6 +29,7 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
+- AC-0446
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28619,4 +28620,76 @@ intake:
     \ anchor removal (A) + tier 0/1 atomic enable + the fade. This is the recenter fix and\n       the\
     \ near-band tower; it is independently shippable and gate-green on its own.\n  P2 = tiers 2/3 atomic\
     \ (B), with its own Run-1 settling the four risks above."
+  comments: []
+- id: AC-0446
+  title: close-the-far-lod-tier-seam
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T05:28
+  updated_at: 2026-10-18T05:28
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A ridge should look the same whether it is drawn by the near tier or the far
+    tier. Right now the distant band is visibly darker than the terrain in front of it, so the boundary
+    between detail levels reads as a shading step across the world.
+
+
+    2) Technical Details:
+
+    RECOMMENDED BY THE INVESTIGATION THAT TRACED AN APPARENT TEAL BAND IN THE SKY, which turned out not
+    to be sky at all but the far tier''s unlit side faces showing over the local horizon from distant
+    terrain curving up into view. That investigation''s conclusion was explicit: do not patch the band,
+    CLOSE THE TIER SEAM, and treat it as a far-level-of-detail ticket rather than a sky one.
+
+    THE MEASUREMENT THAT DEFINES DONE: the same ridge face reads about FIFTY, FORTY, THIRTY through the
+    far band and about A HUNDRED AND THIRTY-FIVE, A HUNDRED AND SIXTEEN, A HUNDRED AND THREE one tier
+    closer. A recent ticket added an ambient lift to the far band, which moved it from thirty to fifty
+    - a real improvement and EXPLICITLY NOT A CLOSURE. The gap is still roughly a factor of two and a
+    half, and it is visible at every horizon in the world.
+
+    WHY THIS IS MORE THAN A BRIGHTNESS DIAL: the far band averages eight by eight by eight blocks per
+    vertex and shades with its own simplified model, while the near tier shades per vertex with the full
+    model including the ambient lift, the corner agreement work and the floor handling. Closing the seam
+    means making the band''s RESULT MATCH the near tier''s, not merely raising a constant until the two
+    happen to agree at one face. Establish how the two models differ before choosing the approach: a comparison
+    across many faces of both the lit and unlit cases, in daylight and in shade, will show whether the
+    difference is a constant factor, a term the band omits entirely, or a shape difference that varies
+    with orientation and exposure. A single global multiplier that fixes one face and over-brightens another
+    has not closed anything.
+
+    THE RISKS, all of which have bitten this project before: a lift applied to the whole band will WASH
+    OUT the far terrain and flatten the world''s depth cue, which is the very thing the band exists to
+    provide; the night look is day-gated in the existing lift and must stay that way; the far tier is
+    fog-gated, so changes to it interact with the fog wall and the limb; and the height-based relief added
+    to the satellite body is a separate mechanism that must not be disturbed.
+
+    ACCEPTANCE: the same ridge face measured through BOTH tiers from the same viewpoint, before and after,
+    with the numbers and the frames, and the gap closed rather than narrowed. Plus a profile ACROSS a
+    tier boundary in a daytime frame showing no step, a night frame showing the lift remaining day-gated,
+    and a wide shot showing the far terrain has kept its depth rather than becoming uniformly bright.
+    If a full closure turns out to be impossible because the band genuinely cannot represent what the
+    near tier does, say so with evidence and describe the smallest honest improvement - a partial fix
+    described accurately is worth more than a closure claimed and not delivered.
+
+    CONSTRAINTS: genhash 25/25 byte-identical unless generation genuinely moves, in which case that is
+    a FINDING; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe
+    1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band,
+    shaderforce 12/12); every look change ships behind a switch defaulting conservative; and the recent
+    work must keep holding - the moon and the night, the sky consistent with altitude, the seam closure
+    and its atlas fix, the ambient lift, the cloud jitter, the interface additions and the column-atomic
+    streaming with its fade.
+
+    EVIDENCE: tasks/AC-0444/AC-0444-results.html for the diagnosis and its elimination chain, tasks/AC-0443/AC-0443-results.html
+    for the partial parity and its numbers, and tasks/AC-0384/AC-0384-results.html section 30 for the
+    assessment that ranked this.
+
+    '
   comments: []
