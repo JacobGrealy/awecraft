@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0445 — Column-atomic build &amp; fade-in (P1) — plan</title>
+<style>
+body{font:14px/1.5 "Segoe UI",system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+h1{font-size:1.5rem;border-bottom:3px solid #2c5f8a;padding-bottom:.3rem}
+h2{font-size:1.15rem;color:#2c5f8a;margin-top:1.6rem}
+h3{font-size:1rem;margin-top:1.1rem}
+table{border-collapse:collapse;width:100%;margin:.8rem 0}
+th,td{border:1px solid #bbb;padding:.35rem .5rem;text-align:left;vertical-align:top;font-size:.85rem}
+th{background:#eef3f7}
+code,pre{font-family:Consolas,monospace;font-size:.82rem}
+pre{background:#f4f6f8;border:1px solid #ddd;border-radius:4px;padding:.6rem;overflow-x:auto}
+.q{border-left:4px solid #2c5f8a;background:#f7f9fb;padding:.7rem 1rem;margin:.9rem 0}
+.q .a{font-weight:700;color:#1e6b34}
+.del{color:#a02020}.add{color:#1e6b34}
+.small{font-size:.8rem;color:#555}
+ul,ol{margin:.4rem 0 .4rem 1.4rem}
+</style>
+</head>
+<body>
+
+<h1>AC-0445 — Column-atomic build &amp; fade-in (P1) — plan</h1>
+<p class="small">Run-0 (continuity) done 2026-10-18. This plan settles the five Run-1 questions
+against the code (every claim below carries its line reference), then lists the implementation.</p>
+
+<h2>Goal (user story → contract)</h2>
+<ul>
+<li><b>Smoothness fix 1 (tower holes):</b> the real band (tier 0) and band A (tier 1) enable a
+16&nbsp;×&nbsp;16 column <i>whole</i>, prepared off-thread, switched on in one frame — no horizontal
+slab slices at the streaming edge — with a short display-side fade so it "arrives" instead of popping.</li>
+<li><b>Smoothness fix 2 (vertical flight):</b> a pure 16-block Y move must cost nothing: the Y term of the
+recenter trigger (player.gd:3310) is deleted, the recenter <code>wy</code> parameter loses its only consumer,
+and both probe caches stop carrying the player-Y slab in their fingerprints (altitude-stable).</li>
+<li><b>Scope (P1 only):</b> anchor removal on all tiers + tier 0/1 column-atomic enable + fade.
+<b>Not</b> in P1: tier 2/3 (far/low) atomicity — the coordinator's fence keeps that lane slab-granular
+(it is a separate, later, self-contained piece with its own Run-1). No C++ change (build_accs range emit,
+range slab_light_payload, and box_settled all exist — see Q1).</li>
+<li><b>Guarantees that must hold:</b> (a) never show an unlit slab (the settle gate + lver re-check);
+(b) the AC-0286 halo is never hidden twice / never double-faded on promotion; (c) settled state == today's
+opaque draw (the fade is transient display-side alpha only); (d) mesh-attach contract: full builds land via
+<code>apply_accs</code> (merged-atlas canvas UVs), scoped builds via <code>apply_edit_accs</code> — the
+column build is a FULL build and lands through apply_accs exactly like the band-A mat landing.</li>
+</ul>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>
+Delete <code>last_wy</code> (:611), <code>_player_slab()</code> (:613–614), <code>_layer_rank_of()</code> (:639–645);
+low probe <code>_entry_best_pending</code> walk :658–699 (pys fan → bottom-up) + fingerprint :740 (drop the
+player-slab element); high probe <code>_hslab_best_pending</code> :767–799 (fan → bottom-up; the
+unmaterialized band-A special case :778 returns marker 0) + fingerprint :818; <code>_grid_score</code>
+:904–939 (drop the layer term and its probe call — score = taxi × 10000 + the kept AC-0399 view bias);
+<code>recenter</code> :11336 (keep the 4-arg signature — the fenced main.gd still passes <code>wy</code> —
+but delete the consumer :11385–11386); <b>new</b> tier-0 column-atomic branch in
+<code>_mesh_dispatch_hslab</code> (gate/payload/entry before the real-band slab branch); <b>new</b>
+column-atomic landing branch in <code>threadmesh_handoff</code>; <b>new</b> fade state + per-frame ramp
+(<code>_col_fade_step</code>) + first-enable decision at landing; new counters (<code>recenter_n</code>,
+<code>col_atomic_lands</code>, <code>hslab_scoped_real_lands</code>, fade census) as declared arm
+introspection.</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>Delete <code>_chunk_y</code> (:97, :257); delete the
+<code>or pcy != _chunk_y</code> trigger term (:3310) and the <code>_chunk_y = pcy</code> write (:3313);
+<code>_recenter</code> call drops the 4th arg (:3321 → <code>recenter(fp.x, fp.z, true)</code>).</td></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>8 four-arg recenter call sites drop the <code>wy</code>
+arg (actual lines 17915, 19958, 19971, 19975, 20606, 23657, 27091, 27185); delete the <code>last_wy</code>
+writes :18001–18004; ladder arm (e) :19783–19791 <code>layerrank_ok</code> → <code>taxi_order_ok</code>
+(same-taxi-tie-free score monotone in raw taxi — the ground-state order is now taxi-exact); r16 wave
+<code>_r16_wave_test</code> :20069–20168 rewrite: the key is <b>taxi alone</b> (non-decreasing sequence,
+inside-out preserved; the removed layer term and <code>_layer_rank_of</code> are gone); <b>new</b>
+<code>vflight</code> arm (vertical flight: pure-Y sweep &gt;16 m, zero recenters, probe caches
+altitude-stable, zero per-slab real-band landings, no partial real-band column in any frame, fade
+completes within its constant).</td></tr>
+<tr><td><code>godot/world/chunk_lit_opaque.gdshader</code>, <code>chunk_lit_cutout.gdshader</code>,
+<code>chunk_lit_flower.gdshader</code>, <code>chunk_lit_fluid.gdshader</code></td><td>
+Add <code>uniform float u_fade : hint_range(0.0,1.0) = 1.0;</code> and fold it into <code>ALPHA</code>
+(default 1.0 → the shipped bit-identical path). Animated water/lava (<code>core/fluid_anim*.gdshader</code>)
+are <b>not</b> faded — see Q5 scope decision.</td></tr>
+<tr><td><code>tasks/harness_data.yaml</code> → <code>harness_doc.py --render</code></td><td>Ladder row:
+<code>layerrank_ok</code> → <code>taxi_order_ok</code> + AC-0445 note; r16 row: wave-order note rewrite;
+new <code>vflight</code> row; standing values re-established (wprof drain stage, r16 baseline).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>Build-order bullet (§6) → taxi-only score, column unit,
+fade; mesh-attach bullet (the column build joins the mat/full apply_accs class); staged-collision bullet
+(column landing feeds the same col_immediate/staged split); recenter contract (AC-0234 is gone — recenter
+is an X/Z-only crossing event).</td></tr>
+</table>
+<p class="small"><b>Fenced — do NOT edit:</b> <code>godot/scenes/main.gd</code> :626/:643 (another session's
+dirty work, passes <code>wy</code>) — hence the 4-arg signature survives as a documented no-op; the report
+names the exact needed change (drop the 4th arg at both sites, then the param can go). Also fenced/dirty:
+game.gd, drop.gd, debug.gd, tasks/AC-0067, tasks/AC-0384 — untouched.</p>
+
+<h2>The five Run-1 answers (settled against code)</h2>
+
+<div class="q"><b>Q1 — SETTLE GATE: wait for all 24, or drop the unsettled at land?</b><br>
+<span class="a">ANSWER: gate the WHOLE column — wait for all 24 sections. Never drop.</span><br>
+Reasoning:
+<ul>
+<li>The gate's job is "a face never shows on lighting that is not calculated" (world.gd:8740–8747,
+AC-0283 P2). A face becomes visible at LANDING, and the landing re-checks <code>box_epochs</code> (lver,
+world.gd:7819–7829) — so dispatch-time settlement + epoch re-check already makes the shown light final.
+Dropping an unsettled slab at land would show a <b>hole</b> (the ticket names this the hard-rule violation);
+there is no other option that keeps both the atomic enable and the no-unlit contract.</li>
+<li>Waiting the full box is <b>bounded</b>: <code>box_settled</code> (gdext/src/starlight.cpp:660) treats
+<b>unseeded sections as settled zero-boundaries</b> (:652–659) — only genuinely in-flight relaxation
+delays, and a new real-band column is seeded as a whole column (<code>_star_seed_column</code> →
+<code>seed_column</code>, all 24 sections) and settles within the engine's settle wave. The standing
+settlewait finding (0 episodes — "new-column landings settle before the drain first offers a slab")
+means the column gate adds no new stalls in practice; it is the <i>max</i> of the per-slab gate completions
+for the same box neighborhood (the per-slab 3×3 boxes already overlapped the same neighbour sections).</li>
+<li>Precedent, already shipped: the FULL landing / tex-refresh path gates on the full-column box —
+<code>star.box_settled(cx, cz, -1, 24)</code> + <code>box_epochs(cx, cz, -1, 24)</code> + the full-column
+payload (world.gd:6317–6327, :8270s). The column build reuses that exact established contract, widened from
+the one-slab box. No C++ needed: <code>slab_light_payload(cx, cz, si0, si1)</code> is already a
+<b>range</b> payload (starlight.cpp:789, window [si0·16−2, (si1+1)·16+1]) and <code>build_accs</code>
+already emits <code>si0..si1</code> with <code>was_full = si1 &lt; 0</code> (mesh.cpp:3431, 3600–3627).</li>
+</ul>
+Dispatch: <code>box_settled(cx, cz, -1, 24)</code>; payload <code>slab_light_payload(cx, cz, 0,
+mini(top&gt;&gt;4, 23))</code>; <code>lver = box_epochs(cx, cz, -1, 24)</code>; landing re-checks the same
+box (mismatch → datadrop + retrigger, the whole column redoes — one unit, cheap).</div>
+
+<div class="q"><b>Q2 — PER-FRAME BUDGET: in-flight columns, not slabs — what is the enable cost?</b><br>
+<span class="a">ANSWER: in-flight is bounded in COLUMNS by the existing TM pool cap; the enable cost equals
+the EXISTING full-landing worst case (same op class, measured). Non-footprint bodies stay staged.</span><br>
+Reasoning:
+<ul>
+<li>In-flight: the threadmesh pool cap (<code>threadmesh_max</code> = 3, startup 9, world.gd:3492; the
+drain's <code>tm_cap</code> logic world.gd:8748–8758 is unchanged) bounds <i>tasks</i>. A task is now a
+column → ≤3–9 columns in flight at once, all worker-side (off the main thread). In-flight dedup
+(<code>_tm_inflight_keys</code>) was already per-COLUMN (world.gd:8624). The drain's wall-clock unit budget
+(pace ≈3.5 ms/unit, <code>drain_budget_ms</code> cap) bounds dispatches per frame; a column dispatch is one
+µs-scale worker submission. The unit accounting in <code>_drain_build_queue</code> keeps counting dispatches
+(one column = one unit) — the comment "one slab" becomes "one column (tier 0/1)".</li>
+<li>Enable (landing, main thread): <code>apply_accs</code> (chunk.gd:1708) = up to 24 slabs ×
+<code>_assemble_slab</code> (ArrayMesh build + surface materials + MeshInstance attach). Plus collision —
+see Q3. This is <b>exactly the existing full-landing op class</b>: AC-0340 measured the immediate-path burst
+for a footprint column (up to 24 slab bodies in one frame, frame_max ≈35 ms, "unbounded by design (that is
+the fence)"). The column landing is the full landing's shape with the mat/full landing's bookkeeping — no
+new worst case, a known one. It is measured before/after with a timing-gated
+<code>TMH_PART</code>-style line on the column landing (apply= / col= / stage= ms, AWECRAFT_TIMING=1) plus
+the perf/boundary frame stats (see Gates).</li>
+</ul></div>
+
+<div class="q"><b>Q3 — COLLISION ATOMICITY: bodies with the mesh?</b><br>
+<span class="a">ANSWER: yes inside the footprint, staged outside — by reusing the existing
+<code>col_immediate</code>/staged split. No new mechanism.</span><br>
+Reasoning: <code>apply_accs</code> → <code>_post_build_collision</code> (chunk.gd:1476):
+<code>c.col_immediate</code> (set at dispatch, world.gd:8621/:8419, via <code>_col_immediate_for</code>
+world.gd:10809 = Chebyshev ≤1 of the recenter anchor + (0,0)) → all dirty bodies build <b>immediately in
+the landing frame</b> (footprint: mesh and bodies together, the player cannot be there without both);
+otherwise <code>col_dirty</code> stays for the staged lane <code>_col_drain_step</code> (world.gd:10837:
+≤2 cols/frame, <code>collide_drain_budget_ms</code> = 8 ms, debt re-queued, never dropped; the
+<code>perf_col_deferred_in_footprint</code> tripwire must stay 0). The column landing calls
+<code>_count_collision_build(c)</code> + <code>_stage_check(c, key)</code> exactly like the mat/full
+landings (world.gd:8086–8109).</div>
+
+<div class="q"><b>Q4 — FAR / LOW LANES: atomic too?</b><br>
+<span class="a">ANSWER: NO — stay slab-granular in P1 (coordinator fence; P2 is a separate gated piece).</span><br>
+Reasoning: <code>_low_dispatch_slab</code> and the far payload representation have their own per-slab
+state (the per-slab/tier/dgen/fgen <code>low_cache</code>, the flip-back attach, the tier-handoff drop,
+the ring batching, the floor prune, the all-air terminal mark) — converting it to column units would
+change its representation and its whole gate contract, and the ticket's own plan defers that to P2 with its
+own Run-1. The ONLY low-lane change in P1 is the anchor removal: <code>_entry_best_pending</code>'s fan
+walk around the player slab becomes a deterministic bottom-up walk (si 0→top, same skip/prune/check
+sequence) and its fingerprint loses the player-Y element. Bottom-up also minimizes all-air terminal-mark
+dispatches on floored far columns (sub-floor slabs are pruned first). Unit, cache, flip-back, and budget
+semantics unchanged.</div>
+
+<div class="q"><b>Q5 — FADE: per-column material duplication + material_override — what exactly, and how
+do both guarantees hold?</b><br>
+<span class="a">ANSWER: per-surface fade materials on the four static lit shaders
+(opaque/cutout/flower/fluid-cross), ramped wall-clock 0→1 over <code>COL_FADE_MS</code> = 350 ms
+(code constant; harness-only env <code>AWECRAFT_FADE_MS</code> for A/B; 0 = off, no Options toggle),
+first-enable only, with the halo held visible under the ramp when a low is showing.</span><br>
+Mechanism (refined vs. the ticket's draft):
+<ul>
+<li>Shaders: <code>uniform float u_fade : hint_range(0.0,1.0) = 1.0;</code> + <code>ALPHA = u_fade</code>
+(opaque), <code>ALPHA = t.a * u_fade</code> (cutout/flower — the soft ramp replaces the scissor only while
+ramping), <code>ALPHA = 0.62 * u_fade</code> (fluid cross — its existing alpha × the ramp). Default 1.0 and
+the shipped (opaque-pass) materials are bit-identical; the transparent pass exists only while a ramp is
+live.</li>
+<li><b>Not</b> <code>material_override</code> — that hook covers all of an instance's surfaces and would
+force one shader on a flora mesh's two surfaces (cutout + flower). Instead the landing sets the fade
+material per <b>surface</b> (<code>ArrayMesh.surface_set_material(i, m)</code>), using the slab's
+sidx/fsidx to find the opaque (surface 0) / fluid-cross / cutout / flower surfaces. Meshes are
+per-build ArrayMeshes (freed at the next re-build), so the transient surface materials carry no stale
+state.</li>
+<li>Landing (first-enable detection): capture <i>before</i> <code>apply_accs</code> whether any high slab
+instance is visible. <b>Visible</b> (remesh, promotion with stored high) → no fade (immediate swap — the
+AC-0286 no-double-fade contract: the thing it replaces is never hidden twice). <b>Not visible</b> (first
+enable, from sky or from a halo) → fade; and if a <i>low</i> (halo) is visible, keep it visible under the
+ramp (crossfade) and hide it exactly once, at ramp completion — no double-hide, the AC-0286 halo is
+replaced, not punched through.</li>
+<li>Completion (in <code>_col_fade_step</code>, wall-clock, smoothstep curve, frame-rate independent):
+restore the shared kind materials on the surfaces (a mid-ramp remesh's fresh meshes already wear the
+shared materials — the restore is a no-op on freed meshes), free the per-column fade materials, hide the
+held low. Ramp budget is O(fading columns × surfaces) per frame — a handful of columns at most.</li>
+<li><b>Guarantee 1 (never show unlit):</b> the fade touches display alpha only — the vertex colors (the
+settled light) are exactly the ones the Q1-gated build baked; dispatch gate + lver re-check untouched. A
+face only exists (even at partial alpha) after its settled-light build landed.</li>
+<li><b>Guarantee 2 (settled == today):</b> after the ramp the surfaces wear the shared opaque-pass
+materials again (identical to today's attach), the fade materials are freed, and the only lasting state
+is zero. Promotion/remesh/tex-refresh never fade (first-enable detection above).</li>
+</ul>
+Scope decision: the <b>animated</b> water/lava surfaces (<code>core/fluid_anim*.gdshader</code>,
+<code>Data.fluid_anim_mats</code> shared per-bid materials with their own per-frame uniform push) do NOT
+fade in P1 — duplicating them per column would join the uniform-push loop + a second lifetime. Their
+arrival is usually continuous with the far band's own water draw at the same height (not a pop of new
+content). Recorded as a deliberate P1 limitation.</div>
+
+<h2>Anchor removal — exact deletion map</h2>
+<table>
+<tr><th>#</th><th>Site</th><th>Action</th></tr>
+<tr><td>1</td><td>world.gd:611 <code>var last_wy</code></td><td class="del">delete</td></tr>
+<tr><td>2</td><td>world.gd:613–614 <code>_player_slab()</code></td><td class="del">delete</td></tr>
+<tr><td>3</td><td>world.gd:639–645 <code>_layer_rank_of()</code></td><td class="del">delete</td></tr>
+<tr><td>4</td><td>world.gd:658–699 <code>_entry_best_pending</code></td><td>fan walk (661–674) → bottom-up 0→top; fingerprint :740 drops <code>_player_slab()</code>; re-check compares drop <code>cf[2]</code></td></tr>
+<tr><td>5</td><td>world.gd:767–799 <code>_hslab_best_pending</code></td><td>fan walk → bottom-up; band-A unmat special case :778 → return 0 (marker si); fingerprint :818 + re-check update; comment :851 (the bake-score doc) reworded</td></tr>
+<tr><td>6</td><td>world.gd:904–939 <code>_grid_score</code></td><td>drop the layer computation (:907, :919–921) and the <code>+ float(layer)</code> term (:938); <b>keep</b> taxi + the AC-0399 view bias (:923–937) — bonus: scoring no longer calls the probes per candidate (a main-thread win)</td></tr>
+<tr><td>7</td><td>world.gd:11336 <code>recenter(..., wy)</code></td><td>keep signature (fenced main.gd:626/:643 still pass it) — <code>wy</code> documented no-op; <span class="del">delete</span> consumer :11385–11386 (<code>last_wy = wy</code>)</td></tr>
+<tr><td>8</td><td>player.gd:97 <code>_chunk_y</code> field, :257 seed</td><td class="del">delete both</td></tr>
+<tr><td>9</td><td>player.gd:3310 trigger</td><td><code>if pcx != _chunk_x or pcz != _chunk_z:</code> — <span class="del">delete</span> <code>or pcy != _chunk_y</code></td></tr>
+<tr><td>10</td><td>player.gd:3313</td><td class="del">delete <code>_chunk_y = pcy</code></td></tr>
+<tr><td>11</td><td>player.gd:3321</td><td><code>Game.world.recenter(fp.x, fp.z, true)</code> — drop the 4th arg</td></tr>
+<tr><td>12</td><td>harness.gd 17915, 19958, 19971, 19975, 20606, 23657, 27091, 27185</td><td>drop the 4th arg at each <code>recenter</code> call</td></tr>
+<tr><td>13</td><td>harness.gd:18001–18004</td><td class="del">delete the <code>world.last_wy = ...</code> writes (+ the stale comment 17997–18000)</td></tr>
+</table>
+<p><b>Reported, not fixed (fence):</b> <code>godot/scenes/main.gd:626</code> and <code>:643</code> still
+pass <code>wy</code> (<code>world.recenter(flt.x, flt.z, true, flt.y)</code>). Needed change: drop the
+4th argument at both call sites; once that lands, <code>recenter</code>'s <code>wy</code> parameter itself
+can be deleted. <code>world.recenter</code> remains 4-arg (ignored) until then so the fenced tree stays
+green.</p>
+
+<h2>Column-atomic dispatch/landing — shape</h2>
+<pre># _mesh_dispatch_hslab, new tier-0 branch (before the per-slab real-band branch):
+tier_now = _lod_tier_of(cx - last_pcx, cz - last_pcz)
+if tier_now == 0:                      # real band -> the WHOLE column
+    if star != null and not star.box_settled(cx, cz, -1, 24): defer (hslab_defer_settle)
+    ... TM cap, ring cache (unchanged) ...
+    pl = star.slab_light_payload(cx, cz, 0, mini(c.top >> 4, 23))
+    if not pl.ok: defer
+    pl["star"] = true; pl["lver"] = star.box_epochs(cx, cz, -1, 24)
+    entry = { ..., "hslab": true, "mat": false, "col_atomic": true,
+              "si0": 0, "si1": -1, "scoped_snap": false,
+              "d_off": 0, "d_hi": Data.HEIGHT - 1, ... }   # was_full = si1 < 0 (mesh.cpp)
+# tier 1 (band A): unchanged (mat dispatch already column-atomic; retrigger stays per-slab)
+
+# threadmesh_handoff, new branch inside e["hslab"]:
+if int(e.get("si1", -1)) < 0:          # column build (tier 0/1 mat)
+    lver re-check on box_epochs(-1, 24) (mismatch -> datadrop + retrigger, whole column)
+    live tier > 1 (straggler): attach via apply_accs (stored), stamp+flush all slabs,
+        show ready lows, hide high, _low_relower_owed, NO fade (it is hidden)  [mat-landing shape]
+    else: capture was_high_visible / had_low_visible BEFORE apply_accs
+          c.apply_accs(res, _tm_ms_full)        # FULL build -> merged-atlas contract
+          stamp + flush slabs 0..top (settled proof = the gate + lver)
+          was_high_visible -> show all, no fade (immediate, AC-0286 contract)
+          else: fade (if enabled): per-surface fade materials (u_fade=0, transparency=ALPHA),
+                show high, hold the halo low if visible (crossfade)
+          _count_collision_build(c); _stage_check(c, key); _drop_queued(key)
+          timing-gated print: TMH_COLATOMIC ... apply= col= stage= fade= ms
+          counters: col_atomic_lands += 1 (else branch) / hslab_scoped_real_lands += 1 (per-slab path)</pre>
+<p class="small">The band-A <b>mat</b> landing (si1=−1, <code>mat: true</code>) also gets the first-enable
+fade on the same branch (it is the other "tower appears" moment; the halo-hold crossfade applies there too —
+it keeps the low visible under the ramp instead of hiding it the frame the high lands, so the halo is never
+hidden twice). <code>_promo_build_step</code> (AC-0286 burst) and <code>_star_remesh_drain</code> (E2) keep
+calling <code>_mesh_dispatch_hslab</code> — the tier-0 branch makes both whole-column automatically (the
+remesh lane's other armed slabs drop at landing when the stamps match — sound, documented).</p>
+
+<h2>New arm — <code>vflight</code> (the vertical-flight regression test)</h2>
+<ol>
+<li>Spawn, settle the sim band (the usual build wait).</li>
+<li><b>Zero-recenter sweep:</b> teleport the player in pure +Y steps (5 × 20 m &gt; 16 m each, fixed xz):
+assert <code>world.recenter_n</code> UNCHANGED across the whole sweep (pre-fix: a recenter per 16 m —
+the AC-0234 trigger we deleted), <code>_sm_move_until</code> not re-armed, and both probe caches
+(<code>_hslab_probe_cache</code>, <code>_low_probe_cache</code>) not growing — the fingerprints are now
+altitude-stable. <code>recenter_n</code> is the declared introspection counter (one int increment in
+<code>recenter</code>).</li>
+<li><b>No-partial-column census:</b> during the subsequent streaming phase (a short X walk to the edge),
+every frame: every real-band column that has a mesh must have ALL slabs 0..top stamped and visible (or the
+column stored off) — a half-visible tower never exists.</li>
+<li><b>Dispatch shape:</b> after settle: <code>hslab_scoped_real_lands == 0</code> (no per-slab real-band
+landings — every tier-0 enable is a column) and <code>col_atomic_lands &gt; 0</code>.</li>
+<li><b>Fade budget:</b> every fade started completes within <code>COL_FADE_MS</code> + a 2-frame tolerance
+(census on the fade state table).</li>
+</ol>
+<p>Plus the permanent rewrites: ladder <code>taxi_order_ok</code> (the ground-state order is taxi-exact)
+and r16 <code>wave</code> (the low-lane sequence's taxi keys non-decreasing — inside-out preserved, the
+layer term gone). Both rows re-rendered into HARNESS.md with AC-0445 notes.</p>
+
+<h2>Harness gates (this run)</h2>
+<ol>
+<li><b>G0</b> every run: <code>gate_census.py</code> → ZERO SCRIPT ERROR + ZERO SHADER ERROR <b>and</b>
+process exit status checked (the stochastic UAF leaves a clean log with signal-11).</li>
+<li><b>Enable-cost before/after</b> (measured): pre-change baseline NOW (perf r4 on the current tree,
+timing-gated landing lines + frame stats), post-change the same — the report carries both numbers.</li>
+<li><b>SMOKE battery</b> (player;interact;light;fluids;genhash), <b>PROBE</b> (meshprobe),
+<b>genhash 25/25</b> (world/* moves — mandatory, drift is a finding), <b>boundary r4</b> (self-check),
+<b>far-tier arms</b> (ladder; r16 <code>--fixed-fps 600</code> — the wave rewrite + baseline
+re-establishment), brightslab, halo, starlighttest, lightstate canary.</li>
+<li><b>Render evidence</b> (software Vulkan, llvmpipe boot line mandatory, AWECRAFT_SIZE=1280,720 comma,
+AWECRAFT_SNAP_DRAIN=600 counts FRAMES, no AWECRAFT_LOGIC): a frame at the streaming edge showing a column
+arriving whole + a mid-ramp fade frame; Debug.snap existence checked.</li>
+<li><b>Standing values</b> that move (wprof drain stage, r16 baseline, possibly the crossing/boundary rows
+— the Y-only recenters were the cheap crossings the AC-0348 census doesn't even count) are re-established
+in <code>tasks/harness_data.yaml</code> + <code>harness_doc.py --render</code> in this task.</li>
+</ol>
+
+<h2>Deliberately NOT done (recorded in the results)</h2>
+<ul>
+<li>P2 — tiers 2/3 (far/low) atomicity: the far lane stays slab-granular (coordinator fence; separate
+ticket piece with its own Run-1).</li>
+<li>Animated water/lava fade (scope decision, Q5).</li>
+<li><code>main.gd:626/:643</code> 4th-arg removal + the <code>recenter</code> <code>wy</code> parameter
+itself (fenced — reported with the exact needed change).</li>
+<li>No Options UI for the fade (constant in code, per the user rule).</li>
+</ul>
+
+</body>
+</html>

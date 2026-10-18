@@ -338,9 +338,11 @@ modes:
   shaderforce:
     entry: '`_shaderforce_test` (AC-0396)'
     tests: |-
-      AC-0396 forced-compile check: every shipped .gdshader (all twelve,
-      globbed from res://core + res://world, so a new shader lands here for
-      free) is FORCED through the live renderer — a material on a probe
+      AC-0396 forced-compile check: every shipped .gdshader (all sixteen —
+      the twelve original + the four AC-0445 first-enable fade variants
+      chunk_lit_{opaque,cutout,flower,fluid}_fade, globbed from res://core
+      + res://world, so a new shader lands here for free) is FORCED
+      through the live renderer — a material on a probe
       mesh in the main viewport (the one sky shader rides the scene sky) —
       and each is judged in-engine: (a) PARSE state — the rendered
       parameter list vs the uniforms the source text declares (a silently
@@ -358,13 +360,13 @@ modes:
       state is the subject; semantic correctness is the satellite arm's
       numeric-twin job
     result_fields: |-
-      `ok`, `count` (12), `failed` ([] when ok), `shaders` (per shader: `path`, `sky`, `declared`, `params`, `px` (5 centre-region samples), `verdict` ok|params_mismatch|fallback_material), `wall_ms`, `note`; plus one greppable `SHADERFORCE <path> declared= params= sky= verdict=` line per shader
+      `ok`, `count` (16 — AC-0445 added the four chunk_lit_*_fade variants, was 12), `failed` ([] when ok), `shaders` (per shader: `path`, `sky`, `declared`, `params`, `px` (5 centre-region samples), `verdict` ok|params_mismatch|fallback_material), `wall_ms`, `note`; plus one greppable `SHADERFORCE <path> declared= params= sky= verdict=` line per shader
     envs: |-
       `AWECRAFT_LOGIC=shaderforce` under the fwdshot shell recipe (xvfb +
       lavapipe + `--rendering-driver vulkan`, `AWECRAFT_SIZE=1280,720`) —
       the SHIPPED FORWARD+ PATH ONLY (the headless dummy renderer never
       compiles the backend stage)
-    wall: ~3–5 min Forward+ (12 shaders × 12 frames + boot, ~5 FPS)
+    wall: ~4–6 min Forward+ (16 shaders × 12 frames + boot, ~5 FPS; AC-0445 was 12, measured ~50 s on the 16-shader set)
     notes: |-
       AC-0396 (2026-10-04): BATTSKIP probe (a Forward+ run per gate — out
       of battery scope); the heavy-gate job carries it and runs
@@ -648,13 +650,50 @@ modes:
   ladder:
     entry: '`_ladder_test` (AC-0261, rebuilt at AC-0283 P3, rebased at AC-0313, 3-tier rebuild at AC-0312)'
     tests: |-
-      The 3-tier far-band draw ladder: small world (render 9; sim 4 / medium_start 5 / low_start 7 pins) — REAL [0, band0_r] = per-slab full meshes; BAND A (taxi 5) = the far column MATERIALIZED to the 16×16×16 no-cave fill (far + far_mat + the materialization identity on the stored data: per-cell top block == payload top, farab's 4a gate; + the cached sky eff obeys the heightmap-sky rule on 16 sample cells × all H + the E strip); AC-0321 band-A texturing gate: every landed non-air slab's opaque surface equals a FRESH real-band high emit of the SAME slabs under the mat dispatch's own inputs (engine precision, _tex_mesh_diff — the UV array byte-exact, non-degenerate) + the visible MeshInstance wears the textured high material (chunk_lit_opaque) sampling EXACTLY the emitted canvas height (the merged-atlas canvas when _tm_ms_full.rects is non-empty, else the plain atlas — NOT the _lod_avg_mat() noise placeholder) + no LOW placeholder visible; BAND B (taxi 6-7) = 8×8 avg slabs, BAND C (taxi 8) = 4×4 (mesh byte-check at the live grid + sky alpha + per-slab tier stamp vs live tier); (c) the LIVE B<->C boundary flip (raise low_start 7→8: the taxi-8 slabs re-emit 4×4→8×8, boundary_flip_n > 0); + the air checks + the Y-layer-rank encoding
+      The 3-tier far-band draw ladder: small world (render 9; sim 4 / medium_start 5 / low_start 7 pins) — REAL [0, band0_r] = per-slab full meshes; BAND A (taxi 5) = the far column MATERIALIZED to the 16×16×16 no-cave fill (far + far_mat + the materialization identity on the stored data: per-cell top block == payload top, farab's 4a gate; + the cached sky eff obeys the heightmap-sky rule on 16 sample cells × all H + the E strip); AC-0321 band-A texturing gate: every landed non-air slab's opaque surface equals a FRESH real-band high emit of the SAME slabs under the mat dispatch's own inputs (engine precision, _tex_mesh_diff — the UV array byte-exact, non-degenerate) + the visible MeshInstance wears the textured high material (chunk_lit_opaque) sampling EXACTLY the emitted canvas height (the merged-atlas canvas when _tm_ms_full.rects is non-empty, else the plain atlas — NOT the _lod_avg_mat() noise placeholder) + no LOW placeholder visible; BAND B (taxi 6-7) = 8×8 avg slabs, BAND C (taxi 8) = 4×4 (mesh byte-check at the live grid + sky alpha + per-slab tier stamp vs live tier); (c) the LIVE B<->C boundary flip (raise low_start 7→8: the taxi-8 slabs re-emit 4×4→8×8, boundary_flip_n > 0); + the air checks + the build-order gate (AC-0445: taxi-only, was the Y-layer-rank encoding)
     result_fields: |-
-      `ok`, `band_a_cols`/`band_a_ok` (20/20), `band_a_fail` (per-column reasons, [] when ok — tex_* reasons are the AC-0321 gate: tex_h = material canvas ≠ emitted UV space, tex_emit_slab = UV/vertex mismatch vs the fresh real-band emit, tex_avgmat = the noise placeholder material, tex_low_visible = a placeholder showing), `band_a_tex_q` (opaque quads compared, u-exact), `band_a_tex_maxv` (max landed UV v — merged-canvas space when the merge atlas is on), `band_a_fluid_only_cols` (1 — AC-0331: the deep-ocean band-A column whose floored OPAQUE mesh is empty (col (0,5), H=124 — its only kept row is the waterline); the arm's has_mesh counts the FLUID instance (the water surface), else the floor's new column class false-negatives "the column shows nothing"), `band_a_ms_h` (the emitted canvas height: merged when rects non-empty, else plain atlas — 1888 px, a CANVAS dimension, NOT a wall time), `band_b_slabs`/`band_b_mesh_ok` (155/155 — AC-0331 floor: slabs 0..6 pruned, was 519), `band_c_slabs`/`band_c_mesh_ok` (94/94 — AC-0331 floor, was 318), `boundary_flip_n` (94 > 0 — AC-0331: was 102; the 126-flip "no flips" pre-AC-0312 baseline is gone with the tiers), `tier_mismatch` (0), `sky_mixed_slabs` (72 — AC-0331: was 73), `sky_bad_alpha` (0), `water_surfaces` (0 — no water in the spawn area, census only), `air_synth_ok`, `air_inworld_ok`, `clutter_ok`, `layerrank_ok`, `emit_cpp_b_ms`/`emit_cpp_c_ms` (the real worker emit cost sample on the far payload)
+      `ok`, `band_a_cols`/`band_a_ok` (20/20), `band_a_fail` (per-column reasons, [] when ok — tex_* reasons are the AC-0321 gate: tex_h = material canvas ≠ emitted UV space, tex_emit_slab = UV/vertex mismatch vs the fresh real-band emit, tex_avgmat = the noise placeholder material, tex_low_visible = a placeholder showing), `band_a_tex_q` (opaque quads compared, u-exact), `band_a_tex_maxv` (max landed UV v — merged-canvas space when the merge atlas is on), `band_a_fluid_only_cols` (1 — AC-0331: the deep-ocean band-A column whose floored OPAQUE mesh is empty (col (0,5), H=124 — its only kept row is the waterline); the arm's has_mesh counts the FLUID instance (the water surface), else the floor's new column class false-negatives "the column shows nothing"), `band_a_ms_h` (the emitted canvas height: merged when rects non-empty, else plain atlas — 1888 px, a CANVAS dimension, NOT a wall time), `band_b_slabs`/`band_b_mesh_ok` (155/155 — AC-0331 floor: slabs 0..6 pruned, was 519), `band_c_slabs`/`band_c_mesh_ok` (94/94 — AC-0331 floor, was 318), `boundary_flip_n` (94 > 0 — AC-0331: was 102; the 126-flip "no flips" pre-AC-0312 baseline is gone with the tiers), `tier_mismatch` (0), `sky_mixed_slabs` (72 — AC-0331: was 73), `sky_bad_alpha` (0), `water_surfaces` (0 — no water in the spawn area, census only), `air_synth_ok`, `air_inworld_ok`, `clutter_ok`, `taxi_order_ok` (AC-0445: the build-order gate — was `layerrank_ok`; the Y-layer-rank encoding is gone with the AC-0234 Y-trigger deletion, so the order is asserted on the DRAIN's taxi (|dx|+|dz|) values, non-decreasing ring-by-ring), `emit_cpp_b_ms`/`emit_cpp_c_ms` (the real worker emit cost sample on the far payload)
     envs: '`AWECRAFT_LOGIC=ladder`'
     wall: ~2–4 min
     notes: |-
       AC-0312 restored the 8×8 tier (band B) + the band-A materialization — the arm tests all three draw tiers on the SAME h-only far payload. The materialization identity is the resident-form gate: a materialized column holds the fill slabs in c.data (the transient draw form) + c.far + the payload (the save form). AC-0313's standing counts (695/44) are superseded by the 3-tier measured values above (the byte-identity + identity gates are the invariants, not the numbers). AC-0321 added the band-A texturing gate (the mat landing is a FULL build → merged-canvas UVs → the attach must wear the merged-canvas material; the pre-fix evidence was tex_h(1024!=1888) on all 20 columns with the UVs u-exact — the material, not the emit, was wrong). The editmat arm (AC-0187) is the parity arm for the OTHER half of the contract (scoped builds → plain-atlas material): a change to apply_accs/apply_edit_accs that breaks either half turns one of the two arms red. **AC-0331 (2026-09-19, the far-tier floor): the floor prunes slabs 0..6 from every far column — `band_b_slabs` 519 → 155, `band_c_slabs` 318 → 94, `sky_mixed_slabs` 73 → 72, `boundary_flip_n` 102 → 94 (the censuses count what the floored world draws; the self-consistency gate `mesh_ok == slabs` holds). band A is unchanged at 20/20 — but the deep-ocean column (0,5) (H=124: slab-7 terrain zeroed by the floor's per-voxel row gate, water 125-126 kept) now has NO OPAQUE mesh at all — its visible geometry is the water surface as a FLUID instance (build_accs routes id 5 to the fluid acc, never opaque) — `has_mesh` counts fluid instances too (new `band_a_fluid_only_cols` 1); the pre-floor pass rode on the column's pruned deep terrain. The band-A texturing reference build also takes the floor (si0 = 7, the floor slab) so the compared meshes match the applied ones. `band_a_ms_h` is the merged-atlas canvas HEIGHT in px (1888) — a dimension, not a wall time (an earlier read mislabeled it).**
+  vflight:
+    entry: '`_vflight_test` (AC-0445 — the column-atomic + free-vertical-flight arm)'
+    tests: |-
+      The two AC-0445 user complaints, proven in one arm: (1) a pure VERTICAL
+      move must fire ZERO recenter — the AC-0234 Y-trigger is deleted, so a 100 m
+      climb (5 x 20 m, flat x/z fixed) must leave `world.recenter_n` unchanged,
+      must NOT re-arm the small-move window (`_sm_move_until`, set only in
+      recenter) and must NOT grow the hslab/low probe caches (keyed by
+      data_gen/fl_gen/tier, a Y move changes none); (2) the streaming edge's
+      real-band columns land WHOLE — a short +X walk streams NEW columns that
+      must arrive column-atomic (no half-built tower): the no-partial-column
+      census over every resident tier-0 column requires each to be PENDING
+      (0 stamped slabs) or COMPLETE (every slab 0..top stamped), never partial,
+      and the landing-mode census requires `hslab_scoped_real_lands == 0` and
+      `col_atomic_lands > 0`. The first-enable FADE is display-side: headless
+      skips it (no pixels, and this build's dummy server rejects transparent
+      render modes) so the fade sub-flag is `headless_skipped` there; under the
+      real renderer it must RUN (started > 0) and NONE may be stuck
+      (completed == started).
+    result_fields: |-
+      `ok`, `sweep` {`recenter_delta` (0), `smu_rearmed` (false), `hcache_grew` (0), `lcache_grew` (0), `free` (recenter_delta==0 and !smu_rearmed)}, `walk` {`col_atomic_before`, `col_atomic_after`, `streamed_new` (>0 over the +X walk)}, `census` {`checked` (resident tier-0 cols), `complete`, `pending`, `partial` (0 — the half-built tower is the regression this kills)}, `land` {`col_atomic_lands` (>0), `hslab_scoped_real_lands` (0), `col_atomic_ok`}, `fade` {`mode` (headless_skipped|render), `started`, `completed`, `max_ramp_ms` (render-only, reported NOT gated — the slow llvmpipe proxy detects completion on a frame boundary so the wall start->completion time is frame-granular, not the 350 ms ramp), `col_fade_ms` (350 default, AWECRAFT_FADE_MS), `ok`}
+    envs: '`AWECRAFT_LOGIC=vflight` (+ `AWECRAFT_FADE_MS` — 0 disables the fade for the A/B render; `AWECRAFT_RADIUS`)'
+    wall: ~40-60 s headless; ~2-4 min under the fwdshot recipe (render — the fade actually runs)
+    notes: |-
+      **AC-0445 (2026-10-18): NEW arm — the ticket's own instrument.** Headless
+      (first run): sweep {recenter_delta 0, smu_rearmed false, hcache_grew 0,
+      lcache_grew 0, free true}, walk {before 41, after 182, streamed_new 141},
+      census {checked 41, complete 41, pending 0, partial 0}, land {col_atomic
+      182, hslab_scoped_real 0, ok true}, fade {headless_skipped, ok true},
+      ok:true. Render (fwdshot, R4): fade {mode render, started 102, completed
+      102, max_ramp_ms 12098 (renderer, not the fade — llvmpipe frames run
+      seconds, so completion is detected on a frame boundary), col_fade_ms 350,
+      ok true}, col_atomic 159, hslab_scoped_real 0, sweep free, census
+      partial 0, ok:true — the fade RAN in the real renderer (102 columns
+      first-enabled, all completed) and the four fade shaders compile (the
+      shaderforce count went 12 -> 16). The 350 ms ramp itself is the render
+      A/B (tasks/AC-0445/: fade_on.png vs fade_off.png @AWECRAFT_FADE_MS=0).
   meshprobe:
     entry: '`_meshprobe_test` (AC-0211)'
     tests: |-

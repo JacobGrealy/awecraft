@@ -580,6 +580,47 @@ static func _get_mat(kind: String, ms_tex: Texture2D = null) -> Material:
 	return m
 
 
+# AC-0445: the per-column first-enable FADE material — a duplicate of the
+# shared kind material (the chunk_lit_*.gdshader unlit set) with
+# transparency=ALPHA and u_fade driven 0.0 -> 1.0 over the ramp (world.gd
+# _col_fade_step). The fade is a DISPLAY-side alpha only: the column-atomic
+# settle gate + the lver re-check make the light SETTLED before the attach,
+# so fading the alpha never shows unlit (AC-0263 preserved). Returns null
+# when the kind's shared material is not a ShaderMaterial (the no-atlas
+# legacy fallback — the column then shows immediately, no fade).
+static func _fade_material(kind: String, ms_tex: Texture2D = null) -> Material:
+	var m: Material = _get_mat(kind, ms_tex)
+	if not (m is ShaderMaterial):
+		return null
+	# Duplicate the shared material (it inherits EVERY current per-frame
+	# uniform — u_day, u_fog_far, u_amb, u_moon, u_moon_dir, the player
+	# light, tex — so the fading column looks exactly like the one it
+	# replaces), then swap the shader to the BLEND fade variant. THIS BUILD'S
+	# ShaderMaterial has no `transparency` property (a BaseMaterial3D
+	# concept) — the alpha blend comes from the variant shader's render_mode.
+	# The param names match the shared shader (the variant is a copy), so the
+	# inherited uniforms survive the swap; only u_fade is the new driver.
+	var path := _fade_shader_path(kind)
+	var sh: Shader = load(path)
+	if sh == null:
+		return null
+	var f: ShaderMaterial = m.duplicate()
+	f.shader = sh
+	f.set_shader_parameter("u_fade", 0.0)
+	return f
+
+
+# AC-0445: the fade (blend) variant shader per kind — the identical fragment
+# as the shared chunk_lit_*.gdshader plus a blend render_mode (this build's
+# ShaderMaterial has no transparency property; the blend is the render_mode).
+static func _fade_shader_path(kind: String) -> String:
+	match kind:
+		"opaque": return "res://world/chunk_lit_opaque_fade.gdshader"
+		"cutout": return "res://world/chunk_lit_cutout_fade.gdshader"
+		"flower": return "res://world/chunk_lit_flower_fade.gdshader"
+		_: return "res://world/chunk_lit_fluid_fade.gdshader"
+
+
 # AC-0107: static (touches only the _ms_* statics + Data) so the main thread
 # can pre-build the atlas cache before the first mesh dispatch.
 static func _merge_atlas() -> Dictionary:

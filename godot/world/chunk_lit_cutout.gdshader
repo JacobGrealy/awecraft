@@ -23,6 +23,10 @@ uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 // 0.0 * x = 0.0, x + 0.0 = x) are owned by chunk_lit_opaque.gdshader.
 uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
 uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
+// AC-0445: the first-enable fade ramp (the shared material leaves it at
+// 1.0; the fade material multiplies the cutout alpha by it - see
+// chunk_lit_opaque.gdshader for the contract).
+uniform float u_fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 v_world_pos;
 
 
@@ -52,4 +56,5 @@ void fragment() {
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
+	ALPHA = t.a * u_fade;  // AC-0445: the first-enable fade (the surviving cutout pixels, t.a ~ 1.0)
 }

@@ -37,6 +37,12 @@ uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 // is never re-tuned; the moon ADDS to it.
 uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
 uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
+// AC-0445: the first-enable fade ramp (0.0 -> 1.0 over COL_FADE_MS). The
+// fade material (a per-column duplicate with transparency=ALPHA, chunk.gd
+// _fade_material) drives it; the SHARED material leaves it at the 1.0
+// default (ALPHA = 1.0, the opaque path bit-identical - and on the opaque
+// render state ALPHA is ignored entirely).
+uniform float u_fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 v_world_pos;
 
 
@@ -91,4 +97,5 @@ void fragment() {
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
+	ALPHA = u_fade;  // AC-0445: the first-enable fade (1.0 default = opaque path)
 }

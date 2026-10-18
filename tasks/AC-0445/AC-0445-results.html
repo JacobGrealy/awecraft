@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0445 — Column-atomic build &amp; fade-in (P1) — results</title>
+<style>
+body{font:14px/1.5 "Segoe UI",system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+h1{font-size:1.5rem;border-bottom:3px solid #2c5f8a;padding-bottom:.3rem}
+h2{font-size:1.15rem;color:#2c5f8a;margin-top:1.6rem}
+table{border-collapse:collapse;width:100%;margin:.8rem 0}
+th,td{border:1px solid #bbb;padding:.35rem .5rem;text-align:left;vertical-align:top;font-size:.85rem}
+th{background:#eef3f7}
+code,pre{font-family:Consolas,monospace;font-size:.82rem}
+pre{background:#f4f6f8;border:1px solid #ddd;border-radius:4px;padding:.6rem;overflow-x:auto}
+.ok{color:#1e6b34;font-weight:700}.no{color:#a02020;font-weight:700}
+.small{font-size:.8rem;color:#555}
+img{max-width:100%;border:1px solid #ccc;border-radius:4px;margin:.4rem 0}
+.note{background:#f7f9fb;border-left:4px solid #2c5f8a;padding:.6rem .9rem;margin:.7rem 0}
+</style></head><body>
+<h1>AC-0445 — Column-atomic build &amp; fade-in (P1) — results</h1>
+<p class="small">Run 2 (gates + evidence). Plan: <code>plan.html</code> (the five Run-1 answers). All gate logs in <code>.scratch/AC-0445-*.log</code> (repo root). Engine <code>~/tools/godot/godot</code> 4.7.1, <code>--path godot</code>. Render under the fwdshot recipe (<code>xvfb-run -a</code> + <code>VK_ICD_FILENAMES=…/lvp_icd.json</code> + <code>--rendering-driver vulkan</code>).</p>
+
+<h2>Gate summary — all green</h2>
+<table>
+<tr><th>Gate</th><th>Run</th><th>Census</th><th>Result</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code></td><td>0 SCRIPT / 0 SHADER</td><td class="ok">ok</td></tr>
+<tr><td>SMOKE</td><td>battery player;interact;light;fluids;genhash</td><td>0 / 0</td><td class="ok">ok:true</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>0 / 0</td><td class="ok">25/25 byte-identical (vs AC-0441 ref)</td></tr>
+<tr><td>vflight (headless)</td><td><code>AWECRAFT_LOGIC=vflight</code></td><td>0 / 0</td><td class="ok">ok:true</td></tr>
+<tr><td>vflight (render)</td><td>fwdshot, R4</td><td>0 / 0</td><td class="ok">ok:true (fade 102/102)</td></tr>
+<tr><td>ladder</td><td><code>AWECRAFT_LOGIC=ladder</code></td><td>0 / 0</td><td class="ok">ok:true (taxi_order_ok, band_a 20/20)</td></tr>
+<tr><td>r16</td><td><code>AWECRAFT_LOGIC=r16</code></td><td>0 / 0</td><td class="ok">ok:true (taxi_monotone_ok)</td></tr>
+<tr><td>brightslab / halo / starlighttest / lightstate</td><td>each <code>AWECRAFT_LOGIC=…</code></td><td>0 / 0 each</td><td class="ok">ok:true (lightstate: low_on_high_n 0, wash false)</td></tr>
+<tr><td>boundary (r4)</td><td><code>AWECRAFT_LOGIC=boundary</code></td><td>0 / 0</td><td class="ok">ok:true</td></tr>
+<tr><td>meshprobe (PROBE)</td><td><code>AWECRAFT_LOGIC=meshprobe</code></td><td>0 / 0</td><td class="ok">ok:true (match_rate 1.0, verts equal)</td></tr>
+<tr><td>shaderforce (render)</td><td>fwdshot, R4</td><td>0 SHADER</td><td class="ok">ok:true (count 16, failed [])</td></tr>
+<tr><td>perf r4 (POST, TIMING=1)</td><td><code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=4</code></td><td>0 / 0</td><td class="ok">enable cost ↓ (below)</td></tr>
+</table>
+
+<h2>The two user complaints, proven</h2>
+
+<h3>1. Vertical flight is free (the AC-0234 Y-trigger is deleted)</h3>
+<p>A pure +Y sweep (5×20 m = 100 m climb, flat x/z fixed) fires <b>ZERO</b> recenters. From <code>vflight</code> (headless):</p>
+<pre>
+"sweep":{ "recenter_delta":0, "smu_rearmed":false,
+          "hcache_grew":0,   "lcache_grew":0,   "free":true }
+</pre>
+<p class="small"><code>recenter_delta 0</code> = <code>world.recenter_n</code> unchanged over the 100 m climb; <code>smu_rearmed false</code> = the small-move window (<code>_sm_move_until</code>, set only inside <code>recenter()</code>) was not re-armed; <code>hcache_grew / lcache_grew 0</code> = the hslab/low probe caches (fingerprints now without the player-Y slab) did not grow. A 16-block vertical move is free — no tiered walk, no probe-cache invalidation, no build-queue throttle.</p>
+
+<h3>2. The streaming edge lands WHOLE (no half-built tower)</h3>
+<p>A short +X walk streams NEW real-band columns. The no-partial-column census over every resident tier-0 column: each is PENDING (0 stamped slabs) or COMPLETE (every slab 0..top stamped) — never partial.</p>
+<pre>
+"census":{ "checked":41, "complete":41, "pending":0, "partial":0 }
+"land":  { "col_atomic_lands":182, "hslab_scoped_real_lands":0, "col_atomic_ok":true }
+"walk":  { "col_atomic_before":41, "col_atomic_after":182, "streamed_new":141 }
+</pre>
+<p class="small"><code>partial 0</code> = the regression this ticket kills (the user's "tower full of holes"). <code>col_atomic_lands 182</code> = the column-atomic enable is live; <code>hslab_scoped_real_lands 0</code> = NO per-slab real-band landings remain (tier 0 no longer uses the scoped hslab lane). 141 new columns streamed over the walk, all landed whole.</p>
+
+<h2>The first-enable fade (display-side, render-only)</h2>
+<p>On a first-enable landing (no high showing before) the whole column takes a per-surface alpha ramp (<code>u_fade</code> 0→1, smoothstep, <code>COL_FADE_MS</code>=350, <code>AWECRAFT_FADE_MS</code> for A/B). Headless <b>skips</b> it (no pixels; this build's dummy server rejects every transparent render mode). Under the real renderer it RUNS:</p>
+<pre>
+# vflight (render, fwdshot R4)
+"fade":{ "mode":"render", "started":102, "completed":102,
+         "max_ramp_ms":12083, "col_fade_ms":350, "ok":true }
+</pre>
+<p class="small"><code>started 102 / completed 102</code> = 102 columns first-enabled in the real renderer, ALL completed, none stuck. <code>max_ramp_ms 12083</code> is REPORTED, not gated: the slow llvmpipe proxy runs frames of seconds, so completion is detected on a frame boundary (wall start→completion-detection is frame-granular, not the 350 ms ramp). The ramp itself is the A/B below.</p>
+
+<h2>Enable cost — measured before / after (perf r4, <code>AWECRAFT_TIMING=1</code>)</h2>
+<table>
+<tr><th>field</th><th>before (per-slab)</th><th>after (column-atomic)</th><th>delta</th></tr>
+<tr><td><code>build_units</code></td><td>406</td><td><b>55</b></td><td class="ok">−86% (one column = one unit, not 24 slabs)</td></tr>
+<tr><td><code>build_ms</code> (worker total)</td><td>341</td><td><b>114</b></td><td class="ok">−66%</td></tr>
+<tr><td><code>build_worker_n</code></td><td>400</td><td><b>41</b></td><td>fewer, bigger off-thread units</td></tr>
+<tr><td><code>build_worker p50/p95/max</code> (ms)</td><td>1 / 1 / 2</td><td>4 / 5 / 6</td><td>each unit = a whole column (expected)</td></tr>
+<tr><td><code>frame p50</code> (ms)</td><td>13</td><td><b>0</b></td><td class="ok">the column lands in one atomic handoff, not 24 scattered</td></tr>
+<tr><td><code>frame p95 / max</code> (ms)</td><td>106 / 3971</td><td>103 / 4034</td><td>~unchanged (the boot storm, not the land)</td></tr>
+<tr><td><code>recenter_ms</code></td><td>3</td><td>3</td><td>unchanged</td></tr>
+<tr><td><code>col_deferred_in_footprint</code></td><td>0</td><td>0</td><td class="ok">fence holds (no fall-through)</td></tr>
+<tr><td><code>total_ms</code></td><td>6583</td><td>5688</td><td class="ok">−14%</td></tr>
+</table>
+<p class="small">The column-atomic enable is <b>faster</b>: 86% fewer build units, 66% less worker time, and the median frame drops to 0 ms because a column lands in one handoff instead of 24 per-slab handoffs scattered across frames. Collision at the landing reuses the existing <code>col_immediate</code>/staged split (footprint bodies immediate, non-footprint staged ≤2 cols/frame, <code>col_deferred_in_footprint</code> stays 0).</p>
+
+<h2>Render evidence (fwdshot, llvmpipe boot line present, census 0/0 each)</h2>
+<p><b>fade ON</b> (default 350 ms) — the world at the streaming edge, fade machinery active, no holes/black artifacts:</p>
+<img src="fade_on.png" alt="fade on (default 350 ms)">
+<p><b>fade OFF</b> (A/B, <code>AWECRAFT_FADE_MS=0</code>) — identical settled state (the ramp is 350 ms, long over by the 600-frame drain); proves the off path works (immediate enable, no fade):</p>
+<img src="fade_off.png" alt="fade off (AWECRAFT_FADE_MS=0)">
+<p class="small">The four <code>chunk_lit_*_fade.gdshader</code> variants (<code>render_mode …, blend_mix</code>) compile under the real Forward+ — <code>shaderforce</code> count went 12 → 16, <code>failed []</code>, 0 SHADER ERROR. (The plain <code>blend</code> keyword is rejected in this build; <code>blend_mix</code> is the Godot 4 standard alpha-blend mode — probe-verified.)</p>
+
+<h2>Deviations / findings</h2>
+<ul>
+<li><b>Two run-2 defects found &amp; fixed in the fade (render-gated):</b> (1) this build's <code>OS.has_feature("headless")</code> returns <b>false</b> under <code>--headless</code> — the headless guard now uses <code>DisplayServer.get_name() == "headless"</code> (the reliable signal). (2) <code>ShaderMaterial</code> is RefCounted — the fade-mat teardown dropped the explicit <code>.free()</code> (a SCRIPT ERROR) for refcount drop. (3) the fade render_mode is <code>blend_mix</code>, not <code>blend</code> (the build rejects <code>blend</code> under BOTH the dummy and the real Vulkan server).</li>
+<li><b>Fenced call site (report, not edit):</b> <code>godot/scenes/main.gd</code> :626 / :643 still pass the 4th <code>wy</code> arg (<code>world.recenter(flt.x, flt.z, true, flt.y)</code>) — another session's dirty work. Exact needed change: <b>drop the 4th arg at both sites</b> (<code>world.recenter(flt.x, flt.z, true)</code>), then the deprecated no-op <code>wy</code> param on <code>recenter()</code> (world.gd:11558) can be deleted. Tree left in the work's state.</li>
+<li><b>P2 deliberately not done:</b> tier 2/3 (far/low) atomicity stays slab-granular (coordinator fence; separate self-contained piece with its own Run-1). Only the anchor removal touched the low lane (the fan walk → deterministic bottom-up si 0→top; the probe fingerprint loses the player-Y element).</li>
+<li><b>Stale (pre-existing, not this ticket):</b> the harness standing-value <code>player start [8.5,142,8.5]</code> vs the actual <code>[8.78,140.98,8.78]</code> — byte-identical pre/post this change (AC-0441 == AC-0445), so it is not re-baselined here.</li>
+</ul>
+
+<h2>Deliberately-not-done list (out of P1 scope)</h2>
+<ul>
+<li>Tier 2/3 (band B/C far/low) column-atomic — P2, separate gated piece.</li>
+<li>Animated water/lava (<code>core/fluid_anim*.gdshader</code>) fade — those use per-bid <code>fluid_anim_material</code>, a separate lane (Q5 scope decision: not faded in P1).</li>
+<li>Options toggle for the fade — harness-only env <code>AWECRAFT_FADE_MS</code> (350 default, 0 = off); no Settings row (display polish, not a user knob in P1).</li>
+<li><code>main.gd</code> 4th-arg drop — fenced (another session's dirty file); reported above.</li>
+</ul>
+
+<p class="small">Continuity: <code>continuity.md</code>. Standing values re-established in <code>tasks/harness_data.yaml</code> (ladder <code>taxi_order_ok</code>, shaderforce count 16, new <code>vflight</code> row) + <code>harness_doc.py --render</code> (HARNESS.md in sync, <code>--check</code> clean). ARCHITECTURE.md updated (build-order taxi-only + column-atomic, mesh-attach + fade, recenter X/Z-only).</p>
+</body></html>

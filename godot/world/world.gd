@@ -605,13 +605,10 @@ func _tier_of(dx: int, dz: int) -> int:
 		return 1
 	return 2
 
-# AC-0257: the PLAYER SLAB (slab units of the player's world Y) — the layer
-# rank's origin. recenter carries the Y across slab crossings; between
-# crossings the slab is constant.
-var last_wy := 0.0
-
-func _player_slab() -> int:
-	return int(floorf(last_wy / 16.0))
+# AC-0445: the player-Y anchor (last_wy / _player_slab / the layer rank) is
+# GONE — the build order is taxi-only (a pure function of the recenter
+# anchor's X/Z) and the probe caches are altitude-stable. A pure vertical
+# move no longer recenters (player.gd) and costs nothing.
 
 # AC-0331: the far-tier mesh FLOOR (world y). The sub-waterline geometry
 # of the THREE FAR DRAW TIERS (band A full-LOD materialization + bands
@@ -633,32 +630,19 @@ var yfloor_y := int(Data.SEA)
 func _far_floor_y() -> int:
 	return yfloor_y
 
-# AC-0257: the Y-LAYER rank of slab si — the bake order around the player's
-# slab: rank 0 = the player's slab, then y-1, y+1, y-2, y+2, ... (the
-# layers nearest the player's altitude build before the deep ones).
-func _layer_rank_of(si: int) -> int:
-	var d := si - _player_slab()
-	if d == 0:
-		return 0
-	if d < 0:
-		return -2 * d - 1
-	return 2 * d
-
-# AC-0257: the column's BEST pending slab — the pending slab with the
-# smallest LAYER rank (nearest the player's Y); -1 = nothing pending.
-# Rank-ordered probe (0, -1, +1, -2, +2, ...) so the first pending hit is
-# the answer; bounded by the slab count, allocation-free (the pick runs
-# it per candidate per scan).
+# AC-0257 (AC-0445): the column's BEST pending slab — the FIRST pending
+# slab in the probe's walk order; -1 = nothing pending. AC-0445: the
+# player-Y anchor is GONE (the build order is taxi-only — see
+# _grid_score): the walk is a plain bottom-up scan (si 0 -> top), which
+# also reaches a floored far column's surface fastest (the sub-floor
+# slabs are pruned first, no all-air terminal marks wasted). Bounded by
+# the slab count, allocation-free (the pick runs it per candidate per
+# scan).
 # AC-0313: the AC-0263 Y-window (the windowed probe while the player
-# moved) is GONE — the probe is always FULL (every slab counts). A column
-# is built as a FULL 24-slab column (inside-out: taxi-major across
-# columns, this Y-distance order within one — see _grid_score), so there
-# is no window for passed columns to re-build and no windowed "nothing
-# pending" to miscount as completion.
+# moved) is GONE — the probe is always FULL (every slab counts).
 func _entry_best_pending(c: Node3D) -> int:
 	if c == null or c.data.is_empty():
 		return -1
-	var pys := _player_slab()
 	var sn: int = c.data.size()
 	var tier := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	# AC-0312: the low lane OWNS the draw bands 2/3 only — the real band
@@ -668,15 +652,8 @@ func _entry_best_pending(c: Node3D) -> int:
 	# skip those chunks themselves).
 	if tier <= 1 or tier >= 4:
 		return -1
-	for r in range(sn * 2):
-		var dy: int
-		if r == 0:
-			dy = 0
-		elif r % 2 == 1:
-			dy = -(r + 1) / 2
-		else:
-			dy = r / 2
-		var si := pys + dy
+	# AC-0445: bottom-up (the fan walk around the player slab is gone).
+	for si in range(sn):
 		# AC-0331: the far-tier mesh floor — a far column's slabs
 		# ENTIRELY BELOW the floor are never built (the dispatch
 		# prunes them, _low_pending_sis) — they must read as NOT
@@ -686,7 +663,7 @@ func _entry_best_pending(c: Node3D) -> int:
 			continue
 		# AC-0284b: a far column's slabs are all null BY REPRESENTATION —
 		# every slab is still buildable (the emit reads the payload).
-		if si < 0 or si >= sn or (c.data[si] == null and not c.far):
+		if c.data[si] == null and not c.far:
 			continue
 		if c.has_low_si(si):
 			# a LOW slab is pending only when stale (edited after the low,
@@ -718,11 +695,11 @@ func _low_slab_pending_at(c: Node3D, si: int, tier: int) -> bool:
 
 # AC-0262: per-chunk cache of the _entry_best_pending result (the wprof
 # storm hunt: the 32-probe sweep is ~13 us/visit and dominated the slab
-# wave's per-pick scan — 126-213 ms/frame of LOW_PICK at R30). The result
-# only changes when one of the four fingerprint parts changes (slab data
-# via [data_gen, fl_gen], the player's Y slab the probe is relative to,
-# the live band tier) or the cached slab itself completes — so a hit is
-# 4 int compares + one cheap single-slab re-check, and a -1 verdict stays
+# wave's per-pick scan — 126-213 ms/frame of LOW_PICK at R30). AC-0445:
+# the player-Y anchor is gone — the result only changes when one of the
+# THREE fingerprint parts changes (slab data via [data_gen, fl_gen], the
+# live band tier) or the cached slab itself completes — so a hit is
+# 3 int compares + one cheap single-slab re-check, and a -1 verdict stays
 # valid until the fingerprint moves (completions remove pendingness, they
 # never add a closer pending slab; only a data landing adds slabs, and
 # that bumps data_gen). Low/fog state changes that do NOT bump the
@@ -736,17 +713,19 @@ func _low_probe_invalidate(c: Node3D) -> void:
 func _entry_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
 	# AC-0313: the AC-0263 window bit (fingerprint element 5) is gone with
-	# the Y-window — the probe is always full, 4 fingerprint parts.
-	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
+	# the Y-window — the probe is always full. AC-0445: the player-Y slab
+	# element is GONE too (the walk no longer depends on the player's
+	# altitude) — 3 fingerprint parts, altitude-stable.
+	var f: Array = [int(c.data_gen), int(c.fl_gen),
 		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
 	var ck = _low_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+		if cf.size() == 3 and cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
-			if _low_slab_pending_at(c, si0, int(f[3])):
+			if _low_slab_pending_at(c, si0, int(f[2])):
 				return si0  # still pending -> still the best (see above)
 		_low_probe_cache.erase(key)
 	if _low_probe_cache.size() > 8000:
@@ -760,37 +739,29 @@ func _entry_best_pending_cached(c: Node3D) -> int:
 # holds data (data[si] != null — ungenerated null slabs are not work yet),
 # it sits at or below the top slab (above the top is all air and never
 # meshed), and its completion stamp does not match the current data_gen
-# (a data landing — gen or edit — re-pends the slab). Same fan walk as
-# the low probe: the player's Y slab first, then down/up — the (layer,
-# taxi) bake order's layer. -1 = the column owes nothing (high-complete;
-# an all-air column's probe is -1 too, so mesh_built can flip).
+# (a data landing — gen or edit — re-pends the slab). AC-0445: the
+# player-Y anchor is GONE — the walk is a plain bottom-up scan (si 0 ->
+# top), and the returned si is a MARKER (any pending slab answers: the
+# tier-0 dispatch is column-atomic and the band-A mat dispatch is the
+# whole column). -1 = the column owes nothing (high-complete; an
+# all-air column's probe is -1 too, so mesh_built can flip).
 func _hslab_best_pending(c: Node3D) -> int:
 	if c == null or c.data.is_empty():
 		return -1
 	# AC-0312: an UNMATERIALIZED band-A far column is owed — its first
 	# slab dispatch is the materialization (the worker runs the skip=1
 	# fill and builds the slab on it). The fill lands the full column,
-	# so any slab answers; the player-slab clamp matches the bake order.
+	# so any slab answers (AC-0445: the anchor is gone — marker 0).
 	# (top is -1 while unmaterialized, so the early-out below would
 	# read "complete" — the special case precedes it.)
 	if c.far and not c.far_mat \
 			and _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) == 1:
-		return clampi(_player_slab(), 0, c.data.size() - 1)
+		return 0
 	if int(c.top) < 0:
 		return -1
-	var pys := _player_slab()
 	var lim: int = mini(int(c.top) >> 4, c.data.size() - 1)
-	for r in range(c.data.size() * 2):
-		var dy: int
-		if r == 0:
-			dy = 0
-		elif r % 2 == 1:
-			dy = -(r + 1) / 2
-		else:
-			dy = r / 2
-		var si := pys + dy
-		if si < 0 or si > lim:
-			continue
+	# AC-0445: bottom-up (the fan walk around the player slab is gone).
+	for si in range(lim + 1):
 		if c.data[si] == null:
 			continue
 		if int(c.high_stamps.get(si, -1)) == int(c.data_gen):
@@ -799,8 +770,9 @@ func _hslab_best_pending(c: Node3D) -> int:
 	return -1
 
 # AC-0262/AC-0263: the high probe's per-chunk cache — the same fingerprint
-# shape as the low probe's ([data_gen, fl_gen, player-Y slab, live tier]);
-# a hit is 4 int compares + one single-slab stamp re-check. A cached si
+# shape as the low probe's ([data_gen, fl_gen, live tier] — AC-0445: the
+# player-Y element is gone, altitude-stable);
+# a hit is 3 int compares + one single-slab stamp re-check. A cached si
 # stays valid until it LANDS (re-check fails -> rescan finds the next) or
 # the fingerprint moves (a data landing bumps data_gen); a cached -1
 # stays valid until the fingerprint moves (completions remove pendingness,
@@ -814,13 +786,15 @@ func _hslab_probe_invalidate(c: Node3D) -> void:
 func _hslab_best_pending_cached(c: Node3D) -> int:
 	var key := _key(int(c.cx), int(c.cz))
 	# AC-0313: the AC-0263 window bit (fingerprint element 5) is gone with
-	# the Y-window — the probe is always full, 4 fingerprint parts.
-	var f: Array = [int(c.data_gen), int(c.fl_gen), _player_slab(),
+	# the Y-window — the probe is always full. AC-0445: the player-Y slab
+	# element is GONE too (the walk no longer depends on the player's
+	# altitude) — 3 fingerprint parts, altitude-stable.
+	var f: Array = [int(c.data_gen), int(c.fl_gen),
 		_lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)]
 	var ck = _hslab_probe_cache.get(key, null)
 	if ck != null:
 		var cf: Array = ck["f"]
-		if cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2] and cf[3] == f[3]:
+		if cf.size() == 3 and cf[0] == f[0] and cf[1] == f[1] and cf[2] == f[2]:
 			var si0: int = int(ck["si"])
 			if si0 < 0:
 				return -1
@@ -831,7 +805,7 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 				# AC-0312: the unmaterialized band-A slab (null by
 				# representation) stays owed until the materialization
 				# lands (the fingerprint already pins tier + data_gen).
-				if c.far and not c.far_mat and int(f[3]) == 1:
+				if c.far and not c.far_mat and int(f[2]) == 1:
 					return si0
 		_hslab_probe_cache.erase(key)
 	if _hslab_probe_cache.size() > 8000:
@@ -840,23 +814,20 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 	_hslab_probe_cache[key] = {"si": si, "f": f}
 	return si
 
-# AC-0257 (AC-0313): the BAKE SCORE — the order the drain picks and the
-# low lanes walk: INSIDE-OUT (the AC-0233/AC-0250 (layer, taxi) layer-
-# major order is gone — passed columns were re-fanned as the player's Y
-# moved and the deep layers of the inner rings waited behind the shallow
-# layers of the far rings). Now the COLUMNS are radial: the innermost
-# unbuilt column first (taxi-major — a pure function of the live recenter
-# anchor, no timer/mode), and WITHIN a column the slabs keep the Y-
-# distance order from the player's slab (player slab first, then ±1, ±2,
-# ... — _layer_rank_of, max 47 < 10000 so it breaks taxi ties only).
-# Every column in the real band is built FULL (24 slabs), so a built
-# column is complete and never re-dispatched — no window rework. The
-# load-target and tier-0 score prefixes are gone with the Y-window /
-# tier-0 set: the 9-chunk load target (Chebyshev ≤ 1) IS the innermost
-# taxi, and the real band (taxi ≤ band0_r) outranks the halo on taxi.
-# The live layer is derived from the chunk's pending state per pick (a
-# completed slab moves the best slab outward; there is no stamp to go
-# stale).
+# AC-0257 (AC-0313, AC-0445): the BAKE SCORE — the order the drain picks:
+# INSIDE-OUT, TAXI-ONLY (the AC-0233/AC-0250 (layer, taxi) layer-major
+# order is gone, and AC-0445 deleted the (taxi, LAYER) intra-column term
+# with the player-Y anchor — the score is a pure function of the live
+# recenter anchor's X/Z, altitude-stable). The COLUMNS are radial: the
+# innermost unbuilt column first (taxi-major, no timer/mode). The unit:
+# the high lanes (tier 0/1) dispatch the WHOLE column as one task
+# (column-atomic — see _mesh_dispatch_hslab), the far lanes (2/3) keep
+# their per-slab unit. Every column in the real band is built FULL (24
+# slabs) as one task, so a built column is complete and never
+# re-dispatched — no window rework. The load-target and tier-0 score
+# prefixes are gone with the Y-window / tier-0 set: the 9-chunk load
+# target (Chebyshev ≤ 1) IS the innermost taxi, and the real band (taxi ≤
+# band0_r) outranks the halo on taxi.
 # AC-0399: sample the camera's flat xz view direction once per drain
 # frame. The direction is the player's aim projected into the FLAT frame
 # through the recenter-ANCHOR column's sphere basis (the same transform
@@ -865,9 +836,9 @@ func _hslab_best_pending_cached(c: Node3D) -> int:
 # quantity; the basis is cached per anchor column, so the per-frame cost
 # is one transposed-basis multiply). The weight is the player's OWN
 # flight band (player.gd flight_band — the AC-0145 P2 smoothstep 500-2000
-# m) x vbias_w: on the ground the lead is exactly ZERO and the (taxi,
-# layer) order is untouched. Looking straight up/down (horizontal
-# component < 0.05) has no view arc to follow — the lead zeroes.
+# m) x vbias_w: on the ground the lead is exactly ZERO and the taxi order
+# is untouched. Looking straight up/down (horizontal component < 0.05)
+# has no view arc to follow — the lead zeroes.
 func _view_sample() -> void:
 	var p = Game.player
 	if p == null or vbias_w < 0.001:
@@ -902,30 +873,22 @@ func _view_sample() -> void:
 	_view_band8 = int(band * 8.0)
 
 func _grid_score(e: Dictionary) -> float:
+	# AC-0445: the score is TAXI-ONLY (the layer rank and its per-candidate
+	# probe call are GONE with the player-Y anchor — the build order is a
+	# pure function of the recenter anchor's X/Z, altitude-stable, and the
+	# probe no longer runs inside the pick scan). The unit inside a column
+	# is the WHOLE column for the high lanes (tier 0/1 column-atomic
+	# dispatch) and the slab for the far lanes (unchanged).
 	var dx := int(e["cx"]) - last_pcx
 	var dz := int(e["cz"]) - last_pcz
-	var layer := 0
-	var c = chunks.get(e["key"])
-	# AC-0335: the pending probe is per-RING (the ring decides the work) —
-	# rings 0/1 (real band + band A, the high slab build) probe the HIGH
-	# completion stamps (an unmaterialized band-A column's first slab is
-	# the mat entry — the hslab probe carries that special case), so band
-	# A now gets a real layer rank instead of a constant 0; rings 2/3
-	# (band B/C, the avg emit) probe the low state (the AC-0262
-	# cached probe).
 	var tierg := _lod_tier_of(dx, dz)
-	var in_high := c != null and tierg <= 1
-	if c != null and not c.data.is_empty():
-		var si: int = _hslab_best_pending_cached(c) if in_high else _entry_best_pending_cached(c)
-		if si >= 0:
-			layer = _layer_rank_of(si)
 	var taxi := float(absi(dx) + absi(dz))
 	# AC-0399: the view-biased bake order (the takeoff fix). The effective
 	# taxi of a DRAW-tier column (tier <= 3 — inside the render region,
 	# where the fill is VISIBLE) is shortened by the lead's projection on
 	# the column's direction: max(0, cos) x |lead| (|lead| = band x
-	# vbias_w, 0 on the ground — the pre-AC-0399 (taxi, layer) order is
-	# exactly preserved there). Tier 4 (data-only, past the render edge —
+	# vbias_w, 0 on the ground — the pre-AC-0399 taxi order is exactly
+	# preserved there). Tier 4 (data-only, past the render edge —
 	# never rendered) is NOT biased: the invisible outer world keeps its
 	# current order and the draw band gets the view priority.
 	if tierg <= 3 and (dx != 0 or dz != 0) \
@@ -935,8 +898,7 @@ func _grid_score(e: Dictionary) -> float:
 			var l := sqrt(float(dx) * float(dx) + float(dz) * float(dz))
 			if l > 0.5:
 				taxi *= (1.0 - dotv / l)
-	var s := taxi * 10000.0 + float(layer)
-	return s
+	return taxi * 10000.0
 
 # AC-0257: the AC-0233 _tier_score ((sim-tier, taxi) pick order) is gone —
 # replaced by _grid_score (the AC-0313 (taxi, layer) inside-out order).
@@ -3651,9 +3613,33 @@ var _tm_handoff := 0
 # the only expected source).
 var _tm_hslab_n := 0
 var _tm_full_firstbuild_n := 0
+# AC-0445: declared arm introspection (the vflight arm). recenter_n = the
+# total recenter() calls (a pure vertical sweep must leave it unchanged —
+# the AC-0234 Y trigger is deleted); col_atomic_lands = whole-column high
+# landings (the column-atomic enable); hslab_scoped_real_lands = per-slab
+# real-band (tier-0) landings (ZERO after the column-atomic change — a
+# partially-visible real-band column is the bug this ticket kills).
+var recenter_n := 0
+var col_atomic_lands := 0
+var hslab_scoped_real_lands := 0
+# AC-0445: the fade census (first-enable fades): started / completed /
+# the longest ramp wall-ms (the vflight arm gates it against COL_FADE_MS).
+var fade_started_n := 0
+var fade_completed_n := 0
+var fade_max_ramp_ms := 0
+# AC-0445: the first-enable fade — a per-column display-side alpha ramp on
+# the freshly-attached high (the tower switches on whole and eases in
+# instead of popping; a display-side fade, the light is settled). The ramp
+# runs _col_fade_step (world _process) over _col_fade_ms (AWECRAFT_FADE_MS
+# harness knob, 0 = off). _col_fades: key -> {c, t0, hold_low, mats, surfs}
+# (the chunk ref + the held-halo flag + the per-kind fade materials + the
+# (mesh, surface_index, kind) triples to restore at completion).
+const COL_FADE_MS := 350
+var _col_fade_ms := COL_FADE_MS
+var _col_fades: Dictionary = {}
 # AC-0263 (AC-0313): the section-first order contract evidence (wall ms):
 # the INITIAL ANCHOR COLUMN's (taxi 0 — the tier-0 set's default, now the
-# innermost column of the (taxi, layer) order) high completion (first
+# innermost column of the taxi-only order) high completion (first
 # anchor-column slab to complete high after boot — a moving recenter's
 # new anchor column does NOT reset it), and the FIRST textured-low attach
 # (the wave's first landing). The contract: low_first >= section_done.
@@ -3810,6 +3796,12 @@ func _ready() -> void:
 
 	timing = OS.get_environment("AWECRAFT_TIMING") == "1"
 	_picklog = OS.get_environment("AWECRAFT_PICKLOG") == "1"  # AC-0217
+	# AC-0445: the first-enable fade ramp duration (harness-only A/B knob —
+	# 0 disables the fade, the column shows immediately; the code default
+	# is COL_FADE_MS). Not a user setting (the ticket: no Options toggle).
+	var _fde := OS.get_environment("AWECRAFT_FADE_MS")
+	if _fde != "":
+		_col_fade_ms = maxi(0, int(_fde))
 	_wprof_init()  # AC-0251: pre-allocate the per-stage pipeline timing ring
 	# AC-0252: seed the med/low band boundary from the user setting (the
 	# later Settings.apply_world re-applies it against the live radii).
@@ -5896,6 +5888,7 @@ func _process(_delta: float) -> void:
 				if int(cc.high_stamps.get(si, -1)) == int(cc.data_gen) and not bool(cc.flush_slabs.has(si)):
 					_star_remesh_add(ckey, si)
 	_drain_build_queue()
+	_col_fade_step()  # AC-0445: the first-enable fade ramp (a display-side step)
 	_wprof_add(WP_DRAIN, Time.get_ticks_usec() - _wpt)
 	var fp6 := Time.get_ticks_usec()
 	_wpt = Time.get_ticks_usec()  # AC-0251 LOW stage bracket
@@ -8009,6 +8002,11 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			_eff_cache_put(key, c, res.get("light", {}), e.get("ngen", null))
 		_tm_handoff += 1
 		_tm_hslab_n += 1  # AC-0263: the per-slab lane's landing count
+		# AC-0445: a TIER-0 (real band) column landed PER-SLAB is the bug
+		# (the half-built tower) — the dispatch is column-atomic now, so
+		# this must stay 0 (the band-A retrigger is tier 1, not counted).
+		if int(e.get("tier", -1)) == 0:
+			hslab_scoped_real_lands += 1
 		# AC-0263 (AC-0313): section evidence — the INITIAL ANCHOR
 		# COLUMN's completion (the first slab of the taxi-0 column to
 		# finish high — the tier-0 set's default, now the innermost
@@ -8062,8 +8060,36 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			print("BUILDCHUNK_E %d,%d build_ms=%d t=%d" % [int(e["cx"]), int(e["cz"]), int(res.get("wms", 0)), Time.get_ticks_msec()])
 		return
 	var ta := Time.get_ticks_msec()
+	var col_atomic := bool(e.get("col_atomic", false))  # AC-0445: the column-atomic enable
 	if not bool(c.mesh_built):
 		_tm_full_firstbuild_n += 1  # AC-0263: first-build evidence
+	# AC-0445: capture the PRE-attach visibility (the first-enable fade
+	# decision + the AC-0286 halo-hold): was any HIGH slab showing (a
+	# remesh / promotion of an already-visible column -> NO fade, an
+	# immediate swap — the thing it replaces is never hidden twice)? Was
+	# any LOW (the halo placeholder) showing (a crossfade — the halo stays
+	# visible under the ramp and is hidden exactly once, at ramp
+	# completion)? Must be captured BEFORE apply_accs (the retain-swap
+	# frees the old instances).
+	var ca_was_high_visible := false
+	var ca_had_low_visible := false
+	if col_atomic:
+		for s in c.slabs:
+			if s.mesh_instance != null and s.mesh_instance.visible:
+				ca_was_high_visible = true
+				break
+			if s.fluid_instance != null and s.fluid_instance.visible:
+				ca_was_high_visible = true
+				break
+			if s.flora_instance != null and s.flora_instance.visible:
+				ca_was_high_visible = true
+				break
+		if not ca_was_high_visible:
+			for i in range(c.low_slabs.size()):
+				var lmi: MeshInstance3D = c.low_instances[i]
+				if lmi != null and lmi.visible:
+					ca_had_low_visible = true
+					break
 	c.apply_accs(res, _tm_ms_full)
 	# AC-0263: a full-column landing stamps every slab at/below the top
 	# done (the per-slab probe's completion record for the legacy path).
@@ -8100,6 +8126,27 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 	_lod_free_all(c, true)
 	# AC-0257: the vwin window stamps/sync/owed re-queue are gone — the
 	# build covers every slab (the empty mask) and nothing is culled.
+	# AC-0445: the column-atomic enable — the STRAGGLER check (the column
+	# left the real band mid-flight: store the high, show the ready lows,
+	# NO fade — it is hidden anyway) + the FIRST-ENABLE fade (a display-
+	# side alpha ramp, first-enable ONLY — a remesh / promotion of an
+	# already-visible column is an immediate swap, never faded, so the
+	# AC-0286 halo it replaces is never hidden twice). _lod_free_all above
+	# stored the lows; the crossfade re-shows them under the ramp (the
+	# halo is hidden exactly once, at ramp completion).
+	if col_atomic:
+		col_atomic_lands += 1
+		var tier_ca := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
+		if tier_ca > 1:
+			hslab_stragglers_n += 1
+			c.hide_all_high()
+			for si_l in c.low_slabs:
+				var si_l2: int = int(si_l)
+				if not _low_slab_pending_at(c, si_l2, tier_ca):
+					c.low_slab_visible(si_l2, true)
+			_low_relower_owed[key] = true
+		elif not ca_was_high_visible:
+			_col_fade_start(key, c, ca_had_low_visible)
 	perf_build_ms += Time.get_ticks_msec() - ta
 	perf_build_worker_ms += int(res.get("wms", 0))
 	perf_build_worker_ms_list.append(int(res.get("wms", 0)))
@@ -8138,6 +8185,143 @@ func _drop_queued(key: String) -> void:
 			queue_size -= 1
 			_pool_touch()  # AC-0217: a pool candidate left the queue
 			return
+
+# AC-0445: the headless detection. THIS BUILD'S OS.has_feature("headless")
+# returns FALSE even under --headless (the feature flag is not set), so the
+# display server name is the reliable signal ("headless" when there is no
+# live display / the dummy rendering server).
+func _headless_display() -> bool:
+	return DisplayServer.get_name() == "headless"
+
+
+# AC-0445: start a first-enable fade on a freshly-attached WHOLE column.
+# Called from the column-atomic full landing ONLY when the column's high was
+# NOT showing before the attach (a true first appearance — a remesh /
+# promotion of an already-visible column shows immediately, no double-fade,
+# the AC-0286 halo it replaces is never hidden twice). Attaches a per-kind
+# fade material (u_fade = 0.0, transparency = ALPHA) to the column's visible
+# high surfaces and — for a crossfade (a halo low was showing) — re-shows the
+# held halo low under the ramp (it is hidden exactly once, at ramp
+# completion). The ramp itself runs in _col_fade_step. The animated
+# water/lava surfaces (the per-bid fluid_anim_mats) are NOT faded — a
+# deliberate P1 limitation (they are per-bid shared materials with their own
+# per-frame uniform push; the static fluid cross IS faded).
+func _col_fade_start(key: String, c: Node3D, hold_low: bool) -> void:
+	if _headless_display():
+		return  # the fade is a DISPLAY-side ramp (there are no pixels in
+		# headless, and this build's dummy rendering server rejects every
+		# transparent render_mode — the fade shader would SHADER-ERROR the
+		# headless census). The column shows immediately, as pre-fade.
+	if _col_fade_ms <= 0:
+		return  # fade disabled (AWECRAFT_FADE_MS=0) — the column shows immediately
+	var ms_tex: Texture2D = _tm_ms_full.get("tex", null)
+	var mats: Dictionary = {
+		"opaque": ChunkScript._fade_material("opaque", ms_tex),
+		"cutout": ChunkScript._fade_material("cutout"),
+		"flower": ChunkScript._fade_material("flower"),
+		"fluid": ChunkScript._fade_material("fluid"),
+	}
+	# A kind that cannot fade (no-atlas legacy fallback) skips the whole fade
+	# (a partial fade — some surfaces ramping, others opaque — looks wrong).
+	for k in mats:
+		if mats[k] == null:
+			return
+	var surfs: Array = []
+	for s in c.slabs:
+		if s.mesh_instance != null and s.sidx.size() > 0 and s.sidx[0] >= 0:
+			var mesh: ArrayMesh = s.mesh_instance.mesh
+			if mesh != null and mesh.get_surface_count() > int(s.sidx[0]):
+				mesh.surface_set_material(int(s.sidx[0]), mats["opaque"])
+				surfs.append([mesh, int(s.sidx[0]), "opaque"])
+		if s.fluid_instance != null and s.sidx.size() > 1 and s.sidx[1] >= 0:
+			var fmesh: ArrayMesh = s.fluid_instance.mesh
+			if fmesh != null and fmesh.get_surface_count() > int(s.sidx[1]):
+				fmesh.surface_set_material(int(s.sidx[1]), mats["fluid"])
+				surfs.append([fmesh, int(s.sidx[1]), "fluid"])
+		if s.flora_instance != null and s.fsidx.size() >= 2:
+			var flmesh: ArrayMesh = s.flora_instance.mesh
+			if flmesh != null:
+				if s.fsidx[0] >= 0 and flmesh.get_surface_count() > int(s.fsidx[0]):
+					flmesh.surface_set_material(int(s.fsidx[0]), mats["cutout"])
+					surfs.append([flmesh, int(s.fsidx[0]), "cutout"])
+				if s.fsidx[1] >= 0 and flmesh.get_surface_count() > int(s.fsidx[1]):
+					flmesh.surface_set_material(int(s.fsidx[1]), mats["flower"])
+					surfs.append([flmesh, int(s.fsidx[1]), "flower"])
+	if surfs.is_empty():
+		return  # nothing to fade (an all-air column) — shows immediately
+	_col_fades[key] = {
+		"c": c, "t0": Time.get_ticks_msec(), "hold_low": bool(hold_low),
+		"mats": mats, "surfs": surfs,
+	}
+	if hold_low:
+		# The crossfade: re-show the held halo low under the ramp (_lod_free_all
+		# in the landing stored them). It is hidden exactly once, at completion.
+		for si_l in c.low_slabs:
+			c.low_slab_visible(int(si_l), true)
+	fade_started_n += 1
+
+
+# AC-0445: the per-frame fade ramp. Drives every active column's fade
+# materials from u_fade 0.0 -> 1.0 (smoothstep) over _col_fade_ms; at
+# completion it restores the shared kind materials on the column's surfaces
+# (guarded — a mid-ramp remesh frees/replaces the meshes, and a freed or
+# re-merged mesh is skipped), hides the held halo low (the one-and-only
+# hide), frees the per-column fade materials, and counts. A column freed
+# mid-ramp (removed) is dropped silently (its surfaces die with it).
+func _col_fade_step() -> void:
+	if _col_fades.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	for key in _col_fades.keys():
+		var st: Dictionary = _col_fades[key]
+		var c: Node3D = st["c"]
+		var t0: int = int(st["t0"])
+		var ramp_ms := now - t0
+		fade_max_ramp_ms = maxi(fade_max_ramp_ms, ramp_ms)
+		var done := _col_fade_ms <= 0 or ramp_ms >= _col_fade_ms
+		var a := 1.0 if done else _smooth01(float(ramp_ms) / float(_col_fade_ms))
+		var mats: Dictionary = st["mats"]
+		for k in mats:
+			if mats[k] != null:
+				mats[k].set_shader_parameter("u_fade", a)
+		if not done:
+			continue
+		# Completion: restore the shared kind materials (guarded — a
+		# mid-ramp remesh freed/replaced the mesh; a freed or re-merged
+		# surface is skipped, and a re-merged mesh already holds the shared
+		# material, so the restore is a safe idempotent re-set).
+		var surfs: Array = st["surfs"]
+		var ms_tex: Texture2D = _tm_ms_full.get("tex", null)
+		for surf in surfs:
+			var mesh: ArrayMesh = surf[0]
+			if mesh == null or not is_instance_valid(mesh):
+				continue
+			var si: int = int(surf[1])
+			if mesh.get_surface_count() <= si:
+				continue
+			var kind: String = surf[2]
+			var shared: Material = ChunkScript._get_mat(kind, ms_tex if kind == "opaque" else null)
+			if shared != null:
+				mesh.surface_set_material(si, shared)
+		# The per-column fade materials are RefCounted (ShaderMaterial) — NO
+		# explicit free (that is a SCRIPT ERROR). Erasing the state drops the
+		# last refs (the surfaces were restored to the shared materials above,
+		# and a freed / re-merged mesh dropped its own ref), so the refcount
+		# frees them.
+		# The one-and-only hide of the held halo low (the crossfade's end).
+		if bool(st.get("hold_low", false)) and c != null and is_instance_valid(c):
+			for si_l in c.low_slabs:
+				c.low_slab_visible(int(si_l), false)
+		_col_fades.erase(key)
+		fade_completed_n += 1
+
+
+# AC-0445: the smoothstep easing for the fade ramp (0.0 -> 1.0, C1-
+# continuous at both ends — the soft "ease" the user asked for).
+func _smooth01(x: float) -> float:
+	var t := clampf(x, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
 
 func _eff_stored_eq(a: Dictionary, b: Dictionary) -> bool:
 	if int(a.get("w", -1)) != int(b.get("w", -1)):
@@ -8616,6 +8800,21 @@ func _band_a_eff_for(c: Node3D) -> Dictionary:
 	c.far_eff = r
 	return r
 
+# AC-0263 (AC-0445): the HIGH dispatch. The build unit is now the COLUMN:
+#   - tier 0 (the real band) = COLUMN-ATOMIC (AC-0445): the WHOLE column
+#     is one task (si0=0, si1=-1, the full settle gate + full star payload
+#     + full-box lver). The half-built tower (the per-slab (taxi, layer)
+#     fill) is gone — the tower is prepared off-thread and enabled in one
+#     landing (the col_atomic full-landing branch, with the first-enable
+#     fade). The `si` arg is a MARKER (the probe's best-pending slab); the
+#     dispatch ignores it for the build range.
+#   - tier 1 (band A) = the far column's MATERIALIZATION (the mat entry,
+#     unchanged) or the mat column's per-slab RETRIGGER (unchanged).
+# The sync fallbacks are GONE (fully queue-driven): a no-data column or a
+# missing neighbor DEFERS (return false) — the data lane delivers the work
+# and the queue re-picks (the in-flight dedup paces one task in flight per
+# column). true = a worker task owns the column; false = deferred (the
+# caller keeps the entry and ends the frame, as with a cap drop).
 func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary, settle := false) -> bool:
 	var key := _key(cx, cz)
 	c.col_immediate = _col_immediate_for(cx, cz)
@@ -8737,10 +8936,16 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		if _tm_debug:
 			print("TMESH HSLAB %d,%d slab=%d mat=%d inflight=%d" % [cx, cz, si, is_mat, threadmesh_inflight.size()])
 		return true
-	# AC-0283 P2: the light gate — the 3x3x3 section box around the slab
-	# (the bake-box overhang) must be SETTLED in the engine: a slab never
-	# dispatches (and never shows) on lighting that is not calculated.
-	if star != null and not star.box_settled(cx, cz, si - 1, si + 1):
+	# AC-0445: tier 0 (the real band) is COLUMN-ATOMIC — the WHOLE column
+	# is the build unit (the half-built tower with holes is gone: the
+	# tower is prepared off-thread and switched on in one landing, with a
+	# first-enable fade). The AC-0283 P2 light gate is the FULL box
+	# (-1..24): a column never dispatches (and never shows) on lighting
+	# that is not calculated — waiting for all 24 sections is bounded
+	# (box_settled treats UNSEEDED neighbor sections as settled zero
+	# boundaries, so the gate can't block forever) and it is the exact
+	# contract the tex-refresh/full-landing path already uses.
+	if star != null and not star.box_settled(cx, cz, -1, 24):
 		_hslab_last_defer = 5
 		hslab_defer_settle += 1
 		_sw_settle_defer(cx, cz, si)  # AC-0339: open/extend the settle-wait episode (instrumentation only)
@@ -8754,7 +8959,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		hslab_defer_cap += 1
 		_hslab_last_defer = 2
 		if _tm_debug:
-			print("TMESH HSLABCAPDROP %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
+			print("TMESH HSLABCAPDROP %d,%d col inflight=%d" % [cx, cz, threadmesh_inflight.size()])
 		return false
 	# AC-0369 CUT T3: the per-column ring cache. The 8 snap_rings calls
 	# are a pure function of the 8 neighbours' (data, fl, gen_keep,
@@ -8805,37 +9010,47 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		if _nbs_ring_cache.size() >= 256:
 			_nbs_ring_cache.clear()  # the cache is a speed aid — a full clear is always safe (a miss re-snapshots)
 		_nbs_ring_cache[key] = {"rings": nbs, "stamps": nbs_stamps, "key8": key8}
-	var y_lo := si * 16
-	var y_hi := (si + 1) * 16 - 1
-	var d_lo := maxi(0, y_lo - 1)
-	var d_hi := mini(Data.HEIGHT - 1, y_hi + 1)
+	# AC-0445: the FULL column's top slab (the build stops at the top —
+	# the tex-refresh full-build's exact convention).
+	var top_slab := mini(int(c.top) >> 4, int(c.data.size() - 1))
 	var ms_w: Dictionary
 	if not _tm_ms_full.rects.is_empty():
 		ms_w = {"rects": _tm_ms_full.rects.duplicate(), "h": float(_tm_ms_full.get("h", 0.0))}
 	else:
 		ms_w = {"rects": {}}
-	# AC-0283 P2: the star payload (the engine's SETTLED light for this
-	# slab's bake box, captured under the box gate) replaces the eff: the
-	# worker expands it into the classic light dict + the 8 margin strips
-	# (no pull kernel, no ctx strips — the gate made the bake final).
+	# AC-0283 P2: the star payload (the engine's SETTLED light for the
+	# column's FULL box, captured under the box gate) replaces the eff:
+	# the worker expands it into the classic light dict + the 8 margin
+	# strips (no pull kernel, no ctx strips — the gate made the bake
+	# final). AC-0445: the payload is the RANGE 0..top_slab (the
+	# full-column window), and the lver is the FULL-box epochs (the
+	# landing re-checks box_epochs(-1, 24) — a mid-flight mutation
+	# datadrops the WHOLE column, one unit, cheap).
 	var strips: Dictionary
 	if star != null:
-		var pl: Dictionary = star.slab_light_payload(cx, cz, si, si)
+		var pl: Dictionary = star.slab_light_payload(cx, cz, 0, top_slab)
 		if not bool(pl.get("ok", false)):
 			_hslab_last_defer = 6
 			return false
 		pl["star"] = true
-		pl["lver"] = star.box_epochs(cx, cz, si - 1, si + 1)
+		pl["lver"] = star.box_epochs(cx, cz, -1, 24)
 		eff = pl
 		strips = {"eff": [], "blk": [], "blk_b": []}
 		if star_bake_probe != null:
 			star_bake_probe.call("disp", cx, cz, si, {"pl": pl})
 	else:
-		strips = _strips_for_scoped(cx, cz, y_lo, y_hi)
+		strips = _strips_for(cx, cz)
 	var ctx_w: Dictionary = _tm_ctx.duplicate()
 	ctx_w["eff_strips"] = strips["eff"]
 	ctx_w["blk_strips"] = strips["blk"]
 	ctx_w["blk_strips_b"] = strips["blk_b"]
+	ctx_w["top"] = int(c.top)  # AC-0197: full builds stop at the top slab
+	# AC-0445: the column-atomic entry — the FULL build (si0=0, si1=-1 →
+	# C++ was_full → merged-atlas canvas UVs, the apply_accs contract).
+	# NO `hslab` flag: the handoff's full-path lver gate (box_epochs
+	# -1..24) fires, and the landing is the full-landing branch (+ the
+	# col_atomic fade). NO scoped_snap: the full stale check (data_gen /
+	# fl_gen) is the right one for a full column.
 	var entry := {
 		"key": key, "cx": cx, "cz": cz, "inst": c.get_instance_id(), "colgen": int(c.col_gen),
 		"data": mc.slab_copy(c.data),  # AC-0208: C++-only value copy (the worker + the handoff stale check share the shape)
@@ -8846,8 +9061,8 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		"eff": eff, "eff_trust": true, "settle": settle or star != null,
 		"ctx": ctx_w, "ms": ms_w, "ngen": _ngens_for(cx, cz),
 		"tier": _tier_of(cx - last_pcx, cz - last_pcz),
-		"hslab": true, "si0": si, "si1": si,
-		"scoped_snap": true, "d_off": d_lo, "d_hi": d_hi,
+		"col_atomic": true,  # AC-0445: the column-atomic landing (fade + census)
+		"si0": 0, "si1": -1,  # the full column (was_full)
 		"t_submit": Time.get_ticks_usec(),
 	}
 	var skey := _tm_next_slot
@@ -8872,7 +9087,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		_sw_samples.append(_sw_frame - int(_sw_open[swk]))
 		_sw_open.erase(swk)
 	if _tm_debug:
-		print("TMESH HSLAB %d,%d slab=%d inflight=%d" % [cx, cz, si, threadmesh_inflight.size()])
+		print("TMESH HSLAB %d,%d col=1 top=%d inflight=%d" % [cx, cz, top_slab, threadmesh_inflight.size()])
 	return true
 
 # AC-0339 STEP 0 (instrumentation only): open/extend this slab's
@@ -11333,6 +11548,13 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 		print("FLIPBACK %s flipped=%d mesh_built=%d" % [key, flipped, int(c.mesh_built)])
 
 
+# AC-0445: recenter is an X/Z-ONLY crossing event. The AC-0234 vertical
+# (Y) trigger in the player is deleted — a pure vertical flight no longer
+# recenters, no longer throttles the build queue, and no longer invalidates
+# the probe caches (their fingerprints are altitude-stable now). The
+# legacy `wy` parameter is a DEPRECATED NO-OP kept only because a fenced
+# tree (main.gd, another session's dirty work) still passes it — once the
+# 4-arg callers are updated, the parameter itself goes.
 func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# AC-0348: the crossing ring — bracket the WHOLE synchronous sweep
 	# (this call runs from the physics frame, outside the wprof partition)
@@ -11358,9 +11580,10 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# is also the ahead DIRECTION.
 	var _cross := absi(pcx - _last_recenter_pcx) + absi(pcz - _last_recenter_pcz)
 	# AC-0277: the fast window is measured from the last PLAYER-CHUNK
-	# CROSSING (_last_cross_ms) - not _last_recenter_ms: the snap-back and
-	# Y-only recenters carry _cross = 0 and must not re-arm the window
-	# (a walk crossing 0.3 s after a snap would read "fast").
+	# CROSSING (_last_cross_ms) - not _last_recenter_ms: a recenter with
+	# _cross = 0 (the snap-back; AC-0445: Y-only recenters are GONE —
+	# recenter is an X/Z crossing event) must not re-arm the window (a
+	# walk crossing 0.3 s after a snap would read "fast").
 	var _now2 := Time.get_ticks_msec()
 	var _fast := _last_cross_ms > 0 \
 			and (_now2 - _last_cross_ms) < AHEAD_FAST_MS \
@@ -11377,13 +11600,9 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	_rec_player_wz = wz
 	_rec_player_pcx = pcx
 	_rec_player_pcz = pcz
-	# AC-0257: the AC-0234 vertical window recompute/tier-0 sync are gone —
-	# the recenter walk (below) is the single collection point. The player
-	# Y (carried on slab crossings) is the layer-rank origin for the bake
-	# order (_grid_score); a -1 wy keeps the last known slab (X/Z-only
-	# recenters).
-	if wy >= 0.0:
-		last_wy = wy
+	# AC-0445: the `wy` consumer is GONE (the layer-rank origin it fed no
+	# longer exists). The parameter is accepted and ignored (see above).
+	recenter_n += 1  # AC-0445: declared arm introspection (the vflight arm's zero-recenter sweep)
 	# AC-0248: TOP-UP the pools to the ring target of the CURRENT render
 	# radius (a no-op in the steady state — three int compares). Every
 	# radius change ends in a recenter (Settings.apply_render_distance /

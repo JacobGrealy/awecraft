@@ -2022,12 +2022,39 @@ Match these; do not improvise a different approach in a task.
   UV-space/material mismatch (band A once rendered untextured exactly this
   way, AC-0321); the ladder arm's band-A gate (landed surfaces u-exact vs a
   fresh real-band emit + the material-canvas check) and the editmat arm
-  (plain material under plain UVs) are the permanent proofs.
+  (plain material under plain UVs) are the permanent proofs. **AC-0445 (column-atomic
+   tier 0 + the first-enable fade)**: the real band (tier 0) now dispatches COLUMN-ATOMIC
+   — the whole 16 m column is one off-thread unit and ONE full landing (si0=0/si1=-1,
+   `col_atomic:true`, NO `hslab` flag → it routes to the full-landing branch and stamps
+   every slab 0..top in one shot), so the "half-built tower with holes" the user saw
+   (24 per-slab landings scattered across frames) is gone — the `_vflight` census proves
+   no resident tier-0 column is ever partially stamped (PENDING or COMPLETE, never
+   partial). On a first-enable landing (no high showing before) the column takes a
+   display-side FADE: per-surface `surface_set_material(i, fadeMat)` where fadeMat = the
+   shared kind material `.duplicate()` (inherits the live per-frame uniforms) + the shader
+   swapped to the `chunk_lit_*_fade.gdshader` variant (`render_mode …, blend_mix` — the
+   Godot4 standard alpha-blend mode; the plain `blend` keyword is rejected in this build,
+   and the headless dummy server rejects ALL transparent render modes, so the fade is
+   SKIPPED headless — `DisplayServer.get_name() == "headless"`, since this build's
+   `OS.has_feature("headless")` is false under `--headless`) + `u_fade` ramped 0.0→1.0
+   (smoothstep) over `COL_FADE_MS` (350, `AWECRAFT_FADE_MS`); at completion the surfaces
+   restore the shared kind material and the per-column fade mats are dropped (RefCounted —
+   no `.free()`). The fade is a pure display ramp (no pixels headless); the render proof is
+   the `vflight` arm under the fwdshot recipe (`fade.started > 0`, `completed == started`)
+   + the `shaderforce` count (16 — the four fade variants compile) + the A/B frames.
 - **Build order (AC-0313, UNIFIED at AC-0335 — one order, the ring decides the work)**:
   ONE scheduler — `_drain_build_queue`'s steady pass — works the whole world in a single
-  **inside-out work order**: the bake score is `(taxi, layer)` — across columns the
+  **inside-out work order**: the bake score is `taxi` — across columns the
   innermost owed column first (a pure function of the live recenter anchor, no timer or
-  mode) — **AC-0399 (the flight-band view weight)**: in the flight band the score's
+  mode). **AC-0445: the score is TAXI-ONLY** — the `(taxi, layer)` second key (the
+   player-Y layer rank + its per-candidate probe call) is GONE with the player-Y
+   recenter anchor (the AC-0234 Y-trigger deletion): the build order is a pure function
+   of the recenter anchor's X/Z, altitude-stable (a pure vertical move re-scores
+   nothing — the `_vflight` sweep proves it) — and the high lanes (tier 0/1) now
+   dispatch COLUMN-ATOMIC (the whole 16 m column is one off-thread unit and one landing
+   — the "half-built tower with holes" the user saw is gone) while the far lanes
+   (tier 2/3) still dispatch per-slab (P2, unchanged). — **AC-0399 (the flight-band
+   view weight)**: in the flight band the score's
   taxi is a VIEW-WEIGHTED EFFECTIVE taxi — the column's distance to the anchor is
   shortened by `max(0, cos(column-dir, view-dir)) x |lead|`, where the lead is the
   camera's flat xz view direction (the player's `aim_dir()` projected through the

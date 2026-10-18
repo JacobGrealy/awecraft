@@ -94,7 +94,10 @@ var _up: Vector3 = Vector3.UP
 var _applied_yaw := 0.0
 var _chunk_x := 0
 var _chunk_z := 0
-var _chunk_y := 0  # AC-0234: the tracked 16-block Y slab (a crossing re-centers)
+# AC-0445: the tracked Y slab (_chunk_y) is GONE — recenter is an X/Z-only
+# crossing event (the AC-0234 vertical trigger is deleted); a pure vertical
+# flight costs nothing (no recenter, no probe-cache invalidation, no build
+# queue throttle).
 var _anchor: Dictionary = {}  # AC-0309 C5: the sim anchor (World.player_anchor)
 var _debug_layer: CanvasLayer = null
 var _debug_label: Label = null
@@ -254,7 +257,6 @@ func _ready() -> void:
 		# contract and the column frame both key on flat).
 		_chunk_x = int(floorf(sp.x / 16.0))
 		_chunk_z = int(floorf(sp.z / 16.0))
-		_chunk_y = int(floorf(sp.y / 16.0))  # AC-0234
 	_init_inv()
 	_build_highlight()
 	_build_held()
@@ -3296,21 +3298,21 @@ func _recenter() -> void:
 	# AC-0213: camera-only moves never requeue — recenter (and with it the
 	# ahead-ring queue rebuild) fires ONLY on a positional chunk change;
 	# look changes touch nothing here.
-	# AC-0234: a 16-block Y crossing ALSO re-centers (a FULL recenter —
-	# the user-confirmed trigger: same walk + tiered rewrite as an X/Z
-	# cross) so the vertical window's player band moves with the
-	# altitude; the wy arg carries the Y to the window recompute.
+	# AC-0445: the AC-0234 vertical (Y) trigger is DELETED — recenter is an
+	# X/Z-ONLY crossing event. A pure 16-block vertical move no longer fires
+	# the full synchronous recenter (no tiered walk, no probe-cache
+	# invalidation, no build-queue throttle): vertical flight is free.
+	# (world.recenter keeps a deprecated no-op `wy` parameter until the
+	# fenced 4-arg callers in main.gd are updated.)
 	# AC-0307: the player position is global; the flat world (and with it
 	# the recenter contract) needs the sphere conversion — global x/z stop
 	# being flat coordinates a few hundred metres from the spawn.
 	var fp: Vector3 = Game.world.flat_of_world_pos(position) if Game.world != null else position
 	var pcx := int(floorf(fp.x / 16.0))
 	var pcz := int(floorf(fp.z / 16.0))
-	var pcy := int(floorf(fp.y / 16.0))
-	if pcx != _chunk_x or pcz != _chunk_z or pcy != _chunk_y:
+	if pcx != _chunk_x or pcz != _chunk_z:
 		_chunk_x = pcx
 		_chunk_z = pcz
-		_chunk_y = pcy
 		# AC-0308 -> AC-0145 P1: the basis no longer re-snaps to the column
 		# frame on a seam crossing — _sphere_align slews local Y to the exact
 		# radial (continuous across the seam). The call flushes a pending
@@ -3318,7 +3320,7 @@ func _recenter() -> void:
 		# frame must not wait for the next input event).
 		_apply_rotation()
 		if Game.world != null:
-			Game.world.recenter(fp.x, fp.z, true, fp.y)
+			Game.world.recenter(fp.x, fp.z, true)  # AC-0445: X/Z only (the wy arg is gone)
 
 
 func _apply_rotation() -> void:

@@ -477,6 +477,15 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			player = main._spawn_player()
 			await _oceanfill_test(spawn)
 			return
+		if logic == "vflight":
+			# AC-0445: the column-atomic + free-vertical-flight arm (a pure
+			# +Y sweep fires ZERO recenters; streamed real-band columns land
+			# WHOLE — no partial column; see _vflight_test).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _vflight_test(spawn)
+			return
 		if logic == "editsnap":
 			# AC-0199: break a trunk at a chunk border - the neighbor
 			# remeshes from the queue front (not the ~500 ms light wave)
@@ -1828,6 +1837,19 @@ func _batt_run_mode(mode: String, spawn: Vector3, seed_env: String) -> void:
 			await main._await_spawn_floor(spawn, 300)
 			player = main._spawn_player()
 			await _oceanfill_test(spawn)
+		"vflight":
+			# AC-0445: the column-atomic + free-vertical-flight arm. Waits for
+			# the SIM BAND (the real band) to build column-atomic, then (1) a
+			# pure +Y sweep must fire ZERO recenters (the AC-0234 Y trigger is
+			# gone), (2) a short +X walk streams new columns that must land
+			# WHOLE (no partial column), (3) the census: no per-slab real-band
+			# landings + column-atomic landings present. The fade census is
+			# render-only (headless skips the fade — no pixels, and this
+			# build's dummy server rejects transparent render modes).
+			world.recenter(spawn.x, spawn.z, true)
+			await main._await_sim_band(spawn, 3000)
+			player = main._spawn_player()
+			await _vflight_test(spawn)
 		"editsnap":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -17912,7 +17934,7 @@ func _r16_test(spawn: Vector3) -> void:
 	Settings.apply_sim_distance()
 	Settings.apply_medium_start()
 	Settings.apply_low_start()
-	world.recenter(spawn.x, spawn.z, true, spawn.y)  # AC-0234: seed the window Y
+	world.recenter(spawn.x, spawn.z, true)  # AC-0445: X/Z only (the Y trigger is gone)
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	var passes0 := int(world.perf_cull_passes)
@@ -17989,19 +18011,14 @@ func _r16_test(spawn: Vector3) -> void:
 	var far0 := _r16_lod_far()
 	var inr0 := _r16_lod_inr()  # AC-0231: in-r pending set at first sight
 	var h0 := _r16_lod_slabcheck()  # AC-0231 rewrite: per-slab geometry + air checks
-	# AC-0231 fix3 (+ AC-0257 bake order): the WAVE ORDER check — drive
-	# the WAVE 2 global slab wave to completion and verify the pick
-	# sequence is a GLOBAL LAYERED wave across all columns (layer rank
-	# non-decreasing around the player's slab, the first layer spans
-	# several columns — not one whole column before the next). The
-	# player Y basis is set from the game player (falling to the floor at
-	# this sample — the same slab the in-game slab-crossing recenter
-	# carries); without it last_wy stays 0 (the bottom slab) and the
-	# whole wave reads as "layer 0".
-	if Game.player != null:
-		world.last_wy = Game.player.position.y
-	elif cam != null:
-		world.last_wy = cam.global_position.y
+	# AC-0231 fix3 (+ AC-0257 bake order, AC-0445): the WAVE ORDER check —
+	# drive the WAVE 2 global slab wave to completion and verify the pick
+	# sequence is an INSIDE-OUT global wave (AC-0445: the player-Y layer
+	# rank is GONE with the anchor — the score is taxi-only, so the
+	# contract is now TAXI monotonicity: the innermost ring lands before
+	# any outer ring, and the first ring spans several columns — not one
+	# whole column before the next; within a ring the slab order is the
+	# scheduler's deterministic band-bucket order).
 	var wave := _r16_wave_test()
 	var min_static_y := 1e30
 	var floor_frames := 0
@@ -18250,15 +18267,15 @@ func _r16_test(spawn: Vector3) -> void:
 		# PER SLAB — far_slabs = the NON-AIR slabs of the data chunks
 		# OUTSIDE the render circle at the sample instant (resident, face
 		# 0/1); far_low/far_high = the per-slab composition (per-slab 4x4x4
-		# low / high). AC-0335 (one scheduler): the fill is the drain's
-		# (taxi, layer) inside-out dispatch — wave.layer_monotone_ok = the
-		# pick sequence's (taxi, layer) keys are non-decreasing (the
-		# innermost ring first, and within a ring all slabs of layer r
-		# before any of layer r+1, r = distance from the player's slab);
-		# wave.first_layer_columns >= 2 = the first layer interleaves
-		# several columns of the innermost ring, never one whole column
-		# before the next; far1.far_low = all the low per slab out to
-		# render distance. catch_up = the low->high upgrades across the
+		# low / high). AC-0335 (one scheduler, AC-0445 taxi-only): the
+		# fill is the drain's inside-out dispatch — wave.taxi_monotone_ok
+		# = the pick sequence's TAXI values are non-decreasing (the
+		# innermost ring first — AC-0445: the player-Y layer term is
+		# GONE, so within a ring the slab order is the scheduler's
+		# band-bucket order, not asserted); wave.first_ring_columns >= 2
+		# = the first ring interleaves several columns of the innermost
+		# ring, never one whole column before the next; far1.far_low =
+		# all the low per slab out to render distance. catch_up = the low->high upgrades across the
 		# idle settle window (far_high filling per the tiered order). The
 		# gates: height_ok = every low mesh is slab-local 0..16 at
 		# (0, si*16, 0); no_giant_ok = no non-fully-solid coarse grid
@@ -19362,7 +19379,8 @@ func _ladder_test(spawn: Vector3) -> void:
 		"air_inworld_bad": 0,
 		"clutter_ok": false,
 		"clutter_dbg": [],
-		"layerrank_ok": false,
+		"taxi_order_ok": false,  # AC-0445: the build order is taxi-only
+		"taxi_order_bad": [],
 		"lod_fcc_build_ms": 0.0,
 		"emit_cpp_b_ms": 0.0,
 		"emit_cpp_c_ms": 0.0,
@@ -19780,15 +19798,28 @@ func _ladder_test(spawn: Vector3) -> void:
 			if c.has_low_si(si):
 				res["air_inworld_bad"] += 1
 	res["air_inworld_ok"] = res["air_inworld_bad"] == 0
-	# (e) AC-0257 (AC-0313): the Y-LAYER rank encoding (0 = the player's
-	# slab, 1 = y-1, 2 = y+1, 3 = y-2, 4 = y+2) — the intra-column slab
-	# order of the (taxi, layer) build order (world._layer_rank_of).
-	var pys: int = world._player_slab()
-	res["layerrank_ok"] = world._layer_rank_of(pys) == 0 \
-			and world._layer_rank_of(pys - 1) == 1 and world._layer_rank_of(pys + 1) == 2 \
-			and world._layer_rank_of(pys - 2) == 3 and world._layer_rank_of(pys + 2) == 4
+	# (e) AC-0445: the build order is TAXI-ONLY — the player-Y layer rank
+	# (and its per-candidate probe call) is GONE from world._grid_score
+	# (the score is a pure function of the recenter anchor's X/Z,
+	# altitude-stable). This arm runs on the ground (flight_band 0, no
+	# view lead), so the score must be EXACTLY taxi*10000 for every
+	# offset — altitude independence + the inside-out order in one check.
+	# (Synthetic entries: the score no longer reads the chunk table.)
+	var taxi_order_ok := true
+	var taxi_order_bad: Array = []
+	for _tdx in range(-12, 13):
+		for _tdz in range(-12, 13):
+			var _te := {"cx": int(world.last_pcx) + _tdx, "cz": int(world.last_pcz) + _tdz, "key": ""}
+			var _tt: int = absi(_tdx) + absi(_tdz)
+			var _ts: float = float(world._grid_score(_te))
+			if _ts != float(_tt) * 10000.0:
+				taxi_order_ok = false
+				if taxi_order_bad.size() < 5:
+					taxi_order_bad.append([_tdx, _tdz, _ts])
+	res["taxi_order_ok"] = taxi_order_ok
+	res["taxi_order_bad"] = taxi_order_bad
 	res["ok"] = a_ok and b_ok and c_ok and sky_ok and res["boundary_flip_ok"] \
-			and res["air_synth_ok"] and res["air_inworld_ok"] and res["layerrank_ok"] and res["clutter_ok"]
+			and res["air_synth_ok"] and res["air_inworld_ok"] and res["taxi_order_ok"] and res["clutter_ok"]
 	Debug.result(res)
 	get_tree().quit()
 
@@ -19955,7 +19986,7 @@ func _r16_stream_phase(cam: Camera3D, base: Vector3) -> Dictionary:
 	# recenter carrying the new wy.
 	for i in range(1, steps + 1):
 		var y := y0 + float(i) * 16.0
-		world.recenter(x0, z0, true, y)
+		world.recenter(x0, z0, true)
 		cam.global_transform = Transform3D(Basis(), Vector3(x0, y + 1.8, z0))
 		for f in 8:
 			await get_tree().physics_frame
@@ -19968,11 +19999,11 @@ func _r16_stream_phase(cam: Camera3D, base: Vector3) -> Dictionary:
 	# DESCEND — the recenter returns to the surface band.
 	for i in range(steps, 0, -1):
 		var y := y0 + float(i) * 16.0
-		world.recenter(x0, z0, true, y)
+		world.recenter(x0, z0, true)
 		cam.global_transform = Transform3D(Basis(), Vector3(x0, y + 1.8, z0))
 		for f in 8:
 			await get_tree().physics_frame
-	world.recenter(x0, z0, true, y0)
+	world.recenter(x0, z0, true)
 	cam.global_transform = Transform3D(Basis(), Vector3(x0, y0 + 1.8, z0))
 	for f in 60:
 		await get_tree().physics_frame
@@ -20037,25 +20068,22 @@ func _r16_air_chunk_test() -> Dictionary:
 	}
 
 
-# AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order, AC-0313): the
-# ORDER check — drive the global slab wave through the REAL
+# AC-0231 fix3 (+ AC-0252 offload, + AC-0257 bake order, AC-0313,
+# AC-0445): the ORDER check — drive the global slab wave through the REAL
 # dispatch path (world._low_pick_slab + world._low_dispatch_slab, no game
 # frames between; the worker handoff is pumped with the same world._low_poll
 # the game loop runs) and record the pick sequence. The wave is GLOBAL
 # (across ALL columns — not one whole column before the next).
-# AC-0313: the order is (taxi, layer) inside-out — the
-# innermost wave ring first, and within a ring the slabs land layer by
-# layer ACROSS the ring's columns (equal-taxi columns interleave A0, B0,
-# A1, B1, ...). The contract:
-#   layer_monotone_ok   : the sequence's (taxi, layer) keys are
-#                         NON-DECREASING — every (t, r) slab lands before
-#                         any (t, r+1) slab, and a ring's slabs land before
-#                         any outer ring's (the AC-0257 layered-across-
-#                         columns property, now per ring);
-#   first_layer_columns >= 2 : the first wave layer ((taxi, layer) == the
-#                         minimum) spans SEVERAL columns of the innermost
-#                         ring (interleaved — a per-column wave touches
-#                         exactly one).
+# AC-0445: the player-Y anchor is GONE — the score is TAXI-ONLY (the
+# layer term and its probe call were deleted). The contract is now:
+#   taxi_monotone_ok     : the sequence's TAXI values are NON-DECREASING —
+#                          a ring's slabs land before any outer ring's
+#                          (inside-out preserved; within a ring the slab
+#                          order is the scheduler's deterministic
+#                          band-bucket order — not asserted);
+#   first_ring_columns >= 2 : the first wave ring (taxi == the minimum)
+#                         spans SEVERAL columns (interleaved — a
+#                         per-column wave touches exactly one).
 # The dispatches + attaches are real (they just accelerate the wave the
 # game would run over ~1000 frames at 60 fps: the grid sample + emit run
 # on the TM workers, the attach + bookkeeping land in the normal
@@ -20128,42 +20156,40 @@ func _r16_wave_test() -> Dictionary:
 		# already holds its low at sample time — the wave completed, which
 		# is exactly the requirement: all low across all columns)
 		return {"ran": true, "ok": true, "builds": 0, "drained_at_sample": true,
-			"layer_monotone_ok": true, "first_layer_columns": 0, "layers": {}}
-	# AC-0257 (AC-0313): the player slab is constant across the test (no
-	# recenter) — the rank of each picked slab is stable for the whole
-	# sequence. The (taxi, layer) key is a pure function of the pick (the
-	# wave band is taxi > band0_r, so the keys span ~5*100..15*100+47).
-	var layer_monotone := true
-	var prev_key := -1
-	var min_key := -1
+			"taxi_monotone_ok": true, "first_ring_columns": 0, "rings": {}}
+	# AC-0445: the player slab is constant across the test (no recenter)
+	# and no longer part of the score — the TAXI of each pick is a pure
+	# function of the pick (the wave band is taxi > band0_r). The contract
+	# is taxi monotonicity (inside-out) + first-ring interleave.
+	var taxi_monotone := true
+	var prev_t := -1
+	var min_t := -1
 	var min_si := -1
-	var first_layer_cols := {}
-	var layers: Dictionary = {}
+	var first_ring_cols := {}
+	var rings: Dictionary = {}
 	for s in seq:
 		var si: int = int(s[0])
-		var l := int(world._layer_rank_of(si))
 		var t := absi(int(s[1]) - int(world.last_pcx)) + absi(int(s[2]) - int(world.last_pcz))
-		var key := t * 100 + l
-		if key < prev_key:
-			layer_monotone = false
-		prev_key = key
-		if key < min_key:
-			min_key = key
-		if key == min_key:
+		if t < prev_t:
+			taxi_monotone = false
+		prev_t = t
+		if min_t < 0 or t < min_t:
+			min_t = t
+		if t == min_t:
 			min_si = mini(min_si, si)
-			first_layer_cols["%d,%d" % [int(s[1]), int(s[2])]] = true
-		layers[key] = int(layers.get(key, 0)) + 1
+			first_ring_cols["%d,%d" % [int(s[1]), int(s[2])]] = true
+		rings[t] = int(rings.get(t, 0)) + 1
 	var capped := seq.size() >= cap
-	var ok := layer_monotone and int(first_layer_cols.size()) >= 2
+	var ok := taxi_monotone and int(first_ring_cols.size()) >= 2
 	return {
 		"ran": true,
 		"builds": seq.size(),
 		"capped": capped,
-		"layer_monotone_ok": layer_monotone,
+		"taxi_monotone_ok": taxi_monotone,
 		"min_si": min_si,
 		"max_si": int(seq[seq.size() - 1][0]),
-		"layers": layers,
-		"first_layer_columns": first_layer_cols.size(),
+		"rings": rings,
+		"first_ring_columns": first_ring_cols.size(),
 		"ok": ok,
 	}
 
@@ -20603,7 +20629,7 @@ func _wprof_test(spawn: Vector3) -> void:
 		Settings.apply_render_distance()
 	world.render_radius = maxi(world.render_radius, 16)
 	var rr: int = world.render_radius
-	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	world.recenter(spawn.x, spawn.z, true)
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
 	# AC-0261 (AC-0263) r16 settle: the HIGH band (taxi < medium_start_r)
@@ -23654,7 +23680,7 @@ func _continue_probe() -> void:
 	var col_body_at_spawn: bool = sc != null and sc.has_any_slab_body()
 	main._restore_player(ps)
 	if Game.world != null:
-		world.recenter(player.position.x, player.position.z, true, player.position.y)  # AC-0234
+		world.recenter(player.position.x, player.position.z, true)  # AC-0445: X/Z only
 	Game.time_of_day = float(data.get("time", 0.0))
 	Game.start()
 	var load_spawn_ms := Time.get_ticks_msec() - t_c0
@@ -27088,7 +27114,7 @@ func _er_sample(st: Dictionary, ph: String, pcx: int, pcz: int, back_phase: bool
 func _aheadtarget_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = 16
-	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	world.recenter(spawn.x, spawn.z, true)
 	player = main._spawn_player()
 	var p = Game.player
 	var pcx0 := int(world.last_pcx)
@@ -27182,7 +27208,7 @@ func _aheadtarget_test(spawn: Vector3) -> void:
 func _candflag_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
 	world.render_radius = 16
-	world.recenter(spawn.x, spawn.z, true, spawn.y)
+	world.recenter(spawn.x, spawn.z, true)
 	player = main._spawn_player()
 	var p = Game.player
 	var pcx0 := int(world.last_pcx)
@@ -32471,6 +32497,132 @@ func _oceanfill_test(spawn: Vector3) -> void:
 	res["solid_to_floor"] = solid_to_floor
 	res["ok"] = res["ocean_found"] and n > 0 and surface_at_sea \
 		and air_above and solid_to_floor
+	Debug.result(res)
+	if not _batt:
+		get_tree().quit()
+
+
+# AC-0445: the column-atomic + free-vertical-flight arm. The two user
+# complaints, proven: (1) a pure VERTICAL move must fire ZERO recenter (the
+# AC-0234 Y trigger is deleted — a 100 m climb is free); (2) the streaming
+# edge's real-band columns land WHOLE (column-atomic — no half-built tower
+# with holes). The fade is a display-side feature proven by the render
+# evidence (headless skips it — no pixels, and this build's dummy server
+# rejects transparent render modes), so the fade census here is render-only.
+func _vflight_test(spawn: Vector3) -> void:
+	var res: Dictionary = {}
+	world.collision_enabled = false
+	player.flying = true
+	# let the sim band settle fully (column-atomic landings complete; the
+	# boot fades, if any, are render-only so they don't block headless)
+	for _f in range(180):
+		await get_tree().process_frame
+	var headless: bool = (DisplayServer.get_name() == "headless")
+	# --- baseline (the sim band is built: col_atomic_lands > 0 already) ---
+	var recenter0: int = world.recenter_n
+	var smu0: int = world._sm_move_until
+	var hcache0: int = world._hslab_probe_cache.size()
+	var lcache0: int = world._low_probe_cache.size()
+	var col0: int = world.col_atomic_lands
+	var scoped0: int = world.hslab_scoped_real_lands
+	var fade_s0: int = world.fade_started_n
+	var fade_c0: int = world.fade_completed_n
+	# --- (1) the pure +Y sweep: 5 x 20 m, flat x/z FIXED ---
+	var flat0: Vector3 = world.flat_of_world_pos(player.position)
+	var fx: float = flat0.x
+	var fz: float = flat0.z
+	var recenter_delta := 0
+	var smu_grew := false
+	var hcache_grew := 0
+	var lcache_grew := 0
+	for step in 5:
+		var ny: float = flat0.y + float(step + 1) * 20.0
+		player.position = world.world_pos_of_flat(fx, ny, fz)
+		player.velocity = Vector3.ZERO
+		for _g in range(12):
+			await get_tree().process_frame
+		recenter_delta = maxi(recenter_delta, world.recenter_n - recenter0)
+		if world._sm_move_until > smu0:
+			smu_grew = true
+		hcache_grew = maxi(hcache_grew, world._hslab_probe_cache.size() - hcache0)
+		lcache_grew = maxi(lcache_grew, world._low_probe_cache.size() - lcache0)
+	res["sweep"] = {
+		"recenter_delta": recenter_delta, "smu_rearmed": smu_grew,
+		"hcache_grew": hcache_grew, "lcache_grew": lcache_grew,
+		"free": recenter_delta == 0 and not smu_grew,
+	}
+	# --- (2) a short +X WALK: streams NEW columns into the real band ---
+	# back to the surface first (the sweep left the player 100 m up)
+	player.position = world.world_pos_of_flat(fx, flat0.y, fz)
+	player.velocity = Vector3.ZERO
+	for _h in range(20):
+		await get_tree().process_frame
+	var col_before_walk: int = world.col_atomic_lands
+	for wstep in 6:
+		var nx: float = fx + float(wstep + 1) * 18.0
+		player.position = world.world_pos_of_flat(nx, flat0.y, fz)
+		player.velocity = Vector3.ZERO
+		for _i in range(40):
+			await get_tree().process_frame
+	for _j in range(240):
+		await get_tree().process_frame  # let the streamed columns land whole
+	var col_after_walk: int = world.col_atomic_lands
+	res["walk"] = {
+		"col_atomic_before": col_before_walk, "col_atomic_after": col_after_walk,
+		"streamed_new": col_after_walk - col_before_walk,
+	}
+	# --- (3) the NO-PARTIAL-COLUMN census over resident real-band columns:
+	# a column-atomic column is either PENDING (0 stamped slabs) or COMPLETE
+	# (every slab 0..top stamped) — never half-built (the user's "tower full
+	# of holes"). A partial count is the regression this ticket kills. ---
+	var checked := 0
+	var complete := 0
+	var pending := 0
+	var partial := 0
+	for key in world.chunks:
+		var c = world.chunks[key]
+		if c == null or c.data.is_empty():
+			continue
+		var tier: int = world._lod_tier_of(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz)
+		if tier != 0:
+			continue  # the real band only (band A / far are separate lanes)
+		checked += 1
+		var top: int = mini(int(c.top) >> 4, int(c.data.size() - 1))
+		var stamped := 0
+		for si in range(top + 1):
+			if int(c.high_stamps.get(si, -1)) == int(c.data_gen):
+				stamped += 1
+		if stamped == 0:
+			pending += 1
+		elif stamped == top + 1:
+			complete += 1
+		else:
+			partial += 1
+	res["census"] = {"checked": checked, "complete": complete, "pending": pending, "partial": partial}
+	# --- (4) the landing-mode census ---
+	res["land"] = {
+		"col_atomic_lands": world.col_atomic_lands,
+		"hslab_scoped_real_lands": world.hslab_scoped_real_lands,
+		"col_atomic_ok": world.col_atomic_lands > 0 and world.hslab_scoped_real_lands == 0,
+	}
+	# --- (5) the FADE census — render-only (headless skips the fade) ---
+	if headless:
+		res["fade"] = {"mode": "headless_skipped", "started": world.fade_started_n,
+			"completed": world.fade_completed_n, "ok": world.fade_started_n == 0}
+	else:
+		# The fade RAN in the real renderer (started > 0) and NONE are stuck
+		# (completed == started). max_ramp_ms is REPORTED but not gated: under
+		# the slow llvmpipe proxy the completion is detected on a frame
+		# boundary (frames run seconds), so the wall start->completion time
+		# is frame-granular, not the 350 ms ramp (measured 12 s on a 102-fade
+		# R4 walk — the renderer, not the fade).
+		var fade_ok: bool = (world.fade_started_n > 0) \
+			and (world.fade_completed_n == world.fade_started_n)
+		res["fade"] = {"mode": "render", "started": world.fade_started_n,
+			"completed": world.fade_completed_n, "max_ramp_ms": world.fade_max_ramp_ms,
+			"col_fade_ms": world._col_fade_ms, "ok": fade_ok}
+	res["ok"] = res["sweep"]["free"] and res["census"]["partial"] == 0 \
+		and res["land"]["col_atomic_ok"] and res["fade"]["ok"]
 	Debug.result(res)
 	if not _batt:
 		get_tree().quit()
