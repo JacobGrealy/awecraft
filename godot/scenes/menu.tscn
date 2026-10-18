@@ -298,7 +298,14 @@ grow_horizontal = 2
 grow_vertical = 2
 color = Color(0, 0, 0, 0.72)
 
-[node name="Center" type="CenterContainer" parent="Layer/OptionsBox"]
+; AC-0448: this used to be a CenterContainer centering the TabContainer,
+; which grew with its tallest page and ran the options panel off the top
+; AND bottom of the window (rows below the fold unreachable - the AC-0448
+; defect). It is now a MarginContainer: _sync_options_frame (ui/menu.gd)
+; computes margins that bound the tab area to the window and keep the
+; panel centred, and the tab pages themselves scroll (the
+; _mk_scroll_page chain in ui/menu.gd). The margins are set at runtime.
+[node name="Center" type="MarginContainer" parent="Layer/OptionsBox"]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -308,9 +315,6 @@ mouse_filter = 2
 
 [node name="VBox" type="VBoxContainer" parent="Layer/OptionsBox/Center"]
 layout_mode = 2
-# AC-0260 fix: the page sits inside the options TabContainer (30px tab bar
-# on top) — 12px separation pushed the content past 720px tall and the
-# centered container clipped the tab bar off the top of the screen.
 theme_override_constants/separation = 6
 alignment = 1
 custom_minimum_size = Vector2(560, 0)

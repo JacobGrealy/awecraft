@@ -142,6 +142,12 @@ var midstart_val: Label
 # worker-thread caps; the per-frame instance cap row moves here from the
 # Settings page). No checkbox: it is a TabContainer page.
 var dev_page: VBoxContainer
+# AC-0448: the scrollable wrappers for each options tab page
+# (ScrollContainer -> CenterContainer -> the page VBox). The Center keeps
+# the AC-0257 centering; the Scroll makes a tall page reachable.
+var settings_scroll: ScrollContainer
+var dev_scroll: ScrollContainer
+var controls_scroll: ScrollContainer
 # AC-0260 fix: the perf knobs are SpinBoxes (typeable — the user wanted to
 # enter a number, not fight a slider; the HSlider rows also misbehaved in
 # the broken tab layout). (AC-0313: the tier-0 radius row is gone with the
@@ -687,17 +693,32 @@ func _ready() -> void:
 	opt_tabs.name = "OptTabs"
 	opt_tabs.add_theme_font_size_override("font_size", 15)
 	opt_center.add_child(opt_tabs)
-	opt_vbox.name = "Settings"
+	# AC-0448: every tab page is BOUNDED and SCROLLABLE. Chain per page:
+	# ScrollContainer (vertical auto) -> CenterContainer (vertical
+	# expand-fill) -> the page's VBox. The CenterContainer is the AC-0257
+	# fix — a bare ScrollContainer wrap broke the centering: with the
+	# Center, a short page stays centred exactly as before and a tall page
+	# scrolls instead of running off the window (the AC-0448 defect: the
+	# panel grew with its rows and the below-fold ones were unreachable —
+	# the AC-0260 note above is the same disease at 12px separation).
+	# The tab area itself is bounded by the OptionsBox/Center frame (a
+	# MarginContainer now — _sync_options_frame computes the margins), so
+	# the TabContainer can no longer grow past the window. The page keeps
+	# its name (the tab label); the list itself is renamed *List.
+	opt_vbox.name = "SettingsList"
 	# AC-0260 fix (the broken-tabs bug): opt_vbox is still seated in its
 	# tscn parent (opt_center) — add_child into the tab WITHOUT removing it
 	# first is a runtime error (logged, non-fatal) that silently left the
 	# Settings page out of the TabContainer. Remove from the old parent
 	# first, then reparent.
 	opt_center.remove_child(opt_vbox)
-	opt_tabs.add_child(opt_vbox)
+	settings_scroll = _mk_scroll_page(opt_tabs, "Settings")
+	settings_scroll.get_node("Center").add_child(opt_vbox)
 	dev_page = VBoxContainer.new()
-	dev_page.name = "Developer"
+	dev_page.name = "DevList"
 	dev_page.add_theme_constant_override("separation", 6)
+	dev_scroll = _mk_scroll_page(opt_tabs, "Developer")
+	dev_scroll.get_node("Center").add_child(dev_page)
 	opt_vbox.remove_child(chunk_row)
 	dev_page.add_child(chunk_row)
 	# AC-0313: the "Tier0Row" Developer spinbox is GONE with the tier-0 set
@@ -755,14 +776,49 @@ func _ready() -> void:
 	cruise_spin.value_changed.connect(_on_cruise_changed)
 	dof_far_spin.value_changed.connect(_on_dof_far_changed)
 	dof_amount_spin.value_changed.connect(_on_dof_amount_changed)
-	opt_tabs.add_child(dev_page)
+	# AC-0448: the user's restructure — the feature-flag and internal
+	# switches move under the Developer section; genuine player
+	# preferences stay on the Settings page. PLACEMENT ONLY: every setting
+	# keeps its key, default and env override (the harness arms drive them
+	# by name — the settings arm's AC-0448 placement block codifies the
+	# new seats). The row that moves is judged by the ticket's test: a
+	# row stays if a player could plausibly want to change it for their
+	# own comfort; it moves if its label names an internal mechanism or
+	# is a debug tool. Moved: the debug tools (stats/logging/noclip), the
+	# three dev overlays, the cloud-rework A/B flags (they name the
+	# implementation — "volumetric masses", "raymarched volume",
+	# "raymarch banding" — and OFF is the pre-rework bit-identical path;
+	# the weather flag a player chose, cloud_gate, stays), the
+	# altitude-only atmosphere gates (limb glow / sky thinning act only
+	# above the flight band) and the LOD tier-seam parity.
+	var dev_flags_label := Label.new()
+	dev_flags_label.name = "FeatureFlagsLabel"
+	dev_flags_label.text = "Feature flags (internal switches)"
+	dev_flags_label.add_theme_font_size_override("font_size", 13)
+	dev_flags_label.add_theme_color_override("font_color", SUB_C)
+	dev_page.add_child(dev_flags_label)
+	var ac0448_moved: Array = [
+		debug_check, debuglog_check,
+		overlay_band_check, overlay_light_check, overlay_collision_check,
+		noclip_check,
+		cloud_deck_check, cloud_vol_check, cloud_jit_check,
+		limb_gate_check, sky_alt_check,
+		far_seam_check,
+	]
+	for m in ac0448_moved:
+		# add_child does NOT reparent in Godot — remove from the Settings
+		# list first (the tscn-seat ChunkRow move above does the same).
+		var mm: Node = m
+		if mm.get_parent() != null:
+			mm.get_parent().remove_child(mm)
+		dev_page.add_child(mm)
 	# AC-0088: the "Controls" page - the AC-0260 tabbed-options
 	# precedent (code-built, like the Developer page). Every managed
 	# action gets a row: one rebind Button per input CLASS the action
 	# actually uses (key / mouse / pad - the stick motions are
 	# protected and never offered), plus a per-action Reset.
 	controls_page = VBoxContainer.new()
-	controls_page.name = "Controls"
+	controls_page.name = "ControlsList"
 	controls_page.add_theme_constant_override("separation", 5)
 	var ctl_all_reset := Button.new()
 	ctl_all_reset.name = "ControlsResetAll"
@@ -830,7 +886,13 @@ func _ready() -> void:
 	ainv.add_child(analog_invert_x_check)
 	ainv.add_child(ainv_reset)
 	controls_page.add_child(ainv)
-	opt_tabs.add_child(controls_page)
+	controls_scroll = _mk_scroll_page(opt_tabs, "Controls")
+	controls_scroll.get_node("Center").add_child(controls_page)
+	# AC-0448: bound the tab area to the window and keep the panel
+	# centred; recompute when the window resizes (resolution change,
+	# fullscreen toggle, manual resize).
+	_sync_options_frame()
+	get_tree().root.size_changed.connect(_sync_options_frame)
 	file_dialog = get_node("Layer/PackDialog")
 	slot_labels = []
 	slot_conts = []
@@ -1045,6 +1107,56 @@ func _on_pack_file_selected(path: String) -> void:
 	if Game.player != null:
 		Game.player.refresh_held()
 	st.text = "Texture pack applied: %d blocks, %d tiles, %d items" % [int(r.get("blocks", 0)), int(r.get("tiles", 0)), int(r.get("item_count", 0))]
+
+
+# AC-0448: one bounded, scrollable options tab page. Chain:
+# ScrollContainer (vertical auto, horizontal off) -> CenterContainer
+# (vertical expand-fill) -> the page's VBox (added by the caller).
+# The CenterContainer is the AC-0257 fix — a bare ScrollContainer broke
+# the centering: a short page stays centred exactly as before and a tall
+# page scrolls. The Center's MIN WIDTH is set by _sync_options_frame: a
+# ScrollContainer gives its child the child's MIN size on the non-scroll
+# axis (measured, AC-0448 layout probe), so without it the page's list
+# left-aligns in a wide tab area. Returns the ScrollContainer (it is the
+# TabContainer page and keeps the tab label name).
+func _mk_scroll_page(parent: Control, page_name: String) -> ScrollContainer:
+	var sc := ScrollContainer.new()
+	sc.name = page_name
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	var cc := CenterContainer.new()
+	cc.name = "Center"
+	cc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sc.add_child(cc)
+	parent.add_child(sc)
+	return sc
+
+
+# AC-0448: bound the options tab area to the window and keep the panel
+# centred. The OptionsBox/Center node is a MarginContainer (tscn); the
+# margins are computed here, not in the scene: 40 px top/bottom, and the
+# sides centre a panel of ~62% of the window width (capped 820 px, never
+# below the list's 560 px min). Re-run on window resize.
+func _sync_options_frame() -> void:
+	var center: Control = get_node_or_null("Layer/OptionsBox/Center") as Control
+	if center == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var panel_w := clampf(vp.x * 0.62, 560.0, 820.0)
+	var side := maxf((vp.x - panel_w) * 0.5, 16.0)
+	center.add_theme_constant_override("margin_left", int(side))
+	center.add_theme_constant_override("margin_right", int(side))
+	center.add_theme_constant_override("margin_top", 40)
+	center.add_theme_constant_override("margin_bottom", 40)
+	# the pages' CenterContainers take the frame's inner width (the
+	# ScrollContainer's non-scroll-axis min-size behaviour above).
+	var inner_w := int(vp.x - 2.0 * side)
+	for p in [settings_scroll, dev_scroll, controls_scroll]:
+		if p == null:
+			continue
+		var cc: Node = p.get_node_or_null("Center")
+		if cc != null and cc is Control:
+			(cc as Control).custom_minimum_size = Vector2(inner_w, 0)
 
 
 # AC-0257: one code-built slider row for the Developer submenu (the tscn

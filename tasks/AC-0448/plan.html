@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0448 plan</title></head>
+<body>
+<h1>AC-0448 — options menu: reachability + developer section</h1>
+
+<h2>Goal</h2>
+<ol>
+<li>Every option reachable at the user's resolution — demonstrated in a frame showing the
+bottom-most entry, with the scroll behaviour shown, not described.</li>
+<li>Feature-flag / internal switches move under the existing Developer tab; genuine player
+preferences stay on the Settings page. Placement only: every setting keeps its key, default,
+env override and the settings arm stays green with its row count explained.</li>
+</ol>
+
+<h2>Row census (code reading, pre-fix — confirmed by the render-run measurement)</h2>
+<p>OptionsBox is a full-rect dim; its <code>Center</code> is a <b>CenterContainer</b> holding one
+<code>TabContainer</code> (Settings / Developer / Controls, built in <code>menu.gd</code> _ready).
+The Settings page (the tscn VBox, renamed <code>Settings</code>) carries, in final order:</p>
+<table border="1" cellpadding="3">
+<tr><th>rows</th><th>children</th></tr>
+<tr><td>14 (tscn-origin)</td><td>Title, RenderRow, SimRow, VolumeRow, FogStartRow, MidStartRow,
+LowStartRow, ResRow, FullscreenCheck, GameplayLabel, HungerCheck, PackButton, OptStatus,
+BackButton (ChunkRow is reparented to Developer at boot)</td></tr>
+<tr><td>27 (code-created checkboxes)</td><td>DebugStatsCheck, DebugLogCheck, OverlayBandCheck,
+OverlayLightCheck, OverlayCollisionCheck, FogEnabledCheck, AmbientCheck, RampCheck, ModernCheck,
+CloudDeckCheck, LimbGateCheck, SkyAltCheck, CloudVolCheck, VmOccCheck, NoclipCheck,
+SatPreloadCheck, ReliefCheck, AmbientSkyCheck, CloudGateCheck, NoSkyFloorCheck, MoonlightCheck,
+StatCapCheck, InvDimCheck, AimWireCheck, CloudJitCheck, FarSeamCheck, NightLiftCheck</td></tr>
+</table>
+<p>≈ 41 children × ~26-30 px + 6 px separation ≈ 1,300-1,450 px of content. The Developer page
+≈ 11 rows (~350 px), the Controls page ≈ 31 children (~900 px). <b>None of the three pages is
+bounded to the viewport</b>.</p>
+
+<h2>What the panel is actually doing (the confirmed defect shape)</h2>
+<ul>
+<li>TabContainer's minimum height = tallest page minimum (the Settings page, &gt; viewport at
+1280×720 and 1920×1080). The full-rect CenterContainer then <b>centers that oversized
+TabContainer</b>, so the panel's top (tab bar) and bottom (last rows, PackButton, BackButton)
+sit <i>outside the window</i>. Nothing clips (no ScrollContainer anywhere), nothing scrolls —
+the off-screen rows are unclickable. The tscn comment at OptionsBox/Center/VBox already records
+the same disease at AC-0260 (12 px separation clipped the tab bar off the top; mitigation was
+only the 12→6 separation cut).</li>
+<li>Measured exactly by the extended menu-shot hook (<code>pages</code> RESULT block:
+rows / content height / page rect / scroll range) in a Forward+ render at 1280,720 before the
+fix, and again after.</li>
+</ul>
+
+<h2>Mechanism chosen — why</h2>
+<ul>
+<li><b>Scroll per tab page</b>: each of the three tab pages becomes
+<code>ScrollContainer</code> (vertical auto-scroll) → <code>CenterContainer</code> (expand-fill) →
+the existing VBox. The CenterContainer restores the AC-0257 casualty (a plain ScrollContainer
+broke the centering): short content stays centred exactly as today, tall content scrolls with
+the engine's own scrollbar — the existing Godot visual language, no new chrome, no paging
+state machine, no fixed-height panel magic. Gamepad/keyboard focus scroll natively.</li>
+<li><b>The tab area is bounded</b>: <code>OptionsBox/Center</code> becomes a MarginContainer
+(margins computed at boot + on window resize: 40 px top/bottom, sides centring a ~720 px panel)
+so the TabContainer can never grow past the window again — the container that was missing,
+added at the level where the overflow is real. Without it the centered tab bar would still clip.</li>
+<li><b>The restructure (job 2) reduces the surface</b>: 12 internal switches move to the
+Developer page (below), so the Settings page stops reading as a development tool; scrolling
+remains as the standing container guarantee for whatever rows future tickets add (growth
+without a container was the root cause — the container is the fix, the split is the polish).</li>
+</ul>
+
+<h2>The split (placement only — keys, defaults, env overrides untouched)</h2>
+<table border="1" cellpadding="3">
+<tr><th>→ Developer (12)</th><th>reason</th></tr>
+<tr><td>debug_stats, debug_logging</td><td>debug tools</td></tr>
+<tr><td>overlay_band, overlay_light, overlay_collision</td><td>developer overlays</td></tr>
+<tr><td>noclip</td><td>debug tool (a debug tool must not be left on by accident)</td></tr>
+<tr><td>cloud_deck, cloud_volume, cloud_jitter</td><td>names the cloud <i>implementation</i>
+("volumetric masses", "raymarched volume", "raymarch banding") — the A/B feature flags of the
+cloud rework; OFF is the pre-rework bit-identical path. The weather-look flag a player chose
+(cloud_gate) stays.</td></tr>
+<tr><td>limb_space, sky_altitude</td><td>atmospheric rim / sky-model gates that act only at
+altitude; orbit-instrument switches, not ground preferences</td></tr>
+<tr><td>far_seam</td><td>LOD tier-seam parity — pure internal (the tier seam the player never
+sees)</td></tr>
+</table>
+<table border="1" cellpadding="3">
+<tr><th>→ stay on Settings (15 switches + the sliders)</th><th>reason</th></tr>
+<tr><td>hunger, volume, resolution, fullscreen, render/sim distance, fog_enabled + fog_start,
+medium/low LOD start</td><td>classic player settings</td></tr>
+<tr><td>smooth_ramps, modern_light, cloud_gate, no_sky_floor, moonlight, night_lift,
+ambient_sky, viewmodel_occlude, sat_preload, relief_shading, stat_captions, inventory_dim,
+aim_wire, ambient_enabled</td><td>look/quality/readability a player could plausibly want to
+change for their own comfort — several at the user's explicit order; ambiguous ones judged on
+that test and recorded in the results page</td></tr>
+</table>
+
+<h2>Files to touch</h2>
+<ul>
+<li><code>godot/scenes/menu.tscn</code> — OptionsBox/Center: CenterContainer → MarginContainer
+(same node name; the tscn rows otherwise untouched).</li>
+<li><code>godot/ui/menu.gd</code> — wrap the three tab pages in the ScrollContainer pattern
+(pages keep their names Settings/Developer/Controls; inner VBoxes renamed *List), reparent the
+12 moved rows to the Developer page, compute/recompute the frame margins (boot + resize).</li>
+<li><code>godot/scenes/main.gd</code> — the existing <code>AWECRAFT_MENU_SHOT</code> hook gains
+two env-gated additions (unset = byte-identical old behaviour, the AWECRAFT_CAM_OFF pattern):
+<code>AWECRAFT_MENU_SCROLL=bottom|&lt;px&gt;</code> (scroll the active page before the snap —
+the reachability instrument) and a <code>pages</code> census block in its RESULT (rows, content
+height, page rect, scroll range — the measurement this ticket must show). <b>Note:</b> this file
+is dirty with another session's in-flight work (AC-0038 particles, AC-0088 controls dispatch) —
+inspected before the edit, reported for the coordinator.</li>
+<li><code>godot/scenes/harness.gd</code> — <code>_settings_test</code>: the three row-presence
+lookups follow the rows to their new seats (Settings/Developer/Controls pages now nest
+<code>Center/*List</code>), the noclip row's lookup moves to the Developer list, plus the
+AC-0448 placement assertions (each moved row in Developer and NOT in Settings; each kept row
+in Settings) and a reported row-count block (settings_rows / dev_rows / controls_rows). The
+21-Controls-rows assertion is unchanged; the value/clamp/round-trip tests are untouched.
+Disclosed: this is the instrument following the rows, not being judged by its own edit.</li>
+</ul>
+
+<h2>Verification (light gates only, then exit)</h2>
+<ol>
+<li>G0 headless — gate_census zero SCRIPT ERROR + zero SHADER ERROR <b>and</b> the process exit
+status checked (the stochastic signal-11 class).</li>
+<li>SMOKE battery <code>player;interact;light;fluids;genhash</code> — genhash 25/25 compared
+byte-identical against <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>.</li>
+<li>Settings arm standalone — green, row count explained.</li>
+<li>Held-item probe (<code>AWECRAFT_LOGIC=held</code>) — green.</li>
+<li>Renders (Forward+ via lavapipe, <code>AWECRAFT_SIZE=1280,720</code> — the shipped default
+resolution and the smallest of RES_MODES, i.e. the worst case for the overflow; a 1920,1080
+after-shot checks the fix at a larger size): BEFORE (pre-fix overflow, measured), AFTER
+Settings-top, AFTER Settings-bottom (<code>MENU_SCROLL=bottom</code> — the bottom-most entry
+reached), AFTER Developer page (the moved flags).</li>
+</ol>
+
+<h2>Not doing</h2>
+<ul>
+<li>No heavy gates (coordinator's), no Windows build, no TASKS.yaml/status change, no
+commit/push (closeout owns those).</li>
+<li>No defaults changed (AC-0435 sweep governs: no third flip), no key renamed, no env override
+touched, no Controls-tab rework, no new arm (the menu-shot hook is the standing render hook;
+it gains env-gated fields only).</li>
+</ul>
+</body></html>

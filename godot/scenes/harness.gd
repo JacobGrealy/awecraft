@@ -3693,7 +3693,11 @@ func _settings_test() -> void:
 	var ymenu = load("res://scenes/menu.tscn").instantiate()
 	add_child(ymenu)
 	ymenu._sync_controls()  # the state the game guarantees whenever the panel opens
-	var ydev = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Developer")
+	# AC-0448: the tab pages are now scrollable wrappers — each page is a
+	# ScrollContainer named like the tab, the list VBox is nested under
+	# Center/*List. The row lookups follow the rows to their new seats
+	# (PLACEMENT only — the rows themselves are unchanged).
+	var ydev = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Developer/Center/DevList")
 	var yrow = ydev.get_node_or_null("YFloorRow") if ydev != null else null
 	var ycheck = ydev.get_node_or_null("YFloorCheck") if ydev != null else null
 	var ysp = yrow.get_child(1) if yrow != null and yrow.get_child_count() == 3 else null
@@ -3714,7 +3718,7 @@ func _settings_test() -> void:
 	# default label, the _sync_controls refresh onto a custom binding,
 	# and the full row count (every managed action gets a row).
 	var ctabs = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs")
-	var cpage = ctabs.get_node_or_null("Controls") if ctabs != null else null
+	var cpage = ctabs.get_node_or_null("Controls/Center/ControlsList") if ctabs != null else null
 	var crow = cpage.get_node_or_null("CtlRow_jump") if cpage != null else null
 	var cbtn = crow.get_node_or_null("Rebind_key") if crow != null else null
 	var ctl_row_present := cpage != null and crow != null and cbtn != null and cbtn is Button \
@@ -3796,7 +3800,7 @@ func _settings_test() -> void:
 	cfr.save(Settings.PATH)
 	Settings.load_settings()
 	var rp_corrupt_ok := bool(Settings.values["smooth_ramps"]) == false
-	var yset2 = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Settings")
+	var yset2 = ymenu.get_node_or_null("Layer/OptionsBox/Center/OptTabs/Settings/Center/SettingsList")
 	var rchk = yset2.get_node_or_null("RampCheck") if yset2 != null else null
 	ymenu._sync_controls()
 	var rp_row_present := rchk != null and rchk is CheckBox and bool(rchk.button_pressed) == false
@@ -3825,7 +3829,9 @@ func _settings_test() -> void:
 	cfn.save(Settings.PATH)
 	Settings.load_settings()
 	var nc_corrupt_ok := bool(Settings.values["noclip"]) == false
-	var nchk = yset2.get_node_or_null("NoclipCheck") if yset2 != null else null
+	# AC-0448: the noclip row moved to the Developer page (a debug tool —
+	# the row lookup follows it; the value tests above are unchanged).
+	var nchk = ydev.get_node_or_null("NoclipCheck") if ydev != null else null
 	ymenu._sync_controls()
 	var nc_row_present := nchk != null and nchk is CheckBox and bool(nchk.button_pressed) == false
 	Settings.set_value("noclip", true)
@@ -3833,6 +3839,50 @@ func _settings_test() -> void:
 	var nc_row_sync_ok := nc_row_present and bool(nchk.button_pressed) == true
 	# back to the shipped default (OFF).
 	Settings.set_value("noclip", false)
+	# AC-0448: the options restructure — PLACEMENT, not identity. The
+	# feature-flag / internal switches moved under the Developer page;
+	# the genuine player preferences stayed on the Settings page. The
+	# identity is untouched (same keys, defaults and env overrides — the
+	# value tests above and the boot preloads prove that); what this
+	# block asserts is the SEAT: each moved row exists on the Developer
+	# page and NOT on the Settings page, each kept row exists on the
+	# Settings page and NOT on the Developer page. The row COUNTS are
+	# reported (menu.rows) so a future move is explained, not silent —
+	# the Controls rows (ctl_rows_count_ok, 21) are unchanged by this.
+	var ac0448_moved: Dictionary = {
+		"debug_stats": "DebugStatsCheck", "debug_logging": "DebugLogCheck",
+		"overlay_band": "OverlayBandCheck", "overlay_light": "OverlayLightCheck",
+		"overlay_collision": "OverlayCollisionCheck", "noclip": "NoclipCheck",
+		"cloud_deck": "CloudDeckCheck", "cloud_volume": "CloudVolCheck",
+		"cloud_jitter": "CloudJitCheck", "limb_space": "LimbGateCheck",
+		"sky_altitude": "SkyAltCheck", "far_seam": "FarSeamCheck",
+	}
+	var ac0448_stays: Dictionary = {
+		"fullscreen": "FullscreenCheck", "hunger_enabled": "HungerCheck",
+		"fog_enabled": "FogEnabledCheck", "ambient_enabled": "AmbientCheck",
+		"smooth_ramps": "RampCheck", "modern_light": "ModernCheck",
+		"cloud_gate": "CloudGateCheck", "no_sky_floor": "NoSkyFloorCheck",
+		"moonlight": "MoonlightCheck", "night_lift": "NightLiftCheck",
+		"ambient_sky": "AmbientSkyCheck", "viewmodel_occlude": "VmOccCheck",
+		"sat_preload": "SatPreloadCheck", "relief_shading": "ReliefCheck",
+		"stat_captions": "StatCapCheck", "inventory_dim": "InvDimCheck",
+		"aim_wire": "AimWireCheck",
+	}
+	var ac0448_moved_ok := true
+	for mk in ac0448_moved:
+		var mrow: String = String(ac0448_moved[mk])
+		if ydev == null or ydev.get_node_or_null(mrow) == null or yset2.get_node_or_null(mrow) != null:
+			ac0448_moved_ok = false
+	var ac0448_stays_ok := true
+	for sk in ac0448_stays:
+		var srow: String = String(ac0448_stays[sk])
+		if yset2 == null or yset2.get_node_or_null(srow) == null or (ydev != null and ydev.get_node_or_null(srow) != null):
+			ac0448_stays_ok = false
+	var ac0448_rows := {"settings": -1, "developer": -1, "controls": n_rows}
+	if yset2 != null:
+		ac0448_rows["settings"] = yset2.get_child_count()
+	if ydev != null:
+		ac0448_rows["developer"] = ydev.get_child_count()
 	ymenu.queue_free()
 	Debug.result({
 		"defaults": {"render": 50, "sim": 4, "ok": defaults_ok},  # AC-0152 default is 4 (the 1 literal was pre-AC-0152)
@@ -3883,7 +3933,12 @@ func _settings_test() -> void:
 		# AC-0395: the noclip toggle (default OFF, clamp, round-trip,
 		# corrupt-fails-false, the Settings-page row syncs).
 		"noclip": {"default_off": nc_default_off, "saved": nc_saved_ok, "reload": nc_reload_ok, "corrupt_false": nc_corrupt_ok, "row_present": nc_row_present, "row_sync": nc_row_sync_ok, "ok": nc_default_off and nc_saved_ok and nc_reload_ok and nc_corrupt_ok and nc_row_present and nc_row_sync_ok},
-		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok and rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok and nc_default_off and nc_saved_ok and nc_reload_ok and nc_corrupt_ok and nc_row_present and nc_row_sync_ok,
+		# AC-0448: the options restructure — the placement assertions and
+		# the reported row counts (the block above the Debug.result owns
+		# the reasoning; the rows dict is the explained count).
+		"menu": {"moved_to_developer": ac0448_moved_ok, "player_kept": ac0448_stays_ok,
+			"rows": ac0448_rows, "ok": ac0448_moved_ok and ac0448_stays_ok},
+		"ok": defaults_ok and min_ok and max_ok and sim_set_ok and sim_lower_ok and sim_raise_ok and ms_def_ok and ms_clamp_lo_ok and ms_clamp_hi_ok and ms_set_ok and ms_redef_clamped_ok and load_clamp_ok and apply_world_ok and apply_dist_ok and sim_floor_ok and volume_ok and hsaved == 0 and hunger_off_ok and hunger_on_ok and hunger_default_ok and chunks_default_ok and chunks_saved_ok and chunks_hi_ok and chunks_lo_ok and fog_default_ok and fog_saved_ok and fog_lo_ok and amb_default_off and amb_saved_on and amb_back_off and yf_default_ok and yf_clamp_hi_ok and yf_clamp_lo_ok and yf_toggle_off_ok and yf_toggle_on_ok and yf_apply_ok and yrow_present and yrow_sync_ok and yrow_dim_ok and ctl_default_empty and ctl_saved_ok and ctl_reload_ok and ctl_map_ok and ctl_corrupt_ok and ctl_row_present and ctl_row_sync_ok and ctl_rows_count_ok and an_def_ok and an_clamp_hi_ok and an_clamp_lo_ok and an_reload_ok and an_rows_present and an_rows_sync_ok and rp_default_off and rp_saved_ok and rp_reload_ok and rp_corrupt_ok and rp_row_present and rp_row_sync_ok and nc_default_off and nc_saved_ok and nc_reload_ok and nc_corrupt_ok and nc_row_present and nc_row_sync_ok and ac0448_moved_ok and ac0448_stays_ok,
 	})
 
 

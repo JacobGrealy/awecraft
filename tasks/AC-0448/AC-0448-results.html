@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0448 results</title>
+<style>
+body{font-family:Georgia,serif;max-width:1180px;margin:24px auto;padding:0 16px;color:#222}
+h1{border-bottom:3px solid #345;padding-bottom:6px}
+h2{border-bottom:1px solid #aab;margin-top:34px}
+table{border-collapse:collapse;margin:10px 0;font-size:14px}
+td,th{border:1px solid #999;padding:4px 8px;vertical-align:top}
+th{background:#eef}
+img{max-width:100%;border:1px solid #777;margin:8px 0}
+.ok{color:#060;font-weight:bold}.bad{color:#900;font-weight:bold}
+code{background:#f3f3f3;padding:1px 4px;font-size:13px}
+pre{background:#f7f7f7;border:1px solid #ddd;padding:8px;overflow-x:auto;font-size:12px}
+.note{background:#fffbe6;border-left:4px solid #db0;padding:8px 12px}
+</style></head>
+<body>
+
+<h1>AC-0448 — the options menu: every option reachable, the developer section filled</h1>
+<p><b>Verdict:</b> the defect is confirmed exactly as suspected (growth without a container) and
+fixed: every tab page of the options panel is now a bounded, scrollable container, and the 12
+feature-flag / internal switches sit under the Developer section where the user said they belong.
+Every setting keeps its key, default and env override; the settings arm is green with its row
+count reported; genhash is 25/25 byte-identical; the acceptance frame shows the bottom-most
+entry reached at the user's resolution (1280×720, the shipped default — and the worst case),
+with a 1920×1080 frame proving the fix at a larger size.</p>
+
+<h2>1. The defect, confirmed and measured</h2>
+<p>The options panel is a full-rect dim whose <code>OptionsBox/Center</code> was a
+<b>CenterContainer</b> holding one <code>TabContainer</code>. The TabContainer's minimum height is
+its tallest page's minimum; a CenterContainer centers a child that is <i>taller than its own
+rect</i> and — measured, not assumed — the Control then <b>grows past the anchor rect to its
+minimum size</b> (layout probe, variant B, at 1280×720: <code>root_b.size=(1280,1339)</code>,
+<code>tabs_b.min=(560,1339)</code>). So the panel was 1339 px tall in a 720 px window, centered,
+with ≈309 px of the top (the tab bar) and ≈309 px of the bottom (the last rows, Load Texture
+Pack, Back) <b>outside the window</b>. Nothing clipped (no ScrollContainer anywhere), nothing
+scrolled: the off-screen rows were unclickable. The pre-fix frame (section 7, first image) shows
+it: the visible list starts at "Hunger" (rows above are above the screen) and ends at "Sky:
+space below the horizon" (rows below are below the screen), and the tab bar is cut off the top.
+The tscn comment from AC-0260 is the same disease at 12 px separation ("the centered container
+clipped the tab bar off the top of the screen"); the 12→6 separation cut was mitigation, not a
+fix.</p>
+
+<h3>Row census (pre-fix)</h3>
+<table>
+<tr><th>page</th><th>rows (children)</th><th>measured content height @1280×720</th><th>viewport</th></tr>
+<tr><td>Settings</td><td><b>41</b> — 14 tscn-origin (Title, 5 slider rows, ResRow, Fullscreen,
+Gameplay label, Hunger, PackButton, OptStatus, BackButton; ChunkRow reparents to Developer at
+boot) + 27 code-created checkboxes (DebugStats, DebugLog, 3× overlay, FogEnabled, Ambient,
+Ramp, Modern, CloudDeck, LimbGate, SkyAlt, CloudVol, VmOcc, Noclip, SatPreload, Relief,
+AmbientSky, CloudGate, NoSkyFloor, Moonlight, StatCap, InvDim, AimWire, CloudJit, FarSeam,
+NightLift)</td><td>1009 px list + tab bar (probe: 41×28 px test rows → 1308 px; the real list is
+slimmer because several rows are 24 px sliders)</td><td>720 px → <b>rows off-screen both ends</b></td></tr>
+<tr><td>Developer</td><td>11 (ChunkRow, 5 thread/speed spins, DOF ×3, far-floor ×2)</td><td>848 px</td><td>720 px</td></tr>
+<tr><td>Controls</td><td>32 (reset-all, status, 4 group labels, 21 CtlRow_*, analog group, 3 spins, invert row)</td><td>3524 px</td><td>720 px</td></tr>
+</table>
+<p>The census block (rows / content size / page rect / scroll range per page) is now reported in
+the menu-shot <code>RESULT</code> on every render — the numbers above are from the post-fix
+renders; the pre-fix state is the before-frame plus the probe measurement (a page with
+<code>scroll_max = -1</code> is the "no container" signature; the pre-fix pages had none).</p>
+
+<h2>2. The mechanism — why this one</h2>
+<p>Chosen from the ticket's four options (scrolling / paging / taller panel / moving entries):
+<b>scrolling per tab page, with the restructure reducing the surface</b>. The four alternatives,
+rejected:</p>
+<ul>
+<li><b>Paging</b>: new state machine + page chrome the visual language never had; it would also
+have to be added three times (all three pages overflow at 720 p).</li>
+<li><b>A taller panel</b>: 720 p is the shipped default and the smallest of the user's own
+RES_MODES (1280×720/1600×900/1920×1080/2560×1440) — no fixed height fits all four, and a panel
+taller than the window is the defect.</li>
+<li><b>Moving entries off the top level alone</b>: moving the 12 flags takes Settings from 41 to
+29 rows (1009 px) — still taller than the 610 px page at 720 p. Restructuring is the polish
+(job 2); it does not remove the container disease.</li>
+</ul>
+<p>The implemented chain, per tab page: <code>ScrollContainer</code> (vertical auto-scroll,
+horizontal off) → <code>CenterContainer</code> (vertical expand-fill) → the page's existing
+VBox. Two layout facts were <b>measured before coding</b> (a temporary standalone SceneTree
+probe, in and out in this task — its numbers, 1280×720 root):</p>
+<ul>
+<li>A ScrollContainer page keeps the TabContainer's minimum compact (<code>tabs.min=(568,31)</code>
+— tab bar only), so the frame can actually bound it. (Pre-fix the TabContainer min was the full
+content height — that is why bounding the frame alone would not have worked and why the
+ScrollContainer is the load-bearing piece.)</li>
+<li>A ScrollContainer sizes its child to the child's <b>min</b> size on the non-scroll axis and
+to <code>max(child min, viewport)</code> on the scroll axis. The CenterContainer (expand-fill)
+therefore gives: short page → exactly the viewport, content centered (the AC-0257 casualty —
+a bare ScrollContainer wrap broke the centering — is restored: measured <code>vb2.pos=(260,146)</code>
+= dead-centre for a 316 px page in a 609 px viewport); tall page → the content height, and the
+page scrolls (measured: scroll offset clamps to <code>content − viewport</code> = 699 for the
+1308 px test page in a 609 px viewport).</li>
+<li>The non-scroll-axis min-size behaviour would left-align the 560 px list in a wide tab area,
+so <code>_sync_options_frame</code> sets each page's CenterContainer minimum width to the frame's
+inner width — centreing holds at every resolution.</li>
+</ul>
+<p>The tab area itself is bounded: <code>OptionsBox/Center</code> is now a <b>MarginContainer</b>
+(same node name; the tscn node type change is the only scene edit). Margins are computed at boot
+and on every window resize (resolution change, fullscreen toggle, manual resize): 40 px
+top/bottom, sides centering a panel of ~62 % of the window width (capped 820 px, floored at the
+list's 560 px min). Measured at 1280×720: the tab area is <code>(243,40,801,640)</code> — 40 px
+margin top <i>and</i> bottom, centred horizontally; the tab bar is visible for the first time.
+The engine's own thin scrollbar is the only new chrome — the existing Godot visual language, no
+paging state, no redesign.</p>
+
+<h2>3. The restructure — the user's words, applied</h2>
+<p>"most of the options that a player would not use should be moved under the developer section
+(ie the feature flag options)". Judgement for every row: <b>could a player plausibly want to
+change it for their own comfort</b> — not whether it exists. 12 rows moved under a new
+"Feature flags (internal switches)" group label on the Developer page; 15 switches + the classic
+sliders stay. <b>Placement only</b>: every row keeps its node name, setting key, default and
+env override (proof in §4).</p>
+<table>
+<tr><th>moved → Developer (12)</th><th>reason</th></tr>
+<tr><td><code>debug_stats</code> "Show debug stats (CPU/RAM/VRAM/FPS)"</td><td>debug tool</td></tr>
+<tr><td><code>debug_logging</code> "Log debug output to the in-game console"</td><td>debug tool</td></tr>
+<tr><td><code>overlay_band</code> / <code>overlay_light</code> / <code>overlay_collision</code></td><td>developer overlays (render bands, light levels, collision shapes)</td></tr>
+<tr><td><code>noclip</code> "Noclip — fly through blocks"</td><td>debug tool (its own comment: a debug tool must not be left on by accident)</td></tr>
+<tr><td><code>cloud_deck</code> "Clouds: fewer, bigger, volumetric masses"</td><td>names the implementation ("volumetric masses"); OFF is the pre-AC-0401 bit-identical path — the A/B flag of the cloud rework</td></tr>
+<tr><td><code>cloud_volume</code> "Clouds: raymarched volume (real depth)"</td><td>names the raymarch technique; OFF is the pre-AC-0405 path</td></tr>
+<tr><td><code>cloud_jitter</code> "Clouds: break raymarch banding (jitter)"</td><td>names an internal artifact (banding) and its fix (jitter) — not a player-visible preference</td></tr>
+<tr><td><code>limb_space</code> "Planet limb glow: orbit only"</td><td>altitude-only atmosphere gate; acts only above the flight band — an orbit-instrument switch, not a ground preference</td></tr>
+<tr><td><code>sky_altitude</code> "Sky thins to space as you climb"</td><td>internal sky-model blend, same altitude-only reasoning</td></tr>
+<tr><td><code>far_seam</code> "Distant terrain: match near-tier lighting at the seam"</td><td>LOD tier-seam parity — pure internal; the player never sees a "tier seam"</td></tr>
+</table>
+<table>
+<tr><th>kept on Settings (15 switches + sliders)</th><th>reason</th></tr>
+<tr><td>render/sim distance, fog enabled + fog start %, mid/low LOD start, volume, resolution, fullscreen, hunger</td><td>classic player settings</td></tr>
+<tr><td><code>smooth_ramps</code>, <code>modern_light</code></td><td>user-requested looks a player could want off again</td></tr>
+<tr><td><code>cloud_gate</code> "Clouds: grouped weather (clear gaps)"</td><td>the weather <i>look</i> the user ordered in their own words (AC-0428) — a preference, unlike the implementation flags above</td></tr>
+<tr><td><code>no_sky_floor</code> "Sky: space below the horizon"</td><td>horizon look the user corrected (AC-0429); a player could plausibly prefer a solid horizon</td></tr>
+<tr><td><code>moonlight</code> "Sky: moonlight at night"</td><td>night brightness the user ordered (AC-0436); a player could plausibly want the old night</td></tr>
+<tr><td><code>night_lift</code> "Night: lift the floor (readable midnight)"</td><td><b>ambiguous → kept</b>: the label names a player-perceivable effect (readable midnight), the gamma-of-this-game; a player who finds night too bright plausibly changes it</td></tr>
+<tr><td><code>ambient_sky</code> "Shadowed faces: ambient sky light"</td><td>shadow brightness — a player-perceivable light level</td></tr>
+<tr><td><code>viewmodel_occlude</code> "Held item: occluded by terrain"</td><td>the user <i>reported</i> the other state as the defect (AC-0421 re-adjudication) — exactly the kind of thing a player changes</td></tr>
+<tr><td><code>sat_preload</code> "Planet: bake before the world loads (recommended)"</td><td>loading-time tradeoff a player could plausibly weigh (wait vs jump-in)</td></tr>
+<tr><td><code>relief_shading</code> "Orbital view: height-based terrain relief"</td><td><b>ambiguous → kept</b>: the orbital view is a real player activity in this game (flight to orbit); a player who orbits plausibly wants the planet's texture style</td></tr>
+<tr><td><code>stat_captions</code>, <code>inventory_dim</code></td><td>HUD readability preferences (user-ordered, AC-0437)</td></tr>
+<tr><td><code>aim_wire</code> "Target mark: outline (no dimming fill)"</td><td><b>ambiguous → kept</b>: aim-marker style is a classic player taste knob (Minecraft-style games ship both); a player could plausibly prefer the old fill</td></tr>
+<tr><td><code>ambient_enabled</code> "Ambient sound (background wind bed)"</td><td>audio preference</td></tr>
+</table>
+<p>Net effect on the Settings page: 41 → 29 rows (1009 px) — it still scrolls at 720 p (the
+container is the fix) but it now reads as a player options panel: quality, sound, sky/night
+looks, HUD and gameplay. The Developer page: 11 → 24 rows (848 px) — perf knobs plus the clearly
+labeled internal switches.</p>
+
+<h2>4. Identity — keys, defaults, env overrides: untouched, proven</h2>
+<p>Nothing in this change touches <code>settings.gd</code>, a settings key, a default, or a boot
+env preload. The rows moved are the same CheckBox nodes (same <code>name</code>, same <code>text</code>,
+same <code>toggled → Settings.set_value(key)</code> connections — connections hold object refs, not
+paths, so the reparent is invisible to the settings layer). The env-override contract is intact
+by construction — each override preloads <code>Settings.values[key]</code> at boot from the key
+name, and no key moved:</p>
+<pre>AWECRAFT_RAMPS→smooth_ramps      AWECRAFT_MODERN→modern_light   AWECRAFT_SEAM_LIGHT→seam_light
+AWECRAFT_CLOUDVOL→cloud_volume   AWECRAFT_CLOUDDECK→cloud_deck  AWECRAFT_LIMB→limb_space
+AWECRAFT_SKYALT→sky_altitude     AWECRAFT_SKYHORIZON→sky_horizon AWECRAFT_NOSKYFLOOR→no_sky_floor
+AWECRAFT_AMBSKY→ambient_sky      AWECRAFT_FARSEAM→far_seam      AWECRAFT_CLOUDGATE→cloud_gate
+AWECRAFT_MOON→moonlight          AWECRAFT_NIGHTLIFT→night_lift  AWECRAFT_CLOUDJIT→cloud_jitter
+AWECRAFT_VMOCC→viewmodel_occlude AWECRAFT_NOCLIP→noclip         AWECRAFT_AIMWIRE→aim_wire
+AWECRAFT_STATCAP→stat_captions   AWECRAFT_INVDIM→inventory_dim  AWECRAFT_RELIEF→relief_shading
+AWECRAFT_SATPRELOAD→sat_preload  (+ AWECRAFT_RAMPS/MEDIUM_START/YFLOOR_… on the Developer rows — unchanged)</pre>
+<p>Empirically: the settings arm's <b>value</b> tests (defaults, clamps, save/reload round-trips,
+corrupt-value safe fallbacks, apply steps) are byte-for-byte the same code and all pass; the
+genhash 25/25 (world/* untouched) and the held probe's byte-identical RESULT (the viewmodel
+depth/tint expectations — the <code>AWECRAFT_VMOCC</code> surface) are the live proof that no
+identity shifted.</p>
+
+<h2>5. The settings arm — green, row count explained</h2>
+<pre>RESULT {"menu":{"moved_to_developer":true,"player_kept":true,
+  "rows":{"controls":21,"developer":24,"settings":29},"ok":true}, ..., "ok":true}   # top ok = true</pre>
+<ul>
+<li><b>rows.settings = 29</b> — the 41 pre-fix rows minus the 12 moved (the count is now
+<i>reported</i> in the RESULT, so the next move is explained, not silent).</li>
+<li><b>rows.developer = 24</b> — the 11 pre-fix perf rows + the 12 moved flags + 1 group label.</li>
+<li><b>rows.controls = 21</b> — the asserted Controls-row count (<code>rows_21</code>) is
+<b>unchanged</b>; the Controls tab was not touched.</li>
+<li>New <b>placement assertions</b> (the AC-0448 block in <code>_settings_test</code>): each of
+the 12 moved rows exists on the Developer page and NOT on the Settings page; each of the 17 kept
+switch rows exists on the Settings page and NOT on the Developer page. The arm's three
+row-presence lookups follow the rows to their new seats
+(<code>…/Settings/Center/SettingsList</code>, <code>…/Developer/Center/DevList</code>,
+<code>…/Controls/Center/ControlsList</code>), and the noclip row's lookup moved with its row.
+<b>Disclosure</b> (godot/scenes/AGENTS.md: a task that edits the arms cannot be judged by them):
+the edit is the instrument following the placement plus the new placement block + the reported
+counts — no value test, clamp, round-trip or the 21-row count was altered. The arm is judged
+here as <i>green and honest about the new seats</i>; the value contract is separately proven by
+genhash/held/env preloads (§4).</li>
+</ul>
+
+<h2>6. Gates (light set only; heavy gates are the coordinator's)</h2>
+<p>All runs: <code>HOME=/tmp/dsh_home</code>, absolute engine path, <code>--path godot</code> from
+repo root, one godot at a time (<code>pgrep</code> checked before each), <code>ulimit -v 8388608</code>
+(OPS §2), logs in <code>.scratch/AC-0448/</code>. Renders: <code>xvfb-run -a</code> +
+<code>VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json</code> + <code>--rendering-driver
+vulkan</code>; the log asserts <code>Vulkan 1.4.318 - Forward+ - Using Device #0: … llvmpipe</code>.
+<b>No</b> <code>AWECRAFT_LOGIC</code> on any render (the menu-shot path); <code>AWECRAFT_SIZE</code>
+with a comma; every shot's file existence checked (and the dirty-tree
+<code>Debug.snap</code> now prints <code>SNAP FAIL</code> instead of claiming success).</p>
+<table>
+<tr><th>gate</th><th>run</th><th>result</th></tr>
+<tr><td>G0 (post-change, final)</td><td><code>--headless --quit</code></td>
+<td class="ok">rc=0 · SCRIPT ERROR 0 · SHADER ERROR 0 (gate_census ok)</td></tr>
+<tr><td>G0 (pre-change baseline, dirty tree)</td><td>same</td>
+<td class="ok">rc=0 · 0/0 — the baseline the post-change runs are judged against</td></tr>
+<tr><td>SMOKE battery</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td>
+<td class="ok">rc=0 · 0/0 · <code>"ok":true</code> (player/interact/light/fluids all green;
+battery <code>ok</code> excludes genhash by design — checked separately below)</td></tr>
+<tr><td>genhash byte-identity</td><td>25 GENHASH lines, pre- vs post-change, normalized diff</td>
+<td class="ok">25/25 byte-identical (the set also matches the last verified tickets' runs,
+<code>.scratch/AC-0446/genhash-smoke.txt</code> / <code>.scratch/AC-0447/gen_r22.txt</code>, tip
+chunk (0,0) = <code>46c20b07…</code> per the AC-0311 p2 rebase recorded in HARNESS §3)</td></tr>
+<tr><td>settings arm</td><td><code>AWECRAFT_LOGIC=settings</code> headless</td>
+<td class="ok">rc=0 · 0/0 · top <code>ok:true</code>, incl. <code>menu.ok:true</code> and
+<code>rows_21:true</code> (pre-change baseline was also green — the arm followed the rows, §5)</td></tr>
+<tr><td>held-item probe</td><td><code>AWECRAFT_LOGIC=held</code> headless</td>
+<td class="ok">rc=0 · 0/0 · RESULT <b>byte-identical pre/post</b> (cross_ok, depth_ok,
+scale_ok, sprite_hidden all true; <code>box_ok:false</code> via <code>tint_top_ok</code> is the
+documented PRE-EXISTING arm-side staleness, identical on a pristine worktree per
+<code>tasks/AC-0394/AC-0394-results.html</code> — not this change)</td></tr>
+<tr><td>render: BEFORE</td><td>menu shot, options view, 1280×720, on a HEAD worktree (pre-fix code)</td>
+<td class="ok">rc=0 · 0/0 · PNG 574 638 B — the defect frame (§7)</td></tr>
+<tr><td>render: settings TOP</td><td>menu shot, options view, 1280×720</td>
+<td class="ok">rc=0 · 0/0 · PNG 532 296 B · census: tabs (243,40,801,640); Settings
+rows 29 / content 1009 / page 610 / scroll_max 1009</td></tr>
+<tr><td>render: settings BOTTOM (acceptance)</td><td>+ <code>AWECRAFT_MENU_SCROLL=bottom</code>, 1280×720</td>
+<td class="ok">rc=0 · 0/0 · PNG 546 289 B — bottom-most entry reached (§7, image 3)</td></tr>
+<tr><td>render: DEVELOPER page</td><td>menu shot, developer view, 1280×720</td>
+<td class="ok">rc=0 · 0/0 · PNG 539 444 B · Developer rows 24 / content 848 / page 610 / scroll_max 848</td></tr>
+<tr><td>render: settings BOTTOM @1920×1080</td><td>+ <code>AWECRAFT_MENU_SCROLL=bottom</code></td>
+<td class="ok">rc=0 · 0/0 · PNG 1 199 642 B · Settings page 970 vs content 1009 — nearly fits at
+1080p, bottom still reached</td></tr>
+</table>
+<p>The <code>AWECRAFT_MENU_SCROLL=bottom|&lt;px&gt;</code> env is a new env-gated addition to the
+<b>existing</b> menu-shot render hook (unset = byte-identical old behaviour, the
+AWECRAFT_CAM_OFF pattern) — the reachability instrument: a bottom frame is only possible if the
+page actually scrolls. The <code>pages</code> census block is reported on every menu shot. No new
+arm; no arm restructure beyond §5's disclosed row-following edit.</p>
+
+<h2>7. The frames (1280×720 = the shipped default resolution, settings.gd
+<code>DEFAULTS["resolution"]</code> and RES_MODES[0] — the resolution a user who never changed it
+runs, and the worst case for the overflow; 1920×1080 = the common second size, included as the
+larger-size proof)</h2>
+<p><b>BEFORE (pre-fix, HEAD worktree):</b> the tab bar is clipped off the top; the visible list
+runs from "Hunger" to "Sky: space below the horizon" — the render/sim/volume/fog/LOD/resolution/
+fullscreen rows above are above the screen, and moonlight/stat-captions/inventory-dim/aim-wire/
+night-lift plus Load Texture Pack and <b>Back</b> are below it. Nothing clips, nothing scrolls,
+the below-fold rows are unreachable — the defect, in one frame.</p>
+<img src="captures/ac0448-before-1280x720.png" alt="before: options menu overflowing the window at 1280x720">
+<p><b>AFTER, Settings TOP (scroll 0):</b> the tab bar is visible (40 px from the top), the panel
+centred, the page starts at "Options / Render distance…" — the player preferences only (no
+feature flags), and the scrollbar thumb sits at ~61 % (610 of 1009 px visible).</p>
+<img src="captures/ac0448-settings-top-1280x720.png" alt="after: settings page top with visible tab bar and scrollbar">
+<p><b>AFTER, Settings BOTTOM — the acceptance frame (<code>MENU_SCROLL=bottom</code>):</b> the
+page is scrolled to the bottom; the previously unreachable tail is reached and selectable:
+"Clouds: grouped weather", "Sky: space below the horizon", "Sky: moonlight at night",
+"HUD: label the health/hunger rows", "Inventory: dim the world behind the panel",
+<b>Load Texture Pack</b>, <b>Back</b>, "Target mark: outline" and the bottom-most entry
+<b>"Night: lift the floor (readable midnight)"</b>. The scrollbar thumb is at the bottom of its
+track.</p>
+<img src="captures/ac0448-settings-bottom-1280x720.png" alt="acceptance: settings page scrolled to the bottom, bottom-most entry reached">
+<p><b>AFTER, Developer page:</b> the perf knobs unchanged, and under the new
+"Feature flags (internal switches)" header the moved rows begin: debug stats, debug logging, the
+three overlays… (noclip, the cloud flags, limb/sky-alt, far-seam continue below — the page
+scrolls, 848 of 610 px).</p>
+<img src="captures/ac0448-developer-1280x720.png" alt="developer page with the feature flags section">
+<p><b>AFTER, Settings BOTTOM @1920×1080:</b> the whole page nearly fits (970 px page vs 1009 px
+content — 39 px of scroll); the bottom-most entry is reached, the layout holds at the larger
+size.</p>
+<img src="captures/ac0448-settings-bottom-1920x1080.png" alt="after at 1920x1080, bottom reached">
+
+<h2>8. Pre-existing uncommitted changes found (the four previously-fenced files)</h2>
+<p>Inspected before touching anything; <b>left as-is</b> (reported so the coordinator can decide
+whether they are kept — they look like legitimate in-flight work, all internally consistent):</p>
+<table>
+<tr><th>file</th><th>what the uncommitted change is</th></tr>
+<tr><td><code>godot/scenes/main.gd</code></td><td>(a) AC-0038: the pooled particle system —
+<code>ParticlePool</code> node created in <code>_create_game_nodes</code> (gated by
+<code>AWECRAFT_PARTICLES=0</code> A/B), freed in <code>_free_game_nodes</code>;
+<code>particle_pool.gd</code> (untracked, <code>class_name ParticlePool</code>) exists in the
+tree. (b) AC-0088: the <code>controls</code> arm dispatch branch (
+<code>harness._controls_test()</code> exists in <code>scenes/harness.gd</code> — consistent).
+On top of that, this task's AC-0448 hook extension sits in the same file.</td></tr>
+<tr><td><code>godot/autoload/game.gd</code></td><td>AC-0038: the <code>particles</code> ref var.</td></tr>
+<tr><td><code>godot/entities/drop.gd</code></td><td>AC-0038: the pickup puff into
+<code>Game.particles</code> on item pickup.</td></tr>
+<tr><td><code>godot/autoload/debug.gd</code></td><td>AC-0396: <code>snap()</code> now fails
+loudly — a failed <code>save_png</code> prints <code>SNAP FAIL …</code> + <code>push_error</code>
+and returns instead of claiming the shot was taken (the false-pass guard the render recipes
+rely on).</td></tr>
+</table>
+
+<h2>9. Files</h2>
+<p><b>Modified</b> (all carry the AC-0448 reference): <code>godot/scenes/menu.tscn</code>
+(OptionsBox/Center: CenterContainer → MarginContainer, one type change + comment),
+<code>godot/ui/menu.gd</code> (the three scroll-page wraps, the restructure move,
+<code>_mk_scroll_page</code> + <code>_sync_options_frame</code>), <code>godot/scenes/main.gd</code>
+(menu-shot hook: <code>AWECRAFT_MENU_SCROLL</code> + the pages census — on top of the
+pre-existing AC-0038/AC-0088 in-flight hunks, §8), <code>godot/scenes/harness.gd</code>
+(<code>_settings_test</code> row lookups follow the new seats + the AC-0448 placement block +
+the reported row counts — §5, disclosed).</p>
+<p><b>New (untracked — named explicitly for the coordinator's scanner, which skips untracked
+files):</b> <code>tasks/AC-0448/plan.html</code>, <code>tasks/AC-0448/continuity.md</code>,
+<code>tasks/AC-0448/AC-0448-results.html</code> (this page), and the captures
+<code>tasks/AC-0448/captures/ac0448-before-1280x720.png</code>,
+<code>ac0448-settings-top-1280x720.png</code>, <code>ac0448-settings-bottom-1280x720.png</code>,
+<code>ac0448-developer-1280x720.png</code>, <code>ac0448-settings-bottom-1920x1080.png</code>.</p>
+<p><b>Temporaries, in and out in this task:</b> <code>godot/.ac0448_layout_test.gd</code>
+(the layout-semantics probe — deleted, git status clean) and the
+<code>.scratch/AC-0448-prefix-wt</code> worktree (the pre-fix render — removed,
+<code>git worktree list</code> clean).</p>
+
+<h2>10. Deliberately not done</h2>
+<ul>
+<li>No heavy gates (boundary/flake/r50/shaderforce — the coordinator's), no Windows build, no
+TASKS.yaml mutation, no commit/push (closeout owns those).</li>
+<li>No default flipped (the AC-0435 sweep governs; this task moves seats, not states), no key or
+env override renamed, no Controls-tab rework, no row reordering (the two rows that sit below
+"Back" on the Settings page — aim-wire and night-lift — were already seated there pre-fix; the
+ticket is reachability + restructure, not reordering), no touch to <code>settings.gd</code> /
+<code>world/*</code> / <code>player.gd</code> (nothing there owes a change — identity is
+untouched by construction, §4).</li>
+<li>The pre-fix frame was taken from a HEAD worktree, not by flipping the dirty tree back and
+forth — the coordinator's four in-flight files stayed exactly as found.</li>
+</ul>
+
+</body></html>
