@@ -21,6 +21,8 @@ uniform vec3 u_player_pos = vec3(0.0, 0.0, 0.0);
 uniform float u_player_light = 0.0;
 uniform float u_player_radius = 5.0;
 uniform float u_srgb_pre : hint_range(0.0, 1.0) = 0.0;
+// AC-0447: the NIGHT TOE weight (0.0 = day / switch OFF = bit-identical).
+uniform float u_night_lift : hint_range(0.0, 1.0) = 0.0;
 // AC-0401: the fog-wall partition (env.fog_depth_end, pushed per frame by
 // world.gd _process - the same value main.gd sets on the env fog).
 uniform float u_fog_far = 332.0;
@@ -103,5 +105,15 @@ void fragment() {
 	L = max(L, 0.12 + 0.88 * pr / 15.0);
 	ALBEDO = t.rgb * COLOR.b * L;
 	ALBEDO = mix(ALBEDO, pow(ALBEDO, vec3(2.2)), u_srgb_pre); // AC-0242
+	// AC-0447: the NIGHT TOE (the dark-readable midnight floor). A
+	// luma-scaled gain f = 1 + u_night_lift*A*(d/(lum+d))^p on the
+	// predecoded ALBEDO; A/d/p = 42.5/0.00175/1.5 are fitted against the
+	// game's own tone curve (in-game probe, tasks/AC-0447): the midnight
+	// floor (lum~0.0004) lifts ~31x to byte ~12, the moonlit grass top
+	// (lum~0.017) ~2.2x to byte ~45, lum=0 stays 0, lum*f monotone.
+	// u_night_lift 0.0 (day / "night_lift" OFF) makes f exactly 1.0 -
+	// bit-identical (IEEE 754: 0*x = 0, 1 + 0.0 = 1.0, x * 1.0 = x).
+	float ac47_lum = dot(ALBEDO, vec3(0.2126, 0.7152, 0.0722));
+	ALBEDO *= 1.0 + u_night_lift * 42.5 * pow(0.00175 / (ac47_lum + 0.00175), 1.5);
 	ALPHA = u_fade;  // AC-0445: the first-enable fade (1.0 default = opaque path)
 }

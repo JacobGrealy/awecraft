@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>AC-0447 — plan</title>
+<style>
+body{font:15px/1.5 "Segoe UI",system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+h1{font-size:22px;border-bottom:3px solid #333;padding-bottom:8px}
+h2{font-size:17px;margin-top:26px;border-bottom:1px solid #bbb;padding-bottom:4px}
+table{border-collapse:collapse;margin:10px 0;font-size:14px}
+th,td{border:1px solid #999;padding:4px 10px;text-align:left;vertical-align:top}
+th{background:#eee}
+code{background:#f2f2f2;padding:1px 5px;border-radius:3px;font-size:13px}
+</style></head><body>
+
+<h1>AC-0447 — night is readable but still too dark — plan</h1>
+
+<h2>Goal</h2>
+<p>Night at <b>true midnight (AWECRAFT_TIME=0.0, day factor exactly 0)</b> must be dark <em>and</em>
+readable: ground luminance up out of the current ~7–13/255 band with the majority of ground pixels
+clearing 10/255, the day bit-identical, and the night keeping its depth (dark foreground, lit
+ridge). The single most important instruction governs measurement: <b>establish the
+hour-and-day-factor curve first</b>, because the hour that reads as dusk (t=0.75) still carries a
+day factor of 0.343 and a fix tuned against it is tuned against the wrong light.</p>
+
+<h2>Hour-and-day-factor curve (the condition)</h2>
+<p>Closed form, from <code>core/daynight.gd</code> (the one home):
+<code>elevation(t) = sin((t−0.25)·TAU)</code>; <code>day(t) = clamp((elevation(t)+0.12)/0.35, 0, 1)</code>.
+The moon's night weight is <code>(1−day(t))·switch</code> (world.gd block 6). <code>AWECRAFT_TIME</code>
+maps to <code>Game.time_of_day = fmod(t,1)</code> (main.gd, fenced — read only).</p>
+<table>
+<tr><th>t (AWECRAFT_TIME)</th><th>hour</th><th>elevation</th><th>day factor</th><th>moon weight (1−day)</th></tr>
+<tr><td>0.00</td><td>midnight</td><td>−1.000</td><td><b>0.000 (exactly 0 — true night)</b></td><td>1.000</td></tr>
+<tr><td>0.25</td><td>sunrise (sun on horizon)</td><td>0.000</td><td>0.343</td><td>0.657</td></tr>
+<tr><td>0.50</td><td>noon</td><td>+1.000</td><td>1.000</td><td>0.000</td></tr>
+<tr><td>0.75</td><td>sunset (the "dusk" hour)</td><td>0.000</td><td><b>0.343 (a third — the AC-0446 discovery)</b></td><td>0.657</td></tr>
+</table>
+<p>day = 0 exactly on t ∈ [0.769, 0.231] (wrapped, centred on 0). <b>Measured, not just stated:</b>
+four renders at t = 0.0 / 0.25 / 0.5 / 0.75 (the assessment recipe) — the ground luma at each hour
+is the empirical column; t=0.75 reproduces the "dusk is not night" finding on this tree and
+answers whether the previous night numbers were dusk-taken.</p>
+
+<h2>What the mapper is doing to the night values (the measurement)</h2>
+<p>The terrain is <code>render_mode unshaded</code>: the shader output <em>is</em> the mapper input.
+Pipeline (aero mode ON by default, <code>core/aero.gd</code> — not fenced): shader
+<code>ALBEDO = (tex·faceShade·L)^2.2</code> (the AC-0242 sRGB pre-decode, u_srgb_pre=1.0 under
+Forward+) → engine <b>ACES</b> tonemap at <b>exposure 0.85</b> → <b>contrast 1.1</b> (pivot 0.5) +
+saturation 1.25 → sRGB encode → 8-bit. The light model at midnight:
+<code>L = 0.20 + 0.25·moonLambert</code> (u_amb term ×u_day = 0) → L ∈ [0.20, 0.45].</p>
+<p><b>Hypothesis under test:</b> ACES(exposure·x) under contrast 1.1 has a hard dead zone —
+display-linear input below ≈0.05 exits as <b>0/255 literally</b> — and the night terrain's whole
+range (L 0.20–0.45, i.e. x ≈ 0.003–0.06 for the atlas greens) sits in or at the edge of it. So the
+input has structure (top faces 6–15× the side faces in L) and the output is mostly zero: <b>the
+mapping is the ceiling, not the moonlight</b>. Verified by: (1) the pure-python model of the exact
+pipeline (aero.gd constants + the shader's L formula + atlas texel values read from the texture);
+(2) pixel-verification of the model on measured day and night frames (a known face predicted
+vs its actual byte value); (3) the exposure question answered numerically — how much
+<code>tonemap_exposure</code> night would need to lift the L=0.20 floor out of the dead zone
+(≈×15 — which would white-out the day, so a shared exposure cannot be the fix; per-frame
+exposure adaptation would live in main.gd's per-frame sky update — <b>fenced</b>, reported not
+edited). The fix therefore goes where the values live: a <b>night-only toe on the terrain's own
+display path</b>, in the four unshaded chunk shaders (world/ — mine), identity by construction at
+day / switch-OFF (u_night_w = 0 → the exact pre-AC-0447 ALBEDO, IEEE bit-identical). Shape: a
+hue-preserving luma-scaled gain <code>f = 1 + w·A·(d/(x+d))^p</code> (decaying with luma — strong
+at the crushed floor, weak at the already-lit moonlit tops), parameters tuned numerically against
+the verified model + measured frames to land: night floor faces ≈ 8–18/255, moonlit tops ≈ 35–65/255,
+top/side display ratio ≥ 2.5, pure black (x=0) stays 0 (the sky and unlit voids stay black).</p>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/world/chunk_lit_{opaque,cutout,flower,fluid}.gdshader</code></td>
+<td><code>u_night_w</code>/<code>u_night_a</code>/<code>u_night_d</code>/<code>u_night_p</code>
+uniforms (defaults = identity: w 0.0) + the night-toe block after the sRGB pre-decode. Same
+formula in all four (the L model is already duplicated verbatim across them).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>AC-0447 consts (A/D/P, one home); <code>AWECRAFT_NIGHTLIFT=0|1</code>
+boot env preload in <code>_ready</code> (the AMBSKY pattern, no save); push in <code>_ac0401_push</code>:
+per-frame value-gated <code>u_night_w = (1−day)·switch</code> to the chunk materials (the moon
+block's day read), one-shot A/D/P (n_mats-gated, the u_amb pattern).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td><code>"night_lift": false</code> default + <code>sanitize_bool</code> clamp case.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>Options row + sync + toggled handler (the far_seam shape).</td></tr>
+<tr><td><code>godot/ARCHITECTURE.md</code></td><td>§2 settings row + the AC-0447 bullet (§3/§4 convention) — same task.</td></tr>
+</table>
+<p>NOT touched: <code>core/aero.gd</code> (the shared mapper — day lives in it), the engine
+tonemap settings (shared day/night exposure), <code>main.gd</code>/<code>game.gd</code>/
+<code>drop.gd</code>/<code>debug.gd</code> (fences), the far band and <code>lod_avg_seam.gdshader</code>
+(far_seam defaults OFF — its night is a documented A/B state), the satellite body and cloud layers
+(they carry the moon already; the ticket's acceptance is the ground), fog (the night air colour is
+the single-source AC-0384 value — a fog change is a separate look decision), moon colour
+(out of the measured need — the dead zone, not the tint, is the ceiling).</p>
+
+<h2>Switch + day guard</h2>
+<p><b>Settings <code>night_lift</code>, default OFF (conservative, per the ticket's constraint;
+re-ruling the default is the coordinator's step — the AC-0446 shape)</b> + menu row +
+<code>AWECRAFT_NIGHTLIFT=0|1</code> boot env. Day guard: at any hour with day&gt;0 the weight is
+<code>(1−day)·switch</code> — at t=0.5 exactly 0.0 → the shader block is the identity → the day
+frame must be <b>bit-identical</b> (measured, not asserted: full-frame pixel diff before/after).
+The night A/B: the t=0.0 frame OFF (the baseline) vs ON (the fix) at the same pose/drain.</p>
+
+<h2>Verification (light gates, then exit)</h2>
+<table>
+<tr><th>Gate</th><th>Recipe</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code>, <code>gate_census.py</code> zero SCRIPT + zero SHADER, <b>and the process exit status</b> (the UAF watch: clean log, signal-11 exit).</td></tr>
+<tr><td>SMOKE</td><td>battery <code>player;interact;light;fluids;genhash</code> (genhash inside + standalone 25/25 — world/ touched).</td></tr>
+<tr><td>PROBE</td><td>meshprobe (the shader-compiling twin).</td></tr>
+<tr><td>settings arm</td><td>the new key must not break the key-count assertions.</td></tr>
+<tr><td>shaderforce</td><td>Forward+/lavapipe forced compile, 16/16.</td></tr>
+</table>
+<p>Acceptance renders (all: 1280×720, R24/F83 the user configuration, seed 44, TIME_FREEZE=1,
+CLOUD_T0=411200, DRAIN=600, the Forward+ recipe, file-exists + boot-line asserted): the
+assessment night frame re-taken at t=0.0 (OFF baseline, ON fix) with the ground-band
+(y440–600) luminance histogram as numbers; the day frame t=0.5 before/after (bit-identical diff);
+the dusk t=0.75 probe (the condition audit); the dawn t=0.25 probe (the curve); a wide ridge shot
+at night (pose yaw 1.57, the AC-0446 ridge recipe) proving depth — dark foreground, lit ridge.
+Heavy gates (farab/ladder/halo/lightstate/r16/boundary) are the coordinator's.</p>
+
+</body></html>

@@ -317,6 +317,18 @@ const DEFAULTS := {
 	# DayNight.MOON_L (core/daynight.gd). Env-overridable
 	# (AWECRAFT_MOON=0|1 at boot, world.gd — written WITHOUT save).
 	"moonlight": true,
+	# AC-0447: the NIGHT-TOE switch (the dark-readable midnight floor).
+	# DEFAULTS OFF — conservative: the shipped night (moonlight only) is
+	# the default look; ON is the measured lift, OFF is the A/B. ON makes
+	# world.gd _ac0401_push drive the chunk shaders' u_night_lift =
+	# (1 - day): a luma-scaled gain on the predecoded ALBEDO (the
+	# A/d/p fit, owned by the shader comment) lifts the midnight floor
+	# from byte 0 to ~12 and the moonlit grass top from 18 to ~45,
+	# keeps lum=0 at 0, and is bit-identical by day (w = 0.0 -> gain
+	# exactly 1.0). No apply step: _ac0401_push reads the live value and
+	# pushes it value-gated (the moon-pair pattern). Env-overridable
+	# (AWECRAFT_NIGHTLIFT=0|1 at boot, world.gd — written WITHOUT save).
+	"night_lift": false,
 	# AC-0437: the HUD stat-row CAPTIONS (ui/inventory.gd) — a "Health"
 	# label beside the heart row and a "Hunger" label beside the food
 	# row, so the two identical-looking red rows stop reading as debug
@@ -603,6 +615,11 @@ func _clamp(k: String, v) -> void:
 		"moonlight":  # AC-0436: bool (the moonlight switch; defaults ON).
 			# sanitize_bool, not bool(): a hand-edited string in the cfg
 			# must fail to the default (true), never throw (the ambient_sky
+			# precedent).
+			values[k] = AnalogTune.sanitize_bool(v)
+		"night_lift":  # AC-0447: bool (the night-toe switch; defaults OFF).
+			# sanitize_bool, not bool(): a hand-edited string in the cfg
+			# must fail to the default (false), never throw (the moonlight
 			# precedent).
 			values[k] = AnalogTune.sanitize_bool(v)
 		"stat_captions":  # AC-0437: bool (the HUD stat-row captions;

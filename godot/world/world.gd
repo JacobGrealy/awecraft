@@ -4056,6 +4056,16 @@ func _ready() -> void:
 	var mone := OS.get_environment("AWECRAFT_MOON")
 	if mone != "":
 		Settings.values["moonlight"] = mone == "1"
+	# AC-0447: the night-toe switch (Settings "night_lift", default OFF —
+	# conservative: the shipped night stays the default look; ON is the
+	# measured dark-readable floor, OFF is the A/B). Same pattern: the env
+	# overrides the STORED setting for this process only (no save, so the
+	# arms never clobber the user's cfg) and lets the render A/B both
+	# states without a save file. Read live by _ac0401_push, so no boot
+	# derive is owed.
+	var nle := OS.get_environment("AWECRAFT_NIGHTLIFT")
+	if nle != "":
+		Settings.values["night_lift"] = nle == "1"
 	# AC-0441: the raymarch-grid jitter switch (Settings "cloud_jitter",
 	# DEFAULT ON — the banded deck IS the reported defect, so the fix
 	# ships in; OFF = the exact current grid, bit-for-bit: the shader's
@@ -5276,6 +5286,13 @@ var _ac0436_cloud_w := -1.0
 var _ac0436_cloud_dir := Vector3(0.0, 1.0, 0.0)
 var _ac0436_sky_moon := -1.0
 var _ac0436_star_lift := -1.0
+# AC-0447: the NIGHT-TOE push state (same seam: _ac0401_push, value-gated
+# per frame like the moon pair — w moves with the clock; plus the lazy
+# material-set size so late-built chunk/fluid materials receive the
+# current weight). u_night_lift = 0.0 (day or "night_lift" OFF) makes the
+# shader's gain factor exactly 1.0 -> bit-identical (IEEE 754).
+var _ac0447_lift := -1.0
+var _ac0447_n_mats := -1
 # AC-0441: the raymarch-grid jitter push state (same seam: _ac0401_push,
 # change-gated on the switch value) + the A/B cost-knob env value read at
 # boot (0.0 = AWECRAFT_VOLSTEPS unset — the shader's shipped 24 steps,
@@ -5759,6 +5776,33 @@ func _ac0401_push() -> void:
 			if m6 is ShaderMaterial:
 				m6.set_shader_parameter("u_moon", moon_i)
 				m6.set_shader_parameter("u_moon_dir", moon_dirv)
+	# (6b) AC-0447: the NIGHT TOE weight — the dark-readable midnight
+	# floor. w = (1 - day) when the "night_lift" switch is ON, else 0.0.
+	# The chunk shaders turn it into a luma-scaled gain on the predecoded
+	# ALBEDO (A/d/p fitted against the game's own tone curve, the comment
+	# in the shader owns the numbers): the midnight floor lifts to byte
+	# ~12, the moonlit grass top to ~45, lum=0 stays 0. w = 0.0 (day, or
+	# the switch OFF) makes the shader's gain factor exactly 1.0 —
+	# bit-identical. Like the moon pair, w moves with the clock, so this
+	# is a per-frame value gate; n_mats too, so lazily built chunk AND
+	# fluid materials receive the current weight (the AC-0420 pattern).
+	# Colour-only: no mesh, no bake, no data.
+	var lift_v: float = (1.0 - day_m) if bool(Settings.values.get("night_lift", false)) else 0.0
+	if n_mats != _ac0447_n_mats or not is_equal_approx(lift_v, _ac0447_lift):
+		_ac0447_n_mats = n_mats
+		_ac0447_lift = lift_v
+		for k in ChunkScript._mat_cache:
+			var m7 = ChunkScript._mat_cache[k]
+			if m7 is ShaderMaterial:
+				m7.set_shader_parameter("u_night_lift", lift_v)
+		for bid in Data.fluid_anim_mats:
+			var am7 = Data.fluid_anim_mats[bid]
+			if am7 is ShaderMaterial:
+				am7.set_shader_parameter("u_night_lift", lift_v)
+		for bid in Data.fluid_anim_bf_mats:
+			var am8 = Data.fluid_anim_bf_mats[bid]
+			if am8 is ShaderMaterial:
+				am8.set_shader_parameter("u_night_lift", lift_v)
 	# AC-0446: the far band's parity moon term (the ON variant only — the
 	# OFF shader declares no u_moon; the set would be a stored no-op, so
 	# gate it). The band mesh carries world-space face normals (the ring

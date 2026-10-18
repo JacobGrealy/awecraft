@@ -111,6 +111,12 @@ var cloud_jit_check: CheckBox
 # bit-identical; ON makes the far average band shade with the near
 # tier's own light model — the tier-seam step the user reported).
 var far_seam_check: CheckBox
+# AC-0447: the night-toe toggle (Settings "night_lift", default OFF —
+# conservative: the shipped moonlight-only night stays the default
+# look; ON lifts the midnight floor (byte 0 -> ~12) and the moonlit
+# grass top (18 -> ~45) via a luma-scaled gain in the chunk shaders,
+# bit-identical by day).
+var night_lift_check: CheckBox
 # AC-0437: the HUD stat-row captions toggle (Settings "stat_captions",
 # default ON — the assessment judged the two identical-looking red rows
 # as debug output; the AC-0435/AC-0436 re-ruling: the reported look
@@ -649,6 +655,23 @@ func _ready() -> void:
 	far_seam_check.add_theme_font_size_override("font_size", 15)
 	far_seam_check.toggled.connect(_on_far_seam_toggled)
 	opt_vbox.add_child(far_seam_check)
+	# AC-0447: the night-toe toggle (Settings "night_lift", default OFF
+	# — conservative: the shipped moonlight-only night stays the default
+	# look). ON: a luma-scaled gain on the chunk shaders' predecoded
+	# ALBEDO, weighted (1 - day), lifts the midnight floor from byte 0
+	# to ~12 and the moonlit grass top from 18 to ~45 (the measured
+	# dark-readable floor; tasks/AC-0447), keeping lum=0 at 0 and the
+	# day bit-identical (w = 0.0 -> gain exactly 1.0). No apply step
+	# owed: world.gd _ac0401_push reads the live value every frame and
+	# pushes u_night_lift value-gated (the moon-pair pattern;
+	# env-overridable: AWECRAFT_NIGHTLIFT=0|1 at boot, world.gd). Last
+	# row of the page: no move_child seat owed.
+	night_lift_check = CheckBox.new()
+	night_lift_check.name = "NightLiftCheck"
+	night_lift_check.text = "Night: lift the floor (readable midnight)"
+	night_lift_check.add_theme_font_size_override("font_size", 15)
+	night_lift_check.toggled.connect(_on_night_lift_toggled)
+	opt_vbox.add_child(night_lift_check)
 	# AC-0260: the options panel is TABBED. The "Settings" page is the
 	# original list restored to its tscn seat (centered again by the
 	# OptionsBox CenterContainer — the AC-0257 ScrollContainer wrap that
@@ -1158,6 +1181,9 @@ func _sync_controls() -> void:
 	# AC-0446: the far-seam parity toggle (default OFF — the current
 	# partial-parity look, bit-identical).
 	far_seam_check.button_pressed = bool(Settings.values.get("far_seam", false))
+	# AC-0447: the night-toe toggle (default OFF — the shipped
+	# moonlight-only night, bit-identical).
+	night_lift_check.button_pressed = bool(Settings.values.get("night_lift", false))
 	fogstart_slider.value = float(int(Settings.values["fog_start_pct"]))
 	fogstart_slider.editable = bool(Settings.values.get("fog_enabled", true))
 	fogstart_slider.modulate.a = 1.0 if bool(Settings.values.get("fog_enabled", true)) else 0.45
@@ -1665,6 +1691,17 @@ func _on_far_seam_toggled(on: bool) -> void:
 	if _syncing:
 		return
 	Settings.set_value("far_seam", on)
+
+
+# AC-0447: the night-toe toggle (Settings "night_lift", default OFF).
+# set_value does the clamp chain + the save; no apply step is owed:
+# world.gd _ac0401_push reads the live value every frame and pushes
+# u_night_lift value-gated (the moon-pair pattern; OFF / day -> 0.0 ->
+# the shader's gain is exactly 1.0, bit-identical).
+func _on_night_lift_toggled(on: bool) -> void:
+	if _syncing:
+		return
+	Settings.set_value("night_lift", on)
 
 
 # AC-0437: the HUD stat-row captions toggle — persisted like every other

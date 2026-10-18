@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0447 — the night is readable but still too dark, measured at true midnight</title>
+<style>
+ body{font:15px/1.5 system-ui,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+ h1{font-size:1.5rem;border-bottom:3px solid #333;padding-bottom:.4rem}
+ h2{font-size:1.15rem;margin-top:2rem;border-bottom:1px solid #bbb;padding-bottom:.2rem}
+ table{border-collapse:collapse;margin:.8rem 0;font-size:.92rem}
+ th,td{border:1px solid #999;padding:.3rem .55rem;text-align:left}
+ th{background:#eee}
+ .num{font-variant-numeric:tabular-nums;text-align:right}
+ code{background:#f2f2f2;padding:.05rem .3rem;border-radius:3px;font-size:.9em}
+ .good{color:#0a6b0a;font-weight:600}.bad{color:#a00;font-weight:600}
+ .imgrow{display:flex;gap:1rem;flex-wrap:wrap}
+ .imgrow figure{margin:0;max-width:470px;flex:1 1 420px}
+ img{width:100%;border:1px solid #888}
+ figcaption{font-size:.85rem;color:#444;margin-top:.3rem}
+ .callout{background:#f7f4ea;border-left:4px solid #b98;padding:.6rem .9rem;margin:.8rem 0}
+</style>
+</head>
+<body>
+<h1>AC-0447 — the night is readable but still too dark, measured at true midnight</h1>
+<p><b>Status: done (light gates green; heavy gates are the coordinator's).</b>
+The midnight floor was measured, the ceiling proved to be the tone mapper's dead zone, and the fix
+belongs to the chunk shaders — a night-only, hue-preserving toe on the predecoded ALBEDO, shipped
+behind a new <code>night_lift</code> switch (default <b>OFF</b>, <code>AWECRAFT_NIGHTLIFT=0|1</code> boot env,
+menu row).</p>
+
+<h2>1. The hour-and-day factor curve (the ticket's first demand)</h2>
+<p>Measured this session, band y440–599 × 1280 (the assessment strip), Rec.709 luma of the 8-bit bytes,
+<code>R24/F83, seed 44, TIME_FREEZE=1</code>, horizon pose <code>8.5,143.62,8.5,0,0.08</code>:</p>
+<table>
+<tr><th>t (time of day)</th><th>hour</th><th class="num">day(t)</th><th class="num">band avg</th><th>notes</th></tr>
+<tr><td class="num">0.00</td><td>midnight</td><td class="num">0.000 (exact)</td><td class="num">12.86</td><td><code>b0-night.png</code> — the acceptance hour</td></tr>
+<tr><td class="num">0.25</td><td>dawn</td><td class="num">0.343</td><td class="num">21.84</td><td><code>b1-dawn.png</code></td></tr>
+<tr><td class="num">0.50</td><td>noon</td><td class="num">1.000</td><td class="num">99.96</td><td><code>b2-day.png</code></td></tr>
+<tr><td class="num">0.75</td><td>dusk</td><td class="num">0.343</td><td class="num">21.07</td><td><code>b3-dusk.png</code></td></tr>
+</table>
+<p><b>Dusk is 1.7× brighter than true midnight</b> (21.07 vs 12.86) — and the moon's night weight is
+0.657 at t=0.75 vs 1.0 at t=0.0. Any dusk-tuned "night" number is tuned against the wrong light.</p>
+<p><b>Prior-numbers audit (plain):</b> r24/r25/AC-0436 all shot <code>AWECRAFT_TIME=0.0</code> — true midnight,
+not dusk; a t=0.0 re-shoot reproduces the published r25 frame <i>exactly</i> (avg 12.86 = 12.86, identical
+histogram). The ticket's "~3/4 below 10" is r25's 76% figure, computed as <b>plain-average luma over full
+ground rows</b> (reproduced: 74.9% on that frame) — a different convention than the standard band
+(15.9% &lt;10, 81.6% in 0–15, median 12.16, p90 22.79, max 70.1). <b>AC-0446's own r3/r4 "night" A/B used
+t=0.75 (dusk)</b> — the ticket's warning applies to it.</p>
+
+<h2>2. What enters the mapper at night, what leaves it</h2>
+<p>Live uniform dump (t=0.0): <code>u_day=0.0, u_moon=0.25, u_moon_dir=(0, 0.9285, 0.3714), u_amb=0.35</code>,
+atlas sampled <b>without</b> sRGB decode (runtime format RGB16), so the shader's pow(2.2) predecode is the
+sRGB→linear step and the ALBEDO that enters the mapper is the predecoded (linear) value. In-game ground
+truth (mode grass texel, real ground reads):</p>
+<table>
+<tr><th>face / hour</th><th class="num">L in shader</th><th class="num">predecoded ALBEDO (G)</th><th class="num">on-screen byte</th></tr>
+<tr><td>top face, day (t=0.5)</td><td class="num">1.0</td><td class="num">0.1087</td><td class="num">(14,128,0)</td></tr>
+<tr><td>top face, dusk (t=0.75)</td><td class="num">0.474</td><td class="num">0.0211</td><td class="num">(0,25,0)</td></tr>
+<tr><td>top face, night (t=0.0)</td><td class="num">0.432</td><td class="num">0.0172</td><td class="num">(0,18,0)</td></tr>
+<tr><td>side face, night (moon-facing)</td><td class="num">0.293</td><td class="num">0.0016</td><td class="num">(0,0,0)</td></tr>
+<tr><td>floor face, night</td><td class="num">0.20</td><td class="num">0.0004</td><td class="num">(0,0,0)</td></tr>
+</table>
+<p><b>The input has structure and the output is zero — the problem is the mapping.</b> The game's own
+G-channel transfer curve, measured in-game (unshaded probe quads on the real ground; verified: the
+g=0.0172 probe point returns byte 18 — the night grass top byte — exactly):</p>
+<table>
+<tr><th class="num">g in (linear)</th><td class="num">0.0002</td><td class="num">0.0005</td><td class="num">0.001</td><td class="num">0.002</td><td class="num">0.004</td><td class="num">0.007</td><td class="num">0.012</td><td class="num">0.0172</td><td class="num">0.025</td><td class="num">0.04</td><td class="num">0.06</td><td class="num">0.09</td><td class="num">0.12</td></tr>
+<tr><th class="num">byte out</th><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">10</td><td class="num">18</td><td class="num">29</td><td class="num">48</td><td class="num">70</td><td class="num">100</td><td class="num">125</td></tr>
+</table>
+<p>Dead zone below ~0.005; steep rise after. Full-intensity red (1,0,0) → (255,0,0) uncrushed — the
+environment does not crush highlights, it crushes the <i>dark end</i>. An exposure change can't fix this:
+the floor needs ×~30 at night and would blow out the day. <b>The honest conclusion: the fix belongs in
+the per-chunk light model (the shaders), not the engine tone mapper</b> — implemented exactly that way,
+as the ticket allows.</p>
+
+<h2>3. The fix</h2>
+<p>Eight <code>chunk_lit_*.gdshader</code> (opaque/cutout/flower/fluid + the four <code>_fade</code> variants): after the
+AC-0242 predecode,</p>
+<pre>float ac47_lum = dot(ALBEDO, vec3(0.2126, 0.7152, 0.0722));
+ALBEDO *= 1.0 + u_night_lift * 42.5 * pow(0.00175 / (ac47_lum + 0.00175), 1.5);</pre>
+<p>a luma-scaled, hue-preserving gain <code>f = 1 + w·A·(d/(g+d))^p</code> with <b>A=42.5, d=0.00175, p=1.5</b>,
+fitted against the measured curve: the midnight floor (g≈0.0004) gains ×31.7 (byte 0 → ~12), the
+moonlit grass top (g≈0.0172) ×2.19 (byte 18 → ~45), the moon-facing side ×~17 (→ ~30); g=0 stays 0;
+g·f(g) monotone. <code>w = u_night_lift = (1 − day)·switch</code>, pushed per-frame, value-gated from
+<code>world.gd _ac0401_push</code> to the chunk <i>and</i> fluid materials. <b>At day or with the switch OFF,
+w=0.0 and f is exactly 1.0 (IEEE: 0·x=0, 1+0=1, x·1=x) — bit-identical.</b>
+New switch: <code>Settings "night_lift"</code> default <b>false</b> (conservative — AC-0446 far_seam OFF precedent
+under identical ticket wording), sanitize_bool, menu row "Night: lift the floor (readable midnight)",
+<code>AWECRAFT_NIGHTLIFT=0|1</code> boot env (the AWECRAFT_MOON pattern, written WITHOUT save).
+ARCHITECTURE.md updated in-task (Settings row).</p>
+
+<h2>4. Evidence — night re-taken at true midnight (t=0.0, lift ON vs OFF)</h2>
+<div class="imgrow">
+<figure><img src="captures/b0-night.png" alt="baseline midnight">
+<figcaption><b>b0 — baseline (OFF):</b> band avg 12.86, med 12.16, 81.6% of the ground in 0–15, L&lt;5 11.5%, max 70.1.</figcaption></figure>
+<figure><img src="captures/a0-night.png" alt="after midnight with lift">
+<figcaption><b>a0 — after (ON):</b> band avg <b>33.54</b>, med <b>36.48</b>, 0–15 bucket <b>1.4%</b> (was 81.6%), L&lt;5 <b>0.6%</b>, max 111.4.</figcaption></figure>
+</div>
+<table>
+<tr><th>night band (y440–599)</th><th class="num">b0 (OFF)</th><th class="num">a0 (ON)</th></tr>
+<tr><td>avg / median</td><td class="num">12.86 / 12.16</td><td class="num">33.54 / 36.48</td></tr>
+<tr><td>p10 / p25 / p75 / p90 / max</td><td class="num">2.28 / 11.44 / 12.87 / 22.79 / 70.1</td><td class="num">22.79 / 30.11 / 37.19 / 37.19 / 111.4</td></tr>
+<tr><td>L&lt;5 / L&lt;10 / L&lt;20</td><td class="num">11.5% / 15.9% / 84.8%</td><td class="num">0.6% / 0.8% / 4.4%</td></tr>
+<tr><td>bucket 0–15 / 16–31 / 32–47</td><td class="num">81.6% / 16.9% / 1.0%</td><td class="num">1.4% / 26.1% / 70.4%</td></tr>
+</table>
+<p>Local strips (same frame): grass-top rows 470–490 avg <b>13.2 → 32.8</b> (zero-pixels 3.0% → 0.0%);
+side/floor rows 500–590 avg 15.0 → 32.5 (1.7% still pure black — the far, fogged floor). Night kept its
+depth: the mass moved into one mid band (32–47, 70.4%), not a flat wash; max stayed in the moonlit
+highlights (111.4 vs day's 219.3).</p>
+<div class="imgrow">
+<figure><img src="captures/b4-night-ridge.png" alt="baseline ridge">
+<figcaption><b>b4 — baseline ridge (yaw 1.57):</b> foreground 24.6 / midground 12.3 / ridge band 7.4 — the ridge is a black void (34.3% zero pixels).</figcaption></figure>
+<figure><img src="captures/a2-night-ridge.png" alt="after ridge with lift">
+<figcaption><b>a2 — after ridge:</b> foreground 41.8 / midground 32.9 / ridge 30.1 (zero% 30.1 → 1.0). Dark foreground anchor, <b>lit ridge</b> — depth monotone, texture readable.</figcaption></figure>
+</div>
+
+<h2>5. Day unchanged — within noise, proved with a control</h2>
+<p>Full-frame pixel diff, 1280×720, same recipe (the two frames' capture state is the documented
+mid-build SNAPDRAIN state — identical recipe, apples-to-apples):</p>
+<table>
+<tr><th>pair</th><th class="num">diff px</th><th class="num">share</th><th class="num">max channel-sum Δ</th></tr>
+<tr><td><b>control:</b> two independent <i>baseline</i> day runs (both lift OFF)</td><td class="num">25,420</td><td class="num">2.758%</td><td class="num">728</td></tr>
+<tr><td><b>subject:</b> baseline day (OFF) vs after day (ON, t=0.5)</td><td class="num">17,507</td><td class="num">1.900%</td><td class="num">662</td></tr>
+</table>
+<p>Band histograms: OFF avg 99.96 / control avg 99.22 / <b>ON avg 98.93</b> — the lift-ON frame sits inside
+the baseline pair's own noise band (median 95.24 and max 219.3 identical across all three). Signature of
+the subject diff: <b>55.4% of changed pixels are darker</b> (a multiplicative gain ≥1 can only lighten) and
+2,419 px carry Δ&gt;64 (impossible for f≡1.0) — it is the run-to-run stochastic flicker class (the same
+white-sky↔dark-green swap, at the same coordinates, appears even between the two captures of a <i>single</i>
+run). Verdict: <b>day unchanged within noise; no leak from the switch.</b></p>
+
+<h2>6. Gates (light set — the heavy set is the coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>result</th></tr>
+<tr><td>G0 (headless load, census + exit status)</td><td class="good">RC=0, 0 SCRIPT / 0 SHADER ERROR</td></tr>
+<tr><td>SMOKE <code>player;interact;light;fluids;genhash</code></td><td class="good">RC=0, census ok, battery ok:true, all 5 modes green (after probe revert — see finding 3)</td></tr>
+<tr><td>genhash</td><td class="good">25/25 byte-identical vs the standing HEAVY-r22 reference (<code>.scratch/HEAVY-r22/genhash.log</code>); GENMS 127</td></tr>
+<tr><td>settings arm</td><td class="good">RC=0, census ok, ok:true (all sub-flags) — the <code>night_lift</code> key round-trips; end-to-end proven by the <code>AWECRAFT_NIGHTLIFT=1</code> renders</td></tr>
+<tr><td>meshprobe</td><td class="good">ok true, match_rate 1.0, verts 255,192/255,192</td></tr>
+<tr><td>shaderforce (forced compile, Forward+/lavapipe)</td><td class="good">17/17 verdict ok, failed=[] — all eight patched chunk shaders included (count is 17 now: 16 + AC-0446's <code>lod_avg_seam.gdshader</code>; the HARNESS row still says 16)</td></tr>
+</table>
+
+<h2>7. Findings (for the coordinator)</h2>
+<ol>
+<li><b>HARNESS.md genhash pointer is stale:</b> the row points at <code>.scratch/AC-0367-gates/genhash_pristine_r1.log</code>,
+but the standing reference is <code>.scratch/HEAVY-r22/genhash.log</code> (AC-0442 verified against it; the AC-0367 set
+moved with the later gen rebases). 25/25 verified against HEAVY-r22. Pointer update owed at closeout.</li>
+<li><b>shaderforce count is now 17</b> (AC-0446's seam shader); the row says 16.</li>
+<li><b>Pre-existing working-tree dirt, untouched by this ticket:</b> <code>godot/autoload/debug.gd</code> (+11/−1),
+<code>godot/autoload/game.gd</code> (+1), <code>godot/entities/drop.gd</code> (+3), <code>godot/scenes/main.gd</code> (+22) and two
+AC-0067 PNGs are modified against HEAD <i>before this session started</i> (fenced files — not edited here).
+The first smoke run's 13 SCRIPT ERRORs were my own temporary probe autoload (headless viewport null),
+fixed by the planned revert, not by the fence files.</li>
+<li><b>Standalone-probe environment is unreliable</b> (measurement caveat): a hand-built WorldEnvironment
+scene crushed a day texel the game renders at (14,128,0) to (0,1,0). All numbers above are in-game;
+the standalone probe was discarded and deleted.</li>
+<li><b>Godot shading language:</b> <code>^</code> is not the power operator (<code>Invalid arguments to operator '^'</code>) —
+the first after-battery failed 12× SHADER ERROR on the toe line; fixed with <code>pow()</code> and caught by the
+census before any frame was trusted.</li>
+<li>Dawn/dusk side effect (predicted, not re-shot): at t=0.25/0.75, w=0.657 — the moonlit top 25→~43,
+the floor 0→~5. Documented, reported, not acceptance scope.</li>
+</ol>
+
+<h2>8. Files</h2>
+<p><b>Changed (named explicitly — the scanner skips untracked):</b>
+<code>godot/world/chunk_lit_opaque.gdshader</code>, <code>chunk_lit_opaque_fade.gdshader</code>, <code>chunk_lit_cutout.gdshader</code>,
+<code>chunk_lit_cutout_fade.gdshader</code>, <code>chunk_lit_flower.gdshader</code>, <code>chunk_lit_flower_fade.gdshader</code>,
+<code>chunk_lit_fluid.gdshader</code>, <code>chunk_lit_fluid_fade.gdshader</code> (each: +<code>u_night_lift</code> uniform + the toe),
+<code>godot/world/world.gd</code> (boot env read, push state, per-frame value-gated push to chunk + fluid materials),
+<code>godot/autoload/settings.gd</code> (<code>"night_lift": false</code> + sanitize), <code>godot/ui/menu.gd</code> (row + sync + handler),
+<code>godot/ARCHITECTURE.md</code> (Settings row clause). <b>Reverted:</b> <code>godot/project.godot</code> (clean vs HEAD),
+temporary <code>godot/autoload/probe_env_tmp.gd</code> and standalone <code>godot/.probe_ac0447/</code> deleted.
+<b>New (kept, named):</b> <code>tasks/AC-0447/AC-0447-results.html</code>, captures <code>a0-night</code>, <code>a1-day</code>,
+<code>a2-night-ridge</code> (+ <code>_placed</code> twins), <code>c0-day-ctrl</code> (the day-noise control); <code>.scratch/AC-0447/</code>
+(git-ignored: logs, <code>measure.py</code>, <code>diff_day.py</code>, <code>render_baseline.sh</code>, <code>render_after.sh</code>).
+Fenced files and AC-0067/AC-0384/AC-0425 untouched.</p>
+</body>
+</html>
