@@ -24,6 +24,7 @@ var camera: Camera3D
 var player: Node3D
 var drops: Node
 var entities: Node
+var particles: Node3D  # AC-0038: the pooled particle system
 var sun: DirectionalLight3D
 var world_env: WorldEnvironment
 var env: Environment
@@ -144,8 +145,53 @@ func _ready() -> void:
 		# snapped the pre-settle (collapsed) layout. Wait longer.
 		for i in 40:
 			await get_tree().process_frame
+		# AC-0448: scroll the active tab page before the snap (unset = the
+		# old single-shot behaviour, byte-identical) — "bottom" or a px
+		# offset. The reachability instrument: a frame of the bottom-most
+		# row is only possible if the page actually scrolls.
+		var menu_scroll := OS.get_environment("AWECRAFT_MENU_SCROLL")
+		if menu_scroll != "":
+			var mtabs: Node = menu.get_node("Layer/OptionsBox/Center/OptTabs")
+			var msc: ScrollContainer = mtabs.get_child(mtabs.current_tab) as ScrollContainer
+			if msc != null and msc.get_v_scroll_bar() != null:
+				var mvbar: ScrollBar = msc.get_v_scroll_bar()
+				msc.scroll_vertical = mvbar.max_value if menu_scroll == "bottom" else clampf(float(menu_scroll), 0.0, mvbar.max_value)
+				for i in 20:
+					await get_tree().process_frame
+		# AC-0448: the per-page census in the RESULT — rows, the list's
+		# rendered size, the page rect and the scroll range. This is the
+		# measurement the ticket must show (row count, rendered height,
+		# panel height, clipping/scroll behaviour), reported wherever the
+		# shot fires.
+		var mcensus: Dictionary = {}
+		var mopt_tabs: Node = menu.get_node("Layer/OptionsBox/Center/OptTabs")
+		for mci in mopt_tabs.get_child_count():
+			var mpg: Node = mopt_tabs.get_child(mci)
+			var mcc: Node = mpg.get_node_or_null("Center")
+			var mlist: Control = null
+			if mcc != null and mcc.get_child_count() > 0:
+				mlist = mcc.get_child(0) as Control
+			elif mpg is Control:
+				mlist = mpg as Control
+			if mlist == null:
+				continue
+			var mscroll: ScrollContainer = mpg as ScrollContainer
+			var mvbar2: ScrollBar = mscroll.get_v_scroll_bar() if mscroll != null else null
+			mcensus[String(mpg.name)] = {
+				"rows": int(mlist.get_child_count()),
+				"content": [int(round(mlist.size.x)), int(round(mlist.size.y))],
+				"page": [int(round(mpg.size.x)), int(round(mpg.size.y))],
+				"scroll_max": float(mvbar2.max_value) if mvbar2 != null else -1.0,
+			}
+		var mopt_center := menu.get_node("Layer/OptionsBox/Center")
+		Debug.result({
+			"menu": true, "mode": Game.mode, "build": Build.ID, "values": Settings.values,
+			"viewport": [int(get_viewport().size.x), int(get_viewport().size.y)],
+			"options_frame": [int(round(mopt_center.position.x)), int(round(mopt_center.position.y)), int(round(mopt_center.size.x)), int(round(mopt_center.size.y))],
+			"tabs": [int(round(mopt_tabs.position.x)), int(round(mopt_tabs.position.y)), int(round(mopt_tabs.size.x)), int(round(mopt_tabs.size.y))],
+			"pages": mcensus,
+		})
 		await Debug.snap(menu_shot)
-		Debug.result({"menu": true, "mode": Game.mode, "build": Build.ID, "values": Settings.values})
 		get_tree().quit()
 		return
 
@@ -215,6 +261,15 @@ func _create_game_nodes(range_mode: bool = false) -> void:
 	entities.name = "Entities"
 	add_child(entities)
 	Game.entities = entities
+	# AC-0038: the pooled particle system (break debris / hit sparks /
+	# arrow burst / pickup puff) — one fixed 200-slot ring, one
+	# InstancedMesh3D, allocated once in _ready, round-robin reuse.
+	# AWECRAFT_PARTICLES=0 disables it (frame-cost A/B).
+	if OS.get_environment("AWECRAFT_PARTICLES") != "0":
+		particles = ParticlePool.new()
+		particles.name = "Particles"
+		add_child(particles)
+		Game.particles = particles
 	inventory_ui = InventoryScript.new()
 	inventory_ui.name = "Inventory"
 	add_child(inventory_ui)
@@ -751,16 +806,20 @@ func _free_game_nodes() -> void:
 		drops.queue_free()
 	if entities != null:
 		entities.queue_free()
+	if particles != null:
+		particles.queue_free()
 	player = null
 	inventory_ui = null
 	stats_overlay = null
 	world = null
 	drops = null
 	entities = null
+	particles = null
 	Game.world = null
 	Game.player = null
 	Game.drops = null
 	Game.entities = null
+	Game.particles = null
 	Game.hotbar = null
 
 func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: String) -> void:
@@ -778,6 +837,14 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 	Game.new_world(44 if seed_env == "" else seed_env.to_int())
 	if logic == "settings":
 		harness._settings_test()
+		get_tree().quit()
+		return
+	if logic == "controls":
+		# AC-0088: the controls remap arm (dispatched like settings -
+		# before the game nodes exist, standalone AND in the battery;
+		# the InputMap + the Settings layer are the whole test surface).
+		# Awaiting: the arm flushes two parsed probe events.
+		await harness._controls_test()
 		get_tree().quit()
 		return
 	if _harness_env_set():

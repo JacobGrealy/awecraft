@@ -66,6 +66,7 @@ var world = null
 var player = null
 var drops = null
 var entities = null
+var particles = null  # AC-0038: the pooled particle system (ParticlePool, owned by main)
 var hotbar = null
 # AC-0121: in-game debug console - console_open gates player input while the
 # overlay is up; console = the main scene's CanvasLayer (null in the menu).

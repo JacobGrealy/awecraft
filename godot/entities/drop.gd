@@ -135,6 +135,9 @@ func _process(dt: float) -> void:
 		_grounded = false
 		if dist < 1.1:
 			if p.inv_add(id, 1):
+				# AC-0038: the pickup puff.
+				if Game.particles != null:
+					Game.particles.burst_pickup(position)
 				Audio.play("pickup")
 				queue_free()
 				return

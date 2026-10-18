@@ -24,7 +24,16 @@ var hunger:
 func snap(path) -> void:
 	await RenderingServer.frame_post_draw
 	var image := get_tree().root.get_viewport().get_texture().get_image()
-	image.save_png(path)
+	# AC-0396: a failed save (missing directory, bad path) used to print
+	# the SNAP line anyway - a snapshot the reader then verifies exists
+	# or not. Fail loudly instead: the SNAP line is the "it was taken"
+	# claim, and a claim for a file that does not exist is the false-
+	# pass this instrument exists to rule out.
+	var err := image.save_png(path)
+	if err != OK:
+		push_error("SNAP FAILED: %s (%s)" % [path, error_string(err)])
+		print("SNAP FAIL ", path, " err=", err)
+		return
 	print("SNAP ", path, " ", image.get_width(), "x", image.get_height())
 
 func result(dict) -> void:
