@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-18T08:44
+  updated_at: 2026-10-18T15:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29,7 +29,8 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
-- AC-0447
+- AC-0448
+- AC-0449
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -28700,11 +28701,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-18T08:44
-  updated_at: 2026-10-18T08:44
-  completed_at: null
+  updated_at: 2026-10-18T15:26
+  completed_at: 2026-10-18T15:26
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Night should be dark and beautiful, not merely legible. Standing under the moon
@@ -28771,6 +28772,139 @@ intake:
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 30 for the assessment''s verdict and its night
     frames, tasks/AC-0436/AC-0436-results.html for the moon and its calibration, and tasks/AC-0446/AC-0446-results.html
     for the discovery that the dusk hour is not midnight.
+
+    '
+  comments: []
+- id: AC-0448
+  title: options-menu-overflows-and-needs-a-developer-section
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T15:26
+  updated_at: 2026-10-18T15:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: Every option must be reachable. Right now the options menu runs off the bottom
+    of the screen and does not scroll, so options below the fold cannot be selected at all - the user
+    cannot change them, whatever they do. The menu has also accumulated internal feature flags that a
+    player will never touch, and those should live under the developer section rather than sitting among
+    the settings a player actually uses.
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER 2026-10-18, and it is a BLOCKING defect rather than a cosmetic one: "the options
+    menus are not scrollable and are going off the screen so I can''t access all the options". A setting
+    a player cannot reach is equivalent to that setting not existing, and this project has spent many
+    rounds chasing exactly that failure shape - fixes that shipped switched off, a crosshair that would
+    have drawn invisibly, a gate that never existed.
+
+    THE CAUSE IS ALMOST CERTAINLY GROWTH WITHOUT A CONTAINER: the settings surface has acquired a row
+    for every feature added over many rounds - moon, night lift, sky floor, cloud gate, cloud jitter,
+    far seam, aim outline, statistic captions, inventory dimming, viewmodel occlusion, ambient lift, seam
+    lighting, relief shading, and more - and each was added as a plain child of a fixed-height panel.
+    Once the total exceeds the panel, the overflow is invisible and unreachable. Confirm that rather than
+    assume it: measure how many rows exist, how tall they render, and what the panel''s height and clipping
+    behaviour actually are at the user''s resolution.
+
+    THE SECOND REQUEST IS A RESTRUCTURE, and it is the right one for this game''s reputation: "most of
+    the options that a player would not use should be moved under the developer section (ie the feature
+    flag options)". A settings menu containing a dozen internal switches reads as a development tool,
+    which is the opposite of the polish this project is working toward, and the user has now made the
+    distinction explicit. The split should follow what the user said: FEATURE FLAGS AND INTERNAL SWITCHES
+    go under a developer section; genuine player preferences stay visible. Anything genuinely ambiguous
+    should be judged by whether a player could plausibly want to change it, not by whether it exists.
+
+    A CONSTRAINT THAT MATTERS: the harness and the probes drive many of these settings by name, and earlier
+    work established contracts about which arms report what. Moving a row must not break a setting''s
+    identity, only its placement - the setting must remain reachable by the same key and the same environment
+    override however it is presented, and the settings arm must stay green with its row count accounted
+    for rather than silently changing.
+
+    ACCEPTANCE: A FRAME SHOWING EVERY OPTION REACHABLE at the user''s resolution - by scrolling, by paging,
+    by a taller panel or by moving entries off the top level, whichever fits the existing visual language
+    - with the scroll behaviour demonstrated rather than described, including reaching the bottom-most
+    entry. Plus the reorganized menu showing the developer section containing the feature flags and the
+    player preferences visible at the top level, and the settings arm green with the row count explained.
+
+    CONSTRAINTS: G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked, because this project has a stochastic use-after-free that leaves a completely
+    clean log with a signal-11 exit; the smoke battery, the settings arm and the held-item probe green;
+    genhash 25/25 byte-identical, since none of this touches generation; and the recent work must keep
+    holding - the moon and the night lift, the sky consistent with altitude, the far-tier seam, the cloud
+    jitter, the interface additions and the column-atomic streaming.
+
+    '
+  comments: []
+- id: AC-0449
+  title: near-field-air-is-washing-out-everything
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T15:26
+  updated_at: 2026-10-18T15:26
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: The world should be clear nearby and hazy far away. Right now there is so much
+    blue in the air that everything is washed out even at arm''s length, and the effect stops reading
+    as distance and starts reading as a camera fault. The user''s words: "the default blue amount is insane
+    now, everything is completely blurred out even things right in front of you. It should be subtle and
+    far out."
+
+
+    2) Technical Details:
+
+    REPORTED BY THE USER 2026-10-18 AS A REGRESSION, and the phrase "now" is the most important word in
+    it - this was not always the case, so something recent changed it. The requirement is also stated
+    precisely: the effect must be SUBTLE and it must live FAR OUT, which means the near field should be
+    clear and the haze should accumulate with distance rather than being applied uniformly.
+
+    THE PRIME SUSPECT, to be confirmed rather than assumed: a recent fix made the sky consistent with
+    where the player is, so that BELOW the local horizon inside the atmosphere the sky is air rather than
+    space. That fix was correct - the sky model was declaring itself space at six hundred metres inside
+    a twelve hundred metre atmosphere - BUT THE AIR IT RESTORED IS NOW APPLIED TO EVERY DIRECTION THE
+    PLAYER LOOKS, INCLUDING DOWNWARD AT THE GROUND A FEW METRES AWAY. If the same column of air is composited
+    in front of nearby terrain, the result is exactly the complaint: everything blurred blue, including
+    things right in front of the player, because the air is being counted between the eye and an object
+    that is inside it rather than behind it.
+
+    ALTERNATIVES TO DISTINGUISH: the engine''s fog near and far distances, which the user has set at a
+    full-fog distance of three hundred and thirty-two metres - that setting has stood for many rounds
+    and the complaint is that it is "now" too strong, so the setting itself is unlikely to be the cause,
+    but the fog''s COLOUR or its DENSITY CURVE may have moved; the atmosphere''s air colour, which several
+    recent fixes touched; the limb and haze terms; and anything that adds a constant term to the view
+    rather than an accumulating one.
+
+    HOW TO TELL THEM APART CHEAPLY: render the same view with the sky''s air term disabled, then with
+    the engine fog disabled, then with both. Whichever removal clears the near field is the one to fix.
+    Measure the near-field contrast - the luminance difference between adjacent terrain features a few
+    metres away - before and after each. A near field that is clear and far that is hazy is the goal,
+    so the measurement is a PROFILE WITH DISTANCE, not a single number: sample the same terrain at several
+    distances and show that clarity returns as distance falls.
+
+    ACCEPTANCE: THE USER''S VIEW RE-TAKEN, with nearby terrain clear and legible - the texture and edges
+    of something a few metres away visible - while distance still fades. Give the contrast-with-distance
+    profile before and after, and confirm the sky above the horizon did not regress, since the whole point
+    of the recent sky work was that the upper sky reads correctly.
+
+    CONSTRAINTS: genhash 25/25 byte-identical; G0 zero SCRIPT ERROR and ZERO SHADER ERROR via tasks/scripts/gate_census.py
+    AND the process exit status checked, because this project has a stochastic use-after-free that leaves
+    a completely clean log with a signal-11 exit; the standing set green (farab h_mismatch 0, ladder 20/20,
+    meshprobe 1.0, halo ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary
+    r4 in band, shaderforce 12/12); every look change ships behind a switch defaulting conservative; and
+    the recent work must keep holding - the sky consistent with altitude both inside and outside the atmosphere,
+    the opaque planet, the moon and the night lift, the far-tier seam, the cloud jitter and the column-atomic
+    streaming.
 
     '
   comments: []
