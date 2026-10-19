@@ -1,0 +1,250 @@
+{
+ "instrument": "AC-0450 airborne void census",
+ "tol": 2,
+ "w": 1280,
+ "h": 720,
+ "pixels": 921600,
+ "pose": {
+  "pos": [
+   10.1420736312866,
+   940.9794921875,
+   10.1420736312866
+  ],
+  "aim": [
+   -0.00204265513457358,
+   -0.999995827674866,
+   -0.00204265536740422
+  ],
+  "up": [
+   -0.999997973442078,
+   0.00204265955835581,
+   1.24813936963619e-10
+  ],
+  "fov": 99.0,
+  "R": 4000.0,
+  "alt": 941.0,
+  "playercam": false,
+  "nadir": true
+ },
+ "derived": {
+  "fog_far": 332.0,
+  "render_edge": 400.0,
+  "render_radius": 24,
+  "fog_start_pct": 83.0,
+  "source": "the arm printed them off env.fog_depth_end (DayNight.fog_far home) and satellite.last_render_edge ((rr+1)*16 home)"
+ },
+ "fractions": {
+  "background_a": 0.32224,
+  "background_a_sky_true": 0.0,
+  "background_a_hazed": 0.32224,
+  "background_sky": 0.322167,
+  "background_hole_a": 7.3e-05,
+  "background_hole_abs": 67,
+  "background_hole_sky_true": 0,
+  "background_hole_hazed": 67,
+  "body_d": 0.67776,
+  "geometry_total": 0.67776,
+  "tier_pixels_b_c": 0,
+  "tier_fraction": 0.0,
+  "fog_owned": 0.0,
+  "skybody": 0.0,
+  "skybody_on_planet_disc": 0.0
+ },
+ "distance": {
+  "geo_dmin_m": 941.0,
+  "geo_dmax_m": 2897.8,
+  "tier_dmin_m": null,
+  "fog_far_m": 332.0,
+  "render_edge_m": 400.0,
+  "note": "tier pixels = geometry not body; a tier pixel with d >= fog_far would contradict the AC-0401 discard - reported, not filtered"
+ },
+ "consistency": {
+  "bg_xor_not_body": 0,
+  "fog_and_body": 0,
+  "skybody_on_bare_geometry": 0,
+  "expect": "all three ~0 (see the module docstring)"
+ },
+ "negative_test": {
+  "a_f0": 0.32224,
+  "note": "F4/F3 fractions computed per-frame below. The (a) counter must RISE when geometry is removed: at this vantage part of the frame already READS as background (the hazed body is on purpose the air colour, the AC-0401/AC-0429 single-source design), so the rise is a_f4 - a_f0 = the visible-geometry fraction, and (a)_hole must rise to the whole planet-intersecting disc. A counter that cannot be made to rise is a broken instrument - these numbers are the test.",
+  "f4_background": 1.0,
+  "f4_background_hole": 0.570714,
+  "f3_background": 1.0,
+  "f3_background_hole": 0.570714,
+  "rise_f4": 0.67776,
+  "rise_f3": 0.67776
+ },
+ "profile_f0_geo": [
+  {
+   "d_lo": 941.0,
+   "d_hi": 1104.1,
+   "pairs": 168084,
+   "C_mean": 3.491,
+   "C_p50": 0.715
+  },
+  {
+   "d_lo": 1104.1,
+   "d_hi": 1267.1,
+   "pairs": 165556,
+   "C_mean": 2.809,
+   "C_p50": 0.715
+  },
+  {
+   "d_lo": 1267.1,
+   "d_hi": 1430.2,
+   "pairs": 156984,
+   "C_mean": 2.756,
+   "C_p50": 0.361
+  },
+  {
+   "d_lo": 1430.2,
+   "d_hi": 1593.3,
+   "pairs": 143048,
+   "C_mean": 2.125,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 1593.3,
+   "d_hi": 1756.4,
+   "pairs": 125704,
+   "C_mean": 1.564,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 1756.4,
+   "d_hi": 1919.4,
+   "pairs": 101072,
+   "C_mean": 1.343,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 1919.4,
+   "d_hi": 2082.5,
+   "pairs": 68915,
+   "C_mean": 1.198,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 2082.5,
+   "d_hi": 2245.6,
+   "pairs": 49294,
+   "C_mean": 1.07,
+   "C_p50": 0.14
+  },
+  {
+   "d_lo": 2245.6,
+   "d_hi": 2408.6,
+   "pairs": 34258,
+   "C_mean": 1.147,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 2408.6,
+   "d_hi": 2571.7,
+   "pairs": 22278,
+   "C_mean": 1.169,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 2571.7,
+   "d_hi": 2734.8,
+   "pairs": 12195,
+   "C_mean": 1.054,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 2734.8,
+   "d_hi": 2897.8,
+   "pairs": 2736,
+   "C_mean": 0.942,
+   "C_p50": 0.072
+  }
+ ],
+ "profile_f3_disc": [
+  {
+   "d_lo": 941.0,
+   "d_hi": 1104.1,
+   "pairs": 168084,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1104.1,
+   "d_hi": 1267.1,
+   "pairs": 165556,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1267.1,
+   "d_hi": 1430.2,
+   "pairs": 156984,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1430.2,
+   "d_hi": 1593.3,
+   "pairs": 143052,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1593.3,
+   "d_hi": 1756.4,
+   "pairs": 125732,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1756.4,
+   "d_hi": 1919.4,
+   "pairs": 101086,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1919.4,
+   "d_hi": 2082.5,
+   "pairs": 68928,
+   "C_mean": 0.008,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2082.5,
+   "d_hi": 2245.6,
+   "pairs": 49358,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2245.6,
+   "d_hi": 2408.6,
+   "pairs": 34296,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2408.6,
+   "d_hi": 2571.7,
+   "pairs": 22314,
+   "C_mean": 0.007,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2571.7,
+   "d_hi": 2734.8,
+   "pairs": 12236,
+   "C_mean": 0.027,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2734.8,
+   "d_hi": 2897.8,
+   "pairs": 2746,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  }
+ ],
+ "settle_pair": []
+}

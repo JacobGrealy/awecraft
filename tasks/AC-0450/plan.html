@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AC-0450 plan — airborne void census + coverage instrument</title>
+<style>
+body { font-family: ui-monospace, Consolas, monospace; font-size: 14px; line-height: 1.45; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #1a2028; }
+h1 { font-size: 20px; border-bottom: 3px solid #2a6; padding-bottom: 6px; }
+h2 { font-size: 16px; margin-top: 26px; border-bottom: 1px solid #9ab; padding-bottom: 3px; }
+table { border-collapse: collapse; margin: 10px 0; }
+th, td { border: 1px solid #bcd; padding: 3px 8px; text-align: left; vertical-align: top; }
+th { background: #e8f2f5; }
+code { background: #f2f6f7; padding: 0 4px; }
+.note { background: #fff8e6; border-left: 4px solid #e6b422; padding: 8px 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<h1>AC-0450 plan — airborne void census and coverage instrument</h1>
+<p>Builder: delegated subagent. Tree 2b2f048 (AC-0449 landed). This is an <b>instrument, not a
+fix</b>: a number for "how much of this frame is not drawn" at the vantage the user complains
+about, proven to be able to fail, then pointed at the live symptom. Nothing is fixed.</p>
+
+<h2>Goal</h2>
+<ul>
+<li>Per-frame pixel fractions at a fixed airborne vantage: (a) background / no geometry,
+(b) far-tier geometry (lod_avg bands), (c) near-tier geometry (chunk/fluid materials),
+(d) satellite body, plus the total. A <b>contrast-with-distance profile</b> (mean luminance
+delta between adjacent pixels, binned by camera distance) — the shared measurement AC-0449's
+acceptance wants.</li>
+<li>A <b>negative test demonstrating the counter RISES</b> (it must be able to fail).</li>
+<li>A <b>four-state elimination</b> (as shipped / sky air term off / engine fog off /
+satellite body off) reported as evidence — <b>no pre-declared winner</b> (the near-field
+handover and the blur reading both remain live).</li>
+<li>A permanent <b><code>air</code></b> camera preset in the standing <code>AWECRAFT_CAM</code>
+set (the AC-0394-owed altitude preset), plus one row set in HARNESS.md §2.</li>
+</ul>
+
+<h2>How the counter works</h2>
+<p>Ownership is established by <b>frame A/B elimination, not by colour</b> (colour cannot
+separate fog-washed terrain from sky: both sit at the single-source air colour
+205/250/255-class). Five deterministic frames, one vantage, CLOUDS=0, T=0.5 frozen,
+R24/FOG_PCT 83, 1280×720, Forward+ via lavapipe (the §2 recipe):</p>
+<table>
+<tr><th>frame</th><th>env state</th><th>what moves</th></tr>
+<tr><td><code>F0</code></td><td>as shipped</td><td>— (the census frame)</td></tr>
+<tr><td><code>F1</code></td><td><code>AWECRAFT_SKYALT=0</code></td><td>sky body only (background pixels; geometry is switch-blind)</td></tr>
+<tr><td><code>F2</code></td><td><code>AWECRAFT_NO_FOG=1</code></td><td>engine depth fog only (near/far tiers in the [fog_near, fog_far] window; body is fog_disabled; sky untouched)</td></tr>
+<tr><td><code>F3</code></td><td><code>AWECRAFT_SAT_BODY=0</code></td><td>the satellite body only (its pixels fall back to the background)</td></tr>
+<tr><td><code>F4</code></td><td><code>AWECRAFT_NO_WORLD_VIS=1</code></td><td>ALL world geometry (the background reference = pure sky; also the "coverage disabled" frame)</td></tr>
+</table>
+<p>Per-pixel (max-channel delta, tolerance 2/255; the planet-preset class is
+byte-identical across runs, so the tolerance is a noise guard, not a fudge):</p>
+<ul>
+<li><b>(a) background</b> = <code>Δ(F0, F4) ≤ tol</code> — nothing drawn in front of that pixel.
+Split analytically: <b>(a)_sky</b> = bg pixels whose camera ray misses the planet
+(above the horizon, expected) vs <b>(a)_hole</b> = bg pixels whose ray hits the planet
+surface distance — background where terrain is expected, the class the standing
+<code>r16 far_holes</code> census reports as 0/0 and the user photographs.</li>
+<li><b>(d) body</b> = <code>Δ(F0, F3) &gt; tol</code> — the body drew there.</li>
+<li><b>total geometry</b> = 1 − (a). <b>Fog-owned geometry</b> = <code>Δ(F0, F2) &gt; tol</code>
+(the evidence row for the engine-fog state).</li>
+<li><b>(c) near / (b) far</b>: geometry pixels that are not body, classified by per-pixel
+camera distance (ray→planet-sphere intersection from the preset's reported pose) against the
+tier discard wall: at 941 m every in-frame pixel is past the render edge, so (b)=(c)=0 by
+construction — reported with the measured min-distance evidence, not assumed. The
+near/far <i>tier</i> split (real band vs lod_avg bands) is only live below ~500 m; at the
+user's vantage the honest answer is 0/0 and the instrument says so.</li>
+</ul>
+<p><b>Derive, do not restate:</b> the arm prints the live derived thresholds —
+<code>fog_far</code> read off <code>env.fog_depth_end</code> (which main.gd pushes from
+<code>DayNight.fog_far(render_radius, fog_start_pct)</code>, core/daynight.gd:49-50) and
+<code>render_edge</code> read off <code>world.satellite.last_render_edge</code>
+(derived at world/satellite_body.gd:931 as <code>(rr+1)*16</code>, the same home
+expression main.gd:1523 pushes). The Python side consumes the printed values; no arm
+hardcodes 24 / 332 / 400. The vantage itself is a stated choice (941 m = the user's
+documented altitude, 30° down-outward), not a derived constant.</p>
+<p><b>Contrast profile:</b> per-pixel camera distance (same ray→sphere model) bins the
+frame; in each bin the mean |ΔL| between horizontally/vertically adjacent pixels
+(L = luma). Reported F0 (as shipped) and F3 (body off = sky reference). A profile that
+stays high at range is the "clear and hazy far field" shape AC-0449 wants measured.</p>
+<p><b>Post-process honesty:</b> the preset camera is a bare <code>Camera3D</code> — it does
+NOT carry the player's <code>CameraAttributesPractical</code> (DoF), the same documented
+limit as the planet preset (AC-0449). Geometry ownership is DoF-invariant (blur does not
+discard pixels), so the census is valid on the bare camera; the contrast profile is
+therefore additionally measured on a <b>player-camera frame</b>
+(<code>AWECRAFT_AIR_PLAYERCAM=1</code> — same pose, the real camera with DoF live) and the
+delta between the two profiles is the DoF's share of the far-field contrast loss. This is
+reported explicitly, as the ticket requires.</p>
+
+<h2>How I will prove it can fail (negative test)</h2>
+<ol>
+<li><b>F4 (world hidden) is the negative test in the matrix:</b> with no world geometry
+drawn, (a) must jump from its F0 reading to ≈100 % and (a)_hole to the whole disc area —
+the counter RISES to the maximum. If it does not, the instrument is broken and I say so
+plainly instead of shipping a zero.</li>
+<li><b>F3 (body off) is the partial rise:</b> (a) rises exactly where the body contributed
+(the disc), the sky-above region stays background — the rise is spatially consistent with
+the (d) mask, not a uniform shift.</li>
+<li>The two rises are reported as the numbers, with the masks, against the F0 baseline.</li>
+</ol>
+
+<h2>Files to touch</h2>
+<table>
+<tr><th>file</th><th>change</th><th>new?</th></tr>
+<tr><td><code>godot/scenes/harness.gd</code></td><td>new <code>elif cam == "air":</code> branch in <code>run()</code>, after the <code>planet</code> branch — self-contained (frozen player to the vantage so the body's altitude uniforms ride, body-LOADED wait, drain, snapshot, quit). Env-gated: <code>AWECRAFT_AIR_ALT</code> (default 941), <code>AWECRAFT_AIR_PITCH</code> (default 30° below horizon), <code>AWECRAFT_AIR_FOV</code> (default 99 = the flight FOV 90×1.10, player.tscn:20 + player.gd:851), <code>AWECRAFT_AIR_NADIR=1</code>, <code>AWECRAFT_AIR_PLAYERCAM=1</code>. RESULT prints the live derived thresholds (fog_depth_end, satellite last_render_edge) + pose + sky uniforms.</td><td>modified (branch added)</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td><td>§2 env table: <code>air</code> added to the <code>AWECRAFT_CAM</code> preset list + a row for the <code>AWECRAFT_AIR_*</code> envs (hand-written section, the AC-0399/AC-0422 pattern)</td><td>modified</td></tr>
+<tr><td><code>tasks/AC-0450/aircensus.py</code></td><td>the pixel census + A/B masks + contrast profile + negative-test report, over the five PNGs + the printed RESULT JSON</td><td><b>NEW</b></td></tr>
+<tr><td><code>tasks/AC-0450/plan.html</code>, <code>AC-0450-results.html</code>, <code>continuity.md</code>, <code>captures/</code></td><td>ticket folder</td><td><b>NEW</b> (results, captures)</td></tr>
+<tr><td><code>.scratch/AC-0450/</code></td><td>run scripts + godot logs (git-ignored)</td><td>scratch</td></tr>
+</table>
+<p>Nothing in <code>world/</code>, <code>autoload/data.gd</code> or any shader is touched —
+genhash must stay 25/25 byte-identical (it will; the arm is additive and env-gated).</p>
+
+<h2>Harness gates (mine; heavy set = coordinator's)</h2>
+<table>
+<tr><th>gate</th><th>how</th><th>pass</th></tr>
+<tr><td>G0</td><td><code>--headless --quit</code> + <code>tasks/scripts/gate_census.py</code> on the log, <b>and the process exit status checked</b> (the stochastic UAF leaves a clean log with rc≠0)</td><td>rc=0 + 0 SCRIPT ERROR + 0 SHADER ERROR</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code></td><td>ok:true, rc=0, census clean</td></tr>
+<tr><td>PROBE (the arm I add)</td><td>the <code>air</code> preset renders: shot fires, <code>SNAP ok</code>, RESULT fields present, derived thresholds read 332.0 / 400.0 at R24/F83, exit 0</td><td>the census matrix itself is the probe's evidence</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical to the AC-0403/AC-0449 reference (no world/ touch)</td></tr>
+</table>
+<div class="note">Render traps honored: no <code>AWECRAFT_LOGIC</code> on any render call (the
+snapshot path only); <code>AWECRAFT_SIZE=1280,720</code> with the comma;
+<code>AWECRAFT_SNAP_DRAIN</code> counts FRAMES — R24 planet-class runs are the
+0.2–0.5 FPS class where AC-0417 proved drain 60 completes inside the 1200 s wall while
+120+ timed out, so the matrix uses drain 60 (the body LOADED wait is separate and
+exits in ~300 ms on the res:// seed-44 path); xvfb-run +
+<code>VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json</code> +
+<code>--rendering-driver vulkan</code>, the boot line must say <code>- Forward+ -</code>;
+every run: one bash command, <code>HOME=/tmp/dsh_home</code> set in the same command,
+absolute engine path, <code>pgrep -af '[g]odot'</code> checked first, log to
+<code>.scratch/AC-0450/</code>, PNG existence checked after, exit status recorded.
+Memory-limited per OPS.md.</div>
+
+<h2>Run matrix (one godot at a time, sequential)</h2>
+<table>
+<tr><th>id</th><th>run</th><th>purpose</th></tr>
+<tr><td>R0</td><td>air 941 m, 30° down-outward, <code>SNAP_STEPS=30,60</code></td><td>F0 as-shipped + the per-frame settle pair</td></tr>
+<tr><td>R1</td><td>+ <code>AWECRAFT_SKYALT=0</code></td><td>F1 sky air term off</td></tr>
+<tr><td>R2</td><td>+ <code>AWECRAFT_NO_FOG=1</code></td><td>F2 engine fog off</td></tr>
+<tr><td>R3</td><td>+ <code>AWECRAFT_SAT_BODY=0</code></td><td>F3 satellite body off</td></tr>
+<tr><td>R4</td><td>+ <code>AWECRAFT_NO_WORLD_VIS=1</code></td><td>F4 world hidden = background reference + <b>negative test</b></td></tr>
+<tr><td>R5</td><td>as-shipped + <code>AWECRAFT_AIR_PLAYERCAM=1</code></td><td>the DoF-carrying player-camera frame (the post-process cross-check)</td></tr>
+<tr><td>R6</td><td><code>AWECRAFT_AIR_NADIR=1</code></td><td>the nadir disc at 941 m (the AC-0451 annulus view)</td></tr>
+<tr><td>R7</td><td><code>AWECRAFT_AIR_ALT=300</code>, nadir</td><td>context: the handover annulus shape at the altitude the handover arithmetic predicts (a single as-shipped frame)</td></tr>
+</table>
+<p>After the matrix: G0, SMOKE, PROBE (a fresh air run doubles as the gate), genhash — each
+one godot at a time, census + exit status on every log. Then the results page.</p>
+</body></html>

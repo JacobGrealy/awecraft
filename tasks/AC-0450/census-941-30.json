@@ -1,0 +1,265 @@
+{
+ "instrument": "AC-0450 airborne void census",
+ "tol": 2,
+ "w": 1280,
+ "h": 720,
+ "pixels": 921600,
+ "pose": {
+  "pos": [
+   10.1420736312866,
+   940.9794921875,
+   10.1420736312866
+  ],
+  "aim": [
+   -0.867045760154724,
+   -0.498227506875992,
+   -0.0010261198040098
+  ],
+  "up": [
+   -0.498228549957275,
+   0.867043912410736,
+   0.00177774950861931
+  ],
+  "fov": 99.0,
+  "R": 4000.0,
+  "alt": 941.0,
+  "playercam": false,
+  "nadir": false
+ },
+ "derived": {
+  "fog_far": 332.0,
+  "render_edge": 400.0,
+  "render_radius": 24,
+  "fog_start_pct": 83.0,
+  "source": "the arm printed them off env.fog_depth_end (DayNight.fog_far home) and satellite.last_render_edge ((rr+1)*16 home)"
+ },
+ "fractions": {
+  "background_a": 0.669508,
+  "background_a_sky_true": 0.645676,
+  "background_a_hazed": 0.023832,
+  "background_sky": 0.669449,
+  "background_hole_a": 6e-05,
+  "background_hole_abs": 55,
+  "background_hole_sky_true": 0,
+  "background_hole_hazed": 55,
+  "body_d": 0.330492,
+  "geometry_total": 0.330492,
+  "tier_pixels_b_c": 0,
+  "tier_fraction": 0.0,
+  "fog_owned": 0.0,
+  "skybody": 0.645676,
+  "skybody_on_planet_disc": 0.0
+ },
+ "distance": {
+  "geo_dmin_m": 961.1,
+  "geo_dmax_m": 2888.6,
+  "tier_dmin_m": null,
+  "fog_far_m": 332.0,
+  "render_edge_m": 400.0,
+  "note": "tier pixels = geometry not body; a tier pixel with d >= fog_far would contradict the AC-0401 discard - reported, not filtered"
+ },
+ "consistency": {
+  "bg_xor_not_body": 0,
+  "fog_and_body": 0,
+  "skybody_on_bare_geometry": 0,
+  "expect": "all three ~0 (see the module docstring)"
+ },
+ "negative_test": {
+  "a_f0": 0.669508,
+  "note": "F4/F3 fractions computed per-frame below. The (a) counter must RISE when geometry is removed: at this vantage part of the frame already READS as background (the hazed body is on purpose the air colour, the AC-0401/AC-0429 single-source design), so the rise is a_f4 - a_f0 = the visible-geometry fraction, and (a)_hole must rise to the whole planet-intersecting disc. A counter that cannot be made to rise is a broken instrument - these numbers are the test.",
+  "f4_background": 1.0,
+  "f4_background_hole": 0.28201,
+  "f3_background": 1.0,
+  "f3_background_hole": 0.28201,
+  "rise_f4": 0.330492,
+  "rise_f3": 0.330492
+ },
+ "profile_f0_geo": [
+  {
+   "d_lo": 961.1,
+   "d_hi": 1121.7,
+   "pairs": 115808,
+   "C_mean": 1.964,
+   "C_p50": 0.638
+  },
+  {
+   "d_lo": 1121.7,
+   "d_hi": 1282.3,
+   "pairs": 94320,
+   "C_mean": 2.053,
+   "C_p50": 0.715
+  },
+  {
+   "d_lo": 1282.3,
+   "d_hi": 1443.0,
+   "pairs": 74734,
+   "C_mean": 2.997,
+   "C_p50": 0.715
+  },
+  {
+   "d_lo": 1443.0,
+   "d_hi": 1603.6,
+   "pairs": 60050,
+   "C_mean": 1.987,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 1603.6,
+   "d_hi": 1764.2,
+   "pairs": 48226,
+   "C_mean": 1.55,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 1764.2,
+   "d_hi": 1924.8,
+   "pairs": 38286,
+   "C_mean": 1.519,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1924.8,
+   "d_hi": 2085.5,
+   "pairs": 29768,
+   "C_mean": 0.97,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2085.5,
+   "d_hi": 2246.1,
+   "pairs": 22357,
+   "C_mean": 1.402,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 2246.1,
+   "d_hi": 2406.7,
+   "pairs": 16066,
+   "C_mean": 1.248,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 2406.7,
+   "d_hi": 2567.3,
+   "pairs": 10652,
+   "C_mean": 1.117,
+   "C_p50": 0.213
+  },
+  {
+   "d_lo": 2567.3,
+   "d_hi": 2728.0,
+   "pairs": 6017,
+   "C_mean": 1.156,
+   "C_p50": 0.072
+  },
+  {
+   "d_lo": 2728.0,
+   "d_hi": 2888.6,
+   "pairs": 1620,
+   "C_mean": 0.677,
+   "C_p50": 0.072
+  }
+ ],
+ "profile_f3_disc": [
+  {
+   "d_lo": 961.1,
+   "d_hi": 1121.7,
+   "pairs": 115808,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1121.7,
+   "d_hi": 1282.3,
+   "pairs": 94320,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1282.3,
+   "d_hi": 1443.0,
+   "pairs": 74734,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1443.0,
+   "d_hi": 1603.6,
+   "pairs": 60050,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1603.6,
+   "d_hi": 1764.2,
+   "pairs": 48234,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1764.2,
+   "d_hi": 1924.8,
+   "pairs": 38294,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 1924.8,
+   "d_hi": 2085.5,
+   "pairs": 29786,
+   "C_mean": 0.013,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2085.5,
+   "d_hi": 2246.1,
+   "pairs": 22430,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2246.1,
+   "d_hi": 2406.7,
+   "pairs": 16128,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2406.7,
+   "d_hi": 2567.3,
+   "pairs": 10672,
+   "C_mean": 0.005,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2567.3,
+   "d_hi": 2728.0,
+   "pairs": 6036,
+   "C_mean": 0.059,
+   "C_p50": 0.0
+  },
+  {
+   "d_lo": 2728.0,
+   "d_hi": 2888.6,
+   "pairs": 1626,
+   "C_mean": 0.0,
+   "C_p50": 0.0
+  }
+ ],
+ "settle_pair": [
+  {
+   "file": "tasks/AC-0450/captures/f0-air941_s30.png",
+   "background": 0.669516,
+   "background_hole": 5.9e-05,
+   "body": 0.330484,
+   "vs_f4_maxdiff": 255
+  },
+  {
+   "file": "tasks/AC-0450/captures/f0-air941_s60.png",
+   "background": 0.66951,
+   "background_hole": 6e-05,
+   "body": 0.33049,
+   "vs_f4_maxdiff": 255
+  }
+ ]
+}

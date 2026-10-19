@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0450 — airborne void census + coverage instrument — results</title>
+<style>
+ body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em auto; max-width: 1080px; color: #1a202c; line-height: 1.45; }
+ h1 { border-bottom: 3px solid #2b6cb0; padding-bottom: .3em; }
+ h2 { margin-top: 1.6em; color: #2b6cb0; border-bottom: 1px solid #cbd5e0; padding-bottom: .2em; }
+ h3 { margin-top: 1.2em; }
+ table { border-collapse: collapse; margin: .8em 0; font-size: .92em; }
+ th, td { border: 1px solid #cbd5e0; padding: .35em .6em; text-align: left; vertical-align: top; }
+ th { background: #edf2f7; }
+ code, pre { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: .9em; }
+ pre { background: #1a202c; color: #e2e8f0; padding: .8em 1em; overflow-x: auto; border-radius: 4px; }
+ .ok { color: #276749; font-weight: 600; }
+ .warn { color: #975a16; font-weight: 600; }
+ .bad { color: #9b2c2c; font-weight: 600; }
+ .num { text-align: right; font-variant-numeric: tabular-nums; }
+ img.cap { max-width: 100%; border: 1px solid #cbd5e0; border-radius: 4px; margin: .4em 0; }
+ .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+ .small { font-size: .88em; color: #4a5568; }
+ .pill { display: inline-block; background: #e6fffa; border: 1px solid #38b2ac; color: #234e52; border-radius: 10px; padding: 0 .6em; font-size: .85em; margin-right: .4em; }
+</style>
+</head>
+<body>
+
+<h1>AC-0450 — airborne void census + coverage instrument</h1>
+<p><span class="pill">instrument, not fix</span><span class="pill">vantage: 941 m radial, user's settings</span>
+<span class="pill">seed 44 · T=0.5 · R24 · FOG_PCT 83 · fog_far 332.0 m · render edge 400.0 m</span>
+<span class="pill">Forward+ lavapipe · 1280×720 · drain 60</span></p>
+
+<p><strong>What this is.</strong> A per-frame pixel-fraction instrument at a fixed airborne
+vantage, built exactly as the ticket spec demands: the fractions are measured by
+<em>eliminating</em> one world component at a time against the world-hidden reference
+frame — never by colour (colour cannot separate fog-washed terrain from sky: both sit
+at the single-source air colour (208,241,251), by design, AC-0401/AC-0429). The
+negative test (a counter that can be made to fail) and the four-state elimination
+(reported as evidence, no pre-decided winner) are the heart of the deliverable.
+Plus the camera preset the AC-0394 notes audit found owed: <code>air</code> is now a
+standing member of the <code>AWECRAFT_CAM</code> set.</p>
+
+<h2>1. What was built (files)</h2>
+<table>
+<tr><th>File</th><th>Role</th></tr>
+<tr><td><code>godot/scenes/harness.gd</code> <em>(modified, air branch only)</em></td>
+<td>The <code>air</code> preset — self-contained like <code>planet</code>: flies a frozen
+player to a stated <strong>radial</strong> altitude (default 941 m, the user's documented
+flight altitude, AC-0449), aims 30° below the local horizon (env-settable), 99° FOV
+default (the flight FOV: base 90 × 1.10, player.gd:849–852); waits the body LOADED
++ <code>AWECRAFT_SNAP_DRAIN</code> frames with <code>AWECRAFT_SNAP_STEPS</code> settle pairs;
+RESULT carries the <strong>measured shot pose</strong> + the <strong>live derived
+thresholds</strong> (<code>fog_far</code> off <code>env.fog_depth_end</code>, <code>render_edge</code> off
+<code>satellite.last_render_edge</code>) + the sky's live pushed uniforms. Env hooks:
+<code>AWECRAFT_AIR_ALT/PITCH/FOV/NADIR/PLAYERCAM</code>. The preset-cam path hides the
+frozen player's model (see §8 — the trapezoid).</td></tr>
+<tr><td><code>tasks/AC-0450/aircensus.py</code> <em>(new)</em></td>
+<td>The census: pure Python + PIL (no numpy on this box — the AC-0449 precedent).
+Takes F0–F4 + the RESULT JSON; computes the masks, the fractions, the
+ray→R-sphere distance axis, the contrast-with-distance profile and the
+negative-test report. Consistency guards included (the instrument must be able
+to be incoherent).</td></tr>
+<tr><td><code>godot/HARNESS.md</code> <em>(modified)</em></td>
+<td><code>air</code> added to the <code>AWECRAFT_CAM</code> preset list + a dedicated
+<code>AWECRAFT_AIR_*</code> row (the AC-0399/AC-0422 hand-written pattern).</td></tr>
+<tr><td><code>tasks/AC-0450/census-{941-30, 941-nadir, 300-nadir, playercam}.{json,out}</code> <em>(new)</em></td>
+<td>The four census outputs (machine-readable + printed).</td></tr>
+<tr><td><code>tasks/AC-0450/captures/*.png</code> <em>(new, 17 frames)</em></td>
+<td>The full matrix (below). <code>tasks/AC-0450/plan.html</code>,
+<code>tasks/AC-0450/continuity.md</code> — plan and journal.</td></tr>
+</table>
+
+<h2>2. Derived values and their homes (derive, don't restate)</h2>
+<table>
+<tr><th>Value</th><th>Home (single source)</th><th>Read at</th></tr>
+<tr><td>fog_far = 332.0 m</td><td><code>DayNight.fog_far(render_radius, fog_start_pct)</code> —
+<code>godot/core/daynight.gd:49–50</code>; pushed to <code>env.fog_depth_end</code> at
+<code>main.gd:1538</code></td><td>live off <code>env.fog_depth_end</code>, printed in RESULT (332.0 at
+R24/FOG_PCT 83 — the user's settings)</td></tr>
+<tr><td>render_edge = 400.0 m</td><td><code>(render_radius + 1) * 16.0</code> — <code>main.gd:1523</code>
+(lod_avg push) / <code>satellite_body.gd:931</code></td><td>live off
+<code>world.satellite.last_render_edge</code>, printed in RESULT</td></tr>
+<tr><td>vantage constants 941 / 30 / 99</td><td colspan="2"><strong>stated choices, not derived
+values</strong> — 941 m = the user's documented flight altitude (AC-0449); 30° = down-and-outward;
+99° = the flight FOV. All env-overridable.</td></tr>
+<tr><td>per-pixel camera distance</td><td colspan="2">ray→R-sphere near intersection, built from the
+arm's <em>measured</em> shot pose (RESULT <code>pos/aim/up/fov</code>) and R = <code>Game.planet_R</code> = 4000
+(printed). The near root is <code>−bd − √disc</code> (the far root is the opposite side of the
+planet — the sign error was caught by the synthetic test, not by the user).</td></tr>
+</table>
+<p class="small">No arm hardcodes 24 / 332 / 400: the R4 probe printed fog_far 69.6 / edge 80; the R24 runs
+printed 332.0 / 400.0 — same code, different settings (the probe is
+<code>captures/probe-r4-air.png</code>).</p>
+
+<h2>3. Counter mechanics</h2>
+<p>Five frames at one pose (plus the elimination references at the context vantages);
+per-pixel, max-channel delta, tolerance 2/255:</p>
+<table>
+<tr><th>Frame</th><th>Hook</th><th>Masks it yields</th></tr>
+<tr><td><b>F0</b> as shipped</td><td>—</td><td>baseline</td></tr>
+<tr><td><b>F1</b> sky's air term off</td><td><code>AWECRAFT_SKYALT=0</code></td>
+<td><b>skybody</b> = |F0−F1|&gt;tol. Refines the background class: a pixel that reads
+as background <em>and changes</em> with the sky body is true sky; one that reads as
+background but does <em>not</em> change is fully-hazed geometry (the body's rim haze
+mixes toward the single-source <code>u_air</code>, which <em>is</em> the sky's air fill —
+indistinguishable by design, reported as its own class).</td></tr>
+<tr><td><b>F2</b> engine fog off</td><td><code>AWECRAFT_NO_FOG=1</code></td>
+<td><b>fog-owned</b> = |F0−F2|&gt;tol (the body is <code>fog_disabled</code>, the sky is
+untouched by the fog — the delta isolates the fog's near/far-tier tinting).</td></tr>
+<tr><td><b>F3</b> satellite body off</td><td><code>AWECRAFT_SAT_BODY=0</code></td>
+<td><b>(d) body</b> = |F0−F3|&gt;tol (the body's <em>visible</em> contribution).</td></tr>
+<tr><td><b>F4</b> world hidden</td><td><code>AWECRAFT_NO_WORLD_VIS=1</code></td>
+<td><b>(a) background</b> = |F0−F4|≤tol (reads as background: nothing
+distinguishable drawn in front). This frame is also the “coverage disabled”
+frame — the negative test (no coverage pass exists yet to disable; hiding all
+world geometry is the maximum removal). The near/far tier classes are
+<em>geometry-not-body</em>; at 941 m they are measured, not assumed (their minimum
+distance vs the 332 m discard wall is in the output).</td></tr>
+</table>
+<p>(a) also splits analytically: <b>(a)_sky</b> = background pixels whose ray misses the
+planet; <b>(a)_hole</b> = background pixels whose ray hits the planet — background where
+terrain is expected, the class the standing r16 <code>far_holes</code> census reports as 0/0
+while the user photographs it. Documented model caveat: the ray model uses the bare
+R=4000 sphere; the actual surface is R+H, so the disc silhouette extends above the
+bare tangent by the terrain height at the tangent — measured at 941/30°: 44,736 px
+(4.85%) of visible geometry sit in that band (they count as geometry, correct; they
+only shift the sky/hole split).</p>
+
+<h2>4. The headline numbers (941 m, 30° below horizon, 99° FOV, bare preset cam)</h2>
+<div class="grid">
+<div><img class="cap" src="captures/f0-air941.png" alt="F0 as shipped, 941 m 30 deg">
+<p class="small">F0 — as shipped. Sky, the haze band, and the body disc (saturated
+near rim at the frame bottom, the body's own distance haze up toward the
+silhouette). No trapezoid (the player-model fix, §8).</p></div>
+<div><img class="cap" src="captures/f4-noworld.png" alt="F4 world hidden">
+<p class="small">F4 — all world geometry hidden: the pure background reference, and
+the “coverage disabled” frame. Byte-identical to F3 (§4.1): at 941 m the body is
+100% of the drawn world geometry.</p></div>
+</div>
+<table>
+<tr><th>Class</th><th class="num">Fraction</th><th>Reading</th></tr>
+<tr><td>(a) background — reads as the world-hidden reference</td><td class="num"><b>66.95%</b></td>
+<td>64.57% true sky (sky-body-owned) + 2.38% hazed body (indistinguishable by design)</td></tr>
+<tr><td>&nbsp;&nbsp;(a)_hole — reads as background where the ray hits the planet</td><td class="num">0.006% (55 px)</td>
+<td><b>all 55 are hazed; 0 are sky-true</b> — the user's photographed hole class does
+not manifest at 941 m on this tree</td></tr>
+<tr><td>(d) body — visible satellite-body contribution</td><td class="num"><b>33.05%</b></td>
+<td>the saturated near rim + the textured disc down to its haze limit</td></tr>
+<tr><td>(b)/(c) tiers — geometry not body</td><td class="num"><b>0 px</b></td>
+<td>measured minimum geometry distance 961.1 m &gt; 332 m fog wall — every in-frame
+pixel is past the wall, so the tiers own nothing in frame (consistent with the
+AC-0401 discard; reported with the distance evidence, not assumed)</td></tr>
+<tr><td>fog-owned</td><td class="num"><b>0.0%</b></td><td>F2 (fog off) is byte-identical to the settled F0
+(md5 <code>a9d2876a…</code>) — the engine fog carries <em>zero</em> pixels at this vantage
+(the AC-0449 finding reproduced on an independent camera)</td></tr>
+<tr><td>skybody (changes with the sky swap)</td><td class="num">64.57%</td>
+<td>all on rays that <em>miss</em> the planet — the body is opaque (op=1) wherever it
+is visible; the haze is a colour mix, not an opacity blend</td></tr>
+</table>
+<p><b>Per-frame (the settle pair, <code>AWECRAFT_SNAP_STEPS=30,60</code>):</b> background
+0.669516 (s30) → 0.669510 (s60) → 0.669508 (final) — the counter is per-frame and
+the streaming tail is quantified: the s30 frame differs from the settled frame
+(md5 <code>3303c236…</code> vs <code>a9d2876a…</code>) by a few streaming pixels, 5th-decimal in
+the fraction. The instrument sees settle state, it does not average over it.</p>
+
+<h3>4.1 The negative test — the counter rises</h3>
+<table>
+<tr><th>Frame</th><th class="num">(a) background</th><th class="num">(a)_hole (ray hits planet)</th><th class="num">rise in (a) vs F0</th></tr>
+<tr><td>F0 as shipped</td><td class="num">66.95%</td><td class="num">0.006%</td><td class="num">—</td></tr>
+<tr><td>F3 body off</td><td class="num">100.00%</td><td class="num">28.20%</td><td class="num"><span class="ok">+33.05%</span></td></tr>
+<tr><td>F4 world hidden</td><td class="num">100.00%</td><td class="num">28.20%</td><td class="num"><span class="ok">+33.05%</span></td></tr>
+</table>
+<p>The rise equals <em>exactly</em> the removed visible geometry (33.05%), and the hole
+class rises to the whole planet-intersecting disc (28.20% = the measured ray-hit
+fraction of the frame). <strong>The counter can be made to fail; it is not a number
+that always reads zero.</strong> (The 941 m nadir vantage rises +67.78%; the 300 m
+nadir rises +36.83% with the world hidden and +25.16% with the body alone —
+leaving the 11.5% tier class standing.)</p>
+
+<h3>4.2 The byte-identity groups (stronger than the deltas)</h3>
+<pre>f2-nofog.png            == f0-air941_s60.png   md5 a9d2876a8a7b283b7881204dc96ff975  (fog owns 0 px)
+f3-bodyoff.png          == f4-noworld.png      md5 bc024f8d17b53253825337ff30ba9c87  (body = 100% of world geometry at 941 m)
+f6c-nadir941-bodyoff.png == f6b-nadir941-noworld.png  md5 f9030e165c2bba6ecb62644c2a3072ae  (same at nadir)</pre>
+
+<h2>5. Contrast-with-distance profile (the AC-0449-shared measurement)</h2>
+<p>Per-pixel camera-distance bins (12 equal bins); C = mean |ΔL| between adjacent
+in-class pixels (L = luma). <b>profile_f0</b> = as-shipped, over the visible-geometry
+pixels; <b>profile_f3</b> = body-off, over the disc = the <em>sky reference</em> the
+contrast is measured against.</p>
+<table>
+<tr><th>Bin (m)</th><th class="num">961</th><th class="num">1122</th><th class="num">1282</th><th class="num">1443</th>
+<th class="num">1604</th><th class="num">1764</th><th class="num">1925</th><th class="num">2086</th>
+<th class="num">2246</th><th class="num">2407</th><th class="num">2567</th><th class="num">2728</th></tr>
+<tr><td>F0 as shipped (30°)</td><td class="num">1.96</td><td class="num">2.05</td><td class="num">3.00</td>
+<td class="num">1.99</td><td class="num">1.55</td><td class="num">1.52</td><td class="num">0.97</td><td class="num">1.40</td>
+<td class="num">1.25</td><td class="num">1.12</td><td class="num">1.16</td><td class="num">0.68</td></tr>
+<tr><td>F3 sky reference (30°)</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td>
+<td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.01</td><td class="num">0.00</td>
+<td class="num">0.00</td><td class="num">0.01</td><td class="num">0.06</td><td class="num">0.00</td></tr>
+<tr><td>F0 as shipped (941 nadir)</td><td class="num">3.49</td><td class="num">2.81</td><td class="num">2.76</td>
+<td class="num">2.13</td><td class="num">1.56</td><td class="num">1.34</td><td class="num">1.20</td><td class="num">1.07</td>
+<td class="num">1.15</td><td class="num">1.17</td><td class="num">1.05</td><td class="num">0.94</td></tr>
+<tr><td>F3 sky reference (941 nadir)</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td>
+<td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.01</td><td class="num">0.00</td>
+<td class="num">0.00</td><td class="num">0.01</td><td class="num">0.03</td><td class="num">0.00</td></tr>
+</table>
+<p><strong>The read:</strong> the sky reference is flat air (C ≈ 0 — no contrast exists in
+the background to borrow). The as-shipped profile therefore is the <em>body's own</em>
+far-LOD contrast: a ~3× collapse from the 961 m rim (1.96, nadir 3.49) to the
+2728–2889 m edge (0.68, nadir 0.94). The user's far-field “wash” at 941 m is the
+body's baked far texture running out of contrast, not fog, not sky, and not
+(many pixels') DoF. At <b>300 m nadir</b> the same instrument finds the far tier
+<em>in frame</em>: C = 10.38 at 300–370 m (the real band + band A, full-res) collapsing
+to 0.1–0.5 at 440 m+ (bands B/C, the 8×8/4×4 averages — near-flat in frame), with
+11.5% of the frame in the tier class and 63.17% reading as background where the
+ray hits terrain. That is the AC-0451 handover-annulus shape, quantified, reported
+as context for the contested reading — not conflated with the user's 941 m
+vantage.</p>
+
+<h2>6. The four-state elimination — evidence, no winner</h2>
+<table>
+<tr><th>State</th><th>Hook</th><th class="num">Frame evidence at 941/30°</th><th>What it owns (measured)</th></tr>
+<tr><td>as shipped (F0)</td><td>—</td><td class="num">baseline</td><td>—</td></tr>
+<tr><td>sky's air term off (F1)</td><td><code>AWECRAFT_SKYALT=0</code></td><td class="num">skybody 64.57% of the frame</td>
+<td>the true sky + the near-horizon band; 0 px on the visible body (the body is
+opaque wherever visible); RESULT shows <code>u_sky_alt 1.0→0.0</code> and the ON-only
+<code>u_space_sky</code> dropping to null</td></tr>
+<tr><td>engine fog off (F2)</td><td><code>AWECRAFT_NO_FOG=1</code></td><td class="num">fog-owned 0.0%</td>
+<td><b>nothing</b> — byte-identical to settled F0. (Note: in this state
+<code>env.fog_depth_end</code> reads the stale 100.0 and the lod_avg wall is pushed with
+it — no observable effect at this vantage, reported for completeness.)</td></tr>
+<tr><td>satellite body off (F3)</td><td><code>AWECRAFT_SAT_BODY=0</code></td><td class="num">(a) rises +33.05% → 100%</td>
+<td>33.05% visible body + the 2.38% hazed body that then reads as sky; F3 == F4
+byte-identical ⇒ the body is 100% of the world geometry in frame</td></tr>
+<tr><td>world hidden (F4)</td><td><code>AWECRAFT_NO_WORLD_VIS=1</code></td><td class="num">(a) = 100%</td>
+<td>the reference itself; also the negative-test frame</td></tr>
+</table>
+<p><b>Honest reading, without a winner:</b> at the user's vantage the frame is 67%
+background-reading / 33% visible body; the engine fog demonstrably owns <em>zero</em>
+pixels; the sky body owns 64.6% of the frame (it is the sky, not a leak); the
+tiers own nothing in frame because every in-frame pixel is past the 332 m wall;
+the remaining “pale” look the user reports is the body's own far-LOD contrast
+collapse (§5) plus the 2.38% by-design hazed band. Whether the user's complaint
+is <em>that</em> (the far LOD's lack of contrast — a texture/LOD problem) or the
+handover reading (the annulus — a tier-ownership problem, live at 300 m in §5)
+is a question this instrument now <em>measures</em> but does not answer: both frames
+and both counts are above, and the next ticket picks the fix to match the
+reading the user confirms.</p>
+
+<h2>7. Does the capture camera carry the player's post-process?</h2>
+<p><b>No.</b> The preset camera is a bare <code>Camera3D</code> (<code>main._make_camera()</code>,
+fov/far set, nothing else) — no <code>CameraAttributesPractical</code>, no DoF, same
+documented limitation as the planet preset (AC-0449 proved it byte-identically).
+The ownership fractions are DoF-invariant, so the census is valid on the bare
+camera. The <code>AWECRAFT_AIR_PLAYERCAM=1</code> frame (<code>captures/f5-playercam.png</code>,
+90° base FOV — the frozen player gets no flight kick — with the DoF live) is the
+cross-check: it shifts 1.74% of the frame from visible-geometry to
+background-reading and moves the contrast profile by ≤ ~0.15 C units across all
+bins — the AC-0449 DoF fix (far wall 1500 m, 1400 m ramp) held; DoF is not the
+far-field collapse. (The playercam frames keep the game's own first-person model
+visibility; the model clips equally in F5/F5b/F5c and cancels in every A/B.)</p>
+
+<h2>8. Finding: the trapezoid (the instrument's own defect, caught and fixed)</h2>
+<div class="grid">
+<div><img class="cap" src="captures/probe-r4-air.png" alt="first render set, trapezoid present">
+<p class="small">First render set (R4 probe): a flat brown (96,68,38) trapezoid pinned
+to the frame top — present in <em>every</em> frame, including the world-hidden
+reference (it survived <code>AWECRAFT_NO_WORLD_VIS</code>). It is not world geometry and
+not the sky: it is the <strong>frozen player's head block, near-clipped</strong> — the
+preset camera sits at the vantage the player occupies. Left unfixed it would
+have sat inside the sky class of every census frame.</p></div>
+<div><img class="cap" src="captures/f0-air941.png" alt="after the fix, clean frame">
+<p class="small">After the fix (<code>player.visible = false</code> in the preset-cam path
+only — the body's altitude uniform rides the player's <em>position</em>, not its
+visibility, so the hide is observation-free): the trapezoid is gone (0 brown
+pixels in the region, verified by scan) and the whole matrix was re-rendered
+clean. The lesson is in the HARNESS.md <code>air</code> row: a census camera and a census
+subject must not share a body.</p></div>
+</div>
+
+<h2>9. Gates (mine) — with exit statuses</h2>
+<table>
+<tr><th>Gate</th><th>Run</th><th>Result</th><th>Exit status</th></tr>
+<tr><td>G0 — headless load + census</td><td><code>godot --headless --path godot --quit</code> ×3 (g0-1…g0-3)</td>
+<td>0 SCRIPT ERROR + 0 SHADER ERROR (g0-1 caught a real defect in the new branch —
+<code>cosf/sinf</code> do not exist in GDScript 4, 4 parse-error lines, fixed, re-run
+clean); census + <strong>process exit status checked together</strong> (the UAF class leaves
+a clean log with a signal-11 exit — both halves of the gate)</td>
+<td class="ok">RC=0, census ok (final)</td></tr>
+<tr><td>SMOKE</td><td><code>AWECRAFT_BATTERY=player;interact;light;fluids;genhash</code> headless</td>
+<td><code>ok: true</code>, all five arms green</td><td class="ok">RC=0, census ok</td></tr>
+<tr><td>PROBE — the air arm</td><td>25 render runs (the R0–R7c matrix + the re-render set), Forward+ lavapipe recipe</td>
+<td>every run: RC=0 + the <code>- Forward+ -</code> boot line present + <code>SNAP</code> fired + PNG
+exists + <code>gate_census.py</code> clean (the R24 runs also proved the drain-60/1200 s
+recipe: the matrix ran at ~1 FPS on this box, well inside budget)</td>
+<td class="ok">25/25 RC=0</td></tr>
+<tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code> headless</td>
+<td><b>25/25 byte-identical</b> to the AC-0445 run <em>and</em> the coordinator's HEAVY-r22
+heavy-gate set — world generation untouched. (The <code>.scratch/AC-0367-gates/
+genhash_pristine_r1.log</code> reference is stale — pre-AC-0311-piece-2 deliberate
+rebase — which is why a naive compare against it reads 0/25.)</td>
+<td class="ok">RC=0</td></tr>
+</table>
+<p class="small">HEAVY gates (the standing set) are the coordinator's job; nothing here touches
+<code>world/</code>, shaders, or autoloads — the harness change is an additive, env-gated
+branch in a file that is inert during normal play.</p>
+
+<h2>10. Every new file, explicitly (the staging scanner skips untracked)</h2>
+<pre>tasks/AC-0450/aircensus.py                              (the instrument)
+tasks/AC-0450/plan.html                                 (the plan)
+tasks/AC-0450/continuity.md                             (journal, append-only)
+tasks/AC-0450/AC-0450-results.html                      (this page)
+tasks/AC-0450/census-941-30.json  / .out
+tasks/AC-0450/census-941-nadir.json / .out
+tasks/AC-0450/census-300-nadir.json / .out
+tasks/AC-0450/census-playercam.json  / .out
+tasks/AC-0450/captures/f0-air941.png        (F0 as shipped, 941/30)
+tasks/AC-0450/captures/f0-air941_s30.png    (settle pair, 30 frames)
+tasks/AC-0450/captures/f0-air941_s60.png    (settle pair, 60 frames == F2, md5 a9d2876a…)
+tasks/AC-0450/captures/f1-skyalt0.png       (F1 sky air term off)
+tasks/AC-0450/captures/f2-nofog.png         (F2 engine fog off)
+tasks/AC-0450/captures/f3-bodyoff.png       (F3 body off, md5 bc024f8d… == F4)
+tasks/AC-0450/captures/f4-noworld.png       (F4 world hidden = negative test)
+tasks/AC-0450/captures/f5-playercam.png     (player-camera, DoF live, 90 FOV)
+tasks/AC-0450/captures/f5b-playercam-noworld.png
+tasks/AC-0450/captures/f5c-playercam-bodyoff.png
+tasks/AC-0450/captures/f6-nadir941.png      (941 m nadir, the AC-0451 view)
+tasks/AC-0450/captures/f6b-nadir941-noworld.png (md5 f9030e16… == F6c)
+tasks/AC-0450/captures/f6c-nadir941-bodyoff.png
+tasks/AC-0450/captures/f7-nadir300.png      (300 m nadir, handover-annulus context)
+tasks/AC-0450/captures/f7b-nadir300-noworld.png
+tasks/AC-0450/captures/f7c-nadir300-bodyoff.png
+tasks/AC-0450/captures/probe-r4-air.png     (R4 probe — carries the trapezoid, §8)
+MODIFIED: godot/scenes/harness.gd (air branch), godot/HARNESS.md (air rows)</pre>
+
+<h2>11. Deliberately not done</h2>
+<ul>
+<li>No coverage pass — the ticket builds the counter, not the cure; the next ticket
+matches a fix to the reading the user confirms (far-LOD contrast vs handover
+annulus, §6).</li>
+<li>No winner declared among the four states — the counts are the evidence (§6).</li>
+<li>No change to <code>world/</code>, shaders, or autoloads; no commit (closeout is the
+coordinator's); the HEAVY gates run on the coordinator's lane.</li>
+<li>The near/far tier split (b vs c) is reported at the <em>total</em> level at 300 m;
+the per-pixel near-vs-band split needs the in-engine chunk-band lookup, which is
+out of scope for the 941 m acceptance vantage (tiers: 0 px there).</li>
+</ul>
+
+<p class="small">Engine /home/angrygiant/tools/godot/godot 4.7.1 · Forward+ lavapipe proxy
+(geometry/layout evidence, not the shipped look — HARNESS.md §2) · all runs
+seed 44, T=0.5, CLOUDS=0, 1280×720, drain 60 · logs in .scratch/AC-0450/.</p>
+
+</body>
+</html>

@@ -1485,6 +1485,201 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 		await Debug.snap(snapshot_path)
 		get_tree().quit()
 		return
+	elif cam == "air":
+		# AC-0450: the AIRBORNE CENSUS vantage - the standing-set altitude
+		# preset the AC-0394 notes audit found missing ("NO satellite/
+		# altitude camera preset - adding one is owed; ... now routine"):
+		# a purpose-built camera at N metres above the surface looking
+		# DOWN AND OUTWARD - the view the user actually complains about
+		# (the 941 m flight altitude documented at AC-0449, where the
+		# "see through unbuilt terrain" square metre was photographed four
+		# times). SELF-CONTAINED like `planet`: it flies a FROZEN player
+		# to the vantage (the body's visibility + altitude uniforms ride
+		# the player's position, satellite_body.gd _tick_view), waits the
+		# body LOADED + the drain, snapshots and quits. Every env is
+		# read-only here and no other path reads it, so the branch is
+		# inert in every run that does not set AWECRAFT_CAM=air.
+		# AWECRAFT_AIR_ALT: the TRUE RADIAL altitude above the R sphere
+		# (m). Radial on purpose: the body's h_band, the flight band, and
+		# the user's documented 941 m (AC-0449) are all radial
+		# (|pos - C| - R). (The planet preset's SAT_ALT is SPAWN-relative
+		# and reads alt + 141 at this spawn, because the spawn itself
+		# sits 141 m above the R sphere - two different numbers, do not
+		# conflate them.)
+		var ai_alt_env := OS.get_environment("AWECRAFT_AIR_ALT")
+		var ai_alt := 941.0 if ai_alt_env == "" else ai_alt_env.to_float()
+		# AWECRAFT_AIR_PITCH: the aim, degrees BELOW the local horizon
+		# (default 30 = down AND outward: at the 99 deg flight FOV the
+		# frame spans from ~19 deg above the horizon to ~80 deg below it).
+		var ai_pitch_env := OS.get_environment("AWECRAFT_AIR_PITCH")
+		var ai_pitch_deg := 30.0 if ai_pitch_env == "" else ai_pitch_env.to_float()
+		# AWECRAFT_AIR_FOV: the vantage's FOV. Default 99 = the player's
+		# FLIGHT FOV (base 90, player.tscn Camera3D fov; x 1.10 in flight,
+		# player.gd:849-852) - the view the user complains about is a
+		# flying view, so the vantage carries the flying field of view.
+		var ai_fov_env := OS.get_environment("AWECRAFT_AIR_FOV")
+		var ai_fov := 99.0 if ai_fov_env == "" else ai_fov_env.to_float()
+		# AWECRAFT_AIR_NADIR=1: aim straight down the local radial (the
+		# body's disc / the handover annulus - the AC-0451 view).
+		var ai_nadir := OS.get_environment("AWECRAFT_AIR_NADIR") == "1"
+		# AWECRAFT_AIR_PLAYERCAM=1: snap through the PLAYER'S camera at
+		# the same pose - the one frame that CARRIES the player's
+		# post-process (the CameraAttributesPractical DoF a bare preset
+		# camera cannot show; the AC-0449 instrument note). The frozen
+		# player never gets the flight FOV kick (its _process is frozen),
+		# so this frame reads the base 90 FOV with DoF live - report the
+		# measured camera, not the intent.
+		var ai_plycam := OS.get_environment("AWECRAFT_AIR_PLAYERCAM") == "1"
+		var ai_R := float(Game.planet_R)
+		var ai_cen := Vector3(0.0, -ai_R, 0.0)
+		var ai_up := (Vector3(spawn.x, spawn.y, spawn.z) - ai_cen).normalized()
+		var ai_pos := ai_cen + ai_up * (ai_R + ai_alt)
+		player = main._spawn_player()
+		player.set_physics_process(false)
+		player.hunger = 20.0
+		player.position = ai_pos  # direct scene-space set (the ladder's)
+		player.sync_flight_band()
+		if main.inventory_ui != null:
+			main.inventory_ui.visible = false
+		await main._await_spawn_floor(spawn, 300)
+		# the body must be LOADED (the startup bake may still be slicing)
+		# and a tick must have published the thresholds + visibility
+		if world.satellite != null:
+			var ai_wait := 0
+			while world.satellite.phase != SatelliteBody.Phase.LOADED and world.satellite.phase != SatelliteBody.Phase.FAILED:
+				await get_tree().process_frame
+				ai_wait += 1
+				if ai_wait > 6000:
+					break
+		for i in 12:
+			await get_tree().process_frame
+		# the basis: the planet branch's horizontal tangent reference
+		# (pl_hd) verbatim, then the down-and-outward aim (the horizon
+		# aim rotated ai_pitch_deg down; the up hint stays the radial -
+		# dir and up are not parallel, so look_at is well-posed).
+		var ai_a := ai_pos - ai_cen
+		var ai_ref := Vector3(0.0, 0.0, 1.0)
+		if absf(ai_a.normalized().dot(ai_ref)) > 0.99:
+			ai_ref = Vector3(1.0, 0.0, 0.0)
+		var ai_hd := ai_ref.cross(ai_a).normalized()
+		var ai_pitch := deg_to_rad(ai_pitch_deg)
+		var ai_aim_dir: Vector3
+		var ai_aim_up: Vector3
+		if ai_nadir:
+			ai_aim_dir = -ai_up
+			ai_aim_up = ai_hd
+		else:
+			ai_aim_dir = (ai_hd * cos(ai_pitch) - ai_up * sin(ai_pitch)).normalized()
+			ai_aim_up = ai_up
+		# the frozen stand-in is the OBSERVER for the world's view-biased
+		# fill (the planet branch's note, verbatim reason): it must look
+		# where the vantage looks.
+		player.look_at(ai_pos + ai_aim_dir, ai_aim_up)
+		var ai_cam := main._make_camera()
+		ai_cam.position = ai_pos
+		ai_cam.fov = ai_fov
+		# the far limb sits |cam - cen| + (R + SEA) out - the body's own
+		# far formula (the planet branch's)
+		ai_cam.far = ai_alt + 2.0 * (ai_R + float(Data.SEA)) + 200.0
+		ai_cam.look_at(ai_pos + ai_aim_dir, ai_aim_up)
+		var ai_shot: Camera3D
+		if ai_plycam:
+			ai_shot = player.camera
+			ai_shot.current = true
+		else:
+			ai_shot = ai_cam
+			ai_cam.current = true
+			# The preset camera sits at the vantage the frozen player
+			# occupies, so the player's blocky model is near-clipped into
+			# every preset shot: the flat brown trapezoid pinned to the
+			# frame top in the AC-0450 matrix (it SURVIVES
+			# AWECRAFT_NO_WORLD_VIS - the observer is not the world). Hide
+			# it: the body's altitude uniform rides the player's POSITION,
+			# not its visibility, and the censured frame should not carry
+			# the observer's own head.
+			player.visible = false
+		# settle (AWECRAFT_SNAP_DRAIN counts FRAMES - the planet branch's
+		# note; at R24 the planet-class runs are the 0.2-0.5 FPS class
+		# where AC-0417 proved drain 60 completes in the 1200 s wall).
+		# AWECRAFT_SNAP_STEPS=frames,frames,... snaps at each CUMULATIVE
+		# drain frame (the AC-0399 multi-snapshot pattern, verbatim).
+		var ai_denv := OS.get_environment("AWECRAFT_SNAP_DRAIN")
+		var ai_drain := 600 if ai_denv == "" else maxi(1, ai_denv.to_int())
+		var ai_steps: Array = []
+		var ai_stenv := OS.get_environment("AWECRAFT_SNAP_STEPS")
+		if ai_stenv != "":
+			for ais in ai_stenv.split(","):
+				if ais.strip_edges() != "":
+					ai_steps.append(maxi(1, ais.strip_edges().to_int()))
+			ai_steps.sort()
+		var ai_frame := 0
+		var ai_snapped: Array = []
+		while ai_frame < ai_drain:
+			await get_tree().process_frame
+			ai_frame += 1
+			if ai_steps.size() > 0 and ai_frame == int(ai_steps[0]):
+				var aisuf := snapshot_path
+				if aisuf.ends_with(".png"):
+					aisuf = aisuf.left(aisuf.length() - 4) + "_s%d.png" % ai_frame
+				await Debug.snap(aisuf)
+				ai_snapped.append(aisuf)
+				ai_steps = ai_steps.slice(1)
+		var ai_phase := -1
+		if world.satellite != null:
+			ai_phase = int(world.satellite.phase)
+		# the LIVE derived thresholds - the single-source values the
+		# engine actually pushed at the snap moment, read off the tree
+		# (fog_far: main.gd pushes DayNight.fog_far(render_radius,
+		# fog_start_pct) onto env.fog_depth_end; render_edge:
+		# satellite_body.gd _tick_view derives (rr+1)*16 - the same home
+		# expression main.gd pushes on the lod_avg material - and stores
+		# it as last_render_edge). The measurement side consumes THESE;
+		# nothing in this arm hardcodes 24 / 332 / 400.
+		var ai_ff := float(main.world_env.environment.fog_depth_end)
+		var ai_edge := 0.0
+		if world.satellite != null:
+			ai_edge = float(world.satellite.last_render_edge)
+		# the sky's LIVE pushed uniforms (the planet branch's read)
+		var ai_sky: Dictionary = {}
+		var aism := main.sky_mat
+		if aism is ShaderMaterial:
+			for aisK in ["u_space", "u_space_sky", "u_sky_alt"]:
+				ai_sky[aisK] = aism.get_shader_parameter(aisK)
+			if "atmosphere_height" in AeroLib:
+				var apav = aism.get_shader_parameter("u_air")
+				var apa: Vector3
+				if apav is Color:
+					apa = Vector3((apav as Color).r, (apav as Color).g, (apav as Color).b)
+				else:
+					apa = apav as Vector3
+				ai_sky["u_air"] = [int(round(clampf(apa.x, 0.0, 1.0) * 255.0)),
+						int(round(clampf(apa.y, 0.0, 1.0) * 255.0)),
+						int(round(clampf(apa.z, 0.0, 1.0) * 255.0))]
+		# the MEASURED shot pose (the camera that actually rendered -
+		# the preset camera or the player's, eye offset included): the
+		# census geometry on the Python side consumes these, not a
+		# recomputation of the intent.
+		var ai_shot_pos := ai_shot.global_position
+		var ai_shot_dir := -ai_shot.global_transform.basis.z
+		var ai_shot_upv := ai_shot.global_transform.basis.y
+		Debug.result({"air": true, "cam": "air", "alt": ai_alt, "R": ai_R,
+				"pitch_deg": ai_pitch_deg, "nadir": ai_nadir,
+				"fov": float(ai_shot.fov), "fov_wanted": ai_fov,
+				"playercam": ai_plycam,
+				"pos": [ai_shot_pos.x, ai_shot_pos.y, ai_shot_pos.z],
+				"aim": [ai_shot_dir.x, ai_shot_dir.y, ai_shot_dir.z],
+				"up": [ai_shot_upv.x, ai_shot_upv.y, ai_shot_upv.z],
+				"hd": [ai_hd.x, ai_hd.y, ai_hd.z],
+				"body_phase": ai_phase, "drain": ai_drain, "steps": ai_snapped,
+				"render_radius": int(world.render_radius),
+				"fog_start_pct": float(Settings.values.get("fog_start_pct", 87.5)),
+				"fog_far": ai_ff, "render_edge": ai_edge,
+				"spawn": [spawn.x, spawn.y, spawn.z],
+				"sky": ai_sky,
+				"w": int(get_viewport().size.x), "h": int(get_viewport().size.y)})
+		await Debug.snap(snapshot_path)
+		get_tree().quit()
+		return
 	elif cam == "sandpad":
 		var pad_top := _build_sand_pad(spawn)
 		camera = main._make_camera()
