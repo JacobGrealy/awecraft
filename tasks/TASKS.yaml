@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-18T21:16
+  updated_at: 2026-10-18T23:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0449
 - AC-0450
 - AC-0433
 - AC-0434
@@ -28911,11 +28910,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-18T15:26
-  updated_at: 2026-10-18T20:44
-  completed_at: null
+  updated_at: 2026-10-18T23:15
+  completed_at: 2026-10-18T23:15
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The world should be clear nearby and hazy far away. Right now there is so much
