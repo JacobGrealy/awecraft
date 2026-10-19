@@ -1,11 +1,19 @@
-# Subagent delegation — the paste-ready builder prompt
+# The xhigh builder — design-stage prompt
+
+**This is NOT the default.** The default delegation path is `tasks/templates/implement.md` on
+`subagent_medium`, applying a coordinator-written `plan.html`. Use this prompt only when the plan
+itself is the work:
+
+- a ticket labelled **`design`** — the mechanism has to be chosen, or a hypothesis has to be measured
+  before any edit can be specified; or
+- an **escalation** — the same ticket has hit a triage signal twice at medium (`awecraft-delegate` §4).
 
 Replace every `AC-NNNN` with the real task id before pasting. Templates reference docs **BY PATH** —
 never inline their contents into a prompt.
 
-**Routing, effort pinning and the launch rules are owned by the `awecraft-delegate` skill. The heavy
-stage the coordinator runs afterwards is owned by `awecraft-heavy-gates`; the closeout by
-`awecraft-closeout`.** This file is only the prompt text.
+**Routing, effort pinning, the launch rules and the triage are owned by the `awecraft-delegate`
+skill; the planning pass by `awecraft-plan`; the heavy stage the coordinator runs afterwards by
+`awecraft-heavy-gates`; the closeout by `awecraft-closeout`.** This file is only the prompt text.
 
 ```
 You are the single subagent for AweCraft task AC-NNNN.
@@ -24,6 +32,11 @@ READ FIRST, in order, BY PATH (do not paste their contents into your reply):
    Scope rules for the directories you touch (godot/AGENTS.md, godot/world/AGENTS.md,
    godot/scenes/AGENTS.md, gdext/AGENTS.md, ...) load automatically when you read or
    edit a file there — read the matching one BEFORE you edit.
+
+NEVER read whole: godot/scenes/harness.gd (36,630 lines / 1.5 MB — larger than your context
+window), godot/world/world.gd (15,498 lines), godot/ARCHITECTURE.md or godot/HARNESS.md. Grep
+first, then read a LINE RANGE around the hit. Loading a whole file is how a run dies with
+nothing written.
 
 YOUR JOB — PLAN + IMPLEMENT in one turn.
 
@@ -49,6 +62,10 @@ Then add any of the following ONLY if the task needs them (do not add boilerplat
      - Fences               — e.g. "no commits/pushes (coordinator handles; read-only git log/show allowed); no TASKS.yaml edits outside queue"
 
 Fences rule: "no git" means no commits/pushes/new branches — coordinator commits. Read-only `git log/show/diff/status` to review previous commits is allowed; do not run `git commit/push/add`.
+
+   Two things in it are MANDATORY even on a design run: **every file in section 2 carries an
+   anchor** (`file:line` or a grep string, not just a path), and **every gate in section 3 carries
+   an expected value**, so a mismatch is a finding you report rather than a judgement you make.
 
    Keep it lean — one page is enough for a P3 tweak; depth is for reasoning, not paperwork.
 

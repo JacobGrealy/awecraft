@@ -34,6 +34,24 @@ A large task with clear boundaries is split into **named pieces in order (P1/P2/
 time** — each piece delegated to a single blocking subagent, gated, and committed before the next
 piece starts. Do **not** force a split on one coherent change.
 
+### Size it for a medium builder (since 2026-10-19)
+
+The default builder is `subagent_medium` applying a coordinator-written `plan.html`
+(`awecraft-delegate`), so the sizing question is concrete:
+
+> **Could a medium builder finish this from a written plan in about an hour?**
+> If not, split it — at filing time, not after the first six-hour run.
+
+Split signals: more than one gate set; an edit in each of three lanes (native C++, GDScript, shader);
+more than ~250 lines of plan to describe it; two things the user would call "done" independently.
+The plan for a piece is written when the piece starts (`awecraft-plan`), not at filing.
+
+**Label it `design` when the ticket needs architecture judgement** — a hypothesis to measure, a
+mechanism to choose, seam algebra to work out before any edit can be specified. `design` is exactly
+what routes it to `subagent_xhigh` with `two-phase.md` on its FIRST launch; everything else defaults
+to medium. Filing a design ticket without the label is how a medium builder ends up improvising a
+design — the one thing it is forbidden to do.
+
 ## Queue discipline
 
 - The queue is the **work order** — `tasks.py next` reads it. Queuing is a decision about what happens

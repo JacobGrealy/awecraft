@@ -22,6 +22,25 @@ the machine, the build, the daemons and git. Do not restate one in the other —
   measured fps/budgets in `godot/HARNESS.md` §2/§4.
 - Native extension: `python3 -m SCons -C gdext platform=linux|windows target=template_release`
   — `./build_windows.sh` runs both for you (§4).
+- **The builder model is a local 27B and its throughput IS the schedule** (measured 2026-10-19,
+  AC-0454). `subagent_medium` / `subagent_xhigh` / `subagent_low` all run `homeserver1` /
+  `Qwen3.8-27B-UD-Q4_K_XL`, and one slot is all there is. The law, over 127 builder sessions
+  replayed from `~/.dsh/sessions/`:
+
+  ```
+  wall_seconds = -938 + 0.0674 * output_tokens      R² = 0.933     ~15 tokens/s
+  ```
+
+  A run's wall clock is 93% explained by how many tokens it writes; **gates and builds are noise
+  beside it** (the full 8-arm set for AC-0433 run 2 took 10.3 min against a 66 min run). Median
+  builder run: 2.40 h / 138k output tokens / 154 steps; p75 4.72 h; worst seen 15.33 h. Output
+  composition: **reasoning 64-80%**, tool-call arguments 20-25%, assistant prose ~2%.
+
+  Consequence, and it is a standing rule: **effort and token count are the knobs, not the machine.**
+  Plan before launching (`awecraft-plan`), keep the builder medium (`awecraft-delegate` §2), and
+  never hand a builder a whole large file — `godot/scenes/harness.gd` is 36,630 lines / 1.5 MB,
+  about 430k tokens, which is larger than the 250k context window and kills the run.
+  Re-measure with `python3 tasks/scripts/builder_stats.py` once AC-0455 lands.
 
 ## 2. Sandbox rules (why a godot call looks the way it does)
 

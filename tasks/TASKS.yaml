@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-19T07:52
+  updated_at: 2026-10-19T09:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0455
 - AC-0433
 - AC-0434
 - AC-0451
@@ -29344,4 +29345,117 @@ intake:
     a failure.
 
     '
+  comments: []
+- id: AC-0454
+  title: builder-economics-plan-first-medium-default
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-10-19T09:56
+  updated_at: 2026-10-19T09:59
+  completed_at: 2026-10-19T09:59
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Every delegated implementation run currently takes hours, and the work sits\n\
+    \   idle while one slow local model thinks between single tool calls. The fix is a division of\n \
+    \  labour: the coordinator (fast model, big context) does the orienting, the design decisions\n  \
+    \ and writes the plan; the local 27B builder applies that plan and runs the gates at MEDIUM\n   effort\
+    \ by default. xhigh becomes the design-stage and escalation tool instead of the\n   default for every\
+    \ ticket. Nothing about the product changes; what changes is that a ticket\n   finishes in a fraction\
+    \ of the wall clock, so fixes reach the player sooner.\n\n2) Technical Details:\n   MEASURED CAUSE\
+    \ (2026-10-19, 127 builder sessions replayed from ~/.dsh/sessions/):\n     wall_s = -938 + 0.0674\
+    \ * output_tokens   R^2 = 0.933   => ~15 tokens/s effective decode.\n     A builder run's wall clock\
+    \ is 93% explained by how many tokens it writes; gates, godot,\n     SCons and file IO are noise by\
+    \ comparison.\n     median run 2.40 h / 138k out tokens / 154 steps (~1100 tokens per step); p75 4.72\
+    \ h /\n     267k / 229; max 15.33 h / 793k / 779.\n     OUTPUT COMPOSITION (streamed chunks): reasoning\
+    \ 64-80%, tool-call arguments 20-25%,\n     assistant prose ~2%. The thinking is the bill.\n     GATE\
+    \ COST: the full 8-arm set for AC-0433 run 2 spans 08:48:11 -> 08:58:29 = 10.3 min\n     (.scratch/AC-0433-gates/),\
+    \ i.e. 3% of run 1's 6.3 h and 15% of run 2's 66 min.\n     ROUTING: ~/.dsh/cordis.patch.yml pins\
+    \ subagent_xhigh, subagent_medium AND subagent_low\n     to homeserver1/Qwen3.8-27B-UD-Q4_K_XL. All\
+    \ three already exist -> NO config change and\n     no change under ~/.dsh/ is needed. subagent/subagent_fork\
+    \ run on the agent default model\n     (deepseek) and are therefore NOT used for implementation: the\
+    \ user wants the local 27B.\n   CHANGES (procedure + templates only; no godot code, no harness.gd):\n\
+    \     .dsh/skills/awecraft-delegate/SKILL.md - routing rewritten (medium = default implementer,\n\
+    \       xhigh = design stages + escalation, low = harvest/closeout); the triage checklist and\n  \
+    \     the escalation ladder below replace the old \"medium = trivial bypass only\" line.\n     .dsh/skills/awecraft-plan/SKILL.md\
+    \ (NEW) - the coordinator's planning pass: orient by\n       grep, write tasks/AC-NNNN/plan.html,\
+    \ then hand off. Timeboxed to ~10 min.\n     .dsh/skills/awecraft-file-ticket/SKILL.md - sizing rule\
+    \ + the `design` label.\n     tasks/templates/implement.md (NEW) - the implement-to-plan builder prompt\
+    \ (lean reading\n       list, hard fences, PLAN-INSUFFICIENT protocol, 3 continuity checkpoints).\n\
+    \     tasks/templates/two-phase.md - demoted to the design-stage prompt.\n     tasks/templates/plan.html\
+    \ (NEW) - the coordinator's plan skeleton.\n     godot/OPS.md - harvest the throughput law and the\
+    \ measured gate cost.\n     AGENTS.md - add awecraft-plan to the procedure list.\n   ESCALATION (ratified\
+    \ by the user 2026-10-19): medium is presumed sufficient. A run \"did not\n   work\" if any hard signal\
+    \ fires - H1 no diff, H2 no results page / no OUTCOME, H3 a number in\n   results absent from .scratch/AC-NNNN-gates/*.log,\
+    \ H4 a gate not ok:true with no HONEST\n   DEVIATION, H5 files changed outside plan.html's file list,\
+    \ H6 an explicit PLAN-INSUFFICIENT.\n   Ladder: first hit -> repair the PLAN and relaunch medium (H1/H3/H5/H6\
+    \ are plan defects, not\n   effort defects); second hit on the same ticket -> subagent_xhigh with\
+    \ the repaired plan;\n   third -> split the ticket. Tickets needing architecture judgement are filed\
+    \ with the `design`\n   label and take xhigh on the FIRST launch. Medium is forbidden to invent design:\
+    \ on hitting a\n   design fork it declares PLAN-INSUFFICIENT and exits, so its failure mode is a fast\
+    \ honest\n   stop rather than a slow confident wrong turn.\n   GATES: none. This ticket is documentation\
+    \ and process only - no engine run, no shader, no\n   C++, no native build. Its own proof is that\
+    \ the next ticket (builder tooling, AC next in\n   queue) is launched at medium from a coordinator-written\
+    \ plan.\n   DEFERRED: the code half (context pack, gate driver, results page, scoreboard) is the\n\
+    \   follow-on ticket. No change to the single-slot rule: one local-LLM subagent at a time stays.\n"
+  comments: []
+- id: AC-0455
+  title: builder-tooling-context-pack-gate-driver-results-scoreboard
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-19T09:56
+  updated_at: 2026-10-19T09:58
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Most of a builder's steps are spent doing things a script could do: reading seven\n\
+    \   documents to find the forty relevant lines, running eight gate commands one at a time and\n  \
+    \ reading eight logs, and hand-writing an HTML results page. Each of those is a round trip\n   through\
+    \ a 15 tokens/second model. Four small scripts collapse them into three steps, which\n   makes every\
+    \ future ticket cheaper to run without making it any less proven.\n\n2) Technical Details:\n   Depends\
+    \ on AC-0454 (the implement-to-plan prompt defines the file formats these scripts emit).\n   Four\
+    \ new scripts under tasks/scripts/ (tooling rules: tasks/scripts/AGENTS.md):\n\n   (a) context_pack.py\
+    \ AC-NNNN  ->  .scratch/AC-NNNN/context.md\n       One file a builder reads instead of seven documents.\
+    \ Contents, in order: the ticket's\n       notes; plan.html's goal + file list; for each file in the\
+    \ plan's file list, the grep\n       anchors named in the plan with N lines of context (NEVER a whole\
+    \ file); the named\n       ARCHITECTURE.md sections only (matched by heading); the HARNESS.md rows\
+    \ for the named\n       AWECRAFT_LOGIC modes; the last continuity entry; the frozen constants the\
+    \ plan cites.\n       HARD CAP 12k tokens (~48 KB) - over the cap it truncates and says so, it does\
+    \ not grow.\n       Must never emit whole harness.gd (36,630 lines / 1.5 MB ~= 430k tokens, larger\
+    \ than the\n       250k window) or whole world.gd (15,498 lines) - asserted in a unit test.\n\n  \
+    \ (b) gate_run.py AC-NNNN --arms g0,smoke,probe,genhash,...\n       One command runs the ticket's\
+    \ gate set SEQUENTIALLY from the HARNESS.md §4 recipes, with:\n       a pgrep -af '[g]odot' guard\
+    \ before every arm (never kill a process it did not start), the\n       mandatory `ulimit -v` cap\
+    \ from godot/OPS.md (a runaway gate OOM-kills dsh-web.service),\n       HOME=/tmp/dsh_home per call,\
+    \ RSS sampling every 10-15 s for large-radius arms, and output\n       to .scratch/AC-NNNN-gates/<arm>-rN.log.\
+    \ Writes summary.json + summary.txt (ONE LINE per\n       arm: name, rc, ok, census, the headline\
+    \ value) and touches HEAVY_GATES_DONE at the end.\n       --dry-run prints the exact planner without\
+    \ invoking godot (the only mode CI can run).\n\n   (c) results_page.py AC-NNNN --deviations <file>\n\
+    \       Renders tasks/AC-NNNN/AC-NNNN-results.html from summary.json + the deviations text +\n   \
+    \    continuity.md. Self-contained HTML, no external refs; carries the G0 output, every RESULT\n \
+    \      JSON, the arm table, the deviations block and the PNG list when visual. Refuses to render\n\
+    \       an arm with no log (the H3 honesty rule: no number that is not in a log).\n\n   (d) builder_stats.py\
+    \ [--since DATE] [--json]\n       The scoreboard, from ~/.dsh/sessions/*/session.jsonl.zstd: per builder\
+    \ session duration,\n       steps, out/in tokens, tokens per step, implied tok/s, and the wall~out_tokens\
+    \ regression\n       with R^2. This is the script that produced the AC-0454 evidence and it is how\
+    \ the change is\n       judged: it must reproduce R^2 >= 0.9 and ~15 tok/s on the existing logs.\n\
+    \n   GATES for this ticket: no godot arm is required to prove the scripts - they are tooling, not\n\
+    \   engine code. Proof is (i) a unit test per script, (ii) each script run against a real existing\n\
+    \   ticket folder as a fixture (AC-0433 for the pack and gate summary, AC-0450 for a render-heavy\n\
+    \   results page), (iii) builder_stats.py reproducing the measured regression, (iv) gate_run.py\n\
+    \   --dry-run. Do NOT modify godot/scenes/harness.gd (it stays pristine).\n   DEFERRED: actually re-running\
+    \ a heavy gate set through gate_run.py is the next real ticket's\n   job, not this one's smoke test.\n\
+    \n\nScope addition (coordinator, 2026-10-19): once gate_run.py exists, update\n.dsh/skills/awecraft-run-verify/SKILL.md\
+    \ to point the builder at `python3 tasks/scripts/gate_run.py\nAC-NNNN --arms ...` as the ONE way to\
+    \ run a light gate set (one command, one summary.json), instead\nof per-arm recipe repetition. Do\
+    \ not restate the recipes there - HARNESS.md §4 owns them and\ngate_run.py reads them."
   comments: []

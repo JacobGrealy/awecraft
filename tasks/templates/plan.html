@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!--
+  THE PLAN — tasks/templates/plan.html
+
+  Copy to tasks/AC-NNNN/plan.html and fill it in BEFORE launching the builder. This file is
+  written by the COORDINATOR (awecraft-plan), not by the builder, and it is the builder's
+  contract: a medium-effort builder applies it and is forbidden to redesign it.
+
+  Its job is to remove the two things that dominate a run's cost:
+    - ORIENTATION. The builder should not have to find the code. Every anchor below is a
+      file:line or a grep string that lands on the exact site, so the builder reads line
+      ranges instead of whole files (never hand it harness.gd or world.gd whole).
+    - DECISION. Every design fork is resolved HERE, with the reason. A builder that hits an
+      unmade decision must stop (PLAN-INSUFFICIENT) rather than choose.
+
+  Delete the guidance comments as you fill it. Keep it under ~250 lines: if the plan needs
+  more, the TICKET is too big — split it (awecraft-file-ticket) instead of writing a longer plan.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-NNNN — plan</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #444; padding-bottom: .3rem; }
+  h2 { font-size: 1.05rem; margin-top: 1.8rem; border-bottom: 1px solid #ccc; }
+  code, pre { font-family: ui-monospace, monospace; font-size: .88em; }
+  code { background: #f2f2f2; padding: .05rem .25rem; border-radius: 3px; }
+  pre { background: #f7f7f7; border-left: 3px solid #999; padding: .6rem .8rem; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0; }
+  th, td { border: 1px solid #ccc; padding: .3rem .5rem; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  .stop { background: #fdf0f0; border-left: 4px solid #b33; padding: .6rem .8rem; }
+  .note { color: #555; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>AC-NNNN — plan</h1>
+<p class="note">Written by the coordinator on &lt;date&gt;. Contract for one <code>subagent_medium</code>
+builder run. Effort: medium · Tool: <code>subagent_medium</code> · Prompt:
+<code>tasks/templates/implement.md</code>.</p>
+
+<h2>1. Goal</h2>
+<!-- ONE sentence: what changes and why. No history, no options considered. -->
+<p>…</p>
+
+<h2>2. Files</h2>
+<!-- Every file the builder may edit or must read, with the anchor that lands on the site.
+     "anchor" is either file:line or a grep string. If you cannot give an anchor, you have not
+     found the code yet — go find it before launching. -->
+<table>
+  <tr><th>File</th><th>Anchor</th><th>What happens here</th></tr>
+  <tr><td><code>godot/world/world.gd</code></td><td><code>grep -n "_face_rebake_boundary"</code></td><td>add the third call site</td></tr>
+  <tr><td><code>godot/world/chunk.gd</code></td><td><code>chunk.gd:412</code></td><td>read only — the ctx fields it already sets</td></tr>
+</table>
+<p><strong>Do not touch:</strong> list the files that look relevant but are out of scope, so the
+builder does not "helpfully" edit them.</p>
+
+<h2>3. Edit shape</h2>
+<!-- The semantics of each change: old behaviour -> new behaviour, the signature if it changes,
+     and the invariant that must still hold. NOT the full final source (that goes stale and costs
+     the coordinator more tokens than it saves). Enough that the builder never has to decide
+     anything. -->
+<pre>
+world.gd  _face_rebake_boundary(…)   [the function at the grep anchor]
+  before: fires only from the home-EDIT path
+  after:  also fires from threadgen_handoff, _land_column, and the band-A mat handoff
+  guard:  skip when the payload is a far landing (it carries no ring)
+  invariant that must not move: face_rebake_n counts per chunk, not per column
+</pre>
+
+<h2>4. Gate set and expected values</h2>
+<!-- The gates THIS ticket runs (light gates = builder; the heavy set is the coordinator's).
+     Give the expected value so a mismatch is a FINDING the builder reports, not something it
+     rationalises. "unchanged" is a legitimate expectation and a strong one. -->
+<table>
+  <tr><th>Arm</th><th>Mode / recipe</th><th>Expected</th></tr>
+  <tr><td>G0</td><td>headless load</td><td>rc=0, zero SCRIPT ERROR</td></tr>
+  <tr><td>probe</td><td><code>AWECRAFT_LOGIC=acNNNNprobe</code></td><td><code>ok:true</code>, rebake_natural true</td></tr>
+  <tr><td>genhash</td><td><code>AWECRAFT_LOGIC=genhash</code></td><td>25/25 byte-identical to HEAD — <strong>unchanged</strong></td></tr>
+</table>
+<p><strong>Negative test:</strong> what must be able to FAIL for this gate to mean anything.</p>
+<p><strong>Render:</strong> yes/no. If yes: the one camera/preset and what the PNG must show.</p>
+
+<h2>5. Acceptance</h2>
+<!-- The one-sentence statement that makes this done, phrased so it can be checked from the
+     logs. If it cannot be checked from a log, it is not acceptance. -->
+<ul>
+  <li>…</li>
+</ul>
+
+<h2>6. Known risks (only if real)</h2>
+<!-- The one or two things that could break, and what the builder should do about it. Omit the
+     section rather than fill it with boilerplate. -->
+
+<h2>7. Fences and stop conditions</h2>
+<div class="stop">
+<ul>
+  <li>No git commit/push/add; no <code>tasks/TASKS.yaml</code>; no new tickets.</li>
+  <li>No edits outside §2. No refactor the plan did not ask for.</li>
+  <li>At most ONE boundary r4 probe if <code>godot/world/*</code> is touched; on a trade-off,
+      record the honest deviation and exit — no option loop.</li>
+  <li><strong>If the plan cannot be applied (anchor missing, symbol absent, steps contradict,
+      or a design decision is required that this plan does not make) write
+      <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT.</strong>
+      Do not invent the design — that is the coordinator's job and it is cheap to redo.</li>
+</ul>
+</div>
+
+<h2>8. Resume point</h2>
+<p>Run: 1 of N (this plan). Prior state: … · Last green gate: … · Next after this run: …</p>
+
+</body>
+</html>

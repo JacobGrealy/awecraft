@@ -9,6 +9,11 @@ development and headless verification. `README.md` is the human entry point.
 The agent is the **orchestrator/coordinator**: plan, launch subagents, verify, commit + push.
 Subagents do all code and research. Procedure lives in the project skills (`.dsh/skills/`), not here.
 
+**Planning is the coordinator's own work, not a hand-off** (2026-10-19): before launching a builder,
+write `tasks/AC-NNNN/plan.html` yourself — the orienting, the anchors and the design decisions —
+then hand a medium builder a contract to apply (`awecraft-plan`). A builder is a 27B on one slot at
+~15 tokens/s; the plan is what keeps its effort where it buys something (`godot/OPS.md` §1).
+
 ## Start of session
 
 1. `python3 tasks/scripts/tasks.py next` — what to work on (the queue is the work order).
@@ -54,7 +59,8 @@ or bash sweep does not trigger them, so open the file when you need its rules.
 
 ## Procedure — load the one skill you need
 
-- `awecraft-delegate` — launch a builder: effort routing, the paste-ready prompt
+- `awecraft-plan` — the coordinator's planning pass: write `plan.html` before any builder launches
+- `awecraft-delegate` — launch a builder: effort routing (medium default), the paste-ready prompt
 - `awecraft-file-ticket` — filing, the notes format, decomposition, `tasks.py` commands
 - `awecraft-run-verify` — which gates and how: G0 semantics, smoke tiers, render limits
 - `awecraft-heavy-gates` — the background gate job, godot contention, build + serve checks

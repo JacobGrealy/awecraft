@@ -5,34 +5,49 @@ description: Use when launching, relaunching or routing a builder subagent for a
 
 # Delegating an AweCraft ticket
 
-The agent is the orchestrator; **subagents do all code and research**. The builder's verbatim prompt
-is the SINGLE TEMPLATE in `tasks/templates/two-phase.md` — paste it, replace `AC-NNNN`, and never
-inline a document's contents into it (paths only; inlining bloats the prompt and drifts).
+The agent is the orchestrator; **subagents do all code and research**. Two verbatim prompts, both
+paste-and-replace-`AC-NNNN`, neither ever inlining a document's contents (paths only; inlining bloats
+the prompt and drifts):
+
+- `tasks/templates/implement.md` — **the default**, routed to `subagent_medium`. The coordinator has
+  already written `tasks/AC-NNNN/plan.html` (`awecraft-plan`); the builder applies it, runs the named
+  gates and exits.
+- `tasks/templates/two-phase.md` — `subagent_xhigh`, for `design`-labelled tickets and for escalation.
+  Plan + implement in one turn; there the plan IS the builder's work.
+
+**The split is the speed.** A run's wall clock is roughly its own output-token count divided by 15
+(the measurement and the current values: `godot/OPS.md` §1). Medium-by-default with a
+coordinator-written plan is what keeps effort where it buys something.
 
 ## 1. Prepare
 
 1. Pick the ticket: `python3 tasks/scripts/tasks.py next` (the queue is the work order).
-2. Mark it: `python3 tasks/scripts/tasks.py set --id AC-NNNN --status in-progress`.
-3. Ensure the spec exists: `python3 tasks/scripts/spec_template.py AC-NNNN` (slim by default — path
+2. **Write the plan first — `awecraft-plan`.** The coordinator does the orienting and makes the design
+   decisions, into `tasks/AC-NNNN/plan.html`. This is the step that turns a 6-hour run into a
+   40-minute one; `trivial` tickets are the only ones that skip it.
+3. Mark it: `python3 tasks/scripts/tasks.py set --id AC-NNNN --status in-progress`.
+4. Ensure the spec exists: `python3 tasks/scripts/spec_template.py AC-NNNN` (slim by default — path
    pointers; `--full` only when the tables genuinely must be inline).
 
 ## 2. Route by effort — current tool names
 
 The `subagent-reasoning` plugin (`~/.dsh/plugins/subagent-reasoning.js`) pins the child's reasoning
-effort **by the tool name used to launch it**:
+effort **by the tool name used to launch it**. The name is an EFFORT, not a rank — `medium` is the
+default implementer:
 
 | Launch tool | Effort | Use for |
 |---|---|---|
-| `subagent_xhigh` | xhigh | **non-trivial tickets** — plan + implement in one turn |
-| `subagent_medium` | medium | the **trivial bypass** only |
-| `subagent_low` | low | never for implementation |
+| `subagent_medium` | medium | **the default implementer** — applies a coordinator-written `plan.html`; prompt `implement.md` |
+| `subagent_xhigh` | xhigh | **design stages and escalation only** — `design`-labelled tickets, or a ticket that has already failed twice at medium; prompt `two-phase.md` |
+| `subagent_low` | low | mechanical work only (a one-file formatting pass, "reply SLOT-OK") — never implementation |
 | `subagent_fork` | (unpinned → `subagentEffort`, currently medium) | inherits this conversation: reviews, continuations, follow-up analysis — not primary implementation |
+| `subagent` | agent default model — **NOT the local model** | reviews and analysis. Never implementation: the user's choice is the local 27B, so do not quietly route work to the fast cloud model |
 
-Anything else falls back to the configured `subagentEffort`. Do not name the retired aliases
-`subagent_plan` / `subagent`.
+The last two run on the agent default model (`deepseek`), not on the 27B — that is why they are not
+in the implementation column, and why `subagent_fork` is not a substitute for a medium builder.
 
-**Trivial bypass** (medium, spec-only, no plan): the ticket's labels contain `trivial`, or its title
-matches `build-scripts`.
+**Trivial bypass** (medium, `implement.md` minus the plan): the ticket's labels contain `trivial`, or
+its title matches `build-scripts`. If it needs a plan, it was not trivial — label it properly.
 
 ## 3. Launch rules
 
@@ -41,6 +56,9 @@ matches `build-scripts`.
   share a single slot: never put two subagent calls in one step, never start the next before the
   previous returns, and expect nothing from a concurrent launch except contention. (`subagent_fork`
   is not in that set — it is the in-process path on the agent default model.)
+  **Ruled 2026-10-19: one slot stays, local-only, and the 27B is the best available model — do not
+  propose parallel builders or a faster model as a speed fix.** Throughput is a constraint to work
+  around with a plan and a lean run, not a knob (`awecraft-plan`).
 - A **DSH host restart kills in-flight children**. After one, inspect `tasks/AC-NNNN/continuity.md`,
   the ticket folder and `.scratch/AC-NNNN/`, then relaunch with a resume pointer at the log's last
   entry.
@@ -65,9 +83,38 @@ matches `build-scripts`.
 - A ticket touching `godot/world/*` or the lighting path may run **at most ONE** boundary r4 A/B
   probe as a self-check; on a trade-off it records an honest deviation and exits (no option loop).
 
-## 4. After it returns
+## 4. After it returns — triage, then trust
 
-Check the deliverable set before trusting it: `tasks/AC-NNNN/plan.html`, the self-contained
+**First run the triage.** It is checkable from artifacts in under five minutes and needs no judgement
+call. Any single hard signal means the run did NOT work:
+
+| Signal | Check |
+|---|---|
+| **H1 no-op** | `git diff --name-only` empty for the ticket's area, but continuity claims implementation |
+| **H2 starved** | `AC-NNNN-results.html` missing, or present with no gate values, or the last continuity entry has no OUTCOME |
+| **H3 lying** | a number in the results page that does not appear in `.scratch/AC-NNNN-gates/*.log` (grep it) |
+| **H4 open red** | a gate not `ok:true` with no `HONEST DEVIATION` paragraph naming the follow-up |
+| **H5 scope escape** | changed files outside `plan.html` §2's file list |
+| **H6 insufficient** | the builder wrote `PLAN-INSUFFICIENT: …` |
+
+Soft signal (one more check before escalating): **S1 thrash** — a file edited ≥3 times with no green
+gate in between, ≥2 boundary probes (the cap is 1), or the same gate re-run ≥3 times.
+
+**The ladder — plan first, effort second:**
+
+1. **First hit → repair the PLAN and relaunch `subagent_medium`.** H1, H3, H5 and H6 are plan defects,
+   not effort defects; adding the missing anchor or the expected value is minutes, and paying xhigh
+   for under-specified work is exactly what the old routing did wrong. Mechanics: `awecraft-plan`.
+2. **Second hit on the same ticket → `subagent_xhigh`** with the repaired plan and `two-phase.md`. Now
+   the implication is genuine: the work needs design judgement inside the implementation.
+3. **Third hit → split the ticket** (`awecraft-file-ticket`).
+
+A ticket that needs architecture judgement is filed with the **`design` label** and takes
+`subagent_xhigh` on the FIRST launch — no cheap attempt. Record every escalation in `continuity.md`
+as one line, `ESCALATED xhigh: <signal> — <plan fix>`; that log is the only evidence of whether the
+medium default is holding, so it is not optional.
+
+Then check the deliverable set: `tasks/AC-NNNN/plan.html`, the self-contained
 `tasks/AC-NNNN/AC-NNNN-results.html`, appended `continuity.md` entries, and gate logs under
 `.scratch/AC-NNNN-gates/`. Then run the heavy stage — `awecraft-heavy-gates` — and close out with
 `awecraft-closeout`.
