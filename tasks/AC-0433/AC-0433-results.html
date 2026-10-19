@@ -125,4 +125,155 @@ home-landing re-bake hook for the ccx-63/ccz-63 face chunks, or a dispatch-order
 straddler's data lands before the adjacent face chunk builds. Also owed (F6): the seamcensus
 rebaseline ticket. Exit after this increment's gates; the heavy set (crossface) is the
 coordinator's.</p>
+
+<h2>8 — RUN 2 (2026-10-19): P0.5 — the rebuild-ordering gap + the straddler stall, landed and proven</h2>
+<p class="meta">Stage = the plan's P0.5 (now an explicit row in <code>plan.html</code> §3): (F3) a home
+edge extends nothing until its column re-bakes, because the ring a face chunk reads is a
+<b>build-time snapshot</b> — and (F4) the jump-band straddler's mesh dispatch stalls forever on the
+8-neighbor build gate. GDScript only: no C++, no .so rebuild, no placement, no data.</p>
+
+<div class="ok"><b>STAGE PROVEN, NATURALLY.</b> The probe's jump-band scenario (recenter to 40 m inside
+the patch edge): the face chunk <code>4:63:1</code> first meshes at frame 2 <b>with the straddler's data
+still absent</b> (<code>initial_ring_live = false</code>) — its initial state carries the full air-ring
+signature (home edge <code>[0.0, 0.0]</code>, no extension; the home-edge side wall full-height,
+0→186 m, 876 wall verts). The straddler <code>(196,4)</code>'s data lands in the next few frames; the
+new <b>home-landing hook</b> re-bakes the face chunk <b>naturally</b> (<code>rebake_natural = true</code>,
+per-chunk counter 0→3, <code>manual_fallback = false</code> — the probe did NOT force a rebuild) and by
+frame 20 the final state matches run 1's forced re-bake to the mm: home edge
+<code>[-0.47, -0.008]</code> (extension armed against the live ring), side wall reduced to the 0–6 m
+chasm ledge (390 verts). Simultaneously, with the <b>gate fix</b>, the straddler's own mesh lands
+inside the wait window (<code>home_mesh_built = true</code>, <code>home_build_ready = true</code>,
+<code>home_queued = "nq"</code> — run 1: <code>false/false/"build"</code>, stuck to the frame cap) and its
+top face at the patch edge is now visible (<code>at_edge [5.0, 6.0, 116]</code> — the sliver cell; run 1:
+empty). Section A (the 8,344-site decomposition) stays byte-identical to run 1's r5/r6/r7.</div>
+
+<h3>8.1 — what changed (all in <code>godot/world/world.gd</code> + the probe)</h3>
+<table>
+<tr><th>change</th><th>where</th><th>why it is the minimal fix</th></tr>
+<tr><td><b>The straddler gate (F4)</b> — <code>_build_ready</code> skips a neighbour that is
+<code>_chunk_past_patch</code> (fully past the patch edge).</td><td><code>_build_ready</code>
+(the one function every high-tier dispatch site re-validates through: pool pick, load-window pick,
+steady pass, tex-refresh, dirty dispatch)</td><td>The dispatch's ring construction at <b>all four</b>
+home sites already synthesizes a past-patch neighbour's ring (<code>_patch_edge_ring</code>, the
+AC-0309 D2 clause: the resampled live face ring or the solid ring — <i>never a defer</i>, because
+"that data is not home and never lands"). The gate and the dispatch previously disagreed: the gate
+demanded data that the design says can never arrive. With R ≤ 0 the skip is inert
+(<code>_chunk_past_patch</code> returns false) — harness-arm behaviour unchanged.</td></tr>
+<tr><td><b>The home-LANDING re-bake hook (F3)</b> — <code>_face_rebake_boundary(cx, cz)</code>
+(the existing home-<i>edit</i> call) now also fires from the three full-landing paths:
+<code>threadgen_handoff</code> (gen — skip flag ≠ 2, i.e. not a far landing),
+<code>_land_column</code> (disk — not a far column), and the band-A materialization landing (the
+<code>mat</code> TM handoff — the column's first real slab data).</td><td>the three landing choke
+points</td><td>A face chunk is a sync build against a ring SNAPSHOT; the landing is the only moment
+the ring's contents change between builds. The hook reuses the edit path's overlap test (a landing
+column re-bakes only the face chunks whose edge row crosses it) and its early-outs (inert without
+resident face chunks / R ≤ 0). A far landing (payload H-only, slabs null) carries no ring —
+correctly excluded, and its promotion lands through <code>threadgen_handoff</code> anyway.</td></tr>
+<tr><td><b>The discriminator</b> — <code>face_rebake_n</code> (World census) + per-chunk meta
+<code>ac0433_rebake_n</code>, incremented inside <code>_face_rebake_boundary</code> on each actual
+edge-row re-bake.</td><td><code>_face_rebake_boundary</code></td><td>The probe reads the per-chunk
+meta (not the census) so a sibling edge row's landing cannot false-positive the natural flag.</td></tr>
+<tr><td><b>The probe rework</b> — section B captures the INITIAL-build state the frame the face
+first meshes (the air-ring signature if the gap applies), then waits on the straddler's <i>mesh</i>
+(not just its data), then reads the FINAL state with no probe-side rebuild; <code>rebake_natural</code>
+/ <code>initial_ring_live</code> / <code>manual_fallback</code> make the verdict mechanical. The
+run-1 forced re-bake survives ONLY as a flagged last resort.</td><td><code>harness.gd</code>
+<code>_ac0433probe_test</code></td><td>Without the initial-state capture the post-fix run cannot tell
+"a live ring at build" from "a natural re-bake"; without the mesh wait the F4 stall is invisible
+(run 1's straddler never meshed in-window and the probe had no field proving why).</td></tr>
+</table>
+
+<h3>8.2 — the evidence (probe r8, seed = live world, site <code>z0=68 face=4 iv=22</code>, chunk <code>4:63:1</code>, straddler <code>(196,4)</code>)</h3>
+<table>
+<tr><th>field</th><th>initial (frame 2, face first meshes)</th><th>final (frame 20, natural)</th><th>run 1 (forced re-bake)</th></tr>
+<tr><td><code>home_edge</code> top band</td><td><code>[0.0, 0.0]</code> — extends nothing</td><td class="ok"><code>[-0.47, -0.008]</code> — armed against the live ring</td><td><code>[-0.47, -0.008]</code> (identical)</td></tr>
+<tr><td><code>side_home</code> wall [xmin, xmax, ymax, n]</td><td><code>[0.0, 0.0, 186.0, 876]</code> — full-height seam wall</td><td class="ok"><code>[-0.47, 0.0, 186.0, 390]</code> — 0–6 m chasm ledge</td><td><code>[-0.47, 0.0, 186.0, 390]</code> (identical)</td></tr>
+<tr><td><code>u_seam</code> / <code>v_seam_n</code></td><td><code>[16.0, 16.0]</code> / <code>[16.0, 16.0]</code></td><td><code>[16.716, 16.753]</code> / <code>[16.555, 16.898]</code></td><td>identical</td></tr>
+<tr><td>straddler state</td><td>absent (data lands later)</td><td class="ok"><code>home_mesh_built = true</code>, <code>home_build_ready = true</code>, <code>home_queued = "nq"</code></td><td><code>false / false / "build"</code> — stalled</td></tr>
+<tr><td>straddler top face at the patch edge</td><td>—</td><td class="ok"><code>at_edge [5.0, 6.0, 116]</code> (the sliver cell meshed)</td><td>empty (never meshed)</td></tr>
+<tr><td>discriminator</td><td><code>initial_ring_live = false</code></td><td class="ok"><code>rebake_natural = true</code>, chunk counter 0→3, <code>manual_fallback = false</code></td><td>forced (run 1 had no hook)</td></tr>
+<tr><td>world census</td><td>—</td><td><code>face_rebake_n_world = 4</code> (3 on this chunk + 1 sibling edge row — the three straddler columns <code>(196,3/4/5)</code> each cross a 49–98 m edge row; one landing, one re-bake each)</td><td>—</td></tr>
+</table>
+<p class="small">The natural re-bake reproduces run 1's forced re-bake <b>exactly</b> (same bands,
+same vertex counts) — the ordering fix does not change WHAT a correct re-bake produces, only that it
+happens without a probe. The two failure branches are negative-tested by construction: without the
+hook, <code>rebake_natural</code> stays false and <code>manual_fallback</code> fires; without the gate
+fix, the wait loop times out with <code>home_mesh_built = false</code> and <code>home_queued =
+"build"</code> (the F4 stall, as run 1 measured it).</p>
+
+<h3>8.3 — the regression guard (the point of this ticket's evidence)</h3>
+<div class="ok"><b>HOLDS.</b> <code>ac0423probe</code> re-run on this tree: the full RESULT dict
+(excluding wall-time) is <b>byte-identical</b> to BOTH run 1's increment-tree run (the same
+<code>libchunkio.so</code> — this run rebuilt no C++) AND run 1's pristine-HEAD-.so run, so the chain
+pristine-HEAD ≡ run-1 increment ≡ run-2 tree holds field-for-field. The standing home-lane
+seam-overlap measures <b>654 / 752 / 660 / 662 / 758 / 848 / 800 / 1290 / 1290 mm</b> — inside the
+standing 654–1290 mm band to the mm. <b>genhash 25/25 byte-identical</b> to the HEAVY-r22 reference —
+<b>the genhash did NOT move</b> (waived stability would have made a move a finding; a scheduling-only
+change owed no data-path change, and there was none). meshprobe <code>match_rate 1.0</code>; farab
+<code>ok true</code> (<code>h_mismatch 0</code>, 45 cols); seamcensus re-run: the pre-existing RED
+(F6) is <b>data-identical</b> to run 1 (only <code>wall_ms</code> differs) — this increment is
+provably neutral on the seam instrument.</div>
+
+<h3>8.4 — is P0.5 cosmetic without P1? No — and the stages stay ordered</h3>
+<p>P0.5 closes a defect that P1 does NOT subsume: the ring-snapshot is a property of the
+<b>sync build lane</b>, not of the placement rule. Even after the unified placement (P1/P2), a face
+edge chunk that builds before the straddler's data lands would still read an air ring — the
+home-landing re-bake hook remains the coherence mechanism for the face lane (or P3's mechanism
+deletion must absorb it). What P0.5 is <i>not</i>: it does not touch the measured base split (the
+1.7–3.7 m h = 0 footprint residual — the thing P1 removes by construction), and the seam-V
+extension it keeps working only closes the lean part, as run 1 established. The plan's ordering
+(P0.5 → P1) is therefore confirmed, not revised; the only plan change this run made was making P0.5
+an <b>explicit row</b> (it had been buried in the P0 risk cell and the §5 findings) with its own
+evidence column — the plan's staged list stays the authority on what comes next.</p>
+
+<h3>8.5 — gates (this run's set; the heavy set / crossface arm is the coordinator's)</h3>
+<table>
+<tr><th>gate</th><th>result</th><th>exit</th></tr>
+<tr><td>G0 (headless load + <code>gate_census.py</code> + exit status)</td><td class="ok">0 SCRIPT ERROR / 0 SHADER ERROR, exit 0</td><td>RC 0</td></tr>
+<tr><td>PROBE <code>ac0433probe</code> (r8)</td><td class="ok">stage proven (8.2); section A byte-identical to run 1</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>regression <code>ac0423probe</code> (r2)</td><td class="ok">byte-identical to run-1 increment AND pristine; overlap 654–1290 mm</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>genhash</td><td class="ok">25/25 byte-identical (no move)</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>SMOKE meshprobe (r2)</td><td class="ok">match_rate 1.0</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>far-tier farab (r2)</td><td class="ok">ok true, h_mismatch 0</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>boundary r4 (r2)</td><td class="ok">ok true; <code>built_final 68</code> (AC-0445 value), <code>resident_final 93</code>, footprint fence 0 — unchanged. NOISE-CLASS finding: <code>col_deferred</code> 48→57 and walk <code>p95_ms</code> 35→37 (frame-pacing census counters on a ~46 s live walk; contract fields untouched — reported per the moved-value rule, not re-baselined)</td><td>RC 0, 0/0 census</td></tr>
+<tr><td>seamcensus (neutrality check, r5)</td><td class="warn">pre-existing RED (F6) data-identical to run 1 — unchanged, owed to the AC-0427 rebaseline ticket</td><td>RC 0, 0/0 census</td></tr>
+</table>
+
+<h3>8.6 — files (every one named)</h3>
+<p><b>Modified (tracked):</b>
+<code>godot/world/world.gd</code> (<code>_build_ready</code> past-patch skip; <code>face_rebake_n</code>
+field + increment + per-chunk meta in <code>_face_rebake_boundary</code>; the three landing-hook
+calls: <code>threadgen_handoff</code>, <code>_land_column</code>, the <code>mat</code> TM handoff) ·
+<code>godot/scenes/harness.gd</code> (<code>_ac0433probe_test</code> section B: initial-state capture,
+mesh wait, natural-re-bake read, fallback flag) ·
+<code>godot/ARCHITECTURE.md</code> (the AC-0309 cross-face bullet: both landing orders + the
+<code>_build_ready</code> past-patch clause) ·
+<code>tasks/AC-0433/plan.html</code> (P0 marked landed; <b>P0.5 made an explicit stage row</b>; new
+§5 "What run 2 lands"; §5→§6 renumber; findings F3/F4 annotated) ·
+<code>tasks/AC-0433/AC-0433-results.html</code> (this section) ·
+<code>tasks/AC-0433/continuity.md</code> (run-2 entry, appended live throughout).</p>
+<p><b>New (ticket):</b>
+<code>tasks/AC-0433/captures/g0-r5.log</code> ·
+<code>tasks/AC-0433/captures/probe-r8.log</code> ·
+<code>tasks/AC-0433/captures/ac0423probe-r2.log</code> ·
+<code>tasks/AC-0433/captures/genhash-r2.log</code> ·
+<code>tasks/AC-0433/captures/meshprobe-r2.log</code> ·
+<code>tasks/AC-0433/captures/farab-r2.log</code> ·
+<code>tasks/AC-0433/captures/boundary-r2.log</code> ·
+<code>tasks/AC-0433/captures/seamcensus-r5.log</code> ·
+<code>tasks/AC-0433/captures/results.json</code> (appended: the <code>ac0433probe_run2_p05</code>
+section). Scratch (git-ignored): <code>.scratch/AC-0433-gates/</code> (all run-2 logs + the
+genhash-line diffs).</p>
+
+<h3>8.7 — what remains (next run)</h3>
+<p><b>P1 (design stage) is next per the plan:</b> the unified footprint — every column extrudes
+along its own radial — with the seam algebra proven on paper + probe before any code (candidate (c)
+from the ticket; the per-cell vs per-column facet cost analysis; the 6.1 m/R lean at the unified
+footprint is the home class, already closed by the existing extension). P0.5's machinery (the K-table
+consumer, the landing hooks, the gate) is the substrate P1 lands on — the face lane's sync build
+keeps reading rings, so the hooks stay live through P1/P2. Still owed (not this ticket's): the
+seamcensus rebaseline ticket (F6, coordinator's queue) and the coordinator's heavy set (crossface
+20-min arm) on this tree. <b>No render was owed this run</b> (no visual change to judge — the
+geometry the re-bake produces is run 1's measured geometry; a render arm is a P2 concern when the
+placement itself moves).</p>
 </body></html>

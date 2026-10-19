@@ -36457,15 +36457,26 @@ func _ac0433probe_test() -> void:
 		var key_h: String = world._key(196, zc)
 		world.recenter(hw - 40.0, float(z0))
 		# the FACE chunk is the subject (read it as soon as it is meshed);
-		# the home straddler is a best-effort control — give it up to
-		# HOME_WAIT frames after the face build (a jump-band build stall is
-		# itself a finding, reported in the wait hist).
+		# the home straddler is now a HARD control (AC-0433 P0.5: the
+		# _build_ready gate no longer defers on past-patch stubs, so the
+		# wait loop exits on the straddler's MESH — a timeout with it still
+		# queued is the F4 stall, negative-tested by construction).
 		var HOME_WAIT: int = 2400
 		var cf: Node3D = null
 		var chh: Node3D = null
 		var wb := 0
 		var face_built_at := -1
 		var hist: Array = []
+		# AC-0433 P0.5: the INITIAL-build state — captured the frame the
+		# face chunk FIRST meshes, before any home-landing re-bake can
+		# touch it. If the straddler's data had not landed yet (the
+		# jump-band order), this is the air-ring signature: home edge
+		# [0.0, 0.0] (extends nothing) + the full-height seam wall in
+		# side_home.
+		var init_bands: Dictionary = {}
+		var init_ring_live := false
+		var init_rebake_cf := 0
+		var init_read_at := -1
 		while wb < 9000:
 			cf = world.chunks.get(key_f)
 			chh = world.chunks.get(key_h)
@@ -36473,6 +36484,10 @@ func _ac0433probe_test() -> void:
 			var hb: bool = chh != null and not chh.data.is_empty() and bool(chh.mesh_built)
 			if fb and face_built_at < 0:
 				face_built_at = wb
+				init_bands = _ac0433_face_bands(cf, f, iv)
+				init_ring_live = chh != null and not chh.data.is_empty()
+				init_rebake_cf = int(cf.get_meta("ac0433_rebake_n", 0))
+				init_read_at = wb
 			if wb % 300 == 0 or (face_built_at >= 0 and wb < face_built_at + HOME_WAIT and wb % 300 == 0):
 				var fst := "absent" if cf == null else ("no_data" if cf.data.is_empty() else ("meshed" if bool(cf.mesh_built) else "not_meshed"))
 				var hst := "absent" if chh == null else ("no_data" if chh.data.is_empty() else ("meshed" if bool(chh.mesh_built) else "not_meshed"))
@@ -36507,39 +36522,60 @@ func _ac0433probe_test() -> void:
 			# the node transform vs the predicted placement
 			var tp: Transform3D = SphereMath.face_chunk_transform(f, 63, ccz2, R)
 			sb["xform_delta_mm"] = roundf((cf.transform.origin - tp.origin).length() * 1000.0)
-			# the edge rows: [min_local, max_local, n] of the TOP-face
-			# vertices in the edge band — pre-fix the rows stop at the
-			# nominal 0/16 footprint; the seam-V extension (armed on the
-			# face lane since the AC-0433 increment) moves them past 0/16.
-			var bands_res: Dictionary = _ac0433_face_bands(cf, f, iv)
 			sb["face_built"] = true
 			sb["face_top"] = int(cf.top)
+			# AC-0433 P0.5: the INITIAL-build state (captured the frame the
+			# face first meshes) — the ring snapshot the build ran against.
+			# In the jump-band order (the straddler's data lands AFTER the
+			# face build) this is the air-ring signature: home edge
+			# [0.0, 0.0] (extends nothing) + the full-height seam wall in
+			# the side read.
+			sb["face_edge_bands_initial"] = init_bands["bands"]
+			sb["face_edge_bands_initial_side"] = init_bands["side_home"]
+			sb["face_edge_bands_initial_ntop"] = int(init_bands["ntop"])
+			sb["initial_ring_live"] = init_ring_live
+			sb["initial_read_at_frame"] = init_read_at
+			var reb: Dictionary = {}
+			var manual_fallback := false
+			var final_read_at := wb
+			if chh != null and not chh.data.is_empty():
+				# AC-0433 P0.5: the home-landing hook re-bakes this chunk
+				# the frame the straddler's DATA lands (threadgen_handoff →
+				# _face_rebake_boundary) — read the bands with NO probe-side
+				# rebuild. The wait loop exits on the straddler's MESH,
+				# which lands after its data (hence after the natural
+				# re-bake), so the per-chunk meta counter has already
+				# carried the hook's increment at this read.
+				reb["home_data_present"] = true
+				reb["home_mesh_built"] = bool(chh.mesh_built)
+				reb["home_build_ready"] = world._build_ready(int(chh.cx), int(chh.cz))
+				reb["home_queued"] = world.queued_keys.get(key_h, "nq")
+				reb["rebake_natural"] = int(cf.get_meta("ac0433_rebake_n", 0)) > int(init_rebake_cf)
+				reb["face_rebake_n_chunk"] = int(cf.get_meta("ac0433_rebake_n", 0))
+				reb["face_rebake_n_world"] = int(world.face_rebake_n)
+				if not bool(reb["rebake_natural"]) and not init_ring_live:
+					# the gap: the straddler's data landed but the hook did
+					# NOT re-bake this chunk (the stage failed) — the
+					# probe-side forced rebuild (the run-1 path) still
+					# demonstrates the mechanism, and manual_fallback flags
+					# the ordering as NOT closed naturally.
+					cf.build_mesh_face({})
+					await get_tree().process_frame
+					manual_fallback = true
+			else:
+				reb["home_data_present"] = false
+			var bands_res: Dictionary = _ac0433_face_bands(cf, f, iv)
 			sb["face_edge_row_tops"] = bands_res["tops"]
 			sb["n_top_face_verts"] = bands_res["ntop"]
 			sb["face_edge_bands_local"] = bands_res["bands"]
-			# AC-0433: the home-edge extension arms only against the LIVE
-			# home ring, and the ring is a snapshot at face-build time
-			# (the home straddler is normally unbuilt/un-generated then —
-			# no re-bake hook exists for home data landing later, a
-			# documented finding). Once the straddler's DATA has landed,
-			# re-bake the face chunk and re-read: every real edge must
-			# cross the nominal footprint (u/v seams from the initial
-			# build already — their rings are face-chunk rings).
-			var reb: Dictionary = {}
-			var dw := 0
-			while ((chh == null or chh.data.is_empty()) and dw < 600):
-				await get_tree().process_frame
-				dw += 1
-				chh = world.chunks.get(key_h)
-			if chh != null and not chh.data.is_empty():
-				cf.build_mesh_face({})
-				await get_tree().process_frame
-				reb = _ac0433_face_bands(cf, f, iv)
-				reb["home_data_present"] = true
-				reb["home_mesh_built"] = bool(chh.mesh_built)
-				reb["drain_frames"] = dw
-			else:
-				reb["home_data_present"] = false
+			sb["face_edge_bands_local_side"] = bands_res["side_home"]
+			sb["final_read_at_frame"] = final_read_at
+			reb["bands"] = bands_res["bands"]
+			reb["tops"] = bands_res["tops"]
+			reb["ntop"] = bands_res["ntop"]
+			reb["side_home"] = bands_res["side_home"]
+			reb["home_edge_x"] = bands_res["home_edge_x"]
+			reb["manual_fallback"] = manual_fallback
 			sb["face_edge_bands_rebake"] = reb
 			# the home straddler control: its top face at the patch edge
 			# (local x ~5.6 for the +X edge) and its armed east-edge

@@ -6882,6 +6882,20 @@ func _build_ready(cx: int, cz: int) -> bool:
 	for n in [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]:
 		var nc = chunks.get(_key(cx + int(n[0]), cz + int(n[1])))
 		if nc == null or nc.data.is_empty():
+			# AC-0433 P0.5 (the jump-band straddler stall, F4): a fully-
+			# past-patch neighbour is FACE TERRITORY — its data NEVER lands
+			# (every home enqueue refuses it: the ENQ-PASTPATCH guards in
+			# _enqueue_build / threadgen_enqueue / the want walk / the
+			# band-3 feed), and the dispatch's ring construction synthesizes
+			# its ring instead of reading it (the _patch_edge_ring D2 clause
+			# at every nap_rings site: the resampled live face ring, or the
+			# solid ring — never a defer). Demanding its data is what
+			# stranded the boundary straddler's high build forever after a
+			# recenter jump: the straddler held data in seconds while its
+			# three past-patch stubs held none, and the gate deferred it to
+			# the frame cap. The gate and the dispatch now agree.
+			if _chunk_past_patch(cx + int(n[0]), cz + int(n[1])):
+				continue
 			return false
 	return true
 
@@ -7401,6 +7415,21 @@ func threadgen_handoff(e: Dictionary, resl: Array) -> void:
 			_far_promo_owed[key] = true
 	_tg_handoff += 1
 	_pool_touch()  # AC-0217: queued entry's data landed (pool membership flipped)
+	# AC-0433 P0.5: the home-LANDING re-bake hook — the reverse of the
+	# edit-side _face_rebake_boundary call (AC-0309 C5). A face edge chunk
+	# is a sync build against a RING SNAPSHOT: across the seam the face
+	# window streams BEFORE the straddler's data lands (the jump band: the
+	# face chunk meshes in ~2 frames, the straddler's data in seconds), so
+	# that chunk was built against an AIR home ring — its home edge extends
+	# nothing and carries a full-height seam wall. This landing re-bakes
+	# the overlapping edge row, so the extension arms against the live
+	# ring in either landing order. Full landings only: args[5] is the
+	# skip flag (0 = full, 1 = the band-A fill — both carry real slab
+	# data; 2 = far, the payload is H-only and the slabs stay null — no
+	# ring to feed). Inert when no face chunk is resident (the function's
+	# early-out) and when R ≤ 0.
+	if int(e["args"][5]) != 2:
+		_face_rebake_boundary(tcx, tcz)
 	if timing or _tg_debug:
 		print("GENHAND %d,%d t=%d" % [int(e["cx"]), int(e["cz"]), Time.get_ticks_msec()])
 
@@ -7979,6 +8008,13 @@ func threadmesh_handoff(e: Dictionary, res) -> void:
 			if int(c.band) == 0:
 				_rt_dirty()  # AC-0373: only a band-0 landing can reach the memo
 			c.no_caves = true  # the skip fill is cave-less (the promotion owes the full regen)
+			# AC-0433 P0.5: the band-A materialization landing carries this
+			# column's first REAL slab data (the far payload was H-only) —
+			# a boundary straddler materialized this way is a live home ring
+			# for the resident face edge row (same ordering class as the
+			# gen/disk landings; the hook is inert without resident face
+			# chunks or at R ≤ 0).
+			_face_rebake_boundary(int(e["cx"]), int(e["cz"]))
 			var ms_m: int = int(e.get("mat_ms", 0))
 			band_a_mat_ms_sum += ms_m
 			band_a_mat_ms_n += 1
@@ -12870,6 +12906,14 @@ func _land_column(c: Node3D, res: Dictionary) -> void:
 	if gmask != 0xFFFFFF:
 		threadgen_enqueue(int(c.cx), int(c.cz), _key(int(c.cx), int(c.cz)), c.get_instance_id(), false, int(c.col_gen))
 	_pool_touch()  # AC-0217: disk data landed on a queued entry
+	# AC-0433 P0.5: the disk landing is the same ordering class as the gen
+	# landing — a saved straddler column can load AFTER the face window
+	# streamed (the face chunk then built against an air home ring). A FAR
+	# disk column (v6 bit 1) has no slab data (the payload is H-only) — it
+	# owes no re-bake; its promotion lands through threadgen_handoff, which
+	# carries the hook. Inert when no face chunk is resident / R ≤ 0.
+	if not c.far:
+		_face_rebake_boundary(int(c.cx), int(c.cz))
 
 
 func _saved_light_from_res(light: Dictionary, cx: int, cz: int) -> Dictionary:
@@ -14504,6 +14548,7 @@ func _fluid_near(x: int, y: int, z: int) -> bool:
 const FACE_CELLS := 1024  # SphereMath.CELLS_PER_FACE
 const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
 var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
+var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac0433probe natural-vs-forced discriminator)
 
 # --- AC-0309: cross-face movement (P4 of AC-0144) — the face-side runtime ---
 # The home pair (faces 0,1) keeps its flat 1 m grid UNTOUCHED (D1: genhash
@@ -15103,12 +15148,17 @@ func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
 		nc.flush_slabs = {}
 
 # C5: the reverse of _face_rearm_home_neighbors — a home BOUNDARY-column
-# edit changes the live data the resident face edge chunks read through
-# their cross-face rings (a ring is a snapshot at face-build time), so
-# the face edge row overlapping the edited column re-bakes (the seam
-# stays coherent in both directions). Only edge-row face chunks (ccx ==
-# 63 on the x faces / ccz == 63 on the z faces) read the home side at
-# all, and only along the edge row's overlap range — one chunk per edit.
+# CHANGE re-bakes the resident face edge chunks whose edge row overlaps
+# the column (the seam stays coherent in both directions). The ring is a
+# snapshot at face-build time, so the trigger is any change to the live
+# data the face edge reads: an EDIT landing (AC-0309 C5) and the column's
+# data LANDING itself (AC-0433 P0.5, the home-landing hook — a face edge
+# chunk built against an air home ring extends nothing there and carries
+# a full-height seam wall until the straddler's data arrives). Only edge-
+# row face chunks (ccx == 63 on the x faces / ccz == 63 on the z faces)
+# read the home side at all, and only along the edge row's overlap range
+# — a handful of chunks per boundary-column landing. face_rebake_n counts
+# the actual re-bakes (the ac0433probe natural-vs-forced discriminator).
 func _face_rebake_boundary(cx: int, cz: int) -> void:
 	if Game.planet_R <= 0.0 or _face_order.is_empty():
 		return
@@ -15158,6 +15208,11 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
 			rebake = hi >= x0 and lo <= x0 + 16.0
 		if rebake:
+			face_rebake_n += 1  # AC-0433 P0.5: an edge-row re-bake actually ran
+			# the per-chunk counter — the ac0433probe reads THIS chunk's
+			# meta, not the world census (a sibling edge row's landing
+			# increments the world counter without touching this chunk).
+			c.set_meta("ac0433_rebake_n", int(c.get_meta("ac0433_rebake_n", 0)) + 1)
 			c.build_mesh_face()
 
 # C5: the player's sim anchor (world.gd side). Inside the home patch the

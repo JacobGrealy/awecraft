@@ -1150,9 +1150,21 @@ Match these; do not improvise a different approach in a task.
   collapsed the boundary projection onto the +x edge near z 0 and starved
   face 5's stream budget (the crossing row never streamed while the player
   stood home-side near the edge). **No cross-face merge**: the face edge
-  cells mirror the home edge data (the cross-face ring) and
-  `_face_rearm_home_neighbors` re-arms the home neighbours on a face
-  landing. **Per-face AweStarlight** (`_star_for_face`): each face owns a
+  cells mirror the home edge data (the cross-face ring) and the seam stays
+  coherent in both landing orders: `_face_rearm_home_neighbors` re-arms
+  the home neighbours on a face landing, and (AC-0433 P0.5)
+  `_face_rebake_boundary` re-bakes the resident face edge row on a home
+  boundary-column change of EITHER kind — an EDIT landing (AC-0309 C5) or
+  the column's data LANDING (the gen / disk / band-A-materialization
+  handoffs): a face chunk is a sync build against a ring SNAPSHOT, so a
+  straddler whose data lands AFTER the face build left that chunk's home
+  edge against an air ring (extends nothing + a full-height seam wall)
+  until the hook re-bakes it. The matching dispatch side: `_build_ready`'s
+  8-neighbor gate (AC-0160) skips a neighbour that is fully past the patch
+  edge (face territory — its data never lands; the dispatch ring
+  synthesizes it via `_patch_edge_ring`), so the boundary straddler's high
+  build no longer defers forever after a recenter jump (AC-0433 F4).
+  **Per-face AweStarlight** (`_star_for_face`): each face owns a
   star instance stepped in the per-frame face pass; `_face_star_pass`
   re-bakes a settled face column on the star payload only when it differs
   from the landing (pull) light — the AC-0297 seam contract (byte-equal in

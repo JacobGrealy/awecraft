@@ -108,7 +108,7 @@ resampling, the per-lane clamps — collapse or disappear.</p>
 
 <table>
 <tr><th>stage</th><th>what changes</th><th>evidence</th><th>risks</th></tr>
-<tr><td><b>P0 — run 1 (this run)</b></td>
+<tr><td><b>P0 — run 1 (landed)</b></td>
 <td>Measurement (<code>ac0433probe</code>) + plan + the face-lane seam-V extension: the shared
 header gains the face-chunk transform; <code>build_seam_ext</code> gains a face path (per-edge
 neighbour class + transforms, unified dot-product formula); <code>build_mesh_face</code> arms the
@@ -117,7 +117,37 @@ key; face clamp sized from the measurement (6.0 m vs 2.5 m home). Placement, dat
 home edge per the live home ring); seamcensus + genhash 25/25 unchanged; G0 clean.</td>
 <td>UV stretch on the extended rows (≤ 2 cell-equivalents — milder than home's existing 3.5×).
 The home-edge K tables need the live home ring (a face chunk built against an air home ring
-extends nothing there — the "act requires tn ≥ 0" contract; acceptable, the re-bake hooks exist).</td></tr>
+extends nothing there — the "act requires tn ≥ 0" contract). <b>Run 1's probe measured this
+branch live: the home-edge extension was inert until the probe forced a re-bake — the
+home-landing → face-re-bake hook the P0 row assumed does not exist.</b> That is P0.5 below.</td></tr>
+<tr><td><b>P0.5 — run 2 (this run)</b></td>
+<td>Rebuild ordering + the straddler's dispatch (GDScript only — no C++, no placement, no data).
+(1) <b>The home-LANDING re-bake hook</b>: the existing <code>_face_rebake_boundary</code>
+(today called from the home-<i>edit</i> path only) also fires when a home boundary column's
+<i>data lands</i> — all three full-landing paths (the gen handoff, the disk handoff, the
+band-A materialization landing). A face edge chunk built against an air home ring is re-baked
+the frame the straddler's data arrives, so the home-edge extension arms against the live ring
+in EITHER landing order. (2) <b>The straddler gate</b>: the 8-neighbor
+<code>_build_ready</code> gate (AC-0160/AC-0335) skips a neighbour that is fully past the patch
+edge — face territory whose data <i>never</i> lands (every home enqueue refuses it, the
+ENQ-PASTPATCH guards), and whose ring the dispatch already synthesizes (the
+<code>_patch_edge_ring</code> D2 clause: live face data or the solid ring, never a defer).
+The gate and the ring construction now agree; the boundary straddler's high build no longer
+defers forever in the jump band (the F4 stall).</td>
+<td>probe section B (reworked): the INITIAL-build state captured the frame the face first meshes
+(the air-ring signature: home edge [0.0, 0.0] + full-height seam wall) vs the FINAL state after
+the NATURAL re-bake — no probe-side rebuild; the new <code>face_rebake_n</code> counter proves
+the hook fired, and the straddler reports <code>mesh_built = true</code> inside the wait window
+(F4 negative-tested: without the gate fix the loop times out with the straddler still queued).
+ac0423probe home lane unchanged (the standing regression guard: run 1's pristine-HEAD .so ≡
+increment .so comparison stands, standing overlap 654–1290 mm); genhash 25/25 (scheduling only —
+no data-path change); farab + boundary r4 green.</td>
+<td>The re-bake is a sync main-thread face build: a jump-band burst lands boundary columns in a
+few seconds and can trigger several re-bakes (bounded: the overlap test limits each landing to
+the face chunks whose edge row crosses the column; the face list caps at 512). If the run shows
+P1 (the unified placement design) is the real blocker and this stage is cosmetic without it,
+that is a finding this run is allowed to report — the plan is a working document (the
+coordinator's standing instruction for this ticket).</td></tr>
 <tr><td><b>P1 — design</b></td>
 <td>Pick the unified footprint and prove the seam algebra on paper + probe: candidate (c) from
 the ticket — every column extrudes along its own radial. Cost analysis: per-cell facets on the
@@ -205,7 +235,42 @@ move), the probe's before/after (section B edge bands), the far-tier + boundary 
 touches the draw path at the seam), and the crossface F-audit standing values (placement
 untouched → must not move; the coordinator's heavy set re-runs it fresh).</p>
 
-<h2>5. Findings logged for later rounds</h2>
+<h2>5. What run 2 lands (P0.5)</h2>
+<ol>
+<li><b>The straddler gate (F4)</b> — <code>world.gd</code> <code>_build_ready</code>: a neighbour
+that is <code>_chunk_past_patch</code> (fully past the patch edge) is satisfied, not a defer.
+Every other <code>_build_ready</code> call site (pool pick, load-window pick, steady pass,
+tex-refresh, dirty dispatch) re-validates through the same function, and every home dispatch's
+ring construction (the four <code>nap_rings</code>/<code>_patch_edge_ring</code> sites) already
+synthesizes that neighbour's ring — the gate and the dispatch now agree where they previously
+disagreed. With R ≤ 0 (harness arms) the skip is inert (<code>_chunk_past_patch</code> returns
+false) — pre-existing behaviour unchanged.</li>
+<li><b>The home-landing re-bake hook (F3)</b> — <code>_face_rebake_boundary(cx, cz)</code> (the
+existing edit-side call: walk resident face chunks, edge-row overlap test, sync re-bake of the
+overlapping ones) is now also called from the three full-landing paths:
+<code>threadgen_handoff</code> (gen, when the skip flag is not 2 = far),
+<code>_land_column</code> (disk, when the column is not far), and the band-A materialization
+landing (the <code>mat</code> handoff). A new <code>face_rebake_n</code> counter on
+<code>World</code> increments on every actual edge-row re-bake — the probe's
+natural-vs-forced discriminator. Inert when no face chunk is resident (the
+<code>_face_order</code> empty early-out) and when R ≤ 0.</li>
+<li><b>The probe rework</b> — <code>ac0433probe</code> section B now captures the
+INITIAL-build state the frame the face chunk first meshes (the air-ring signature, if the
+straddler's data has not landed yet), then waits for the straddler's <i>mesh</i> (the F4
+assertion — the wait loop's exit condition), then reads the FINAL state with NO probe-side
+rebuild: <code>rebake_natural</code> = the counter moved, <code>initial_ring_live</code> = the
+face happened to build after the data (the no-gap branch), <code>manual_fallback</code> = the
+run-1 forced re-bake path (set only if the natural one did not fire — a failure of the stage).
+The home-straddler control bands (<code>at_edge</code>/<code>east_ext</code>) are expected
+non-empty this round (the straddler meshes).</li>
+</ol>
+<p><b>Proven by:</b> the probe's initial/final pair + <code>rebake_natural</code> +
+<code>home_mesh_built</code>; G0 (census + exit status — the stochastic UAF class); ac0423probe
+vs run 1 (home lane must be unchanged — this stage touches scheduling only); genhash 25/25
+(world/* touched — a move is a finding); farab (far-tier contract) + boundary r4 (streaming
+moved); meshprobe (C++ lane parity, the .so is run 1's increment build — unchanged this run).</p>
+
+<h2>6. Findings logged for later rounds</h2>
 <ul>
 <li><b>Jump-band straddler stall (probe artifact, live-question open):</b> after a 195-chunk
 recenter jump, the home boundary straddler (196, 4) lands data in seconds but its mesh
@@ -213,12 +278,17 @@ dispatch is held: <code>queued_keys = "build"</code>, <code>_build_ready = false
 its three past-patch neighbours (197, 3..5) <i>never</i> hold data (AC-0309 D2) and the
 tier-0/1 build gate (AC-0335) demands all-8-neighbor data. The crossface walk's gradual approach
 builds the straddler (C4 proves it) — the exact live mechanism is open; if the jump-band case is
-reachable by a player (fast travel / a future teleport), it is a hole at the seam.</li>
+reachable by a player (fast travel / a future teleport), it is a hole at the seam.
+<b>Run 2 (P0.5): the gate now skips past-patch neighbours (the dispatch already synthesizes
+their rings) — the probe's section B waits on the straddler's MESH, not just its data.</b></li>
 <li><b>Face re-bake gap:</b> a face chunk's home-edge ring is a snapshot at face-build time
-(the home-landing → face-re-bake hook does not exist; only face-landing → home re-mesh and
-home-edit → face re-bake exist). A face chunk built against an air home ring extends nothing at
+(the home-landing → face-re-bake hook did not exist; only face-landing → home re-mesh and
+home-edit → face re-bake existed). A face chunk built against an air home ring extends nothing at
 its home edge until something re-bakes it. The P0 increment arms the extension correctly when
-the ring is live; closing the ordering gap is a P0.5/P2 item.</li>
+the ring is live. <b>Run 2 (P0.5): the landing hook landed — <code>_face_rebake_boundary</code>
+fires from all three full-landing paths; the probe's natural re-bake read is the proof.</b>
+Residual for P1: the re-bake is a per-landing event; the unified-placement stage should make
+the home edge not depend on snapshot ordering at all.</li>
 <li>The F-audit comment (harness.gd:35040) already names this split a "PLACEMENT property" whose
 closure "is a placement-unification ticket's work" — this ticket files it; the
 ARCHITECTURE.md:1116 "separate, unfiled concern" note is updated by the P0 landing.</li>
