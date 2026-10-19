@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-19T02:11
+  updated_at: 2026-10-19T07:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29292,6 +29292,55 @@ intake:
     700 / 300 m); and the GROUND CASE MUST NOT REGRESS - the full annulus built by 180 s at 120 m is existing
     behaviour that AC-0399 records and requires to stay, so re-measure it rather than assuming a scheduling
     change is free there.
+
+    '
+  comments: []
+- id: AC-0453
+  title: rebaseline-the-seam-census
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-19T07:51
+  updated_at: 2026-10-19T07:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story: A check that is red should mean something is wrong. A seam census has been reporting
+    red while the thing it measures was already dealt with, so the red is noise - and noise in a check
+    is worse than no check, because it teaches everyone to ignore the output.
+
+
+    2) Technical Details:
+
+    SURFACED BY THE FIRST RUN OF THE ONE-WORLD-MODEL TICKET, which needed the seam census to prove its
+    work and found it red. It PROVED the red is not caused by that work by reproducing the census fixture
+    byte-identically against a build from an older era, so the state predates it.
+
+    THE CAUSE, per that investigation: A REBALANCE WAS WRITTEN BUT NEVER LANDED. Two tickets that changed
+    how seams are measured produced expectations that were never reconciled - one that relaid the boundary
+    corners and one that rebalanced the census against them - so the census still expects a world that
+    no longer exists.
+
+    WHAT TO DO: establish what the census currently asserts, what the world currently does, and whether
+    the assertions or the world are wrong. Do not simply re-record the current output as the new expectation,
+    because that would bless whatever is there now including anything genuinely broken; the rebalance
+    that was never landed presumably encoded a REASON, and that reason should be recovered and either
+    honoured or explicitly retired with a note. If the old numbers were the right ones and the world drifted,
+    that is a different ticket; if the assertions were superseded by deliberate changes, rebaseline with
+    the reason recorded.
+
+    ACCEPTANCE: the census green against the current world, with a statement of which side was wrong and
+    why - and, if the numbers were re-recorded rather than repaired, the reasoning that makes the new
+    numbers correct rather than merely current.
+
+    CONSTRAINTS: G0 zero SCRIPT ERROR and zero SHADER ERROR via tasks/scripts/gate_census.py AND the process
+    exit status checked; the standing set otherwise green; genhash 25/25 byte-identical unless generation
+    genuinely moves, and note the user has waived genhash stability so a move is a finding rather than
+    a failure.
 
     '
   comments: []
