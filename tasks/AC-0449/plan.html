@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0449 plan (correction run) — the BLUR, not the blue</title>
+<style>body{font:14px/1.5 system-ui,sans-serif;max-width:1000px;margin:2em auto;padding:0 1em}
+h1{font-size:1.4em}h2{font-size:1.1em;border-bottom:2px solid #444;padding-bottom:.2em;margin-top:1.6em}
+code,pre{background:#f2f2f2;padding:1px 4px;font-size:.92em}pre{padding:.6em}
+table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:4px 8px;vertical-align:top}
+.note{background:#fff8e1;border-left:4px solid #e0a800;padding:.5em .8em}</style></head>
+<body>
+<h1>AC-0449 plan — resume under the correction</h1>
+<p>This run supersedes the 17:45–20:40 run, which worked the <b>withdrawn</b> air-colour
+prime suspect. The correction (commit <code>e60bf4f</code>) governs: the user's "insane" default is a
+<b>blur amount</b> — an actual image blur destroying the near field — and the effect must stay,
+made <b>subtle</b> and <b>far out</b>. The prior run's uncommitted <code>u_fill_key</code> sky-fill
+change was reverted to HEAD so the tree is clean for the real fix.</p>
+
+<h2>Goal</h2>
+<p>Identify by elimination which pass blurs the user's view, then make it behave: nearby detail
+sharp at every view, softening only out at distance. No removal, no global strength cut.</p>
+
+<h2>Post-process / full-screen effect inventory (all of them, pre-elimination)</h2>
+<table>
+<tr><th>#</th><th>Effect</th><th>Where</th><th>Blur?</th></tr>
+<tr><td>1</td><td><b>ENGINE DOF</b> (CameraAttributesPractical on the player Camera3D): far blur
+enabled, <b>far distance 82.62 m</b>, transition 5 m, near disabled, amount 0.08</td>
+<td><code>godot/camera_attributes/main-camera-attributes.tres</code>, pushed by
+<code>Settings.apply_dof()</code> (settings.gd:948) at player init (player.gd:275) and on menu
+change (menu.gd:1482ff)</td><td><b>YES — the only actual image blur in the tree</b> (Forward+/Mobile
+depth-based blur; the compat proxy cannot show it, HARNESS §2)</td></tr>
+<tr><td>2</td><td>Engine env fog (depth window [100, 332] m at user R24/F83)</td>
+<td>project env fog, per-material</td><td>No — colour wash, no kernel</td></tr>
+<tr><td>3</td><td>Sky background (below-horizon air fill, horizon haze band)</td>
+<td><code>core/aero_sky_gradient.gdshader</code> (background plane)</td><td>No — colour</td></tr>
+<tr><td>4</td><td>AeroWash additive quad (constant 0.03 add)</td><td>world.gd</td><td>No — colour</td></tr>
+<tr><td>5</td><td>AC-0445 streaming fade material (transient 350 ms)</td><td>fade shaders</td>
+<td>Blends opacity, not a steady blur</td></tr>
+<tr><td>6</td><td>Tone mapper (Linear, project.godot); no MSAA/TAA/motion-blur/SubViewport/upscale
+(grep-verified); <code>core/analog_tune.gd</code> = controls tuning (deadzone/sens), no blur</td>
+<td>project.godot</td><td>No</td></tr>
+</table>
+<p><b>Elimination verdict (PROVEN by the v1/v2 A/B): #1, the engine DOF.</b> In the user's 941 m
+nadir view the whole visible disc (943 m at the frame centre → 2545 m at the limb arcs) sits past
+the 87.62 m wall, so <b>every</b> visible fragment renders at the maximum blur: "completely blurred
+out even things right in front of you". With DoF disabled (v2) the identical frame's edge energy
+rises 1.2–3.2× on every ring (v1/v2 ratio table in the results page). Ground views were never
+affected at arm's length (the near side is disabled) — the complaint reproduces exactly at the
+altitude the user has been living in since AC-0445 made vertical flight free (10-17, the day
+before the report). That is the "NOW".</p>
+
+<h2>Instrument note (why the planet preset could not see it)</h2>
+<p>The <code>planet</code> preset's shot camera is a <b>separate</b> Camera3D
+(<code>main._make_camera()</code>, fov 75, <b>no attributes</b> — harness.gd:1349-1387; the AC-0421
+comment names it). The preset spawns a frozen player only so the satellite body's altitude
+uniforms ride on it — the snapshot never goes through the player camera, so DoF is <b>never
+applied</b> in planet-preset frames. A pristine-tree DoF-on vs DoF-off planet shot came back
+<b>byte-identical</b>, proving it. All planet-preset captures in the tree (a0/a0f/a1/a2/n0/…) are
+DoF-free. The elimination therefore runs on the <b>default cam path with
+<code>AWECRAFT_AIM=8.5,941,8.5,0,±pitch</code></b> — the player teleported to the 941 m radial,
+snapshot through the player camera (the user's actual camera, DoF live).</p>
+
+<h2>Why the near field is affected (the mechanism, per the correction's list)</h2>
+<p>Not an inverted depth term and not a full-screen kernel — it is a <b>wrong focus/far distance</b>:
+the blur zone begins at 82.62 m, a value calibrated for a grounded player. At 941 m altitude the
+"near field" (the terrain in front, 943 m at the nadir) is <i>farther than the far wall</i>, so a
+correct distance-based blur blurs it at full strength. The effect is correct by construction; its
+distance is wrong for a world whose user flies.</p>
+
+<h2>The fix (measured, not guessed)</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>DEFAULTS: <code>dof_far_distance</code>
+82.62 → <b>1500.0</b>. <code>apply_dof()</code>: also push
+<code>dof_blur_far_transition</code> (const 5.0 legacy / 1400.0 fix; env
+<code>AWECRAFT_DOFFAR=0</code> selects legacy). The value clamp band and the dev-menu spinbox widen
+1–400 → 1–8192 (the engine property's own band) so the new default is reachable/storable. The
+legacy env restores the pre-ticket state bit-for-bit (far 82.62 / transition 5.0 / amount 0.08 /
+enabled true / near disabled).</td></tr>
+<tr><td><code>godot/camera_attributes/main-camera-attributes.tres</code></td><td>far_distance
+<b>1500.0</b> + far_transition <b>1400.0</b> (ramp 1500 → 2900 m: blur ACCUMULATES across the
+flight-far band instead of hard-maxing 5 m past the wall).</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>DOF far-distance dev spinbox range 1–400 → 1–8192
+(matches the widened clamp band).</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>Boot-only legacy preload:
+<code>AWECRAFT_DOFFAR=0</code> → <code>values["dof_far_distance"]=82.62</code> (env-only, no
+Settings row — the AWECRAFT_SPEC pattern), so both halves of the legacy state (far + transition)
+are bit-for-bit the pre-ticket values.</td></tr>
+<tr><td><code>godot/player/player.gd</code></td><td>TEMPORARY elimination probe
+(AWECRAFT_DOFOFF=1 → far blur disabled on the live attributes) — <b>removed before exit</b>.</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td><td>§2 env row for <code>AWECRAFT_DOFFAR</code>
+(the switch is a shipped look switch, per the standing rule that look changes ship behind a switch).</td></tr>
+</table>
+<p><b>Why 1500 / 1400:</b> in the user's documented 941 m view the terrain spans 943 m (nadir,
+frame centre) to 2903 m (the local horizon/limb); the horizon view's near field is 1546 m and its
+far end 2903 m. A wall at 1500 m is the <i>flight near boundary</i> — above the render edge
+(400 m: nothing in any ground view ever reaches it, so the fog keeps owning the ground's far end)
+and below the flight near field — so the ground-below is sharp at every altitude and the softening
+lives out at the horizon: at 941 m the ramp ends exactly at the 2900 m horizon (full 0.08 there),
+at 275 m cruising the horizon (~1509 m) just starts softening, and ground views are untouched.
+Verified on the radial edge profile: fix vs DoF-off baseline is <b>1.000 on every ring up to
+1720 m</b> (near field bit-for-bit sharp), softening only past ~2.2 km (0.98 → 0.89 toward the
+limb); vs the legacy frame the near/mid rings recover 1.4–3.2× edge energy.</p>
+
+<h2>Verification (light gates, then exit)</h2>
+<ul>
+<li><b>Elimination A/B at the user's view</b> (player camera, <code>AWECRAFT_AIM</code> 941 m
+radial, R24/F83, T=0.5, empty hand, drain 600, 1200 s wall):
+<b>nadir</b> — <code>v1</code> legacy DoF vs <code>v2</code> DoF off (the elimination) and
+<code>v3</code> the fix; <b>horizon</b> — <code>u1</code> legacy vs <code>u2</code> DoF off and
+<code>u3</code> the fix. Metric: <code>profile_radial.py</code> (per-ring edge energy C(r) with
+ring→distance mapping for R=4000/D0=4941/90° FOV, HUD masked) + <code>contrast.py</code> row
+bands + <code>frame_ab.py</code> changed-pixel census.</li>
+<li><b>Ground acceptance</b> (eye-level <code>AWECRAFT_AIM=8.5,143.5,8.5,0,0</code>, R24/F83):
+<code>g1</code> legacy vs <code>g2</code> fix — arm's length unchanged (it was never blurred),
+mid-range 82–332 m sharpens (the fog band stops being double-softened).</li>
+<li><b>Switch proof</b>: <code>v4</code> = fix code + <code>AWECRAFT_DOFFAR=0</code> must be
+byte-identical to <code>v1</code> (legacy bit-for-bit, the switch contract).</li>
+<li><b>Nothing-else-changed proof</b>: v3 vs v2 differ only past the 1500 m ring (0.98/0.89 at the
+limb arcs); u3 vs u1 differ only in the far band; above-horizon/sky rows unchanged; the
+frame_ab changed-pixel mass sits in the terrain bands only.</li>
+<li><b>Gates</b>: G0 (<code>gate_census.py</code> zero SCRIPT + zero SHADER ERROR <b>and process
+exit status checked</b> — the stochastic UAF leaves clean logs with rc 134), SMOKE
+(<code>BATTERY=player;interact;light;fluids;genhash</code>), genhash 25/25 (world.gd touched),
+shaderforce (Forward+ forced-compile). Heavy set = the coordinator's.</li>
+</ul>
+
+<div class="note">Fences: none (coordinator is the only agent; tree clean apart from this ticket's
+own files). Staging note honored: every new file is named explicitly in the report (the scanner
+skips untracked ticket folders).</div>
+</body></html>

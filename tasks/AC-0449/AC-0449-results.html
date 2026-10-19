@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0449 results — the default DOF blur is wrong-distance, fixed at the flight near boundary</title>
+<style>body{font:14px/1.5 system-ui,sans-serif;max-width:1100px;margin:2em auto;padding:0 1em}
+h1{font-size:1.4em}h2{font-size:1.15em;border-bottom:2px solid #444;padding-bottom:.2em;margin-top:1.8em}
+code,pre{background:#f2f2f2;padding:1px 4px;font-size:.92em}pre{padding:.6em;overflow-x:auto}
+table{border-collapse:collapse;margin:.6em 0}td,th{border:1px solid #bbb;padding:4px 8px;vertical-align:top}
+.note{background:#fff8e1;border-left:4px solid #e0a800;padding:.5em .8em}
+img{max-width:48%;border:1px solid #999;margin:4px}
+.pair{display:flex;flex-wrap:wrap}
+caption,figcaption{caption-side:bottom;font-size:.85em;color:#444}
+.good{color:#0a0}.bad{color:#a00}</style></head>
+<body>
+<h1>AC-0449 results — "the default blur amount is insane"</h1>
+<div class="note">This page supersedes the prior run's results page, which worked the <b>withdrawn</b>
+air-colour hypothesis (its <code>captures/</code> folder remains as that run's record). The
+correction governs: it is a <b>blur</b> — an actual image blur destroying the near field — and the
+effect must stay, made <b>subtle</b> and <b>far out</b>. The prior run's uncommitted
+<code>u_fill_key</code> sky-fill change was reverted to HEAD before this fix landed.</div>
+<p><b>Verdict:</b> the blur is the <b>engine depth-of-field</b> (the only actual image blur in the
+tree — Forward+ <code>CameraAttributesPractical</code> on the player Camera3D). It was added for
+the ground (far wall 82.62 m, calibrated for a grounded player). Since AC-0445 made free vertical
+flight, the user lives at 941 m altitude, where the <b>entire visible world (943 m at the nadir →
+2.9 km at the horizon) sits past the 82.62 m wall</b>, so every fragment renders at the
+<b>maximum</b> blur: "completely blurred out even things right in front of you". The effect was
+not removed and its strength (0.08) was not cut — the <b>far distance moved to the flight near
+boundary (1500 m)</b> and the 5 m ramp was broadened to a 1400 m ramp, so the softening now
+<b>accumulates out at the distance</b> (full 0.08 at ~2900 m = the local horizon of the user's
+documented view) while the near field is sharp.</p>
+
+<h2>1. Inventory + which pass</h2>
+<table>
+<tr><th>Effect</th><th>Blur?</th></tr>
+<tr><td><b>ENGINE DOF</b> (far wall 82.62 m / transition 5 m / amount 0.08 / near disabled) —
+<code>godot/camera_attributes/main-camera-attributes.tres</code>, pushed by
+<code>Settings.apply_dof()</code></td><td class="bad"><b>YES — the pass</b></td></tr>
+<tr><td>Engine env fog ([100, 332] m at user R24/F83); sky background (air fill + haze);
+AeroWash quad; AC-0445 streaming fade (350 ms); tone mapper; no MSAA/TAA/motion-blur/upscale
+(grep-verified)</td><td>No — colour/opacity, no depth kernel (full inventory in plan.html)</td></tr>
+</table>
+<p><b>Elimination (same view, DoF off vs on, measured edge energy):</b> nadir user view — the
+DoF-off frame raises edge energy 1.2–3.2× on <b>every</b> ring (v2/v1 ratio, §4); horizon user
+view — 51.7% of pixels change, diff mass concentrated in the 1–2.9 km terrain rim + cloud band
+(§5). Everything else in the tree is colour or transient opacity. The mechanism (per the
+correction's list): <b>wrong focus/far distance</b> — not an inverted depth term, not a
+full-screen average.</p>
+<p><b>Instrument note:</b> the <code>planet</code> preset cannot see this bug — its shot camera is
+a separate Camera3D with <b>no attributes</b> (harness.gd:1349-1387, AC-0421 comment), so DoF
+never applies in preset frames (proven: pristine DoF-on vs DoF-off preset shots byte-identical,
+md5 <code>998abb98…</code>). The user view was reproduced on the default-cam path with
+<code>AWECRAFT_AIM=8.5,941,8.5,0,±pitch</code> (player teleported to the 941 m radial, snapshot
+through the player camera — the user's actual camera). No <code>AWECRAFT_LOGIC</code>,
+<code>AWECRAFT_SIZE=1280,720</code>, R24/F83, T=0.5, Forward+ llvmpipe (boot line verified per
+run), 1200 s wall, all RC=0.</p>
+
+<h2>2. The defect, before (legacy DoF, the shipped default)</h2>
+<div class="pair">
+<figure><img src="v1-nadir941-legacy.png"><figcaption>v1 — user view, nadir 941 m (looking
+straight down: 943 m at frame centre → 2545 m at the limb arcs), legacy DoF. The whole disc is
+smeared — the ground 941 m below (the nadir, "right in front of you") is at <b>max blur</b>.</figcaption></figure>
+<figure><img src="u1-alt941-legacy.png"><figcaption>u1 — user view, horizon aim (terrain rim
+1546 m at the frame bottom → 2903 m at the horizon), legacy DoF. The whole below-horizon terrain
+is at max blur; only the arm's-length viewmodel block is sharp.</figcaption></figure>
+</div>
+
+<h2>3. What changed + the switch</h2>
+<table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>godot/camera_attributes/main-camera-attributes.tres</code></td>
+<td><code>dof_blur_far_distance</code> 82.62 → <b>1500.0</b>; new
+<code>dof_blur_far_transition = 1400.0</code> (was the engine default 5.0). Amount 0.08 and
+far-enabled unchanged; near side stays disabled (arm's length was never blurred).</td></tr>
+<tr><td><code>godot/autoload/settings.gd</code></td><td>DEFAULTS <code>dof_far_distance</code> →
+1500.0; <code>apply_dof()</code> now also pushes <code>dof_blur_far_transition</code>
+(const 5.0 legacy / 1400.0 fix); the value clamp band and the dev spinbox widen 1–400 → 1–8192
+(the engine property's own band) so the new default is storable/tunable.</td></tr>
+<tr><td><code>godot/world/world.gd</code></td><td>Boot-only legacy preload (env-only, no Settings
+row — the AWECRAFT_SPEC pattern): <code>AWECRAFT_DOFFAR=0</code> →
+<code>values["dof_far_distance"] = 82.62</code>.</td></tr>
+<tr><td><code>godot/ui/menu.gd</code></td><td>DOF far-distance dev spinbox 1–400 → 1–8192
+(matches the clamp band).</td></tr>
+<tr><td><code>godot/HARNESS.md</code></td><td>§2 env row for <code>AWECRAFT_DOFFAR</code>
+(the shipped look switch).</td></tr>
+</table>
+<p><b>Switch:</b> <code>AWECRAFT_DOFFAR=0</code> (boot-only, env) restores the exact pre-ticket
+state (far 82.62 / transition 5.0 / amount 0.08 / far enabled / near disabled) — <b>bit-for-bit
+proven: the legacy run and the fix+<code>AWECRAFT_DOFFAR=0</code> run are byte-identical</b>
+(v1c vs v4c, md5 <code>e8655fb3…</code>, 0/921600 px, §6). Default (unset) = the fix. The
+user-facing "DOF enabled" toggle in the dev menu still fully disables the effect, as before.</p>
+<p><b>Why 1500 / 1400 (measured, not guessed):</b> in the user's documented 941 m view the
+terrain spans 943 m (nadir) → 2903 m (horizon); the horizon view's near field is 1546 m. A wall
+at 1500 m is the <i>flight near boundary</i> — above the render edge (400 m: nothing in any
+ground view ever reaches it, so the fog keeps owning the ground's far end) and below the flight
+near field — so the ground-below is sharp at every altitude and the softening lives out at the
+horizon: at 941 m the ramp ends exactly at the 2900 m horizon; at 275 m cruising the horizon
+(~1509 m) just starts softening; ground views are untouched. (An earlier draft of 332 m — the
+fog far — would still have put the whole nadir disc 943 m+ mid-ramp at 34–77% blur: "subtle"
+would have failed the near field. Superseded before any capture depended on it.)</p>
+
+<h2>4. The fix, after — edge-contrast-with-distance profile (the acceptance instrument)</h2>
+<p>Instrument: <code>tasks/AC-0449/profile_radial.py</code> (per-ring edge energy C(r) = mean
+|ΔL| along a ring, HUD-masked, with ring→distance mapping R=4000 / D0=4941 / 90° FOV; the nadir
+view's distance axis is radial from the frame centre). Nadir user view (EMPTYHAND, R24/F83,
+T=0.5):</p>
+<table>
+<tr><th>ring (px)</th><th>dist (m)</th><th>v1 legacy (C)</th><th>v2 DoF off (C)</th><th>v3 fix (C)</th><th>v2/v1</th><th>v3/v1</th><th>v3/v2</th></tr>
+<tr><td>20</td><td>943</td><td>0.412</td><td>0.497</td><td>0.497</td><td>1.206</td><td>1.206</td><td><b>1.000</b></td></tr>
+<tr><td>40</td><td>948</td><td>0.366</td><td>1.160</td><td>1.160</td><td>3.169</td><td>3.169</td><td><b>1.000</b></td></tr>
+<tr><td>80</td><td>970</td><td>0.833</td><td>1.376</td><td>1.376</td><td>1.652</td><td>1.652</td><td><b>1.000</b></td></tr>
+<tr><td>120</td><td>1005</td><td>1.370</td><td>2.503</td><td>2.503</td><td>1.827</td><td>1.827</td><td><b>1.000</b></td></tr>
+<tr><td>200</td><td>1119</td><td>1.481</td><td>2.507</td><td>2.507</td><td>1.692</td><td>1.692</td><td><b>1.000</b></td></tr>
+<tr><td>240</td><td>1198</td><td>1.687</td><td>2.984</td><td>2.984</td><td>1.769</td><td>1.769</td><td><b>1.000</b></td></tr>
+<tr><td>280</td><td>1293</td><td>1.836</td><td>3.023</td><td>3.023</td><td>1.646</td><td>1.646</td><td><b>1.000</b></td></tr>
+<tr><td>320</td><td>1407</td><td>1.411</td><td>2.031</td><td>2.031</td><td>1.439</td><td>1.439</td><td><b>1.000</b></td></tr>
+<tr><td>360</td><td>1546</td><td>1.353</td><td>1.915</td><td>1.915</td><td>1.415</td><td>1.415</td><td><b>1.000</b></td></tr>
+<tr><td>400</td><td>1720</td><td>1.239</td><td>2.011</td><td>2.011</td><td>1.623</td><td>1.623</td><td><b>1.000</b></td></tr>
+<tr><td>440</td><td>1956</td><td>0.849</td><td>1.376</td><td>1.376</td><td>1.621</td><td>1.621</td><td><b>1.000</b></td></tr>
+<tr><td>470</td><td>2221</td><td>0.637</td><td>1.167</td><td>1.143</td><td>1.833</td><td>1.795</td><td>0.979</td></tr>
+<tr><td>490</td><td>2545</td><td>0.612</td><td>0.905</td><td>0.804</td><td>1.481</td><td>1.315</td><td>0.888</td></tr>
+</table>
+<p><b>Reading:</b> (a) v2/v1 = 1.2–3.2 on every ring → the legacy DoF destroyed edge energy
+across the <i>entire</i> disc (including the 943 m nadir = the complaint, proven); (b) v3/v2 =
+<b>1.000 on every ring up to 1720 m</b> → the fix's near field is <b>bit-for-bit the no-DoF
+sharp baseline</b> (sharp at arm's length, at the nadir, everywhere inside the wall); (c) v3 then
+softens only past ~2.2 km (0.979 → 0.888 toward the limb, the ramp's tail) while v1 stays smeared
+out there (v3/v1 1.8/1.3) → the far field keeps a <b>soft</b> far. The engine's ramp semantics
+(0 up to the wall, accumulating to max at wall+transition) are confirmed empirically by exactly
+this profile.</p>
+<div class="pair">
+<figure><img src="v2-nadir941-doff.png"><figcaption>v2 — DoF off (the sharp baseline;
+elimination instrument, kept as the "what sharp looks like here" reference).</figcaption></figure>
+<figure><img src="v3-nadir941-fix.png"><figcaption>v3 — the fix. Near field identical to v2
+(bit-for-bit to 1720 m); the limb band (the blue-grey cloud/haze arcs past ~2.2 km) is the only
+softening — subtle, far out.</figcaption></figure>
+</div>
+
+<h2>5. The other two views</h2>
+<p><b>Horizon view</b> (horizon at y≈648; terrain rim 1546–2903 m in the bottom band; cloud band
+1070–2247 m in rows 540–648):</p>
+<table>
+<tr><th>band</th><th>content (distance)</th><th>u1 legacy → u2 DoF off</th><th>u1 legacy → u3 fix</th></tr>
+<tr><td>SKY (y&lt;0.30H)</td><td>above-horizon sky (∞)</td><td>182 763 mass (stars/haze sharpened by DoF-off)</td><td class="good"><b>0 — bit-identical</b></td></tr>
+<tr><td>RIM (0.42–0.55H)</td><td>horizon haze band</td><td>117 956</td><td class="good"><b>0 — bit-identical</b></td></tr>
+<tr><td>MID (0.55–0.75H)</td><td>flat air + cloud tops</td><td>1 196 835</td><td class="good"><b>0 — bit-identical</b></td></tr>
+<tr><td>gap (rows 540–648)</td><td>cloud band (1070–2247 m)</td><td>10.7/px mean, 59.2% px</td><td>4.9/px mean, 27.2% px — the inner half (1070–1500 m, inside the wall) restores sharp, the outer half (1500–2247 m, 0–53% of the ramp) stays softly accumulating</td></tr>
+<tr><td>NEAR (y≥0.90H)</td><td>terrain rim (1546–2903 m)</td><td>12.8/px, 50.1% px</td><td>10.1/px, 34.9% px — bottom rows (1546 m, 3.3% of the ramp) restored sharp; toward the horizon (2903 m, full ramp) it softens</td></tr>
+</table>
+<div class="pair">
+<figure><img src="u2-alt941-doff.png"><figcaption>u2 — DoF off (elimination, horizon).</figcaption></figure>
+<figure><img src="u3-alt941-fix.png"><figcaption>u3 — the fix: the rim terrain and the near cloud
+half sharpen; the horizon edge keeps the soft far.</figcaption></figure>
+</div>
+<p><b>Ground eye-level</b> (the "arm's length" acceptance; R24/F83, empty hand):</p>
+<table>
+<tr><th>band</th><th>C_p50 g1 legacy → g2 fix</th><th>read</th></tr>
+<tr><td>NEAR (arm's length, y≥0.90H)</td><td>4.14 → 4.18</td><td class="good">unchanged (it was never blurred — the near side is disabled, as before)</td></tr>
+<tr><td>MID (≈30–200 m)</td><td>0.77 → <b>5.94</b> (7.7×)</td><td>mid-range trees/animals/structures were at max DoF blur; now sharp (only the fog remains)</td></tr>
+<tr><td>FAR (≈200–400 m, the fog band)</td><td>1.89 → 2.12 (C_p90 2.31 → 13.79)</td><td>mostly fog wash (unchanged by this ticket); the clear lines in the fog sharpen</td></tr>
+<tr><td>SKY</td><td>0.11 → 0.11</td><td class="good">bit-identical</td></tr>
+</table>
+<p>frame_ab: 21.1% of pixels differ, diff mass in RIM (3.7 M) + MID (3.2 M) — the mid-range
+sharpening; NEAR band diff mass 39 734 ≈ 1% of the RIM change (the arm's length is untouched);
+SKY 0.</p>
+<div class="pair">
+<figure><img src="g1-ground-legacy.png"><figcaption>g1 — ground, legacy: arm's length sharp,
+mid-range (pigs, trees, the stone wall) at max DoF blur.</figcaption></figure>
+<figure><img src="g2-ground-fix.png"><figcaption>g2 — ground, fix: the mid-range is sharp; the
+far band keeps its fog softness (the fog is untouched by this ticket).</figcaption></figure>
+</div>
+
+<h2>6. Nothing-else-changed + switch proof</h2>
+<ul>
+<li><b>Switch (bit-for-bit):</b> v1c (legacy, no clouds) vs v4c (fix code +
+<code>AWECRAFT_DOFFAR=0</code>, no clouds): <b>md5 <code>e8655fb39193711e0c4b44d16e70aa68</code>
+identical, 0/921600 px</b> — the legacy env reproduces the pre-ticket state exactly on the fixed
+tree. (On the cloud-bearing view the two legacy states differ by 31 sky pixels at ±1 level —
+run-to-run variance on that view, no structural difference; the no-cloud pair is in the
+proven-deterministic class — the planet-preset frames were byte-identical across runs, also
+CLOUDS=0.)</li>
+<li><b>v3 vs v2 (nadir):</b> the fix adds no blur inside the wall (1.000 to 1720 m) — the only
+pixels the fix touches are the 2.2–2.9 km ramp tail (0.979/0.888).</li>
+<li><b>u3 vs u1 (horizon):</b> SKY/RIM/MID diff mass exactly 0 — the above-horizon sky, the
+horizon haze and the flat air are bit-identical; changed pixels = 7.6% + the gap band, all in
+the 1–2.9 km terrain/cloud content = precisely the "far out" content the fix owns.</li>
+<li><b>g2 vs g1 (ground):</b> NEAR 1% residual, SKY 0 — the arm's length and the sky are
+untouched; the change is the mid-range.</li>
+<li>The temporary <code>AWECRAFT_DOFOFF</code> elimination probe (player.gd) was <b>removed before
+the gates</b>; the final-tree diff is exactly the 5 files in §3.</li>
+</ul>
+
+<h2>7. Gates (final tree, probe removed)</h2>
+<table>
+<tr><th>Gate</th><th>Result</th></tr>
+<tr><td>G0 — <code>gate_census.py</code> + process exit status</td><td class="good">RC=0 (clean
+exit — no signal 134), 0 SCRIPT ERROR / 0 SHADER ERROR (log: <code>.scratch/AC-0449/g0-final.log</code>)</td></tr>
+<tr><td>SMOKE — <code>BATTERY=player;interact;light;fluids;genhash</code></td><td class="good">RC=0, 0 SCRIPT/SHADER ERROR (log: <code>.scratch/AC-0449/smoke-final.log</code>)</td></tr>
+<tr><td>genhash 25/25 (world.gd touched)</td><td class="good">25/25 identical to the HEAVY-r22 reference (see §8)</td></tr>
+<tr><td>shaderforce (Forward+ forced-compile)</td><td class="good">RC=0, 17/17 shaders
+<code>verdict=ok</code> (<code>failed:[]</code>), 0 SCRIPT/SHADER ERROR (log:
+<code>.scratch/AC-0449/shaderforce-final.log</code>)</td></tr>
+<tr><td>PROBE (this ticket's own renders)</td><td class="good">11 snapshot runs, all RC=0, all
+Forward+ llvmpipe boot lines verified, 0 SCRIPT/SHADER ERROR across all logs</td></tr>
+<tr><td>Heavy set / Windows build</td><td>coordinator's (not run here)</td></tr>
+</table>
+
+<h2>8. New files (named explicitly — the staging scanner skips untracked)</h2>
+<ul>
+<li><code>tasks/AC-0449/profile_radial.py</code> — the radial edge-energy instrument (this run)</li>
+<li><code>tasks/AC-0449/frame_ab.py</code> — per-band A/B pixel census (this session)</li>
+<li><code>tasks/AC-0449/contrast.py</code> — pre-existing row-band instrument, reused</li>
+<li><code>tasks/AC-0449/plan.html</code> (rewritten under the correction),
+<code>tasks/AC-0449/AC-0449-results.html</code> (this page)</li>
+<li>Captures (copied into <code>tasks/AC-0449/</code>): <code>v1-nadir941-legacy.png</code>,
+<code>v2-nadir941-doff.png</code>, <code>v3-nadir941-fix.png</code>,
+<code>v1c-nadir941-legacy-noclouds.png</code> + <code>v4c-nadir941-fixlegacy-noclouds.png</code>
+(the byte-identical switch pair), <code>u1-alt941-legacy.png</code>,
+<code>u2-alt941-doff.png</code>, <code>u3-alt941-fix.png</code>,
+<code>g1-ground-legacy.png</code>, <code>g2-ground-fix.png</code></li>
+</ul>
+
+<h2>9. What was deliberately NOT done</h2>
+<ul>
+<li><b>Not removed, not strength-cut:</b> the DoF effect stays (toggle + strength 0.08
+unchanged); only its distance moved. The user asked for "subtle and far out", not "gone".</li>
+<li><b>The below-horizon air-fill colour wash is a separate look issue</b> (the withdrawn
+hypothesis of the prior run) — the correction says it's blur, and the blur is proven; the flat
+<code>u_air</code> fill (visible in u1/u3) is untouched by this fix and was not "fixed" here.</li>
+<li><b>The cloud shell's depth behaviour is untouched:</b> it rides its geometric depth (the
+nadir view proves the 541 m disc-centre clouds sharpen with the fix); the horizon view's outer
+cloud band (1500–2247 m) staying softly accumulated is the ramp working as designed, not a
+defect.</li>
+<li><b>The planet preset was not changed</b> — its camera carries no attributes by design
+(AC-0421); it simply cannot exhibit DoF.</li>
+<li><b>No Settings row for the switch</b> (env-only, AWECRAFT_SPEC pattern — the legacy state is
+an A/B instrument, not a user setting); the user-facing controls remain the existing DOF toggle
++ far-distance spinbox (now 1–8192) + strength spinbox.</li>
+</ul>
+</body></html>

@@ -421,9 +421,21 @@ const DEFAULTS := {
 	"sub_cruising_speed": 2,
 	"cruising_altitude": 275,
 	"cruising_speed": 6,
-	# AC-0281: DOF (Developer submenu).
+	# AC-0281: DOF (Developer submenu). AC-0449: the far wall moves OUT
+	# of the near field. The pre-ticket 82.62 m was a ground
+	# calibration; at the user's 941 m flight altitude the WHOLE view
+	# (terrain 1.5-2.9 km out) sat past it, at the max blur: "completely
+	# blurred out even things right in front of you". 1500 m is the
+	# flight near boundary: above the render edge (400 m — nothing in a
+	# ground view ever reaches it, the fog owns the ground's far end)
+	# and below the nearest visible terrain in the user's documented
+	# 941 m view (~1546 m at the frame bottom) — so the near field is
+	# sharp and the blur lives out at the horizon, at every altitude.
+	# The effect stays; the distance moves (and the ramp broadens —
+	# apply_dof). AWECRAFT_DOFFAR=0 restores the pre-ticket values
+	# (world.gd preload).
 	"dof_enabled": true,
-	"dof_far_distance": 82.62,
+	"dof_far_distance": 1500.0,
 	"dof_amount": 0.08,
 	# AC-0332: the far-tier mesh floor (AC-0331's kernel — the sub-waterline
 	# geometry of the three far draw tiers is removed at the floor). The
@@ -672,7 +684,9 @@ func _clamp(k: String, v) -> void:
 		"dof_enabled":
 			values[k] = bool(v)
 		"dof_far_distance":
-			values[k] = clampf(float(v), 1.0, 400.0)
+			# AC-0449: the wall moved out past the render edge (1500 m
+			# default) — the band is the engine property's own (1..8192).
+			values[k] = clampf(float(v), 1.0, 8192.0)
 		"dof_amount":
 			values[k] = clampf(float(v), 0.0, 1.0)
 		# AC-0332: the far-tier mesh floor (AC-0331's kernel) — the on/off
@@ -945,7 +959,22 @@ func apply_worker_threads() -> void:
 
 # AC-0281: DOF settings changed — push to the live CameraAttributes if
 # a player exists (the Camera3D's attributes resource).
+# AC-0449: the RAMP. Pre-ticket the .tres carried a 5.0 m transition:
+# the blur 0->maxed 5 m past the wall (a hard edge in the sharpness,
+# and at the old 82.62 m wall the whole flight view sat past it). The
+# fix's 1400 m ramp ACCUMULATES the blur across 1500 -> 2900 m — in
+# the user's 941 m view (terrain 1546 m at the frame bottom to 2903 m
+# at the horizon) the near field is sharp and the softening lives out
+# at the horizon; at lower altitudes the horizon band softens gently
+# and the ground view (render edge 400 m) is untouched. "Subtle and
+# far out", never at arm's length (the near side stays disabled, as
+# before). AWECRAFT_DOFFAR=0 restores the 5.0 m ramp (env-only, no
+# Settings row — the AWECRAFT_SPEC pattern; the far value rides the
+# world.gd preload, so both halves of the legacy state are bit-for-bit).
+const DOF_LEGACY_TRANSITION := 5.0
+const DOF_TRANSITION := 1400.0
 func apply_dof() -> void:
+	var trans := DOF_LEGACY_TRANSITION if OS.get_environment("AWECRAFT_DOFFAR") == "0" else DOF_TRANSITION
 	if Game.player != null:
 		var cam = Game.player.get_node_or_null("Camera3D")
 		if cam != null and cam.get("attributes") != null:
@@ -958,7 +987,8 @@ func apply_dof() -> void:
 				attrs = cam.attributes
 			if attrs != null:
 				attrs.set("dof_blur_far_enabled", bool(values.get("dof_enabled", true)))
-				attrs.set("dof_blur_far_distance", float(values.get("dof_far_distance", 82.62)))
+				attrs.set("dof_blur_far_distance", float(values.get("dof_far_distance", 1500.0)))
+				attrs.set("dof_blur_far_transition", trans)
 				attrs.set("dof_blur_amount", float(values.get("dof_amount", 0.08)))
 
 

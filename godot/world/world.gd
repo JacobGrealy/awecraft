@@ -4077,6 +4077,14 @@ func _ready() -> void:
 	var cjite := OS.get_environment("AWECRAFT_CLOUDJIT")
 	if cjite != "":
 		Settings.values["cloud_jitter"] = cjite == "1"
+	# AC-0449: the pre-ticket DOF legacy switch (env only, no save — the
+	# AWECRAFT_SPEC pattern): AWECRAFT_DOFFAR=0 restores the pre-ticket
+	# defaults for this process (the far wall back to 82.62 m — the
+	# Settings table carries the new 1500 m default, so the legacy value
+	# preloads here; the 5.0 m ramp constant is read in
+	# Settings.apply_dof), so the A/B holds the old state bit-for-bit.
+	if OS.get_environment("AWECRAFT_DOFFAR") == "0":
+		Settings.values["dof_far_distance"] = 82.62
 	# AC-0441: the A/B COST INSTRUMENT (the AWECRAFT_SPEC pattern — env
 	# only, no Settings row): AWECRAFT_VOLSTEPS=n drives the march's
 	# u_vol_steps cost knob (shipped 24 count-based steps per segment —

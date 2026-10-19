@@ -746,7 +746,9 @@ func _ready() -> void:
 	dof_enabled_check.add_theme_font_size_override("font_size", 15)
 	dof_enabled_check.toggled.connect(_on_dof_enabled_toggled)
 	dev_page.add_child(dof_enabled_check)
-	var doff := _mk_dev_spin_row(dev_page, "DOFFarRow", "DOF far distance", 1.0, 400.0)
+	# AC-0449: the wall moved out past the render edge (1500 m default)
+	# — the range is the engine property's own band (1..8192).
+	var doff := _mk_dev_spin_row(dev_page, "DOFFarRow", "DOF far distance", 1.0, 8192.0)
 	dof_far_spin = doff[0]
 	dof_far_val = doff[1]
 	dof_far_spin.step = 1.0

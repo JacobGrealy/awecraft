@@ -2,5 +2,6 @@
 
 [resource]
 dof_blur_far_enabled = true
-dof_blur_far_distance = 82.62
+dof_blur_far_distance = 1500.0
+dof_blur_far_transition = 1400.0
 dof_blur_amount = 0.08
