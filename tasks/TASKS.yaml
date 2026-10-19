@@ -29464,5 +29464,26 @@ intake:
     \n\nScope addition (coordinator, 2026-10-19): once gate_run.py exists, update\n.dsh/skills/awecraft-run-verify/SKILL.md\
     \ to point the builder at `python3 tasks/scripts/gate_run.py\nAC-NNNN --arms ...` as the ONE way to\
     \ run a light gate set (one command, one summary.json), instead\nof per-arm recipe repetition. Do\
-    \ not restate the recipes there - HARNESS.md §4 owns them and\ngate_run.py reads them."
+    \ not restate the recipes there - HARNESS.md §4 owns them and\ngate_run.py reads them.\n\nDONE 2026-10-19,\
+    \ commit ecd83cd (pushed). Written by the first subagent_medium builder under the\nAC-0454 flow, from\
+    \ a coordinator-written plan (tasks/AC-0455/plan.html).\nCoordinator triage: clean on all six signals\
+    \ (no no-op, results page + OUTCOME present, every claimed\nnumber greppable from a log, no open red\
+    \ without a deviation, no scope escape, no PLAN-INSUFFICIENT).\nIndependently re-verified: test_builder_tools.py\
+    \ 16/16; test_tasks.py 53 checks green; context_pack\nAC-0433 = 8,065 tokens (cap 12k); one real g0\
+    \ arm rc=0 census 0/0 via gate_run.py with summary.json\nwritten and NO HEAVY_GATES_DONE; godot/ +\
+    \ gdext/ git-clean; no shell=True/eval in the drivers.\nbuilder_stats.py reproduces the AC-0454 law\
+    \ from an independently written implementation:\nwall_s = -911 + 0.0666*out_tokens (R^2=0.937, n=306)\
+    \ ~15.0 tok/s, median 2.05 h / 125k / 122 steps\n(n=312). It is now the AUTHORITY for the OPS.md section\
+    \ 1 numbers; takes ~2 min.\nFIRST MEDIUM RUN: 1.03 h / 88 steps / 104,751 out tokens. vs the 2.05\
+    \ h / 122 step / 125k median:\nabout half the wall clock and 28-43% fewer steps - BUT it decoded at\
+    \ 28.2 tok/s against the 15 tok/s\nlaw, so roughly half of the wall gain is throughput variance, and\
+    \ one run is not a trend. The\nstructural signal (steps, output tokens) moved down modestly; the real\
+    \ test is a godot/world ticket\n(AC-0433 P1), not self-contained Python.\nAccepted deviations (all\
+    \ mechanical, none a design change): g0 arm carries --quit (a bare load has no\nexit path - the plan's\
+    \ generic arm shape omitted it); builder_stats defaults to THIS workspace's\nsession dir (the all-workspace\
+    \ glob dilutes the fit to R^2=0.837; the AweCraft population reproduces\nit, and --sessions GLOB targets\
+    \ any other); harness mode rows field-capped at 500 chars (the 11.4 KB\nnotes field otherwise eats\
+    \ the whole 12k budget); inline file:line anchor resolution (the AC-0433\nprose plan needs it).\n\
+    Known cosmetic, not filed: results_page.py emits the deviations markdown as literal text, so\nbackticks\
+    \ and ** markers show raw in the rendered page. Fix whenever the page is next touched."
   comments: []
