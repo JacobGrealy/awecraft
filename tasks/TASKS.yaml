@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-19T09:59
+  updated_at: 2026-10-19T11:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0455
 - AC-0433
 - AC-0434
 - AC-0451
@@ -29401,7 +29400,15 @@ intake:
     \ and process only - no engine run, no shader, no\n   C++, no native build. Its own proof is that\
     \ the next ticket (builder tooling, AC next in\n   queue) is launched at medium from a coordinator-written\
     \ plan.\n   DEFERRED: the code half (context pack, gate driver, results page, scoreboard) is the\n\
-    \   follow-on ticket. No change to the single-slot rule: one local-LLM subagent at a time stays.\n"
+    \   follow-on ticket. No change to the single-slot rule: one local-LLM subagent at a time stays.\n\
+    \n\nDONE 2026-10-19, commit e650e44 (pushed). Process-only ticket: no engine code, no gate\nvalue\
+    \ moved, no godot run owed and none run.\nShipped: new skill awecraft-plan; new tasks/templates/implement.md\
+    \ (default, subagent_medium);\nnew tasks/templates/plan.html; two-phase.md demoted to design/escalation\
+    \ (subagent_xhigh);\nawecraft-delegate sections 1/2/4 rewritten (medium default + the H1-H6/S1 triage\
+    \ + the ratified\nladder: plan fix first, xhigh on a second hit, split on a third); awecraft-file-ticket\
+    \ sizing\nquestion + design label; harvest into godot/OPS.md section 1; AGENTS.md role and procedure\
+    \ list;\nCONTINUITY r27 (r25 archived).\nQueue: AC-0455 is now head. It is the first test of the flow\
+    \ - coordinator plan, medium builder."
   comments: []
 - id: AC-0455
   title: builder-tooling-context-pack-gate-driver-results-scoreboard
@@ -29410,11 +29417,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-19T09:56
-  updated_at: 2026-10-19T09:58
-  completed_at: null
+  updated_at: 2026-10-19T11:12
+  completed_at: 2026-10-19T11:12
   waiting_on: null
   parent_id: null
   notes: "1) User Story: Most of a builder's steps are spent doing things a script could do: reading seven\n\

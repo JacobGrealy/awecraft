@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0455 — plan</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; border-bottom: 2px solid #444; padding-bottom: .3rem; }
+  h2 { font-size: 1.05rem; margin-top: 1.8rem; border-bottom: 1px solid #ccc; }
+  code, pre { font-family: ui-monospace, monospace; font-size: .88em; }
+  code { background: #f2f2f2; padding: .05rem .25rem; border-radius: 3px; }
+  pre { background: #f7f7f7; border-left: 3px solid #999; padding: .6rem .8rem; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0; }
+  th, td { border: 1px solid #ccc; padding: .3rem .5rem; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  .stop { background: #fdf0f0; border-left: 4px solid #b33; padding: .6rem .8rem; }
+  .note { color: #555; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>AC-0455 — plan</h1>
+<p class="note">Written by the coordinator 2026-10-19. Contract for one <code>subagent_medium</code>
+builder run. Effort: medium · Tool: <code>subagent_medium</code> · Prompt:
+<code>tasks/templates/implement.md</code> · Depends on AC-0454 (committed <code>e650e44</code>).</p>
+
+<h2>1. Goal</h2>
+<p>Add four plain-Python tools under <code>tasks/scripts/</code> that collapse a builder's most
+expensive steps — reading seven documents, driving gate arms one bash call at a time, hand-writing
+the results page, guessing whether the last change helped — into single commands. No engine code, no
+gate value moves.</p>
+
+<h2>2. Files</h2>
+<table>
+  <tr><th>File</th><th>Anchor</th><th>What happens here</th></tr>
+  <tr><td><code>tasks/scripts/context_pack.py</code></td><td>NEW</td><td>emit <code>.scratch/AC-NNNN/context.md</code></td></tr>
+  <tr><td><code>tasks/scripts/gate_run.py</code></td><td>NEW</td><td>run a gate set, write summary + marker</td></tr>
+  <tr><td><code>tasks/scripts/results_page.py</code></td><td>NEW</td><td>render <code>AC-NNNN-results.html</code> from the summary</td></tr>
+  <tr><td><code>tasks/scripts/builder_stats.py</code></td><td>NEW</td><td>the builder scoreboard from session logs</td></tr>
+  <tr><td><code>tasks/scripts/test_builder_tools.py</code></td><td>NEW</td><td>unittest for all four, negative tests included</td></tr>
+  <tr><td><code>tasks/scripts/AGENTS.md</code></td><td>the bullet list, after the <code>render.py</code> line</td><td>one bullet: the four tools + that the test file must stay green</td></tr>
+  <tr><td><code>.dsh/skills/awecraft-run-verify/SKILL.md</code></td><td>its gate-run section</td><td>point the builder at <code>gate_run.py</code> as the one way to run a light set</td></tr>
+  <tr><td><code>tasks/scripts/gate_census.py</code></td><td>READ ONLY — <code>def census(path)</code></td><td>import it; do not reimplement the SCRIPT/SHADER ERROR rule</td></tr>
+  <tr><td><code>tasks/scripts/spec_template.py</code></td><td>READ ONLY — <code>REPO_ROOT</code>, <code>_tasks_path()</code>, <code>_load_task()</code></td><td>copy these helper shapes for consistency</td></tr>
+  <tr><td><code>tasks/scripts/tasks_lib.py</code></td><td>READ ONLY — <code>load_tasks</code>, <code>find_task</code></td><td>read the registry through these, never re-parse YAML</td></tr>
+  <tr><td><code>tasks/harness_data.yaml</code></td><td>READ ONLY — <code>battery.smoke</code>, <code>modes</code> keys</td><td>the only machine facts about modes</td></tr>
+</table>
+<p><strong>Do not touch:</strong> <code>godot/scenes/harness.gd</code> (pristine), <code>tasks.py</code>,
+<code>tasks_lib.py</code>, <code>harness_data.yaml</code>, <code>godot/HARNESS.md</code>,
+<code>godot/ARCHITECTURE.md</code>, anything in <code>godot/</code> or <code>gdext/</code>.</p>
+
+<h2>3. Edit shape</h2>
+
+<h3>Two constraints this plan was corrected by — obey them, they are not negotiable</h3>
+<ul>
+  <li><strong>No scripting against a document's markdown.</strong> <code>tasks/scripts/AGENTS.md</code>
+    forbids it, so <code>gate_run.py</code> must NOT parse <code>godot/HARNESS.md</code> for recipes,
+    timeouts or envs. <code>harness_data.yaml</code> is not a machine source for them either: its
+    <code>envs</code> and <code>wall</code> fields are PROSE (<code>"~1–2 min"</code>), and scraping
+    prose is the same mistake in a different file. The only clean machine facts there are
+    <code>battery.smoke</code> (a list of 5 mode names) and the mode NAMES (<code>modes</code> keys).</li>
+  <li>Therefore <strong>timeouts and extra envs come from the CLI with documented defaults</strong>
+    (see (b)), and the mode name is only VALIDATED against <code>harness_data.yaml</code> when it is a
+    known mode — an unknown name is accepted because ticket probes are deliberately rowless
+    (<code>ac0433probe</code> is the precedent). A machine-readable <code>gate_defaults:</code> block in
+    <code>harness_data.yaml</code> is a DEFERRED follow-up, not this ticket.</li>
+</ul>
+
+<h3>(a) <code>context_pack.py AC-NNNN [--out PATH] [--max-tokens 12000] [--stdout]</code></h3>
+<p>Emits ONE markdown file (default <code>.scratch/AC-NNNN/context.md</code>) a builder reads instead of
+seven documents. Sections in this order:</p>
+<pre>
+## Ticket            TASKS.yaml title, status, priority, labels, created/updated  (via tasks_lib)
+## Notes             the ticket's notes verbatim
+## Plan              plan.html §1 Goal text + the §2 file table rows (strip tags; anchors kept)
+## Anchors           for each file in §2: each anchor the plan names, resolved and shown with
+                     +-8 lines of context, headed by "file:line". A `grep -n "X"` anchor is RUN.
+## Frozen refs       lines the plan quotes as constants (file:line + the line text), if any
+## Harness modes     for each mode named in plan §4: its row from harness_data.yaml
+                     (entry / tests / result_fields / notes) - lookups only
+## Architecture      ONLY the ARCHITECTURE.md sections whose heading the plan names
+                     (heading match -> until the next heading of the same or higher level)
+## Last continuity   the final "## RUN" block of tasks/AC-NNNN/continuity.md
+## Cap               "TRUNCATED: <what was dropped>" lines, one per dropped item
+</pre>
+<p><strong>The hard cap is the point of the tool.</strong> Estimate tokens as <code>bytes/3.6</code>;
+over <code>--max-tokens</code>, drop items from the BOTTOM up (Last continuity and Harness modes are
+never dropped first) and record each drop in the Cap section. Two structural guards:</p>
+<ul>
+  <li>no single excerpt may exceed 200 lines; and</li>
+  <li>refuse — exit 2 with a clear message — if a target file is one of the known monsters
+    (<code>godot/scenes/harness.gd</code>, <code>godot/world/world.gd</code>,
+    <code>godot/ARCHITECTURE.md</code>, <code>godot/HARNESS.md</code>) AND the request would include
+    more than 200 lines of it.</li>
+</ul>
+
+<h3>(b) <code>gate_run.py AC-NNNN --arms g0,smoke,probe [--rev N] [--dry-run] [--mem-mb 8192] [--timeout 600] [--timeout arm=sec,...] [--env 'K=V K2=V2'] [--heavy]</code></h3>
+<ul>
+  <li><strong>Arm vocabulary:</strong> <code>g0</code> = a bare <code>--headless</code> load with NO
+    <code>AWECRAFT_LOGIC</code> (its gate is <code>rc==0</code> AND the census 0/0 — either alone is a
+    false pass, per <code>gate_census.py</code>'s docstring). <code>smoke</code> expands to the five
+    names in <code>harness_data.yaml</code> <code>battery.smoke</code>, each as its own arm and log.
+    Anything else is a literal <code>AWECRAFT_LOGIC</code> mode. Unknown names are allowed; if the
+    name IS in <code>modes</code>, note it in the summary (informational only).</li>
+  <li><strong>Per arm, exactly this shape</strong> (models <code>.scratch/AC-0287-gates/gates_run.sh</code>,
+    which is the canonical precedent):
+    <pre>bash -c 'ulimit -v &lt;mem_mb*1024&gt;; cd &lt;repo&gt;; HOME=/tmp/dsh_home AWECRAFT_LOGIC=&lt;mode&gt; &lt;extra env&gt; \
+  timeout &lt;sec&gt; /home/angrygiant/tools/godot/godot --headless &lt;--fixed-fps 600 when --fps&gt; --path godot' \
+  &gt; .scratch/AC-NNNN-gates/&lt;arm&gt;-r&lt;N&gt;.log 2&gt;&amp;1</pre>
+    <code>--rev N</code> defaults to (highest existing rN for that arm)+1. Envs are passed as a list, never a
+    shell string (no <code>eval</code>, no injection).</li>
+  <li><strong>pgrep guard before every arm:</strong> while <code>pgrep -f '[g]odot'</code> matches, sleep
+    20 s and retry, with a bounded wait (<code>--wait-slot 1800</code>) after which the run exits 3
+    rather than starting a second engine. NEVER kill a process.</li>
+  <li><strong>After each arm:</strong> rc; <code>census(log_path)</code> imported from
+    <code>gate_census</code>; and the LAST <code>RESULT {...}</code> JSON line of the log parsed (absent
+    → <code>null</code>, not an error).</li>
+  <li><strong>Outputs</strong> in <code>.scratch/AC-NNNN-gates/</code>: <code>summary.json</code>
+    (per-arm: name, mode, rc, script_errors, shader_errors, wall_s, <code>ok</code> = rc==0 and census
+    clean and RESULT ok if that field exists, the parsed RESULT, log path) and <code>summary.txt</code>
+    (ONE line per arm: <code>arm  rc=0  script=0 shader=0  ok=true  42s  &lt;headline key=value&gt;</code>).
+    With <code>--heavy</code>, touch <code>HEAVY_GATES_DONE</code> on completion and print the marker
+    path; without it, never create the marker.</li>
+  <li><code>--dry-run</code> prints the exact per-arm command lines and the planned log paths, invokes
+    nothing, writes nothing outside <code>stdout</code>. This is the only mode CI can run.</li>
+  <li>Exit code: 0 iff every arm is <code>ok</code>; 1 otherwise; 3 slot-timeout; 2 bad usage.</li>
+</ul>
+
+<h3>(c) <code>results_page.py AC-NNNN [--deviations FILE] [--headline "text"] [--files "a,b"] [--summary PATH]</code></h3>
+<p>Renders <code>tasks/AC-NNNN/AC-NNNN-results.html</code>, self-contained (inline CSS, no external refs),
+house style = numbered <code>&lt;h2&gt;</code> sections as in
+<code>tasks/AC-0448/AC-0448-results.html</code>:</p>
+<pre>
+1. Gates            table: arm | mode | rc | script | shader | ok | wall | headline RESULT values
+                    (headline = the plan §4 keys if given, else ok/ok-ish fields; max 6 columns)
+2. Deviations       the --deviations file verbatim (paragraphs), or "None." 
+3. Files            the --files list, else `git status --porcelain` filtered to godot/ gdext/ tasks/
+4. Artifacts        *.png / *.json in tasks/AC-NNNN/ when present, else the section is omitted
+</pre>
+<p><strong>It REFUSES to render a lie</strong> (this is the H3 integrity rule made mechanical):
+exit 1 if an arm in the summary has no log file on disk, or if <code>--headline</code> names a value
+that is not present in that arm's log. Every number on the page has to be greppable from a log.</p>
+
+<h3>(d) <code>builder_stats.py [--since YYYY-MM-DD] [--json] [--top N] [--sessions GLOB]</code></h3>
+<p>The scoreboard. Reads <code>~/.dsh/sessions/*/session.jsonl.zstd</code> (decompress with
+<code>zstd -dc</code> via subprocess; no python zstd dependency assumed). Per session, in this exact
+schema:</p>
+<ul>
+  <li>the <code>{"type":"session"}</code> record gives <code>createdAt</code> (ms epoch) and
+    <code>delegationDepth</code> — keep <code>depth &gt; 0</code> (builders) unless <code>--all</code>;</li>
+  <li>wall = (max <code>time</code> over records) − <code>createdAt</code>, both in ms;</li>
+  <li>steps = count of <code>step/start</code>; tokens = sum of
+    <code>assistant/message</code> → <code>data.usage</code> <code>input</code>/<code>output</code>
+    (accept <code>outputTokens</code>/<code>output_tokens</code> spellings too);</li>
+  <li>report duration h, steps, out/in, out-per-step, implied tok/s.</li>
+</ul>
+<p>Then fit <code>wall_s = a + b*out_tokens</code> (ordinary least squares, done by hand — no numpy) and
+print the law line with <strong>R²</strong>. Baseline to reproduce on the current logs:
+<code>~15 tok/s</code>, <code>R² ≈ 0.93</code>, median run 2.40 h / 138k tokens / 154 steps.
+<code>--json</code> emits the same as a dict for the ticket notes; <code>--top N</code> prints the N
+longest runs.</p>
+
+<h3>(e) <code>test_builder_tools.py</code></h3>
+<p><code>unittest</code>, no network, no godot, everything under <code>.scratch/</code>. One negative
+test per guard — a guard without a failing replica is not a tested guard:</p>
+<ul>
+  <li>context_pack on <strong>AC-0433</strong> (fixture): output ≤ cap, contains an anchor excerpt with
+    file:line, and does NOT contain more than 200 lines from any monster file;</li>
+  <li>context_pack token cap: force a tiny <code>--max-tokens</code>, assert items are dropped and the
+    Cap section names them;</li>
+  <li>gate_run <code>--dry-run</code>: prints N commands for N arms, invokes nothing, creates no log;</li>
+  <li>gate_run arm expansion: <code>smoke</code> → 5 arms from <code>battery.smoke</code>;</li>
+  <li>results_page: a stub summary with an arm whose log is MISSING must exit 1 (H3 negative test),
+    and a complete stub must render a page with the four sections;</li>
+  <li>builder_stats: synthetic sessions with known token counts/timestamps give the exact expected
+    wall and tok/s; a synthetic perfectly-linear set gives R² = 1.0.</li>
+</ul>
+
+<h2>4. Gate set and expected values</h2>
+<table>
+  <tr><th>Arm</th><th>How</th><th>Expected</th></tr>
+  <tr><td>unit</td><td><code>python3 tasks/scripts/test_builder_tools.py</code></td><td>all pass, 0 failures</td></tr>
+  <tr><td>registry</td><td><code>python3 tasks/scripts/test_tasks.py</code></td><td><strong>53 checks green, unchanged</strong> (the scripts neighbor must not disturb it)</td></tr>
+  <tr><td>fixtures</td><td><code>context_pack.py AC-0433</code> · <code>builder_stats.py</code></td><td>pack ≤ 12k tokens; stats reproduce ~15 tok/s and R² ≥ 0.9</td></tr>
+  <tr><td>g0 (real)</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0</code></td><td><code>rc=0</code>, census <code>0/0</code>, <code>ok:true</code>, summary.json + summary.txt written</td></tr>
+</table>
+<p><strong>Negative test:</strong> <code>results_page.py AC-0433</code> with a summary naming an arm whose
+log is absent must exit 1 — run it by hand once and record the refusal in the deviations.</p>
+<p><strong>Render:</strong> no. Nothing visual changes.</p>
+
+<h2>5. Acceptance</h2>
+<ul>
+  <li>All four scripts exist, are importable, and run from the repo root as
+    <code>python3 tasks/scripts/&lt;name&gt;.py</code> with a <code>main(argv=None)</code> and
+    <code>if __name__ == "__main__"</code>, matching the house style of <code>gate_census.py</code>.</li>
+  <li><code>test_builder_tools.py</code> passes and <code>test_tasks.py</code> still reports its 53
+    checks green.</li>
+  <li>One real <code>g0</code> arm runs through <code>gate_run.py</code> and produces
+    <code>.scratch/AC-0433-gates/summary.json</code> with <code>ok:true</code>.</li>
+  <li><code>builder_stats.py</code> prints the law with R² ≥ 0.9 and ~15 tok/s on the current logs.</li>
+  <li>No file outside §2 is modified; <code>git status</code> for <code>godot/</code> and
+    <code>gdext/</code> is clean.</li>
+</ul>
+
+<h2>6. Known risks</h2>
+<ul>
+  <li><strong>Import path:</strong> <code>gate_run.py</code> does <code>import gate_census</code>. That
+    works when the script is run directly (<code>sys.path[0]</code> is <code>tasks/scripts</code>) and
+    under <code>test_builder_tools.py</code>, but NOT if imported as a package module — add the
+    <code>sys.path.insert(0, str(Path(__file__).parent))</code> guard so both work.</li>
+  <li><strong>The real g0 arm needs the native extension.</strong> <code>godot/bin/libchunkio.so</code>
+    is present in this tree; if a run reports <code>AWECRAFT CANNOT START</code>, record it as a
+    finding — do NOT copy or rebuild the <code>.so</code> (that is the coordinator's build lane).</li>
+  <li><strong>Memory cap:</strong> <code>ulimit -v</code> is in KB and gates run inside the
+    <code>dsh-web.service</code> cgroup — an unbounded run OOM-kills the harness itself
+    (<code>godot/OPS.md</code> §2). Default 8 GB, and never remove the cap to make an arm fit.</li>
+</ul>
+
+<h2>7. Fences and stop conditions</h2>
+<div class="stop">
+<ul>
+  <li>No git commit/push/add; no <code>tasks/TASKS.yaml</code> edits; no new tickets.</li>
+  <li>No edits outside §2. No refactor the plan did not ask for. <code>godot/scenes/harness.gd</code>
+      stays pristine; nothing under <code>godot/</code> or <code>gdext/</code> is edited at all.</li>
+  <li>ONE godot run is authorised: the single real <code>g0</code> arm in §4. Check
+      <code>pgrep -af '[g]odot'</code> first and use the driver's own guard.</li>
+  <li>Never parse markdown for machine facts (§3, first constraint). Never <code>eval</code> a shell
+      string built from arguments.</li>
+  <li><strong>If the plan cannot be applied — an anchor is missing, a helper named here has a different
+      signature, or a design decision is required that this plan does not make — write
+      <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> into continuity.md and your
+      reply, and EXIT.</strong> Do not invent the design.</li>
+</ul>
+</div>
+
+<h2>8. Resume point</h2>
+<p>Run 1 of 1. Prior state: AC-0454 committed (<code>e650e44</code>) — the implement-to-plan flow is
+live and this ticket is its first use. Last green gate: none needed (no engine change). Next after this
+run: the coordinator's triage + closeout, then AC-0433 P1 under the new flow.</p>
+
+</body>
+</html>

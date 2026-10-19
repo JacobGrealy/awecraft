@@ -14,6 +14,15 @@ One godot process at a time, `HOME=/tmp/dsh_home` in the same bash command, abso
 `--path godot` from the repo root. Recipes: `godot/HARNESS.md` §4. Check `pgrep -af '[g]odot'` first —
 a parallel agent or a coordinator gate job may hold the slot.
 
+**Since AC-0455 a builder runs a light set through ONE driver** —
+`python3 tasks/scripts/gate_run.py AC-NNNN --arms g0,smoke,probe` (plus the ticket's own probe arm).
+The driver owns the per-arm command shape above, the `ulimit -v` memory cap, the `pgrep` slot guard
+(sleep-20 s, bounded, exit 3 — never kills), the per-arm logs under `.scratch/AC-NNNN-gates/` and the
+`summary.json`/`summary.txt` the results page renders from. It parses no markdown: mode names and
+`battery.smoke` come from `tasks/harness_data.yaml`; timeouts and extra envs come from the CLI
+(`--timeout 600` / `--timeout arm=sec,...` / `--env 'K=V ...'`). `--dry-run` prints the exact per-arm
+commands and writes nothing — the only mode CI can run. The heavy set stays the coordinator's.
+
 ## The tiers
 
 | Tier | What it is | When |

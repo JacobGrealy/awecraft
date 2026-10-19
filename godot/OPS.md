@@ -32,15 +32,20 @@ the machine, the build, the daemons and git. Do not restate one in the other —
   ```
 
   A run's wall clock is 93% explained by how many tokens it writes; **gates and builds are noise
-  beside it** (the full 8-arm set for AC-0433 run 2 took 10.3 min against a 66 min run). Median
-  builder run: 2.40 h / 138k output tokens / 154 steps; p75 4.72 h; worst seen 15.33 h. Output
-  composition: **reasoning 64-80%**, tool-call arguments 20-25%, assistant prose ~2%.
+  beside it** (the full 8-arm set for AC-0433 run 2 took 10.3 min against a 66 min run). The
+  population median builder run is about **2.1 h / 125-142k output tokens / 115-122 steps**.
+  Output composition: **reasoning 64-80%**, tool-call arguments 20-25%, assistant prose ~2%.
 
   Consequence, and it is a standing rule: **effort and token count are the knobs, not the machine.**
   Plan before launching (`awecraft-plan`), keep the builder medium (`awecraft-delegate` §2), and
   never hand a builder a whole large file — `godot/scenes/harness.gd` is 36,630 lines / 1.5 MB,
   about 430k tokens, which is larger than the 250k context window and kills the run.
-  Re-measure with `python3 tasks/scripts/builder_stats.py` once AC-0455 lands.
+  `python3 tasks/scripts/builder_stats.py` is the AUTHORITY for the values above — re-run it (about
+  two minutes over ~300 sessions) rather than trusting this paragraph. Judge any change to the
+  delegation flow with it: a real win shows up as fewer steps and fewer output tokens per run, not as
+  a faster token rate. Do not read a single run's wall clock as evidence — decode speed varies
+  (a quiet run has been measured at 28 tok/s against this 15 tok/s law), so one fast run proves
+  nothing on its own.
 
 ## 2. Sandbox rules (why a godot call looks the way it does)
 

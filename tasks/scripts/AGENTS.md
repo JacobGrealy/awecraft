@@ -23,3 +23,8 @@
 - `render.py` and `webui.py` share the board layout, so the saved view and the live board can never
   disagree. `python3 tasks/webui.py --daemon` serves the LAN board on `:5180` (`--replace` reclaims the
   port from a stale instance; without it, an already-running instance exits 0).
+- `context_pack.py`, `gate_run.py`, `results_page.py`, `builder_stats.py` (AC-0455): the builder's
+  one-command tools — the context pack, the light gate-set driver (the one way a builder runs a light
+  set), the results-page renderer, the builder scoreboard.
+  `python3 tasks/scripts/test_builder_tools.py` must stay green (all tests); run it after touching any
+  of the four.
