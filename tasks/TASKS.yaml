@@ -1,11 +1,16 @@
 meta:
-  updated_at: 2026-10-18T20:44
+  updated_at: 2026-10-18T21:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0434
+- AC-0449
+- AC-0450
 - AC-0433
+- AC-0434
+- AC-0451
+- AC-0452
+- AC-0399
 - AC-0130
 - AC-0294
 - AC-0296
@@ -22,14 +27,12 @@ queue:
 - AC-0327
 - AC-0328
 - AC-0330
-- AC-0399
 - AC-0402
 - AC-0406
 - AC-0407
 - AC-0409
 - AC-0412
 - AC-0438
-- AC-0449
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -24679,7 +24682,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-06T19:10
-  updated_at: 2026-10-06T19:10
+  updated_at: 2026-10-18T21:16
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -24733,7 +24736,68 @@ intake:
     the round 6 findings in the r9 commit message, godot/HARNESS.md section 2 for the render recipe and
     the fwdshot row in tasks/harness_data.yaml.
 
-    '
+
+
+
+
+    COORDINATOR NOTE 2026-10-18 — READ THIS BEFORE STARTING. The scope of this ticket has narrowed, and
+    the reason is a fact discovered after it was filed: part of what this ticket was going to chase is
+    a HANDOVER defect rather than a fill-rate one, and it is now being taken by two tickets ahead of this
+    one (AC-0451 the rule, AC-0452 the provider). Do not duplicate them, and do not treat their absence
+    from the measurements below as permission to widen.
+
+
+    1) WHAT CHANGED UNDER THIS TICKET: AC-0445 (closed 2026-10-18) made the near field COLUMN-ATOMIC and,
+    in doing so, DELETED the ordering this ticket''s Run-1 was told to go and state. Gone: `last_wy`,
+    `_player_slab()`, `_layer_rank_of()`, the layer term in `_grid_score`, the player-slab element of
+    both probe-cache fingerprints, and the Y-crossing recenter trigger itself (AC-0234''s Y-crossing rule
+    is repealed). The ordering as it now exists is taxi + the AC-0399 view bias (`_view_bucket` / `_view_band8`)
+    and NOTHING ELSE — so the question "say what the current ordering actually is" is answered from the
+    tree, not from this ticket''s original text. Also fixed by AC-0445 and no longer in scope here: "flying
+    vertically costs nothing" (the altitude anchor is gone). And by explicit decision the FAR/LOW lane
+    stays SLAB-GRANULAR — this ticket lives at the junction of a column-atomic near lane and a slab-granular
+    far lane and must respect both.
+
+
+    2) WHAT THIS TICKET STILL OWNS, and it is the half that AC-0451/AC-0452 cannot do:
+
+    - THE RATE. The measured frontier stands as filed: 256 m at 180 s and ~365 m at 360 s at the 2600
+    m view, against a visible arc of well over 1000 m, at the user''s settings (radius 24, fog full 332
+    m, edge 400 m). That is a budget problem and it does not go away when the hole under the camera is
+    closed.
+
+    - THE REQUIRED SET. The streaming''s required set is PLAYER-relative — `_tier_of`, `_lod_tier_of`
+    (world.gd:1965-1981, note `taxi >= render_radius -> 4` = "nothing to draw") and `_face_stream`''s
+    edge-normal gate (ARCHITECTURE.md:1033-1038: "a face streams only when the player is within `win`
+    of THAT edge") all describe a player standing in the world. For a camera at height h the required
+    set is the ground disc under the camera within `fog_far` — radius `sqrt(fog_far^2 - h^2)` — plus the
+    frustum''s arc, which is a much larger area than the ground-level sim square and a different SHAPE.
+    The `_face_stream` gate in particular was written for a walking player and should be re-examined for
+    an airborne one, with the r15 "hole-to-void" precedent (lumping the face pair) in mind.
+
+    - THE ORDER, if and only if the rate measurement says order still matters: the same acceptance ladder
+    as filed, same method, same captures.
+
+
+    3) THE HANDOVER FACT THIS TICKET DEFERS. The near/far handover is keyed to CAMERA distance on both
+    sides: the near materials discard at `d >= u_fog_far` (AC-0401) and the body''s existence window is
+    `op = smoothstep(u_fog_far, u_render_edge, d)` (`core/satellite_body.gdshader:177-179`, `ALPHA = op`).
+    Reading those two together, for a camera at height h the ground within `sqrt(fog_far^2 - h^2)` is
+    the near field''s and the ground past `sqrt(u_render_edge^2 - h^2)` is the body''s, so the annulus
+    between them is owned by NEITHER — invisible at ground level because the fog is the horizon there,
+    hundreds of metres wide directly beneath an airborne player. That geometry is being fixed by AC-0451
+    (make the discard a coverage question) and AC-0452 (give the unbuilt set a first-pass surface). It
+    is filed here because it explains why part of the "far LOD is visually absent from altitude" finding
+    was never going to respond to a fill-rate change: the absence is by construction over a large part
+    of the frame.
+
+
+    4) ACCEPTANCE INSTRUMENT. Use AC-0450 (airborne void and coverage census), not the eye and not the
+    standing `far_holes` band census — the standing census reports 0/0 while the user photographs a hole,
+    which is the AC-0392 failure shape. Time-to-visible-arc is still measured by this ticket''s own ladder;
+    the two report side by side. AC-0449 is open at the head of the queue and reports the same region
+    as a BLUR ("not blue, I meant blur") — until it closes, no frame of this region should be attributed
+    to the void without AC-0450''s four-state elimination behind it.'
   comments: []
 - id: AC-0400
   title: dark-rim-at-the-limb-seam-fade
@@ -28943,4 +29007,293 @@ intake:
     enabled by default, or its strength raised, or a new pass added, that is the cause and the fix is
     to return it to subtle - or to a distance-only behaviour - rather than to remove the effect, since
     the user asked for it to exist and to be far out rather than to be gone.'
+  comments: []
+- id: AC-0450
+  title: airborne-void-census-and-coverage-instrument
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T21:15
+  updated_at: 2026-10-18T21:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story:
+
+    Nobody can currently say, from a rendered frame, how much of what the player sees is missing world.
+    "You can see through the terrain where the chunks have not been generated" has been measured as a
+    FILL RATE (AC-0399: the built frontier is 256 m at 180 s and ~365 m at 360 s at the 2600 m view) but
+    never as a property of the PICTURE, so every look fix since has been accepted by eye and the same
+    square metre of missing world has been re-photographed by the user four times. This ticket gives the
+    project a number for "how much of this frame is not drawn", at the vantage the player actually complains
+    about, so the coverage work that follows can be proven instead of argued.
+
+
+    2) Technical Details:
+
+
+    WHAT IT MEASURES. Per frame, at a fixed airborne vantage, the pixel fraction that is (a) background
+    / no geometry, (b) far-tier geometry, (c) near-tier geometry, (d) satellite body. Minimum viable is
+    (a) plus a total. Reported as RESULT fields, plus a CONTRAST-WITH-DISTANCE profile: the luminance
+    delta between adjacent terrain features sampled at several distances from the camera. The profile
+    is what AC-0449 needs for its own acceptance ("a near field that is clear and far that is hazy is
+    the goal, so the measurement is a PROFILE WITH DISTANCE, not a single number"), which is why ONE run
+    serves both tickets.
+
+
+    WHY THE EXISTING CENSUS DOES NOT COVER IT, and this is the reason the ticket exists. The standing
+    set already counts far holes (`r16 ... far_holes 0/0 both bands`) and it reports zero while the user
+    photographs a hole in the same class. That is the AC-0392/AC-0393 failure shape - a check that cannot
+    reach the defect converting an open question into a false conclusion - and it is the second time this
+    project has had an instrument report clean on a visible defect. The standing census measures BANDS;
+    it does not measure the BACKGROUND BETWEEN them, and the background between them is exactly where
+    the user is looking.
+
+
+    THE VANTAGE. A purpose-built camera preset at N metres above the surface looking down and outward.
+    This is already owed: AC-0394''s notes audit harness.gd and find only top / iso / iso2 / lodring /
+    sky / eyeup / sandpad / shaft, conclude "there is NO satellite/altitude camera preset - adding one
+    is owed", and recommend adding one permanently because this class of shot is now routine. Work at
+    the USER''S settings: render radius 24, fog full 332 m, `u_render_edge` 400 m - both derived from
+    one home each, `DayNight.fog_far(render_radius, fog_start_pct)` (core/daynight.gd:27-28) and `(render_radius+1)*16`
+    (scenes/main.gd:1477-1478), never restated as constants in the arm.
+
+
+    THE ELIMINATION A/B, the instrument''s first use. The same frame in four states - as shipped / the
+    sky''s air term off / the engine fog off / the satellite body off - using the env hooks that already
+    exist (HARNESS.md section 2 owns the list: `AWECRAFT_SKYALT`, `AERO`, `NO_WORLD_VIS`, `AWECRAFT_SAT_MESH_STEP`).
+    Whichever removal clears the affected region identifies its owner, and the answer is currently contested:
+    the near-field handover (the fog-wall partition plus the body''s camera-distance existence window)
+    predicts one shape, and AC-0449''s corrected reading ("not blue, I meant BLUR") predicts a completely
+    different one. Do not pre-decide; report the four frames and the four counts.
+
+
+    NEGATIVE TEST, REQUIRED BEFORE THE INSTRUMENT IS TRUSTED. The counter must be able to fail: point
+    it at a known-unbuilt column (or run the frame with the coverage pass disabled once that pass exists)
+    and show (a) RISE. An instrument whose negative test cannot fail is the defect this ticket is chartered
+    to prevent.
+
+
+    GATES. `tasks/scripts/gate_census.py` - zero SCRIPT ERROR and zero SHADER ERROR AND the process exit
+    status checked (this project has a stochastic use-after-free that exits signal-11 after a clean log);
+    the standing set unchanged: genhash 25/25, farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo ok,
+    lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12. Render recipe is HARNESS.md section 2 (fwdshot, Forward+ through lavapipe + Xvfb, ~5 FPS, budget
+    1200 s per shot, verify the PNG exists). Logs go to the repo-root `.scratch/`, never /tmp - AC-0394
+    lost a whole run''s evidence to /tmp not persisting between commands.
+
+
+    DEFERRED / NOT IN SCOPE. No look change, so no player-facing switch is added: the arm must be inert
+    during normal play (AC-0140). Nothing here touches generation, streaming order or the materials -
+    it only observes. It does not fix the hole; it makes the hole countable, and it must be committed
+    before either of the coverage tickets so they have an acceptance instrument rather than an eyeball.
+
+    '
+  comments: []
+- id: AC-0451
+  title: no-discard-without-coverage
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T21:15
+  updated_at: 2026-10-18T21:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story:
+
+    When the player is above the ground - flying, standing on a ridge, or coming down out of the sky -
+    there is a ring of world under and around him that no layer is responsible for drawing: the near field
+    stops drawing at a fixed distance on purpose, and the far field refuses to start drawing until a second,
+    larger fixed distance. From the ground that ring is the horizon, and the fog hides it. From the air
+    it is directly underneath him, hundreds of metres wide, and through it he sees whatever is behind
+    the world. The gap is not a loading artefact and waiting longer does not close it: it is the handover
+    between two layers, and this ticket makes the handover a RULE ("stop drawing only where something
+    else is already drawing") instead of a distance, so that no camera position can see through the world
+    between them.
+
+
+    2) Technical Details:
+
+
+    THE TWO HALVES OF THE HANDOVER, both keyed to CAMERA distance, both read from the code rather than
+    assumed:
+
+    - NEAR-FIELD PARTITION. Every near material discards its fragments at `d >= u_fog_far` (AC-0401):
+    the four `world/chunk_lit_*.gdshader` kinds, `core/lod_avg.gdshader` and the two fluid shaders; `world.gd
+    _ac0401_push` pushes the value change-gated and it is the same number `main.gd:1477` puts on `env.fog_depth_end`.
+
+    - BODY EXISTENCE. `core/satellite_body.gdshader:177-179`: `op = smoothstep(u_fog_far, u_render_edge,
+    d); if (op <= 0.001) { discard; }`, with `ALPHA = op` (:251) and `render_mode cull_back, depth_draw_always,
+    fog_disabled` (:87). `u_render_edge` is `(render_radius+1)*16` (`main.gd:1478`) - 400 m at the user''s
+    radius 24, against `fog_far` 332 m.
+
+    So the two layers are separated by construction: near dies at `fog_far`, body begins at `fog_far`
+    and only becomes solid at `render_edge`.
+
+
+    THE CONSEQUENCE, and it is ARITHMETIC FROM THOSE TWO LINES, not yet measured - say so in the results
+    page. For a camera at height h over the ground, ground within horizontal radius `sqrt(fog_far^2 -
+    h^2)` is the near field''s, ground past `sqrt(u_render_edge^2 - h^2)` is the body''s, and the annulus
+    between belongs to neither. At h ~ 2 m that annulus is the horizon and the fog hides it, which is
+    why the defect survived every ground-level arm. At h ~ 300 m it is a wide disc directly under the
+    player; at h >= `fog_far` the near field owns nothing at all in the downward direction, so the body
+    is the only thing that can be there and it is discarding. THE USER''S FRAME IS CONSISTENT WITH THIS
+    (built patch : pale region ~ 1.7-1.8, which is the ratio this predicts near h ~ 300 m at radius 24
+    / fog 332 / edge 400) - but the same frame is ALSO consistent with the open blur regression in AC-0449
+    (user correction: "not blue, I meant blur"). THE IDENTIFICATION IS A HYPOTHESIS TO BE SETTLED BY AC-0450''s
+    CENSUS, NOT A FINDING, and this ticket must not be built as though it were settled - the rule it lands
+    is correct independently of which defect owns that frame.
+
+
+    THE RULE TO LAND. Replace "discard at `d >= u_fog_far`" with "discard only where COVERED", where coverage
+    is asked of the layer that would take over. P1 lands the predicate with the coverage query stubbed
+    to "never covered": behaviour must be BYTE-IDENTICAL to today''s build, which is the inertness proof
+    (the AC-0159 pattern - the off state is the strongest statement available that the change is surgical)
+    and makes P1 independently committable and revertable. P2 switches the query on against the coverage
+    surface filed as AC-0451. Do not collapse the two phases: P1 changes nothing the user can see or the
+    gates can measure beyond byte-identity, P2 is the look change.
+
+
+    OWNERSHIP MUST BE DETERMINISTIC. Where two surfaces coexist in a frame the finer one must win by GEOMETRY,
+    not by draw order - the construction the body itself already uses: its vertex stage pulls the displaced
+    surface 2 m radially inward so that "wherever the same terrain still coexists the near tiers win the
+    depth test by construction - no flicker" (ARCHITECTURE.md, SatelliteBody bullet). The handover must
+    also be SAME-FRAME (AC-0234''s rule: a placeholder yields in the frame the real thing lands, never
+    a frame of coplanar fighting) and must reuse the existing stale-LOD cache (`low_cache_kept_n` / `low_cache_hit_n`,
+    the "keep showing the old surface until the new one is ready" path) rather than inventing a second
+    one.
+
+
+    SWITCH DECISION, made at filing per the standing rule that every look change ships with a player-facing
+    switch. This change prevents holes and therefore must NOT default to showing holes, so: `AWECRAFT_COVERAGE=0|1`
+    for the arms to render both states, and NO Options row - recorded explicitly, by precedent: AC-0445
+    decided the column fade-in was "a visual nicety, not a switchable feature" (user 2026-10-17, toggles
+    are for visual elements and only when explicitly asked). The OFF path stays byte-identical to today,
+    which is what makes the A/B renders meaningful.
+
+
+    WHAT THIS TICKET DOES NOT FIX, and must not be widened to: anything before residency (a column that
+    is not streamed in has nothing to draw at any fidelity - that is AC-0399''s half, the fill rate and
+    the required set). It must not move the body''s op window with respect to the FAR field beyond the
+    render edge (AC-0428 closed "the planet is opaque again"), must not touch the far tier''s shading
+    (AC-0443 / AC-0444 / AC-0446), and must not touch the home/face lane split (AC-0433). If any of those
+    appears to be required, stop and file it separately.
+
+
+    VERIFY. AC-0450''s census at the airborne vantage: background fraction (a) at or near zero in the
+    same frame the user photographed, with the negative test proving the counter can rise; the A/B with
+    `AWECRAFT_COVERAGE=0` must REPRODUCE the region; genhash 25/25 (a partition and ordering change cannot
+    move generation - any delta is a FINDING); G0 zero SCRIPT ERROR and zero SHADER ERROR via `tasks/scripts/gate_census.py`
+    AND the exit status; the standing set green (farab h_mismatch 0, ladder 20/20, meshprobe 1.0, halo
+    ok, lightstate 0/0, r16 all sub-flags with far_holes 0/0 both bands, boundary r4 in band, shaderforce
+    12/12); renders at radius 24 / fog 332 / edge 400 across the AC-0399 ladder (2600 / 1600 / 700 / 300
+    m) because a visual feature verified at one set of settings is verified at one set of settings - the
+    AC-0394 haze bug was invisible to every arm for exactly this reason.
+
+    '
+  comments: []
+- id: AC-0452
+  title: coverage-first-surface-for-unbuilt-columns
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-18T21:15
+  updated_at: 2026-10-18T21:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story:
+
+    The world should never show nothing. When the player looks at ground the game has already claimed
+    but not yet built, he should see the shape of the land immediately - softly, at low detail - and then
+    watch the real detail arrive on top of it, instead of a hole that later fills in. That is the same
+    promise AC-0445 kept for the skyline (whole columns arriving instead of horizontal strips climbing
+    toward you), applied to the surface itself: coverage first, detail second. It also means a player
+    who never moves sees a world that is complete from the first second and merely gets sharper.
+
+
+    2) Technical Details:
+
+
+    THE ARTIFACT ALREADY EXISTS - THIS IS A SCHEDULING AND DRAWING CHANGE, NOT A NEW RENDERER OR A NEW
+    PLACEHOLDER LANE. Per column the cheap path is already built and proven: `generate_resl` `skip=2`,
+    the far h-only lane (AC-0284b, whose H is the CARVED top since AC-0387 and is therefore the promotion
+    contract), the avg emitters `AweMesh.h_avg_emit` / `low_emit_avg` at G=8 / G=4 (AC-0312 bands B and
+    C), and the AC-0331 / AC-0332 far-tier mesh floor (`_far_floor_y()`, world.gd:631, Settings `yfloor_enabled`
+    + `yfloor_chunks_below_sea`). The payload is ALREADY consumed by band A''s materialization fill (AC-0397
+    drives it from the column''s far payload), so the path "payload lands -> something drawable exists"
+    is present in the code; what is missing is that the drawable artifact is not emitted FIRST for every
+    column, so a resident-but-unbuilt column draws literally nothing.
+
+
+    WHY NOTHING AT ALL IS DRAWN TODAY, which is the fact this ticket exists for: the AC-0234 placeholder
+    lane (the pre-baked 16x16x16 fog box, its MultiMesh pool and the cap reuse) is GONE - AC-0336 records
+    that `FOG_WAVE_ON` was `const false` and "nothing ever fed the fog_slabs bookkeeping in the shipped
+    path", so the box, the pool and the cap were deleted with it. AC-0257 had already removed the vertical
+    window and its black caps. There is therefore no fallback geometry of any kind for an unbuilt column,
+    and the AC-0445 fade-in ramps a mesh that exists - it cannot fade in a mesh that does not.
+
+
+    THE COST ARGUMENT, with the project''s own measured numbers - this decides the whole design. AC-0387
+    priced the far lane at 3,353 us/chunk against 5,651 us for the full path, so the cheap pass is ~60%
+    of a full build and must NOT be paid for the near band, which is going to be fully built anyway: that
+    would be a 60% surcharge on the most expensive tier to produce an artifact that is replaced within
+    seconds. Apply it to the UNBUILT SET only - resident columns whose real-band build has not landed
+    (whole columns since AC-0445) - which is precisely the set that currently draws nothing. Anything
+    wider is a different ticket with a budget argument attached.
+
+
+    WATER IS THE LIVE ACCEPTANCE CASE AND MUST NOT BE SKIPPED. The avg emitters carry the water exception:
+    a water-topped cell emits its top face with the TRANSLUCENT water material, so a coverage surface
+    over ocean is see-through by itself. Without the AC-0331 floor cap underneath it the defect simply
+    moves to the waterline, where it is easier to miss because it looks like water rather than like a
+    hole. Test at the SHIPPED FLOOR DEFAULT (on, 0 = `Data.SEA`) over deep water as well as over land,
+    and state both cases in the results page.
+
+
+    LANE SCOPE - DO NOT WIDEN. The far/low lane stays SLAB-GRANULAR (AC-0445 item 4, a deliberate decision:
+    different representation, its own cache, its own tier flip, and converting it would put the halo''s
+    behaviour at risk for no gain to the user-visible complaint). The real band stays column-atomic. Anything
+    that changes the real band''s atomicity re-opens AC-0445''s settled run-1 questions (the settle gate,
+    the per-frame budget, collision atomicity) and belongs in its own ticket.
+
+
+    ORDERING AGAINST AC-0433. Build against the one-world-model DECISION (AC-0433 P1: one grid, one placement,
+    one meshing lane, one conversion) and do NOT pre-empt its later pieces. AC-0433 is expected to re-validate
+    this lane rather than require it to be rewritten, because this ticket changes WHEN the existing artifact
+    is emitted, not what a cell is or where it is placed. If P1''s decision lands with a different footprint
+    for the far emitter, take the new number from there rather than hard-coding G.
+
+
+    SWITCH + INERTNESS. `AWECRAFT_COVERAGE=0|1` shared with AC-0451, no Options row, and the OFF path
+    must be BYTE-IDENTICAL to today (the surface is simply not emitted, so the frame equals the pre-ticket
+    frame). State that as the inertness proof for the arm. The same env drives both halves so the arms
+    can A/B the pair together.
+
+
+    VERIFY. AC-0450''s census at the airborne vantage: background fraction (a) at or near zero, and the
+    NEGATIVE TEST with `AWECRAFT_COVERAGE=0` showing it rise; the ocean frame specifically (above); genhash
+    25/25 - the emitters are untouched and only rescheduled, so any generation delta is a FINDING and
+    not a re-base (AC-0379 / AC-0408 discipline); G0 zero SCRIPT ERROR and zero SHADER ERROR via `tasks/scripts/gate_census.py`
+    AND the exit status; the standing set green, with `farab h_mismatch 0` and the r16 `far_holes 0/0
+    both bands` named as the closest existing instruments to this defect - if either drifts, that is the
+    finding, not noise; renders at radius 24 / fog 332 / edge 400 on the AC-0399 ladder (2600 / 1600 /
+    700 / 300 m); and the GROUND CASE MUST NOT REGRESS - the full annulus built by 180 s at 120 m is existing
+    behaviour that AC-0399 records and requires to stay, so re-measure it rather than assuming a scheduling
+    change is free there.
+
+    '
   comments: []
