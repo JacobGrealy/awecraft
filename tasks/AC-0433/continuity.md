@@ -121,3 +121,59 @@
   ticket): the seamcensus rebaseline ticket (F6, coordinator's queue) + the coordinator's heavy set
   (crossface 20-min arm) on this tree. No render owed this run (the re-bake geometry = run 1's measured
   geometry; a render is a P2 concern when the placement itself moves).
+
+## RUN - Mon Oct 19 09:35:10 EDT 2026 - AC-0433 run 3
+
+## RUN — Mon Oct 19 11:43:11 EDT 2026 — AC-0433 (P1 validation, medium, resume from run-2 OUTCOME)
+- LANDED (P1 validation instrument only — no production edits, per plan §2/§7):
+  - tasks/AC-0433/p1_probe.gd (NEW): standalone SceneTree probe, calls shipped SphereMath only.
+    §3.1 grid (N=16*ceil(face_width(R)/2/16)); §3.2 canonical integer-cube-vertex Q with the
+    face_for_dir tie order on raw Q + chart-inverse formulas (sphere_math.gd:129-144 on Q/N,
+    NOT world_to_face(Q)); §3.3 all 12 cube edges at t=k/32 (33 pts/edge, 2N/32=N/16 integral),
+    incident-chart grouping, one-cell neighbours, interior chunk (1,1)+adjacent vertices;
+    §3.4 inverse round trips (fractions 1/8..7/8, h=0/140/168); §3.5 negative control
+    (f0 t=0.5 boundary, h=168, one-cell shift); §3.6 old controls copied from _ac0433probe_test
+    (home/home 4 sites, face/face 10+10 sites, home/face f4 iv1000); §3.7 one RESULT JSON,
+    exit nonzero + HONEST DEVIATION on any tolerance fail.
+  - Probe run #1 (draft grouping) failed one check: raw v-labeled face/face max lean = 0.024380
+    vs expected 0.012270. Verified against run-2's own arm RESULT (probe-r8.log): the v controls
+    on z-faces 8/10 are the 98 m class (0.02438 there too — byte-identical to my standalone
+    reproduction of all 20 sites). The plan's expected values are the two footprint classes the
+    arm's own comment documents ("98 m in u on the x faces, 49 m in v; the roles swap on the
+    z faces"): 0.02454 = 98 m class, 0.01227 = 49 m class. Re-grouped by axis role (tolerances
+    unchanged, per-label maxima still emitted); this is the deviation recorded in
+    tasks/AC-0433/p1-deviations.txt. Final run: rc=0, census 0/0, RESULT ok=true.
+- GATES (plan §4 set, all green):
+  - gate_run.py AC-0433 --arms g0,ac0423probe: g0-r3 rc=0 script=0 shader=0; ac0423probe-r3 rc=0
+    script=0 shader=0, RESULT dict byte-identical to the run-2 reference (tasks/AC-0433/captures/
+    ac0423probe-r2.log) excluding ms (5673 vs 5515); the nine overlaps exactly 654/752/660/662/758/
+    848/800/1290/1290 mm — the old-runtime regression guard is unchanged.
+  - P1 standalone: pgrep slot free before the call; HOME=/tmp/dsh_home, ulimit -v 8388608,
+    timeout 120, godot --headless --path godot --script tasks/AC-0433/p1_probe.gd ->
+    .scratch/AC-0433-gates/p1-probe.log: rc=0, gate_census 0/0, RESULT ok=true, negative_detected=true
+    (gap 0.792551 m > 0.001 m). Headline measurements (all in that log): N=3152, full axis 6304,
+    slots 931416 (197x394 x 12), midline nominal step 0.996698 m; max shared-edge gap 0.000000 m
+    (380 unique Q groups, 2340 chart incidents, 1272 pairs at h=0/140/168); max direct-vs-canonical
+    0.000000 m; inverse 576 points max round trip 0.000481 m (owning face consistent, max h err
+    0.000488 m); measured midline 1-cell edges [0.920654, 0.997559] m (n=113472), 16-cell
+    [14.733155, 15.947946] m; old controls home00 ds0 0.002000 / lean 0.004000, face/face class
+    maxima 0.024543 (98 m) / 0.012272 (49 m), home/face f4 iv1000 ds0 3.732179 — every plan
+    tolerance within.
+  - Scope: git diff --name-only shows no production file touched; builder artifacts = p1_probe.gd,
+    p1-deviations.txt, AC-0433-results.html (fresh P1 report + runs 1-2 preserved as labelled
+    historical section, verbatim backup at .scratch/AC-0433-gates/AC-0433-results-p0-p05.html),
+    continuity.md. docs/INDEX.md + tasks/AC-0433/plan.html modified and tasks/AC-0433/spec.html
+    untracked = the user's unrelated in-progress edits, present at session start, left untouched.
+- OUTCOME: **P1 VALIDATED — the chosen model reproduces the shipped math within 1 mm on all 12
+  charts** (shared-vertex equal-height seams agree bitwise on every sampled cube edge at h=0/140/168;
+  inverse round trips < 0.5 mm with owning-face consistency; the one-cell negative control fires;
+  old-runtime guard byte-identical). No design decisions made or needed by the builder; no gameplay,
+  shader, native, harness, registry or docs changes. Parent ticket remains in-progress. Next (the
+  coordinator's): triage this run, then plan the P2a pure-canonical-API implementation unit against
+  docs/ac0433-unified-model.html §5.
+
+## Coordinator triage — P1 implementation-only validation
+- H1–H6: no hard signal. Standalone probe exists; results retain prior evidence; OUTCOME exists; measurements match p1-probe.log; documented axis-role grouping correction did not weaken tolerances; builder touched only permitted artifacts. Coordinator-authored docs/plan are not builder scope escapes.
+- Independent rerun: p1-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0; complete RESULT equals builder RESULT excluding ms. This proves sampled mapping algebra, NOT equality to old rigid placement or production mesh/collision/playability.
+- Scoreboard: builder_stats.py session 98307275-2a95-4c9b-9214-a9eb8e8cb4a0: 32 steps, 80,990 output tokens, 2783.357 seconds (46.4 minutes). One run is not a trend; cancelled launch excluded. Recorded in captures/p1-builder-cost.json.
+- Coordinator chose/wrote design and anchored contract; medium only implemented the probe. No runtime change; no Windows rebuild owed. Parent AC-0433 stays in-progress. Next: coordinator writes bounded P2a canonical-API contract, then medium implementation.

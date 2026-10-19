@@ -984,8 +984,9 @@ Match these; do not improvise a different approach in a task.
 **Proposed, not implemented — AC-0433 P1:** the coordinator's selected replacement for the
 home/face split is documented in [the unified-model design](../docs/ac0433-unified-model.html).
 It specifies one radius-derived nominal-metre chart grid and shared-vertex radial embedding,
-canonical ownership, and a staged consumer/save migration. Numerical validation is pending;
-the implemented grid and placement described below remain unchanged until their migration gates pass.
+canonical ownership, and a staged consumer/save migration. Sampled equal-height seam and
+inverse validation passed (AC-0433 P1); production mesh/collision/streaming validation remains
+pending. The implemented grid and placement below stay unchanged until their migration gates pass.
 
 - **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
   12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell

@@ -7,6 +7,7 @@ behind the current design.
 
 | Doc | Topic | Status |
 |---|---|---|
+| `ac0433-unified-model.html` | One radius-derived chart grid, shared-vertex radial embedding and canonical addressing (AC-0433 P1) | **proposed — coordinator decision, sampled seam/inverse validation passed; runtime unchanged** |
 | `planet-epic.html` | **Round planet epic (plan)** — grid lock (W/R = π/2 → 1 m blocks at R = 4000), spherical placement, cross-face movement, radial-gravity flight, satellite LOD tier | **approved 2026-09-17** · tickets AC-0306…AC-0311 (tracked) |
 | `flight-world-epic.html` | **Flight-ready world epic — lighting & far-band (design + measurements)** — the five decisions (starlight engine, no-caves + h-only far data, no-pop promotion, save filter pending), the RP before/after re-profile, the honest done-when verdict, and the open AC-0299 user decisions | **decisions made — AC-0313 + AC-0312 in flight** (tracked) |
 | `fps-spike-review.html` | **Why the frame spikes got worse (performance review, read-only)** — the tail-vs-average regression from the AC-0283→AC-0314 series (p95 22→39 ms, max 128→660 ms at a flat p50), the ranked hot spots (per-slab collision rebuilds, the 2048-entry per-frame queue scan, the per-crossing queue rebuild, node churn, the light gate), and the instrumentation gaps that let it ship | **review only — no code changed; next-ticket list in §08** |

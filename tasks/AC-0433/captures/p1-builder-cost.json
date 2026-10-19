@@ -1,0 +1,12 @@
+{
+  "source": "tasks/scripts/builder_stats.py --json",
+  "session": "98307275-2a95-4c9b-9214-a9eb8e8cb4a0",
+  "depth": 1,
+  "created_at": 1792424509623,
+  "wall_s": 2783.357,
+  "steps": 32,
+  "out_tokens": 80990,
+  "in_tokens": 115140,
+  "scope": "AC-0433 P1 standalone validation, medium implementation-only",
+  "note": "One completed stage, not a completed ticket or a performance trend. Cancelled design launch is excluded from this run's cost."
+}

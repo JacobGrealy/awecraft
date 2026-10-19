@@ -1,298 +1,43 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>AC-0433 — one world model, no home face: the measured split and the unification plan</title>
-<style>
- body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2.5rem auto; max-width: 980px; color: #1a2027; padding: 0 1rem; }
- h1 { font-size: 1.5rem; border-bottom: 2px solid #2b6cb0; padding-bottom: .35rem; }
- h2 { font-size: 1.15rem; margin-top: 2rem; color: #2b6cb0; }
- table { border-collapse: collapse; width: 100%; font-size: .88rem; margin: .8rem 0; }
- th, td { border: 1px solid #cbd5e0; padding: .35rem .55rem; text-align: left; vertical-align: top; }
- th { background: #edf2f7; }
- code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
- code { background: #edf2f7; padding: .05rem .3rem; border-radius: 3px; font-size: .86em; }
- pre { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: .7rem; overflow-x: auto; font-size: .82rem; }
- .ok { color: #276749; font-weight: 600; }
- .bad { color: #9b2c2c; font-weight: 600; }
- .warn { color: #975a16; font-weight: 600; }
- .muted { color: #718096; }
- .verdict { background: #ebf8ff; border-left: 4px solid #2b6cb0; padding: .7rem 1rem; margin: 1rem 0; }
-</style>
-</head>
-<body>
-
-<h1>AC-0433 — one world model, no home face</h1>
-<p><b>Run 1 (measurement + this plan + first increment).</b> 2026-10-19. The ticket's core
-finding — the placement rule differs between the lanes because the <i>footprint</i> differs
-(home 16 m rigid column facets vs non-home 49–98 m per-chunk LSQ fits) — is the design premise.
-Unification means one footprint rule; placement (and the seam behaviour) follows from it.
-This page records (1) the measured hypothesis, (2) the target end state and the ordered stages,
-(3) what run 1 lands and how it is proven.</p>
-
-<h2>1. The hypothesis, measured</h2>
-<p>The ticket asked whether the standing 2.19 m crossing-row split and 3.73 m corner split are
-the <b>frame-lean term</b> (each lane extrudes local +Y along the radial at its own chunk
-centre, so adjacent lanes diverge in height by centre-separation × h/R — the AC-0423 V-crack
-class at 6× the footprint), or in-plane LSQ residuals. The <code>ac0433probe</code> arm
-(<code>godot/scenes/harness.gd</code>) measures the exact decomposition at every home-edge
-cell of all eight non-home faces (8,344 sites) plus the home/home and face/face controls:</p>
-<pre>offset(h) = offset(0) + h · (n_face − n_home)        (exact by construction)
-chasm(h)  = |offset(0) + h·(n_face − n_home)|</pre>
-
-<table>
-<tr><th>quantity</th><th>value</th><th>meaning</th></tr>
-<tr><td>home/home control (16 m class)</td><td class="ok">ds0 = 2 mm, lean = 0.00400 = 16/4000, chasm(140) = 558 mm</td>
-<td>reproduces AC-0423's live 552–558 mm crack to the mm — the method is validated</td></tr>
-<tr><td>face/face u-seam (98 m class)</td><td class="ok">ds0 ≈ 1 mm, lean = 0.02454 = 98.16/4000, chasm(168) = 4.13 m</td>
-<td><b>pure frame-lean</b>: the two fits agree on the shared edge to the millimetre; the entire
-split is h·(footprint/R). At v-seam (49 m class): lean = 0.01227 = 49.08/4000, chasm(168) = 2.06 m</td></tr>
-<tr><td>home/face crossing row (h = 0)</td><td>ds0 = 1.68–2.70 m (max 2.704 at [4,536]; AC-0425's "crossing net split 2.7037")</td>
-<td>the <b>base-plane split</b> — a grid-placement mismatch (the face cell's extended home-flat
-position sits at a fractional offset on the home column, and the two tangent planes fold apart
-at the net corner), <i>not</i> the lean (which is zero at h = 0)</td></tr>
-<tr><td>home/face corner (h = 0)</td><td class="ok">ds0 = 3.732 m at [4,1000] — standing <code>f_seam_max_m</code> = 3.732444 reproduced to 4 significant figures</td>
-<td>the standing 3.73 m is the h = 0 base split (the F-audit measures at local height 0.0)</td></tr>
-<tr><td>home/face at terrain height</td><td>chasm(168): crossing max 4.47 m, corner 5.33 m, full-edge max 5.63 m @ [4,979]</td>
-<td>the lean term <i>adds</i> 1.3–1.9 m on top of the base at surface height (lean share
-30–42 % of the total at h = 168)</td></tr>
-</table>
-
-<div class="verdict"><b>Verdict — the hypothesis is refuted as literally stated, confirmed in substance.</b>
-The 2.19 / 3.73 m standing values are <b>h = 0 base-plane splits</b> (grid offset + the folded-net
-residual), not the lean term — the lean is zero at the height where they were measured. The
-ticket's arithmetic (49 × 140/4072 ≈ 1.68 m/side, "3.4 m across → 3.73 m at the corner")
-coincidentally matches the base value's magnitude but attributes it to the wrong mechanism.
-What <i>is</i> confirmed: the lean term is real, exactly linear in surface height, and equals
-footprint/R per metre — 16 m/R at home (the AC-0423 V-crack, reproduced), 49–98 m/R on the face
-lane, where the face/face seams are <i>purely</i> lean (base ≈ 0) and reach 2.1–4.1 m at terrain
-height.</div>
-
-<p>Consequence for the fix strategy: the seam-V extension (AC-0423) closes exactly the lean
-part — so it is the right stopgap on the face lane (face/face seams: closes everything below the
-clamp; home/face seams: closes the lean, leaves the base for the footprint unification). The
-footprint unification (stages below) is what removes both terms by construction.</p>
-
-<h2>2. The live defect, confirmed and counted</h2>
-<p>The AC-0423 seam-V extension is armed <b>only</b> where the build ctx carries
-<code>sphere_r</code>: the worker ctx template (the comment at world.gd:3889 says so in writing:
-"the home worker ctx template; the face-chunk sync path keeps no key") and the sync home path
-(chunk.gd:1667). The face lane is sync-only (world.gd:15262: "the face chunk is few and the sync
-lane is its build lane" — all three <code>build_mesh_face</code> call sites are sync), so
-<code>build_mesh_face</code> (chunk.gd:1684, ctx at 1708–1713) never sets the key and the
-extension is silently absent there.</p>
-<ul>
-<li><b>Exact count: 10 of 12 faces</b> lack the extension (faces 2–11, the non-home faces).
-Faces 0/1 (home) are armed. The ticket's "11 of 12" is off by one.</li>
-<li><b>Live proof</b> (<code>ac0433probe</code> section B, chunk <code>4:63:1</code>,
-face-top 188 m, 1,632 top-face vertices read): every edge band of the live face mesh stops
-exactly at the nominal footprint — home edge <code>[0.0, 0.0]</code>, u-seam
-<code>[16.0, 16.0]</code>, v-seams <code>[0.0, 0.0]</code> / <code>[16.0, 16.0]</code>. No
-vertex crosses local 0 or 16. Compare the home lane, where ac0423probe reads extensions to
-16.88 / 0.33 local. The see-through slits are therefore live on all 10 non-home faces, up to
-4.1 m wide at the 98 m-direction (u) face/face seams at terrain height.</li>
-<li><b>The one-line arm is mathematically wrong</b> (ticket's "unverified hypothesis" pattern,
-confirmed by code reading): <code>build_seam_ext</code> (mesh.cpp:982) hardcodes
-<code>sm_column_transform</code> for both own and neighbour frames — on the face lane it would
-treat face-chunk indices as <i>home column</i> indices (a different region of the sphere) and
-build garbage K tables. The fix must generalize the transforms, not just arm the key.</li>
-</ul>
-
-<h2>3. Target end state and ordered stages</h2>
-<p><b>End state: every part of the world is the same kind of thing.</b> One placement rule:
-terrain is a field of columns, each column a rigid facet extruded along <i>its own</i> radial;
-the footprint (the facet's width) is the same everywhere. The seam behaviour then becomes a
-property of placement (two facets sharing an edge agree at every height by construction, up to
-one footprint of lean) and the per-lane special cases — the face LSQ fit, the home-edge ring
-resampling, the per-lane clamps — collapse or disappear.</p>
-
-<table>
-<tr><th>stage</th><th>what changes</th><th>evidence</th><th>risks</th></tr>
-<tr><td><b>P0 — run 1 (landed)</b></td>
-<td>Measurement (<code>ac0433probe</code>) + plan + the face-lane seam-V extension: the shared
-header gains the face-chunk transform; <code>build_seam_ext</code> gains a face path (per-edge
-neighbour class + transforms, unified dot-product formula); <code>build_mesh_face</code> arms the
-key; face clamp sized from the measurement (6.0 m vs 2.5 m home). Placement, data, genhash: untouched.</td>
-<td>probe section B: face edge bands cross local 0/16 (u-seam +~0.6 cells, v-seam +~0.35 cells,
-home edge per the live home ring); seamcensus + genhash 25/25 unchanged; G0 clean.</td>
-<td>UV stretch on the extended rows (≤ 2 cell-equivalents — milder than home's existing 3.5×).
-The home-edge K tables need the live home ring (a face chunk built against an air home ring
-extends nothing there — the "act requires tn ≥ 0" contract). <b>Run 1's probe measured this
-branch live: the home-edge extension was inert until the probe forced a re-bake — the
-home-landing → face-re-bake hook the P0 row assumed does not exist.</b> That is P0.5 below.</td></tr>
-<tr><td><b>P0.5 — run 2 (this run)</b></td>
-<td>Rebuild ordering + the straddler's dispatch (GDScript only — no C++, no placement, no data).
-(1) <b>The home-LANDING re-bake hook</b>: the existing <code>_face_rebake_boundary</code>
-(today called from the home-<i>edit</i> path only) also fires when a home boundary column's
-<i>data lands</i> — all three full-landing paths (the gen handoff, the disk handoff, the
-band-A materialization landing). A face edge chunk built against an air home ring is re-baked
-the frame the straddler's data arrives, so the home-edge extension arms against the live ring
-in EITHER landing order. (2) <b>The straddler gate</b>: the 8-neighbor
-<code>_build_ready</code> gate (AC-0160/AC-0335) skips a neighbour that is fully past the patch
-edge — face territory whose data <i>never</i> lands (every home enqueue refuses it, the
-ENQ-PASTPATCH guards), and whose ring the dispatch already synthesizes (the
-<code>_patch_edge_ring</code> D2 clause: live face data or the solid ring, never a defer).
-The gate and the ring construction now agree; the boundary straddler's high build no longer
-defers forever in the jump band (the F4 stall).</td>
-<td>probe section B (reworked): the INITIAL-build state captured the frame the face first meshes
-(the air-ring signature: home edge [0.0, 0.0] + full-height seam wall) vs the FINAL state after
-the NATURAL re-bake — no probe-side rebuild; the new <code>face_rebake_n</code> counter proves
-the hook fired, and the straddler reports <code>mesh_built = true</code> inside the wait window
-(F4 negative-tested: without the gate fix the loop times out with the straddler still queued).
-ac0423probe home lane unchanged (the standing regression guard: run 1's pristine-HEAD .so ≡
-increment .so comparison stands, standing overlap 654–1290 mm); genhash 25/25 (scheduling only —
-no data-path change); farab + boundary r4 green.</td>
-<td>The re-bake is a sync main-thread face build: a jump-band burst lands boundary columns in a
-few seconds and can trigger several re-bakes (bounded: the overlap test limits each landing to
-the face chunks whose edge row crosses the column; the face list caps at 512). If the run shows
-P1 (the unified placement design) is the real blocker and this stage is cosmetic without it,
-that is a finding this run is allowed to report — the plan is a working document (the
-coordinator's standing instruction for this ticket).</td></tr>
-<tr><td><b>P1 — design</b></td>
-<td>Pick the unified footprint and prove the seam algebra on paper + probe: candidate (c) from
-the ticket — every column extrudes along its own radial. Cost analysis: per-cell facets on the
-face lane (256 facets/chunk vs 1) vs per-column (16); the seam lean at the unified footprint
-(6.1 m/R ≈ 0.25 m at 168 m — the home class, closed by the existing extension).</td>
-<td>a design doc in <code>tasks/AC-0433/</code> with the measured seam algebra per candidate; no code.</td>
-<td>mesh complexity growth (greedy merge only coplanar-frees; per-cell radials crease every
-cell) — decide the LOD treatment for far tiers (the 8×8/4×4 avg payload is height-only and
-unaffected — verify).</td></tr>
-<tr><td><b>P2 — placement unification</b></td>
-<td>The face lane switches from the per-chunk LSQ affine to per-column (or per-cell) radial
-facets: <code>face_chunk_transform</code> retires in favour of the generalised column transform;
-the data layout is unchanged (same 16×16×H cells), only the node transform / per-facet basis
-changes. Home lane optionally follows (1 m cells) so ONE rule literally holds.</td>
-<td>probe: home/face base split (the 1.7–3.7 m at h = 0) drops to the grid-sliver class;
-face/face chasm drops from 2.1–4.1 m to ≤ 0.3 m; crossface F-audit standing values
-re-baselined (waived in writing by the user: save re-keying and genhash re-basing are both
-acceptable; a genhash <i>move</i> is a finding to report — the placement change is mesh-only,
-so genhash should NOT move; if it does, that is the finding).</td>
-<td>the big one: every consumer of <code>face_chunk_transform</code> (mobs, the C5 player
-anchor, collision, the far emit, the crossface arms, the save re-keyer's assumptions) must be
-audited; the mirror-class local-slot mapping is load-bearing everywhere. High regression risk —
-stage-gate with the full heavy set + a dedicated crossface re-measurement.</td></tr>
-<tr><td><b>P3 — seam rule as a placement property; mechanism deletion</b></td>
-<td>With one footprint, the seam closure is uniform: the K-table/ring-read/sphere_r/margin/clamp
-machinery collapses to one code path (or shrinks to the grid-sliver fill), and the per-lane
-special cases in <code>_face_rings</code>/<code>_face_home_ring</code> retire.</td>
-<td>seamcensus on every face class; the ac0433probe decomposition shows chasm(168) ≤ the
-extension clamp everywhere with margin to spare.</td>
-<td>removing machinery after P2's consumers are verified — order matters; deletion before the
-consumer audit is how the AC-0423 first two rounds saw "no extension".</td></tr>
-<tr><td><b>P4 — consumers</b></td>
-<td>Mobs on the face side (physics anchor = the chunk's unit frame — the per-column basis
-changes the footing surface), save re-key (v2 "0:face:ccx:ccz:local" form — the placement change
-does not change the keying; the user waived re-keying in writing anyway), genhash re-base if the
-data layout moves (it should not — P2 is mesh-only).</td>
-<td>consumers arm + boundary r4 + the crossface walk at the re-based standing values.</td>
-<td>low once P2 is stable; the save format is already face-capable (AC-0143 M5).</td></tr>
-</table>
-
-<h2>4. What run 1 lands (P0)</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P1 validation contract</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.4rem}pre,code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0433 P1 — implement the coordinator's numerical validation</h1>
+<p>Coordinator-written. Route <b>subagent_medium</b>, tasks/templates/implement.md. The coordinator has chosen and written the design in <code>docs/ac0433-unified-model.html</code>. Builder implements only the standalone test below; no delegated design and no gameplay changes. Resume run-2 OUTCOME; interrupted run-3 headers contain no completed work.</p>
+<h2>1. Goal</h2><p>Validate the chosen uniform nominal-metre grid and shared-vertex radial embedding against shipped math, with deterministic seam/inverse tests and a negative control.</p>
+<h2>2. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>docs/ac0433-unified-model.html</td><td>§§1–5, coordinator decision</td><td>Read only. Do not choose a different model.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td>50 CELLS_PER_FACE; 62 face_width; 75 face_for_dir; 90 uv_to_world; 110 world_to_face; 147 _EDGES; 315 home_uv; 332 column_transform; 450 face_mirror_x; 508 face_chunk_transform</td><td>Read only, anchored ranges. Probe calls actual SphereMath, never transcribes its trigonometry/LSQ fit.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>36232 _ac0433_decomp; 36248 _ac0433probe_test</td><td>Read only, current control construction; no whole-file read.</td></tr>
+<tr><td>tasks/AC-0433/captures/ac0423probe-r2.log</td><td>RESULT</td><td>Read only, deterministic old-runtime regression reference.</td></tr>
+<tr><td>tasks/AC-0433/p1_probe.gd (NEW)</td><td>standalone SceneTree _initialize / call_deferred to test</td><td>Implement numerical validation. No autoload, no production reference.</td></tr>
+<tr><td>tasks/AC-0433/p1-deviations.txt (NEW)</td><td>OUTCOME, measurements and log links</td><td>Write concise evidence for results_page.py; every number in a log.</td></tr>
+<tr><td>tasks/AC-0433/AC-0433-results.html</td><td>existing P0/P0.5 evidence</td><td>Preserve old sections. Render new report with results_page.py, then append old body as labelled historical evidence OR keep old page and append generated report body as P1. Do not discard historical evidence.</td></tr>
+<tr><td>tasks/AC-0433/continuity.md</td><td>run-2 OUTCOME lines 65–123; interrupted headers after</td><td>Append RUN / LANDED / GATES+OUTCOME only.</td></tr>
+<tr><td>.scratch/AC-0433-gates/</td><td>summary.json; p1-probe.log; p1_probe RESULT</td><td>Gate/measurement artifacts. Log every reported value.</td></tr>
+<tr><td>tasks/templates/implement.md; tasks/scripts/gate_run.py; tasks/scripts/results_page.py</td><td>template contract; CLI --help</td><td>Read selectively; use tools, no edits.</td></tr></table>
+<p><b>Do not touch:</b> game code, shaders, native source, harness, registry, generated spec, design/architecture/index (coordinator owns them this run).</p>
+<h2>3. Edit shape — no unresolved forks</h2>
 <ol>
-<li><b>Probe</b> — <code>ac0433probe</code> arm in <code>godot/scenes/harness.gd</code> (kept,
-like <code>ac0423probe</code>: the standing instrument for the unification rounds). Section A:
-the 8,344-site decomposition + controls (this page's numbers). Section B: the live face-chunk
-edge bands at the deterministic census site + the home drain state.</li>
-<li><b>Shared header</b> — <code>gdext/src/sphere_math_cpp.h</code> gains
-<code>SM_FIT_INV</code>, <code>sm_face_mirror_x</code>, <code>sm_face_chunk_transform</code>
-(moved verbatim from gen.cpp, the AC-0423 pattern for the home math).</li>
-<li><b>Face-lane seam extension</b> — <code>gdext/src/mesh.cpp</code>:
-<code>build_seam_ext</code> gains the face path. Design:
-<ul>
-<li>ctx gains <code>face</code> (0 = home lane = pre-feature path, byte-identical),
-<code>seam_v_max</code> (m, per-lane clamp), <code>face_edge_class</code> (4 × int:
-0 = off, 1 = home edge, 2 = real same-face neighbour), <code>face_edge_nb</code>
-(4 × [nccx, nccz]), <code>face_edge_home</code> (16 × [hcx, hcz, lx, lz] — the per-cell home
-seam cell, mirroring <code>_face_home_ring</code>'s resampling).</li>
-<li>Own frame: home <code>sm_column_transform</code> (unchanged) / face
-<code>sm_face_chunk_transform</code>. Neighbour: class 2 → the same-face chunk's transform;
-class 1 → the per-cell home column transform (<code>sm_column_transform(hcx_i, hcz_i, R)</code>).
-Class 0 (synthetic-solid / window / sector edges) → <code>act = false</code> (the ring is solid
-but the terrain across it is owned by another face — extending into it would z-fight).</li>
-<li>Unified formula (dot-product along the seam-normal axis, exact for the face frames whose
-local x-axis is <i>not</i> world-x at the home edge):
-<pre>E_world(i, t) = (Tn.o + lxₙ·col(Tn,a) + lzₙ·col(Tn,g) + tₙ·col(Tn,1)
-               − To.o − a₀·col(To,a) − i·col(To,g)) · x̂   −   t·col(To,1)·x̂
-E_local(i, t) = E_world(i, t) / |col(To,a)|            (cell units; home: /1 = unchanged)</pre>
-It reproduces the home-lane formula term-for-term (verified: with x̂ = (1,0,0), L = 1,
-lxₙ = 0, lzₙ = i, a₀ = 16 it is exactly the shipped K0[1][i]) — the home lane keeps its own code
-path anyway, so byte-identity is guaranteed, not approximate.</li>
-<li>The clamp and the 0.05 m margin are world-metre quantities; <code>seam_ext_at</code>
-converts through the per-edge scale (home scale = 1.0 exactly → home mesh byte-identical).</li>
-</ul></li>
-<li><b>GDScript arming</b> — <code>godot/world/chunk.gd</code> <code>build_mesh_face</code>
-sets <code>sphere_r</code> + the face edge metadata; <code>godot/world/world.gd</code> gains
-<code>_face_edge_meta</code>, sharing its edge classification with <code>_face_rings</code>
-(one source of truth for home-edge / real-neighbour / synthetic-solid).</li>
-<li><b>Face clamp</b> — 6.0 m (measured worst chasm at h = 168: 5.63 m; the u-seam lean
-0.02454·t reaches it at t ≈ 244 m &gt; realistic face terrain; in local cell units that is
-≤ 1 cell of extra stretch — the UV cost is milder than the home lane's existing 3.5×).</li>
+<li><b>Grid under test.</b> R=4000 is the stated fixture, not a replacement production constant. H=SphereMath.face_width(R)/2; N=16*ceil(H/16). Nu,Nv=(2N,N) for faces 4–7; (N,2N) otherwise. Expected N=3152; full=6304. Report slots=12*(N/16)*(2N/16), midline step H/N, measured edge-length min/max over the sample grid. Mark formulas/predictions separately from measured extrema.</li>
+<li><b>Canonical vertex coordinates.</b> Integer cube triple Q at grid vertex (i,j): f0=(i,N,j−N), f1=(i−N,N,j−N), f2=(i,−N,j−N), f3=(i−N,−N,j−N); f4=(N,i−N,j), f5=(N,i−N,j−N), f6=(−N,i−N,j), f7=(−N,i−N,j−N); f8=(i,j−N,N), f9=(i−N,j−N,N), f10=(i,j−N,−N), f11=(i−N,j−N,−N). Use Vector3i keys or exact string triples, never rounded world positions. Canonical direction = SphereMath.uv_to_world evaluated at a deterministic owning face (the face_for_dir tie order on raw Q, then chart inverse formulas from source lines 129–144 applied to Q/N; NOT world_to_face(Q), because Q is unwarped cube coordinates). Then P=(R+h)*n−(0,R,0). Direct chart samples must agree with this direction within 0.001m in world space.</li>
+<li><b>Sample all classes.</b> Each face boundary: edge endpoints plus t=k/32 for k=0..32, and one-cell neighbours where useful. Counts are multiples of 16, so these are integer vertices. Group identical Q across charts; compare positions for all incident faces at h=0,140,168. Also sample an interior chunk's edges (chunk coordinates 1,1 and adjacent) on each face. Expected shared-edge gap≤0.001m. This is equal-height embedding proof only, not mesh watertightness.</li>
+<li><b>Inverse.</b> For each face, sample interior cell-centre coordinates at fractions 0.125/0.375/0.625/0.875 of each dimension, heights 0/140/168. Forward via shipped uv_to_world; inverse via shipped world_to_face on planet-centred P and radial h=length−R; multiply u/v by shape of returned face; forward again. Record max world round-trip error≤0.001m and owning face consistency for strictly interior points.</li>
+<li><b>Negative control.</b> On a fixed f0 boundary vertex at t=0.5 and h=168, compare correct P against a deliberately one-cell-shifted endpoint on that chart. Must produce gap&gt;0.001m, and negative_detected=true. Never count an intentionally removed geometry region as a mapping pass.</li>
+<li><b>Old controls.</b> Copy only control-site selection from existing _ac0433probe_test, calling production transforms. Reproduce home/home ds0≈0.002m (±0.01), lean≈0.004/m (±0.00005); face/face u≈0.02454/m and v≈0.01227/m (±0.00005); home/face f4 iv1000 ds0≈3.732m (±0.01). Use source control coordinates from the arm, not guessed ones. Emit actual values and control_ok fields. If mismatch, report failure, do not alter tolerances/model.</li>
+<li><b>Output.</b> One RESULT JSON with ok, R, N, grid dimensions/slot count, heights, sample/group counts, max shared gap, max direct-vs-canonical error, inverse error, negative gap/detected, old controls and measured edge-length range. If an assertion fails: ok=false, exit nonzero, concise HONEST DEVIATION; stop, do not redesign. Log to .scratch/AC-0433-gates/p1-probe.log.</li>
 </ol>
-<p><b>Proven by:</b> G0 (census + exit status), SMOKE (meshprobe — the C++ lane parity;
-seamcensus — the standing seam instrument), genhash 25/25 (no data/placement change → must not
-move), the probe's before/after (section B edge bands), the far-tier + boundary arms (the change
-touches the draw path at the seam), and the crossface F-audit standing values (placement
-untouched → must not move; the coordinator's heavy set re-runs it fresh).</p>
-
-<h2>5. What run 2 lands (P0.5)</h2>
-<ol>
-<li><b>The straddler gate (F4)</b> — <code>world.gd</code> <code>_build_ready</code>: a neighbour
-that is <code>_chunk_past_patch</code> (fully past the patch edge) is satisfied, not a defer.
-Every other <code>_build_ready</code> call site (pool pick, load-window pick, steady pass,
-tex-refresh, dirty dispatch) re-validates through the same function, and every home dispatch's
-ring construction (the four <code>nap_rings</code>/<code>_patch_edge_ring</code> sites) already
-synthesizes that neighbour's ring — the gate and the dispatch now agree where they previously
-disagreed. With R ≤ 0 (harness arms) the skip is inert (<code>_chunk_past_patch</code> returns
-false) — pre-existing behaviour unchanged.</li>
-<li><b>The home-landing re-bake hook (F3)</b> — <code>_face_rebake_boundary(cx, cz)</code> (the
-existing edit-side call: walk resident face chunks, edge-row overlap test, sync re-bake of the
-overlapping ones) is now also called from the three full-landing paths:
-<code>threadgen_handoff</code> (gen, when the skip flag is not 2 = far),
-<code>_land_column</code> (disk, when the column is not far), and the band-A materialization
-landing (the <code>mat</code> handoff). A new <code>face_rebake_n</code> counter on
-<code>World</code> increments on every actual edge-row re-bake — the probe's
-natural-vs-forced discriminator. Inert when no face chunk is resident (the
-<code>_face_order</code> empty early-out) and when R ≤ 0.</li>
-<li><b>The probe rework</b> — <code>ac0433probe</code> section B now captures the
-INITIAL-build state the frame the face chunk first meshes (the air-ring signature, if the
-straddler's data has not landed yet), then waits for the straddler's <i>mesh</i> (the F4
-assertion — the wait loop's exit condition), then reads the FINAL state with NO probe-side
-rebuild: <code>rebake_natural</code> = the counter moved, <code>initial_ring_live</code> = the
-face happened to build after the data (the no-gap branch), <code>manual_fallback</code> = the
-run-1 forced re-bake path (set only if the natural one did not fire — a failure of the stage).
-The home-straddler control bands (<code>at_edge</code>/<code>east_ext</code>) are expected
-non-empty this round (the straddler meshes).</li>
-</ol>
-<p><b>Proven by:</b> the probe's initial/final pair + <code>rebake_natural</code> +
-<code>home_mesh_built</code>; G0 (census + exit status — the stochastic UAF class); ac0423probe
-vs run 1 (home lane must be unchanged — this stage touches scheduling only); genhash 25/25
-(world/* touched — a move is a finding); farab (far-tier contract) + boundary r4 (streaming
-moved); meshprobe (C++ lane parity, the .so is run 1's increment build — unchanged this run).</p>
-
-<h2>6. Findings logged for later rounds</h2>
-<ul>
-<li><b>Jump-band straddler stall (probe artifact, live-question open):</b> after a 195-chunk
-recenter jump, the home boundary straddler (196, 4) lands data in seconds but its mesh
-dispatch is held: <code>queued_keys = "build"</code>, <code>_build_ready = false</code> because
-its three past-patch neighbours (197, 3..5) <i>never</i> hold data (AC-0309 D2) and the
-tier-0/1 build gate (AC-0335) demands all-8-neighbor data. The crossface walk's gradual approach
-builds the straddler (C4 proves it) — the exact live mechanism is open; if the jump-band case is
-reachable by a player (fast travel / a future teleport), it is a hole at the seam.
-<b>Run 2 (P0.5): the gate now skips past-patch neighbours (the dispatch already synthesizes
-their rings) — the probe's section B waits on the straddler's MESH, not just its data.</b></li>
-<li><b>Face re-bake gap:</b> a face chunk's home-edge ring is a snapshot at face-build time
-(the home-landing → face-re-bake hook did not exist; only face-landing → home re-mesh and
-home-edit → face re-bake existed). A face chunk built against an air home ring extends nothing at
-its home edge until something re-bakes it. The P0 increment arms the extension correctly when
-the ring is live. <b>Run 2 (P0.5): the landing hook landed — <code>_face_rebake_boundary</code>
-fires from all three full-landing paths; the probe's natural re-bake read is the proof.</b>
-Residual for P1: the re-bake is a per-landing event; the unified-placement stage should make
-the home edge not depend on snapshot ordering at all.</li>
-<li>The F-audit comment (harness.gd:35040) already names this split a "PLACEMENT property" whose
-closure "is a placement-unification ticket's work" — this ticket files it; the
-ARCHITECTURE.md:1116 "separate, unfiled concern" note is updated by the P0 landing.</li>
-</ul>
-
-</body>
-</html>
+<h2>4. Gate set and expected values</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>G0 + old runtime</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0,ac0423probe --timeout g0=60,ac0423probe=600</code></td><td>Both rc=0 and SCRIPT=0/SHADER=0. Compare ac0423probe deterministic RESULT to run-2 log (exclude timing). Nine overlaps exactly 654/752/660/662/758/848/800/1290/1290 mm.</td></tr>
+<tr><td>P1 standalone</td><td>pgrep slot check; HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120 /home/angrygiant/tools/godot/godot --headless --path godot --script absolute path to p1_probe.gd. Run gate_census.py on its log with exit status.</td><td>rc=0, census 0/0, RESULT ok=true, all §3 tolerances pass, negative_detected=true.</td></tr>
+<tr><td>Scope</td><td>git diff --name-only</td><td>Builder edits only §2 permitted artifacts. Production unchanged; no native rebuild, no SMOKE/heavy/render owed.</td></tr></table>
+<p>Use results_page.py with its gate summary and deviations. Standalone probe is a separate linked log (not invented summary values); all claims trace to that log. Do not overwrite the previous stages' evidence.</p>
+<h2>5. Acceptance</h2><p>Probe validates or refutes the coordinator's chosen design without making design choices itself, negative control fires, old runtime guard unchanged, results/journal report an honest OUTCOME. Parent ticket remains in-progress.</p>
+<h2>6. Known risks</h2><p>World coordinates are float32; tolerance is 1mm, not exact byte equality across different evaluation orders. Current rigid controls and new nonlinear placement are different experiments. No frame-time, collision or whole-planet playability claims from algebra.</p>
+<h2>7. Fences and stop conditions</h2><div class="stop"><ul>
+<li>No git commit/push/add; no <code>tasks/TASKS.yaml</code>; no new tickets.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>At most ONE boundary r4 probe if <code>godot/world/*</code> is touched; on a trade-off, record the honest deviation and exit — no option loop. World edits forbidden, so none owed.</li>
+<li><strong>If the plan cannot be applied (anchor missing, symbol absent, steps contradict, or a design decision is required that this plan does not make) write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT.</strong> Do not invent the design — that is the coordinator's job and it is cheap to redo.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>P0 and P0.5 landed at 160ad80. Earlier run-3 launches cancelled, no implementation landed. Coordinator chose one model in docs/ac0433-unified-model.html. Next after validation: medium implements P2a canonical API alongside unchanged runtime, with a separate anchored contract.</p>
+</body></html>
