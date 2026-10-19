@@ -14758,15 +14758,13 @@ func _face_home_ring(face: int, ccx: int, ccz: int, dx: int, dz: int) -> PackedB
 				ring[(si * 16 + y_in) * 16 + t] = v
 	return ring
 
-# C3: the 4 rings of a face chunk — the same-face neighbour via the C++
-# snap_rings (the identical 16x16xH local shape); the home edge (the
-# edge-adjacent row only) via the resampled LIVE home ring; the
-# sector/antipode and window edges = a solid ring (the terrain continues;
-# never a defer — the face streaming owns the window, not a retry).
-func _face_rings(c: Node3D) -> Dictionary:
-	var face: int = int(c.face)
-	var ccx: int = int(c.cx)
-	var ccz: int = int(c.cz)
+# AC-0433: the per-edge kind of a face chunk — the single source of truth
+# shared by _face_rings (which ring to build) and _face_edge_meta (which
+# seam edges the C++ seam-V extension may arm). Returns [kind, a, b]:
+# kind 0 = synthetic solid (window/sector/out-of-charts/absent neighbour —
+# _solid_ring), 1 = home edge (the resampled LIVE home ring), 2 = real
+# same-face neighbour (snap_rings; a/b = the chart neighbour (nccx, nccz)).
+func _face_edge_kind(face: int, ccx: int, ccz: int, dx: int, dz: int) -> Array:
 	var is_x_face: bool = face <= 7
 	# AC-0309: the mirror class runs its local +X AGAINST the face's u,
 	# so a chunk's local EAST edge is the chart line at its u-range's
@@ -14780,27 +14778,94 @@ func _face_rings(c: Node3D) -> Dictionary:
 	# plain x faces; the z faces' home edge (local NORTH of ccz = 63)
 	# is untouched (the z slot is never mirrored).
 	var mirrored: bool = SphereMath.face_mirror_x(face)
+	var is_home_edge: bool = (dz == 0 and is_x_face and ccx == 63 and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
+			or (dx == 0 and not is_x_face and ccz == 63 and dz == 1)
+	if is_home_edge:
+		return [1, 0, 0]
+	var nccx: int = ccx - dx if (mirrored and dx != 0) else ccx + dx
+	var nccz: int = ccz + dz
+	if nccx < 0 or nccx > 63 or nccz < 0 or nccz > 63:
+		return [0, 0, 0]
+	var nc: Node3D = chunks.get(_key_f(face, nccx, nccz))
+	if nc == null or nc.data.is_empty():
+		return [0, 0, 0]
+	return [2, nccx, nccz]
+
+# C3: the 4 rings of a face chunk — the same-face neighbour via the C++
+# snap_rings (the identical 16x16xH local shape); the home edge (the
+# edge-adjacent row only) via the resampled LIVE home ring; the
+# sector/antipode and window edges = a solid ring (the terrain continues;
+# never a defer — the face streaming owns the window, not a retry).
+func _face_rings(c: Node3D) -> Dictionary:
+	var face: int = int(c.face)
+	var ccx: int = int(c.cx)
+	var ccz: int = int(c.cz)
 	var nbs: Dictionary = {}
 	var mc: Variant = ChunkScript.mesh_cpp()
 	for d in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
 		var dx: int = int(d[0])
 		var dz: int = int(d[1])
-		var is_home_edge: bool = (dz == 0 and is_x_face and ccx == 63 and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
-				or (dx == 0 and not is_x_face and ccz == 63 and dz == 1)
-		if is_home_edge:
-			nbs["%d,%d" % [dx, dz]] = _face_home_ring(face, ccx, ccz, dx, dz)
-			continue
-		var nccx: int = ccx - dx if (mirrored and dx != 0) else ccx + dx
-		var nccz: int = ccz + dz
-		if nccx < 0 or nccx > 63 or nccz < 0 or nccz > 63:
-			nbs["%d,%d" % [dx, dz]] = _solid_ring()
-			continue
-		var nc: Node3D = chunks.get(_key_f(face, nccx, nccz))
-		if nc == null or nc.data.is_empty():
-			nbs["%d,%d" % [dx, dz]] = _solid_ring()
+		var ek: Array = _face_edge_kind(face, ccx, ccz, dx, dz)
+		var key_s: String = "%d,%d" % [dx, dz]
+		if int(ek[0]) == 1:
+			nbs[key_s] = _face_home_ring(face, ccx, ccz, dx, dz)
+		elif int(ek[0]) == 2:
+			var nc: Node3D = chunks.get(_key_f(face, int(ek[1]), int(ek[2])))
+			nbs[key_s] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())
 		else:
-			nbs["%d,%d" % [dx, dz]] = mc.snap_rings(nc.data, nc.fl, dx, dz, nc.gen_keep, nc.far_payload())
+			nbs[key_s] = _solid_ring()
 	return nbs
+
+# AC-0433: the face-lane seam-V extension metadata for the build ctx
+# (consumed by the C++ build_seam_ext face path). The SAME edge
+# classification as _face_rings (one source of truth — _face_edge_kind):
+# only real edges arm the extension (class 1 home / class 2 same-face);
+# the synthetic-solid window/sector edges stay off (the terrain across
+# them is owned by another face — extending into it would z-fight).
+# For a class-1 edge the per-along-cell home seam cell [hcx, hcz, lx, lz]
+# is carried (one entry per the 16 along cells; mirrors _face_home_ring's
+# resampling — the ring's per-cell top IS that seam cell's home top, so
+# the C++ K tables and the ring agree on the surface). C++ edge order:
+# k = [dx-1, dx+1, dz-1, dz+1] (parse_nbs).
+func _face_edge_meta(c: Node3D) -> Dictionary:
+	var face: int = int(c.face)
+	var ccx: int = int(c.cx)
+	var ccz: int = int(c.cz)
+	var cls: Array = [0, 0, 0, 0]
+	var nb: Array = [0, 0, 0, 0, 0, 0, 0, 0]
+	var home: Array = []
+	home.resize(64)
+	for i in range(64):
+		home[i] = 0
+	var dirs: Array = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	for k in range(4):
+		var dx: int = int(dirs[k][0])
+		var dz: int = int(dirs[k][1])
+		var ek: Array = _face_edge_kind(face, ccx, ccz, dx, dz)
+		cls[k] = int(ek[0])
+		if int(ek[0]) == 2:
+			nb[2 * k] = int(ek[1])
+			nb[2 * k + 1] = int(ek[2])
+		elif int(ek[0]) == 1:
+			var is_x: bool = dx != 0
+			for t in range(16):
+				var iu: int = (SphereMath.CELLS_PER_FACE - 1) if is_x else ccx * 16 + t
+				var iv: int = (ccz * 16 + t) if is_x else (SphereMath.CELLS_PER_FACE - 1)
+				var b: Vector3 = SphereMath.face_cell_band(face, iu, iv, R)
+				# the home edge of faces 4/5 is the patch's +x edge, of
+				# 6/7 the -x edge (the same face-based rule _face_home_ring
+				# applies — keep the two in step)
+				var fx: float = (hw - 0.5) if (is_x and (face == 4 or face == 5)) else (-hw + 0.5) if is_x else b.x
+				var fz: float = b.y if is_x else ((hw - 0.5) if dz > 0 else (-hw + 0.5))
+				var hcx: int = int(floorf(fx / 16.0))
+				var hcz: int = int(floorf(fz / 16.0))
+				home[4 * t] = hcx
+				home[4 * t + 1] = hcz
+				home[4 * t + 2] = int(floorf(fx)) - hcx * 16
+				home[4 * t + 3] = int(floorf(fz)) - hcz * 16
+	return {"class": cls, "nb": nb, "home": home}
 
 # D2: the home dispatch clause — a neighbour position fully past a
 # home-patch edge is the far side of the seam: its ring is the LIVE face

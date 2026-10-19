@@ -1661,9 +1661,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	# top-face edge rows past the nominal footprint by the V-crack width at
 	# the surface height (the per-column tangent sheets diverge with height,
 	# AC-0307's documented "known physical consequence"; nothing ever closed
-	# the V — the user's see-through seam). The face-chunk path
-	# (build_mesh_face) stays OFF: its placement is the LSQ affine, not the
-	# home column math.
+	# the V — the user's see-through seam). AC-0433: the face-chunk path
+	# (build_mesh_face) arms it too, through the C++ face lane (C.face >= 2
+	# — the unified dot-product K tables; the placement is the LSQ affine,
+	# not the home column math the home lane hardcodes).
 	ctx_w["sphere_r"] = float(Game.planet_R)
 	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — every meshed
 	# band is full-fidelity (the far LOD is the separate low placeholder).
@@ -1711,6 +1712,25 @@ func build_mesh_face(light: Dictionary = {}) -> void:
 	ctx_w["blk_strips"] = ze2
 	ctx_w["blk_strips_b"] = ze2
 	ctx_w["top"] = int(top)
+	# AC-0433: the face-lane seam-V extension — the AC-0423 mechanism was
+	# silently absent on all ten non-home faces (the worker ctx template's
+	# key comment says so in writing: "the face-chunk sync path keeps no
+	# key"; the face lane is sync-only, so every face chunk built without
+	# it — the live 2-4 m see-through slits at the face/face seams, the
+	# ac0433probe section-B proof). The C++ face path (C.face >= 2) arms
+	# only the REAL edges from _face_edge_meta (same-face neighbours + the
+	# live home edge, per-cell home columns); the synthetic-solid
+	# window/sector edges stay off. The face clamp is the measured worst
+	# chasm at terrain height (5.63 m at h=168 — tasks/AC-0433/plan.html §1);
+	# in local cell units that is at most one cell of extra stretch, milder
+	# than the home lane's 2.5 m on a 1 m cell.
+	ctx_w["sphere_r"] = float(Game.planet_R)
+	ctx_w["face"] = int(face)
+	ctx_w["seam_v_max"] = 6.0
+	var fem: Dictionary = Game.world._face_edge_meta(self)
+	ctx_w["face_edge_class"] = fem["class"]
+	ctx_w["face_edge_nb"] = fem["nb"]
+	ctx_w["face_edge_home"] = fem["home"]
 	var ms_full: Dictionary
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms_full = {"tex": null, "rects": {}}

@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SATDIAG diag: on (silence: AWECRAFT_SATDIAG=0) | body A/B: press F7 in-game, or start with AWECRAFT_SAT_BODY=0 to hide it | body_off=false period=2.0s band=[500,2000] | send back the file: /tmp/dsh_home/Desktop/AweCraft-satdiag.txt | /home/angrygiant/tools/godot/AweCraft-satdiag.txt
+THREADGEN on threadgen=true cap=2
+THREADMESH on threadmesh=true pool=4
+FCCREBUILD n=1 tex=true rects=33 tiles_so_far=0
+RESULT {"codec":{"bit0_ok":true,"far_bytes":127,"far_ok":true,"v4_ok":true},"cols":45,"fcc_tiles":198,"h_bad_h":0,"h_bad_top":0,"h_mismatch":0,"mat_cmp":45,"mat_pierce_cells":0,"mat_pierce_cols":0,"mat_surf_cells":0,"mat_surf_diff":0,"mat_uplift_cells":3359,"ms":4354,"note":"","ok":true,"seed":44,"slab_cmp":1080,"slab_cmp8":1080,"slab_mismatch":0,"slab_mismatch8":0,"water_slabs":6,"water_slabs8":7,"water_verts":28}
+SATDIAG configure: planet_id=0 seed=44 R=4000 SEA=126 hmax=384 src=res predicate=ResourceLoader.res reason=-

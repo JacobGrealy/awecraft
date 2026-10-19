@@ -696,68 +696,11 @@ using namespace awesm; // the code below consumes sm_*/SmV3/SmT unqualified
 static inline int floordiv(int a, int b);
 
 
-// The 16×16 local-grid Gram inverse (sphere_math.gd _fit_build_gram) — the
-// local positions are identical for every face chunk, so the inverse is a
-// compile-time constant (Cramer's-rule cofactors of the normal matrix,
-// round-trip-verified). Row-major.
-static const double SM_FIT_INV[9] = {
-	0.0001838235294117647, 0, -0.0014705882352941176,
-	0, 0.0001838235294117647, -0.0014705882352941176,
-	-0.0014705882352941176, -0.0014705882352941176, 0.027435661764705882,
-};
-
-static inline bool sm_face_mirror_x(int face) {
-	return (face >= 2 && face <= 5) || (face >= 8 && face <= 9);
-}
-
-// The face 2-11 per-chunk LSQ-AFFINE placement (face_chunk_transform :508)
-// AS-IS — the 256 cell centres of the chunk (home frame, minus (0, R, 0))
-// fit the local (cell) grid by least squares; the local +Y is the radial at
-// the chunk centre; the mirror class enters through the data layout only.
-static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) {
-	bool mirrored = sm_face_mirror_x(face);
-	double u0 = ((double)ccx * 16.0 + 8.0) / 1024.0;
-	double v0 = ((double)ccz * 16.0 + 8.0) / 1024.0;
-	SmV3 Pc = sm_uv_to_world(face, u0, v0, R);
-	SmV3 n = {Pc.x / R, Pc.y / R, Pc.z / R};
-	double s[3][3];
-	for (int i = 0; i < 3; i++)
-		for (int j = 0; j < 3; j++)
-			s[i][j] = 0.0;
-	for (int lx = 0; lx < 16; lx++) {
-		int iu = ccx * 16 + (mirrored ? 15 - lx : lx);
-		double x = (double)lx + 0.5;
-		for (int lz = 0; lz < 16; lz++) {
-			int iv = ccz * 16 + lz;
-			SmV3 w = sm_uv_to_world(face,
-					((double)iu + 0.5) / 1024.0,
-					((double)iv + 0.5) / 1024.0, R);
-			w.y -= R;
-			double y = (double)lz + 0.5;
-			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x;
-			s[1][0] += x * w.y; s[1][1] += y * w.y; s[1][2] += w.y;
-			s[2][0] += x * w.z; s[2][1] += y * w.z; s[2][2] += w.z;
-		}
-	}
-	// co[ci][cj] = (inv * s[ci] row)[cj] — [coef_lx, coef_lz, const]
-	double co[3][3];
-	for (int ci = 0; ci < 3; ci++) {
-		for (int cj = 0; cj < 3; cj++) {
-			double v = 0.0;
-			for (int k = 0; k < 3; k++)
-				v += SM_FIT_INV[cj * 3 + k] * s[ci][k];
-			co[ci][cj] = v;
-		}
-	}
-	SmT t;
-	t.m[0][0] = co[0][0]; t.m[0][1] = co[1][0]; t.m[0][2] = co[2][0];
-	t.m[1][0] = n.x;      t.m[1][1] = n.y;      t.m[1][2] = n.z;
-	t.m[2][0] = co[0][1]; t.m[2][1] = co[1][1]; t.m[2][2] = co[2][1];
-	t.o[0] = co[0][2];
-	t.o[1] = co[1][2];
-	t.o[2] = co[2][2];
-	return t;
-}
+// AC-0433: the face 2-11 LSQ affine (sm_face_chunk_transform + SM_FIT_INV
+// + sm_face_mirror_x) moved to sphere_math_cpp.h -- the mesh-lane seam-V
+// extension (the build_seam_ext face path) consumes the shipped face
+// placement from the same home as the gen lane; the call below uses it
+// via `using namespace awesm` (the AC-0423 pattern for the home math).
 
 // The GLOBAL sphere direction at a flat position (fx, fz) — the CHART (home
 // pair: home_point; faces 2-11: the face uv chart in the face's flat domain,

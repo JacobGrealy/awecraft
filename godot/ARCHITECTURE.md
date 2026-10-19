@@ -1027,7 +1027,16 @@ Match these; do not improvise a different approach in a task.
   neighbour's per-cell edge-column tops from the snap ring; AC-0427: the
   edge column's outward side faces extend with the sliver too — at a height
   step across the seam the extended cliff face lands on the lower ground and
-  closes the under-void, the periodic holes of the AC-0427 report), so the
+  closes the under-void, the periodic holes of the AC-0427 report);
+  AC-0433 armed the SAME extension on the face lane (`build_seam_ext`'s
+  `C.face >= 2` path — the unified dot-product form of these home formulas;
+  the per-edge class comes from `world._face_edge_kind` — only REAL edges
+  extend, the synthetic-solid window/sector edges stay off; K0/K1 are WORLD
+  metres with the per-edge seam-axis scale in `seam_ext_at` (home = 1.0
+  exactly — byte-identical; face = |col| ≈ S or S/2, one face cell per local
+  unit) and the clamp `seam_v_max` = 6.0 (measured worst chasm 5.63 + margin);
+  the home-edge table is per-cell — the seam line crosses the home columns'
+  interiors, so each along cell carries its home column + local offset), so the
   two sheets' top faces OVERLAP across the seam and meet in the fold crease — the user-visible
   detector is the `seamcensus` arm (missing_faces 0 on 393,216 seam rows r4). The GLOBAL frame is the planet frame
   shifted by (0,−R,0) so the +Y pole (flat origin) sits on the global origin and the
@@ -1114,7 +1123,16 @@ Match these; do not improvise a different approach in a task.
   surface-HEIGHT seam (0–1 m vcrack, unchanged band-free; the sphere-domain
   (d, δ) field is continuous across the edge on its own), NOT the placement
   split (crossing-row chasm 2.19 m, corner 3.73 m, bit-identical pre/post
-  band removal); the split's closure is a separate, unfiled concern).
+  band removal); the split's closure is filed as **AC-0433** (the one-world-
+  model unification — `tasks/AC-0433/plan.html`); its first increment armed
+  the seam-V extension on the face lane and fixed `parse_nbs` to accept the
+  RAW compact rings (`_face_home_ring` / `_solid_ring` / `_patch_edge_ring`
+  store the (HEIGHT/16)×256 B ring bare in the nbs dict) that the dict-only
+  check silently DROPPED — pre-fix the face chunk's home edge and every
+  window/absent-neighbour edge read the neighbour as air and emitted a
+  full-height boundary wall (measured at the home/face seam: a 0→186 m side
+  wall, 886 wall verts; post-fix the 0–6 m chasm ledge + the top rows extended
+  past the nominal footprint).
   `_face_stream` (per-frame)
   streams the player's window (sim_dist × 16 m, the per-face half of the
   edge — the along-edge clamp pairs faces 4/6/8/10 with the + half and

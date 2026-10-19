@@ -326,6 +326,19 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _ac0423probe_test()
 			get_tree().quit()
 			return
+		if logic == "ac0433probe":
+			# AC-0433 probe (kept like ac0423probe: the standing instrument
+			# for the unification rounds): SECTION A: the home/face
+			# placement split decomposed into the base-plane split (h = 0,
+			# the standing f_cross/f_seam values) and the frame-LEAN term
+			# h*(n_face - n_home) (each lane extrudes its local +Y = the
+			# radial at its own chunk centre, the AC-0423 V-crack class at
+			# 6x the footprint); SECTION B: the LIVE face-chunk edge rows
+			# at the crossing row (the seam-V extension's armed state on
+			# the face lane, pre/post the AC-0433 face-lane arming).
+			await _ac0433probe_test()
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -36112,3 +36125,470 @@ func _ac0423probe_side(c: Node3D, axis: String, edge: float) -> Dictionary:
 				tv.append(1 if s2.mesh_instance.visible else 0)
 	out["visible_top_slabs"] = tv
 	return out
+
+
+# ---------------------------------------------------------------------------
+# AC-0433 probe (the standing instrument for the one-world-model rounds,
+# kept like ac0423probe): the home/face placement split, decomposed.
+#
+# At a home-edge cell the split is the world offset between the FACE
+# CHART placement (the cell's own LSQ-affine chunk frame) and the HOME
+# NET placement (the same cell's extended home-flat position on its home
+# column's rigid facet). Both frames extrude a local height h along their
+# own local +Y (= the radial at their OWN chunk centre), so by
+# construction (exact, not a fit):
+#     offset(h) = offset(0) + h * (n_face - n_home)
+# i.e. split = the base-plane split (h = 0 — the standing crossface F
+# values f_cross_max 2.19 / f_seam_max 3.73) + a frame-LEAN term linear
+# in the surface height (the AC-0423 V-crack class, ~16 m/R per metre at
+# home, ~49-98 m/R per metre on the face lane). SECTION A measures the
+# decomposition at the F-audit sites + a full-edge scan + the home/home
+# and face/face controls. SECTION B reads the LIVE face-chunk edge rows
+# at the deterministic crossing site (the compact crossface census) —
+# the armed state of the seam-V extension on the face lane.
+# ---------------------------------------------------------------------------
+
+# AC-0433: the face chunk's TOP-face edge-row census (local units). The
+# [min, max, n] of the top-face vertices in each edge band — the nominal
+# footprint is 0/16; the seam-V extension (armed on the face lane since
+# the AC-0433 increment) moves the home-edge row to home_edge_x - E and
+# the opposite rows to 16 + E / - E (E in local cell units). Empty [] =
+# no vertex in the band.
+func _ac0433_face_bands(cf: Node3D, f: int, iv: int) -> Dictionary:
+	var mirr: bool = SphereMath.face_mirror_x(f)
+	var home_edge_x: float = 0.0 if mirr else 16.0  # the home-edge local x
+	var bands: Dictionary = {}
+	for band_name in ["home_edge", "u_seam", "v_seam_s", "v_seam_n"]:
+		bands[band_name] = [1e18, -1e18, 0]
+	# the home-edge SIDE faces (a boundary wall — the home/solid rings are
+	# raw PBAs and parse_nbs drops non-dict entries, so a missing ring
+	# reads the neighbour as air: a full-height wall if it happens).
+	var side_home: Array = [1e18, -1e18, -1e18, 0]  # [xmin, xmax, ymax, n]
+	var ntop := 0
+	var nsl: int = int(cf.slab_n())
+	var tops: Array = []
+	for k in 16:
+		var bx: int = k  # the home-edge row spans local x 0..15 (mirror included)
+		var bz: int = iv & 15
+		var ty := -1
+		for y in range(mini(int(cf.top) + 1, Data.HEIGHT - 1), -1, -1):
+			if cf.get_local(bx, y, bz) != 0:
+				ty = y
+				break
+		tops.append(ty)
+	for si in nsl:
+		var sl = cf.slabs[si]
+		if sl == null or sl.mesh_instance == null or sl.mesh_instance.mesh == null:
+			continue
+		var mesh: ArrayMesh = sl.mesh_instance.mesh
+		if mesh.get_surface_count() == 0:
+			continue
+		var arrs: Array = mesh.surface_get_arrays(0)
+		var vv: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+		var nn: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+		if int(vv.size()) != int(nn.size()):
+			continue
+		for i in vv.size():
+			var v: Vector3 = vv[i]
+			var nw: Vector3 = nn[i]
+			if nw.y <= 0.5:
+				if absf(v.x - home_edge_x) < 0.5:
+					side_home[0] = minf(float(side_home[0]), v.x)
+					side_home[1] = maxf(float(side_home[1]), v.x)
+					side_home[2] = maxf(float(side_home[2]), v.y)
+					side_home[3] += 1
+				continue
+			ntop += 1
+			var e: float
+			for band_name in bands:
+				if band_name == "home_edge":
+					e = v.x
+				elif band_name == "u_seam":
+					e = v.x
+				elif band_name == "v_seam_s":
+					e = v.z
+				else:
+					e = v.z
+				var in_band: bool
+				if band_name == "home_edge":
+					in_band = absf(e - home_edge_x) < 1.0
+				elif band_name == "u_seam":
+					in_band = absf(e - (16.0 - home_edge_x)) < 1.0
+				elif band_name == "v_seam_s":
+					in_band = e < 1.0
+				else:
+					in_band = e > 15.0
+				if in_band:
+					bands[band_name][0] = minf(float(bands[band_name][0]), e)
+					bands[band_name][1] = maxf(float(bands[band_name][1]), e)
+					bands[band_name][2] += 1
+	var bands_out: Dictionary = {}
+	for band_name in bands:
+		var b3: Array = bands[band_name]
+		bands_out[band_name] = [roundf(b3[0] * 1000.0) / 1000.0, roundf(b3[1] * 1000.0) / 1000.0, int(b3[2])] if int(b3[2]) > 0 else []
+	var side_out: Array = [roundf(side_home[0] * 1000.0) / 1000.0, roundf(side_home[1] * 1000.0) / 1000.0, roundf(side_home[2] * 1000.0) / 1000.0, int(side_home[3])] if int(side_home[3]) > 0 else []
+	return {"bands": bands_out, "ntop": ntop, "tops": tops, "home_edge_x": home_edge_x, "side_home": side_out}
+
+func _ac0433_decomp(tf: Transform3D, lf: Vector3, th: Transform3D, lh: Vector3, R: float) -> Dictionary:
+	var nf: Vector3 = tf.basis.y
+	var nh: Vector3 = th.basis.y
+	var ds0: Vector3 = tf * lf - th * lh  # both at local height 0
+	var lean: Vector3 = nf - nh
+	var r: Dictionary = {}
+	r["ds0_m"] = roundf(ds0.length() * 1000.0) / 1000.0
+	r["lean_coeff"] = roundf(lean.length() * 1e6) / 1e6
+	r["arc_sep_m"] = roundf(R * acos(clampf(nf.dot(nh), -1.0, 1.0)) * 1000.0) / 1000.0
+	var chasm: Dictionary = {}
+	for h in [0.0, 50.0, 100.0, 140.0, 168.0, 200.0]:
+		chasm["h%d" % int(h)] = roundf((ds0 + h * lean).length() * 1000.0) / 1000.0
+	r["chasm_m"] = chasm
+	return r
+
+
+func _ac0433probe_test() -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var seed: int = Game.world_seed
+	var out: Dictionary = {"ok": false}
+
+	# --- SECTION A: the placement decomposition (pure SphereMath) ---
+	var ds0_cross_max := 0.0
+	var ds0_corner_max := 0.0
+	var ch168_cross_max := 0.0
+	var ch168_corner_max := 0.0
+	var ch168_full_max := 0.0
+	var site_cross := [0, 0]
+	var site_corner := [0, 0]
+	var site_full := [0, 0]
+	var det_cross: Array = []
+	var det_corner: Array = []
+	var det_full: Array = []
+	var n_sites := 0
+	var per_face: Dictionary = {}
+	for f2 in range(4, 12):
+		var pf: Dictionary = {"ds0_cross_max": 0.0, "ds0_corner_max": 0.0, "ch168_cross_max": 0.0, "ch168_corner_max": 0.0, "ch168_full_max": 0.0, "site_cross": [], "site_corner": [], "site_full": []}
+		var is_x_face: bool = f2 <= 7
+		var ks_cross: Array = []
+		for m in range(-40, 41, 8):
+			ks_cross.append(512 + m)
+		var ks_corner: Array = [2, 32, 62, 100, 924, 962, 1000, 1022]
+		for scan in [0, 1]:
+			var ks: Array = range(0, 1024) if scan == 1 else (ks_cross + ks_corner)
+			for kk in ks:
+				var iu2: int = 1023 if is_x_face else int(kk)
+				var iv2: int = int(kk) if is_x_face else 1023
+				var ccx2: int = iu2 >> 4
+				var ccz2: int = iv2 >> 4
+				var tf: Transform3D = SphereMath.face_chunk_transform(f2, ccx2, ccz2, R)
+				var fh: Vector3 = SphereMath.face_cell_band(f2, iu2, iv2, R)
+				if is_inf(fh.z):
+					continue  # this face does not border the home patch
+				var lxf: float
+				var lzf: float
+				if is_x_face:
+					lxf = float(SphereMath.face_local_x(f2, 1023, 63)) + 0.5
+					lzf = float(iv2 & 15) + 0.5
+				else:
+					# the F audit's exact face point: the mirror-aware local
+					# slot of cell iu2 in its chunk (the z slot is never
+					# mirrored; the home-edge row is the local z = 15 row)
+					lxf = float(SphereMath.face_local_x(f2, iu2, ccx2)) + 0.5
+					lzf = 15.5
+				var hcx: int = int(floorf(fh.x / 16.0))
+				var hcz: int = int(floorf(fh.y / 16.0))
+				var th: Transform3D = SphereMath.column_transform(hcx, hcz, R)
+				var lh: Vector3 = Vector3(fh.x - float(hcx) * 16.0, 0.0, fh.y - float(hcz) * 16.0)
+				var d: Dictionary = _ac0433_decomp(tf, Vector3(lxf, 0.0, lzf), th, lh, R)
+				n_sites += 1
+				var ch168: float = float(d["chasm_m"]["h168"])
+				var tag: Array = [f2, int(kk)]
+				if ch168 > ch168_full_max:
+					ch168_full_max = ch168
+					site_full = tag
+					det_full = [tag, d]
+				if ch168 > float(pf["ch168_full_max"]):
+					pf["ch168_full_max"] = ch168
+					pf["site_full"] = tag
+				if scan == 0:
+					if ks_cross.has(int(kk)):
+						if float(d["ds0_m"]) > ds0_cross_max:
+							ds0_cross_max = float(d["ds0_m"])
+							site_cross = tag
+							det_cross = [tag, d]
+						if ch168 > ch168_cross_max:
+							ch168_cross_max = ch168
+						if float(d["ds0_m"]) > float(pf["ds0_cross_max"]):
+							pf["ds0_cross_max"] = float(d["ds0_m"])
+							pf["site_cross"] = tag
+						if ch168 > float(pf["ch168_cross_max"]):
+							pf["ch168_cross_max"] = ch168
+					elif float(d["ds0_m"]) > ds0_corner_max:
+						ds0_corner_max = float(d["ds0_m"])
+						site_corner = tag
+						det_corner = [tag, d]
+						if ch168 > ch168_corner_max:
+							ch168_corner_max = ch168
+						if float(d["ds0_m"]) > float(pf["ds0_corner_max"]):
+							pf["ds0_corner_max"] = float(d["ds0_m"])
+							pf["site_corner"] = tag
+						if ch168 > float(pf["ch168_corner_max"]):
+							pf["ch168_corner_max"] = ch168
+		per_face["f%d" % f2] = {
+			"ds0_cross_max_m": roundf(float(pf["ds0_cross_max"]) * 1000.0) / 1000.0,
+			"ds0_corner_max_m": roundf(float(pf["ds0_corner_max"]) * 1000.0) / 1000.0,
+			"ch168_cross_max_m": roundf(float(pf["ch168_cross_max"]) * 1000.0) / 1000.0,
+			"ch168_corner_max_m": roundf(float(pf["ch168_corner_max"]) * 1000.0) / 1000.0,
+			"ch168_full_max_m": roundf(float(pf["ch168_full_max"]) * 1000.0) / 1000.0,
+			"site_cross": pf["site_cross"], "site_corner": pf["site_corner"], "site_full": pf["site_full"],
+		}
+	out["section_a"] = {
+		"n_sites": n_sites,
+		"per_face": per_face,
+		"ds0_cross_max_m": roundf(ds0_cross_max * 1000.0) / 1000.0,
+		"ds0_cross_site": site_cross,
+		"ds0_corner_max_m": roundf(ds0_corner_max * 1000.0) / 1000.0,
+		"ds0_corner_site": site_corner,
+		"ch168_cross_max_m": roundf(ch168_cross_max * 1000.0) / 1000.0,
+		"ch168_corner_max_m": roundf(ch168_corner_max * 1000.0) / 1000.0,
+		"ch168_full_max_m": roundf(ch168_full_max * 1000.0) / 1000.0,
+		"ch168_full_site": site_full,
+		"det_cross": det_cross,
+		"det_corner": det_corner,
+		"det_full": det_full,
+	}
+	# the home/home control — the AC-0423 V-crack class at 16 m: the
+	# offset between two adjacent home columns' seam rows at height h
+	# (AC-0423 measured the live gap at 552-558 mm at t ~ 140-146).
+	var home_ctl: Array = []
+	for seam in [[0, 0], [195, 0], [195, 512], [100, 100]]:
+		var c: int = int(seam[0])
+		var zz: int = int(seam[1])
+		var ta: Transform3D = SphereMath.column_transform(c, zz, R)
+		var tb: Transform3D = SphereMath.column_transform(c + 1, zz, R)
+		home_ctl.append(["%d|%d,%d" % [c, c + 1, zz], _ac0433_decomp(ta, Vector3(16.0, 0.0, 8.0), tb, Vector3(0.0, 0.0, 8.0), R)])
+	out["home_control"] = home_ctl
+	# the face/face controls — the same class at the face-chunk footprints
+	# (98 m in u on the x faces, 49 m in v; the roles swap on the z
+	# faces). The mirror class runs local +X against the chart u, so a
+	# chart-east boundary sits at local x = 0 there.
+	var ff_ctl: Array = []
+	for f2 in [4, 5, 6, 8, 10]:
+		var mirrored: bool = SphereMath.face_mirror_x(f2)
+		for b in [63, 32]:
+			var t31: Transform3D = SphereMath.face_chunk_transform(f2, 31, b, R)
+			var t32: Transform3D = SphereMath.face_chunk_transform(f2, 32, b, R)
+			var la: Vector3 = Vector3(0.0, 0.0, 8.0) if mirrored else Vector3(16.0, 0.0, 8.0)
+			var lb: Vector3 = Vector3(16.0, 0.0, 8.0) if mirrored else Vector3(0.0, 0.0, 8.0)
+			ff_ctl.append(["f%d u31|32 b%d" % [f2, b], _ac0433_decomp(t31, la, t32, lb, R)])
+			var tbm: Transform3D = SphereMath.face_chunk_transform(f2, 31, b - 1, R)
+			ff_ctl.append(["f%d v31,b%d|b%d" % [f2, b - 1, b], _ac0433_decomp(tbm, Vector3(8.0, 0.0, 16.0), t31, Vector3(8.0, 0.0, 0.0), R)])
+	out["faceface_control"] = ff_ctl
+
+	# --- SECTION B: the live face-chunk edge rows at the crossing row ---
+	# the site: the compact crossface census (the same deterministic
+	# pure-gen walkability scan the crossface arm uses — corner-side
+	# corridor, dry, build-proven).
+	var zbest := 9999
+	var zbest_step := 99.0
+	for zz2 in range(0, 72, 4):
+		for sgn in [1, -1] if zz2 > 0 else [1]:
+			var z0: int = zz2 * sgn
+			var zc: int = int(floorf(float(z0) / 16.0))
+			var f: int = 4 if z0 >= 0 else 5
+			var iv: int = clampi(int(floorf((float(z0) / hw + (0.0 if f == 4 else 1.0)) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
+			# the same site the crossface arm walks (bx = lx 2 in the
+			# straddler, 3.6 m inside the patch edge; approach west 40 m)
+			var bxc: int = 196 * 16 + 2
+			var htop: int = _crossface_col_top(WorldGen.generate(196, zc, seed), bxc - 196 * 16, int(z0) - zc * 16)
+			if htop <= Data.SEA + 1:
+				continue
+			var hsx: int = bxc - 40
+			var hcx3: int = int(floorf(float(hsx) / 16.0))
+			if _crossface_col_top(WorldGen.generate(hcx3, zc, seed), hsx - hcx3 * 16, int(z0) - zc * 16) <= Data.SEA + 1:
+				continue
+			var hstep_max := 0.0
+			var prev_t: int = htop
+			var walk_ok := true
+			var hcache: Dictionary = {}
+			for sx in range(bxc - 1, bxc - 41, -1):
+				var hcx2: int = int(floorf(float(sx) / 16.0))
+				if not hcache.has(hcx2):
+					hcache[hcx2] = WorldGen.generate(hcx2, zc, seed)
+				var tt: int = _crossface_col_top(hcache[hcx2], sx - hcx2 * 16, int(z0) - zc * 16)
+				if tt < 0:
+					walk_ok = false
+					break
+				hstep_max = maxf(hstep_max, absf(float(tt) - float(prev_t)))
+				if hstep_max > 1.3:
+					walk_ok = false
+				prev_t = tt
+			if not walk_ok:
+				continue
+			var fc: PackedByteArray = WorldGen.generate_face(f, 63, iv >> 4, seed, R)
+			var ftops: Array = []
+			for iu2 in [1023, 1022, 1021, 1020]:
+				var ftop: int = _crossface_face_col_top(fc, f, iu2, iv)
+				if ftop < 0:
+					break
+				ftops.append(ftop)
+			if ftops.size() < 4:
+				continue
+			var seam_step: float = absf(float(ftops[0]) - float(htop))
+			if seam_step > 1.3:
+				continue
+			var fstep_max := 0.0
+			for si in range(3):
+				fstep_max = maxf(fstep_max, absf(float(ftops[si]) - float(ftops[si + 1])))
+			if fstep_max > 1.3:
+				continue
+			var mstep: float = maxf(seam_step, fstep_max)
+			if mstep <= zbest_step:  # ties: the last candidate wins (crossface's rule)
+				zbest_step = mstep
+				zbest = z0
+	var sb: Dictionary = {}
+	if zbest < 9999:
+		var z0: int = zbest
+		var f: int = 4 if z0 >= 0 else 5
+		var iv: int = clampi(int(floorf((float(z0) / hw + (0.0 if f == 4 else 1.0)) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
+		var ccz2: int = iv >> 4
+		var key_f: String = world._key_f(f, 63, ccz2)
+		var zc: int = int(floorf(float(z0) / 16.0))
+		var key_h: String = world._key(196, zc)
+		world.recenter(hw - 40.0, float(z0))
+		# the FACE chunk is the subject (read it as soon as it is meshed);
+		# the home straddler is a best-effort control — give it up to
+		# HOME_WAIT frames after the face build (a jump-band build stall is
+		# itself a finding, reported in the wait hist).
+		var HOME_WAIT: int = 2400
+		var cf: Node3D = null
+		var chh: Node3D = null
+		var wb := 0
+		var face_built_at := -1
+		var hist: Array = []
+		while wb < 9000:
+			cf = world.chunks.get(key_f)
+			chh = world.chunks.get(key_h)
+			var fb: bool = cf != null and not cf.data.is_empty() and bool(cf.mesh_built)
+			var hb: bool = chh != null and not chh.data.is_empty() and bool(chh.mesh_built)
+			if fb and face_built_at < 0:
+				face_built_at = wb
+			if wb % 300 == 0 or (face_built_at >= 0 and wb < face_built_at + HOME_WAIT and wb % 300 == 0):
+				var fst := "absent" if cf == null else ("no_data" if cf.data.is_empty() else ("meshed" if bool(cf.mesh_built) else "not_meshed"))
+				var hst := "absent" if chh == null else ("no_data" if chh.data.is_empty() else ("meshed" if bool(chh.mesh_built) else "not_meshed"))
+				var qh: Variant = world.queued_keys.get(key_h, "nq")
+				var brh: bool = false
+				var pbh: int = -99
+				var miss: Array = []
+				if chh != null and not chh.data.is_empty():
+					brh = world._build_ready(int(chh.cx), int(chh.cz))
+					pbh = world._hslab_best_pending(chh)
+					for nn in [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]:
+						var nck = world._key(int(chh.cx) + int(nn[0]), int(chh.cz) + int(nn[1]))
+						var ncv = world.chunks.get(nck)
+						if ncv == null or ncv.data.is_empty():
+							miss.append(nck)
+				var missv: Variant = []
+				if chh != null and not chh.data.is_empty():
+					missv = miss
+				hist.append([wb, fst, hst, qh, brh, pbh, missv, world._face_in_mesh_window(f, 63, ccz2), world._face_player_flat(), world._face_order.size()])
+			if face_built_at >= 0 and (hb or wb >= face_built_at + HOME_WAIT):
+				break
+			if not fb and wb >= 3600:
+				break  # the face never builds — stop waiting
+			await get_tree().process_frame
+			wb += 1
+		sb["wait_hist"] = hist
+		sb["face_built_at_frame"] = face_built_at
+		var built: bool = face_built_at >= 0
+		sb["site"] = ["z0=%d face=%d iv=%d" % [z0, f, iv], key_f, key_h]
+		sb["census_step_m"] = zbest_step
+		if built:
+			# the node transform vs the predicted placement
+			var tp: Transform3D = SphereMath.face_chunk_transform(f, 63, ccz2, R)
+			sb["xform_delta_mm"] = roundf((cf.transform.origin - tp.origin).length() * 1000.0)
+			# the edge rows: [min_local, max_local, n] of the TOP-face
+			# vertices in the edge band — pre-fix the rows stop at the
+			# nominal 0/16 footprint; the seam-V extension (armed on the
+			# face lane since the AC-0433 increment) moves them past 0/16.
+			var bands_res: Dictionary = _ac0433_face_bands(cf, f, iv)
+			sb["face_built"] = true
+			sb["face_top"] = int(cf.top)
+			sb["face_edge_row_tops"] = bands_res["tops"]
+			sb["n_top_face_verts"] = bands_res["ntop"]
+			sb["face_edge_bands_local"] = bands_res["bands"]
+			# AC-0433: the home-edge extension arms only against the LIVE
+			# home ring, and the ring is a snapshot at face-build time
+			# (the home straddler is normally unbuilt/un-generated then —
+			# no re-bake hook exists for home data landing later, a
+			# documented finding). Once the straddler's DATA has landed,
+			# re-bake the face chunk and re-read: every real edge must
+			# cross the nominal footprint (u/v seams from the initial
+			# build already — their rings are face-chunk rings).
+			var reb: Dictionary = {}
+			var dw := 0
+			while ((chh == null or chh.data.is_empty()) and dw < 600):
+				await get_tree().process_frame
+				dw += 1
+				chh = world.chunks.get(key_h)
+			if chh != null and not chh.data.is_empty():
+				cf.build_mesh_face({})
+				await get_tree().process_frame
+				reb = _ac0433_face_bands(cf, f, iv)
+				reb["home_data_present"] = true
+				reb["home_mesh_built"] = bool(chh.mesh_built)
+				reb["drain_frames"] = dw
+			else:
+				reb["home_data_present"] = false
+			sb["face_edge_bands_rebake"] = reb
+			# the home straddler control: its top face at the patch edge
+			# (local x ~5.6 for the +X edge) and its armed east-edge
+			# extension (local x > 16).
+			var txh: Transform3D = chh.transform
+			var home_bands: Dictionary = {"at_edge": [1e18, -1e18, 0], "east_ext": [1e18, -1e18, 0]}
+			for si in int(chh.slab_n()):
+				var sl = chh.slabs[si]
+				if sl == null or sl.mesh_instance == null or sl.mesh_instance.mesh == null:
+					continue
+				var mesh: ArrayMesh = sl.mesh_instance.mesh
+				if mesh.get_surface_count() == 0:
+					continue
+				var arrs: Array = mesh.surface_get_arrays(0)
+				var vv: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
+				var nn: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
+				if int(vv.size()) != int(nn.size()):
+					continue
+				for i in vv.size():
+					var v: Vector3 = vv[i]
+					if nn[i].y <= 0.5:
+						continue
+					if v.x > 4.0 and v.x < 7.0:
+						home_bands["at_edge"][0] = minf(float(home_bands["at_edge"][0]), v.x)
+						home_bands["at_edge"][1] = maxf(float(home_bands["at_edge"][1]), v.x)
+						home_bands["at_edge"][2] += 1
+					elif v.x > 15.9:
+						home_bands["east_ext"][0] = minf(float(home_bands["east_ext"][0]), v.x)
+						home_bands["east_ext"][1] = maxf(float(home_bands["east_ext"][1]), v.x)
+						home_bands["east_ext"][2] += 1
+			var home_out: Dictionary = {}
+			for bn in home_bands:
+				var b3: Array = home_bands[bn]
+				home_out[bn] = [roundf(b3[0] * 1000.0) / 1000.0, roundf(b3[1] * 1000.0) / 1000.0, int(b3[2])] if int(b3[2]) > 0 else []
+			sb["home_top"] = int(chh.top)
+			sb["home_edge_bands_local"] = home_out
+		else:
+			sb["face_built"] = false
+			sb["wait_frames"] = wb
+			sb["face_chunk_state"] = "absent" if cf == null else ("no_data" if cf.data.is_empty() else "not_meshed")
+			sb["home_chunk_state"] = "absent" if chh == null else ("no_data" if chh.data.is_empty() else "not_meshed")
+			var nf_res := 0
+			for kk2 in world.chunks:
+				if String(kk2).begins_with("%d:" % f):
+					nf_res += 1
+			sb["face_chunks_resident"] = nf_res
+	else:
+		sb["site"] = "no_dry_walkable_site"
+	out["section_b"] = sb
+	out["ok"] = true
+	out["ms"] = Time.get_ticks_msec() - t0
+	Debug.result({"ac0433probe": out})

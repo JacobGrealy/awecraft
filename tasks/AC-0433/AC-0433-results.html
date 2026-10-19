@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0433 — results (run 1: hypothesis measured + face-lane seam-V increment)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-word}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.ok{background:#e9f7e9;border-left:4px solid #2e8b57;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.red{background:#fdeaea;border-left:4px solid #c0392b;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.note{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.small{font-size:12px;color:#555}</style></head><body>
+<h1>AC-0433 — results (run 1: hypothesis measured + one increment landed)</h1>
+<p class="meta">2026-10-19 · subagent · engine 4.7.1.stable.official.a13da4feb · headless · seed = <code>Game.world_seed</code> (the live world) · <b>this run = the FIRST INCREMENT ONLY</b> (not the unification) — plan in <code>tasks/AC-0433/plan.html</code></p>
+
+<h2>Verdict</h2>
+<div class="ok"><b>MEASURED + ONE INCREMENT LANDED + PROVEN.</b> (1) The ticket's hypothesis
+(the 2.19/3.73 m seam splits are "frame-lean") is <b>refuted as literally stated</b>:
+both are h = 0 <b>BASE</b> splits (the frames agree at ground level to ~1 mm — the
+home/home and face/face controls measure lean as a pure per-metre coefficient and
+zero base); the lean is additive on top (footprint/R per metre — §1). (2) The live
+defect is <b>10 of 12 faces</b>, not the ticket's 11: faces 2–11 build through the
+sync-only <code>build_mesh_face</code>, whose build ctx carries <b>no</b> seam-V arming
+(the worker-lane ctx template comment at <code>world.gd:3889</code> says in writing the
+face sync path "keeps no key") — every edge band on the measured face chunk sat
+exactly at the nominal 0/16 footprint. (3) The increment arms the SAME seam-V
+extension on the face lane (unified dot-product form of the four home formulas,
+world-metre K tables, per-edge seam-axis scale, per-edge class from
+<code>_face_edge_kind</code> — synthetic-solid edges stay off) and fixes a second live
+defect found along the way: <code>parse_nbs</code> silently DROPPED the raw compact
+rings the GDScript side stores bare, so the face chunk's home edge and every
+window/absent-neighbour edge read the neighbour as air and emitted a <b>full-height
+boundary wall</b> — measured at the home/face seam: a 0→186 m side wall, 886 wall
+verts pre-fix; a 0–6 m chasm ledge post-fix. All standing gates hold: genhash 25/25
+bit-identical (the mesh-only change did NOT move generation), ac0423probe
+home-lane byte-identical (pristine-HEAD A/B), meshprobe match_rate 1.0, farab green,
+boundary r4 green.</div>
+
+<h2>1 — the measured hypothesis (probe r5, deterministic — section A, seed <code>Game.world_seed</code>)</h2>
+<table>
+<tr><th>quantity</th><th>measured</th><th>site</th><th>cross-check</th></tr>
+<tr><td>home/home control (ds0)</td><td><b>0.002 m base</b>, lean 0.004 = 16/4000</td><td>home pair seam</td><td>chasm(140) = 558 mm — the AC-0423 standing 552–558 mm</td></tr>
+<tr><td>face/face control (ds0)</td><td><b>≈1 mm base</b> (pure lean)</td><td>face 4 v 31|32</td><td>u-seam lean 0.02454 = 98.16/4000 (→ 4.13 m @ ch168); v-seam lean 0.01227 = 49.08/4000 (→ 2.06 m)</td></tr>
+<tr><td>face↔home crossing (ds0)</td><td><b>2.704 m BASE</b> + lean</td><td>face 4, iv 536</td><td>AC-0425 "crossing net split 2.7037"</td></tr>
+<tr><td>face↔home corner (ds0)</td><td><b>3.732 m BASE</b> + lean</td><td>face 4, iv 1000</td><td>standing <code>f_seam_max</code> 3.732444</td></tr>
+<tr><td>worst full offset (ch168)</td><td>5.631 m</td><td>face 4, iv 979</td><td>the <code>seam_v_max</code> = 6.0 margin target</td></tr>
+</table>
+<p>Identity (exact): <code>offset(h) = offset(0) + h·(n_face − n_home)</code>. The 2.19/3.73
+numbers the ticket cited are the h = 0 crossing/corner base splits — a placement
+residual (net-vs-chart, the AC-0307/AC-0308 property), not a lean. The user waived
+compatibility in writing: save re-keying + genhash re-basing acceptable; <b>the
+increment is mesh-only, so genhash must NOT move — it did not</b> (§4).</p>
+
+<h2>2 — the increment (what landed)</h2>
+<table>
+<tr><th>piece</th><th>where</th><th>what</th></tr>
+<tr><td>shared face placement</td><td><code>gdext/src/sphere_math_cpp.h</code> / <code>gen.cpp</code></td><td><code>sm_face_chunk_transform</code> + <code>SM_FIT_INV</code> + <code>sm_face_mirror_x</code> moved verbatim into <code>namespace awesm</code> (the AC-0423 pattern — the mesh lane and gen lane consume ONE copy); a NOTE records that the face in-plane basis columns are SCALED (|col| ≈ S or S/2) and the home-edge local x-axis is not world-x (dot products required). gen.cpp keeps using it via <code>using namespace awesm</code> — genhash 25/25 proves the move is bit-exact.</td></tr>
+<tr><td>face-lane extension</td><td><code>gdext/src/mesh.cpp</code> <code>build_seam_ext</code></td><td>the <code>C.face >= 2</code> path: the unified dot-product form of the four home K formulas (east <code>o − 16L + la·cA + i(cG − gTo) + tn·cY</code>; west its negation; N/S analogous) — verified by hand term-for-term; K0/K1 in WORLD metres; per-edge <code>scale[k] = |col(To,a)|</code> (home = 1.0 exactly → <code>/1.0</code> exact → home byte-identical); <code>seam_ext_at</code> clamps to <code>seam_v_max</code> (face ctx sets 6.0 = worst chasm 5.63 + margin) then divides by scale; the home-edge table is PER-CELL (the seam line crosses home columns' interiors — each along cell carries [hcx, hcz, lx, lz] via <code>face_edge_home</code>; same-face edges one <code>sm_face_chunk_transform</code> each via <code>face_edge_nb</code>); per-edge class 0/1/2 from <code>face_edge_class</code> — class 0 (synthetic-solid window/sector) never extends (the terrain across is another face's — extending would z-fight). The shared per-cell neighbour-top read moved into the <code>ring_top</code> lambda (verbatim — both lanes use it).</td></tr>
+<tr><td>ctx</td><td><code>mesh.cpp</code> <code>Ctx</code>/<code>parse_ctx</code>, <code>godot/world/chunk.gd</code> <code>build_mesh_face</code></td><td>new keys (absent = home defaults): <code>face</code>, <code>seam_v_max</code>, <code>face_edge_class</code> [4], <code>face_edge_nb</code> [8], <code>face_edge_home</code> [64] (plain Arrays — hcx/hcz can be negative); the face ctx sets <code>sphere_r = Game.planet_R</code> (the one-line arming AC-0425 flagged as "mathematically wrong on the face lane" — now it is right, because the face path exists).</td></tr>
+<tr><td>edge classification</td><td><code>godot/world/world.gd</code></td><td><code>_face_edge_kind(face, ccx, ccz, dx, dz)</code> — ONE source of truth for mirror/home-edge/neighbour-residency (moved from <code>_face_rings</code>, which now consumes it — rings unchanged: same PBAs, same dicts, same keys); <code>_face_edge_meta(c)</code> builds the three ctx arrays (dirs in C++ k order [−x, +x, −z, +z]; the home array mirrors <code>_face_home_ring</code>'s resampling so the K tables and the ring agree on the surface).</td></tr>
+<tr><td><b>the ring fix</b> (finding → fix)</td><td><code>mesh.cpp</code> <code>parse_nbs</code></td><td>the dict-only check <code>continue</code>d on the raw compact rings (<code>_face_home_ring</code> / <code>_solid_ring</code> on the face lane, <code>_home_face_ring</code> / <code>_solid_ring</code> via <code>_patch_edge_ring</code> on the home lane store the (HEIGHT/16)×256 B PBA bare in the nbs dict) → the neighbour read as air at every height → <b>full-height boundary walls</b> at the home/face seam (both sides), every face-chunk window edge and every absent same-face neighbour. A raw PBA is now treated as <code>{"d": v}</code> (the compact shape, no fluid row).</td></tr>
+<tr><td>the standing instrument</td><td><code>godot/scenes/harness.gd</code></td><td><code>ac0433probe</code> arm KEPT as a standing probe (the ac0423probe precedent — committed, no <code>harness_data.yaml</code> row for probe-class arms): section A = the deterministic offset decomposition (12 faces × ds0/ch168 crossing/corner/full + the home &amp; face/face controls); section B = the LIVE face site (z0 = 68, face 4, the chunk "4:63:1" + its home straddler "196,4"): edge-band census (top-face rows per edge: [min, max, n] local units), the seam-row tops, a SIDE-face wall census, and a POST-REBAKE re-read (once the home straddler holds data, the face chunk is re-baked and the bands re-read — the home-edge extension arms only against the live ring; §5 finding).</td></tr>
+</table>
+
+<h2>3 — before/after at the live face site (z0 = 68, face 4, chunk "4:63:1"; local units, x = u at 6.135 m/cell, z = v at 3.068 m/cell)</h2>
+<table>
+<tr><th>edge band (top-face rows)</th><th>pre-fix (r7 A/B, old .so)</th><th>post-fix initial build (r6, ring = state at build frame)</th><th>post-fix re-bake (r6, all rings live)</th></tr>
+<tr><td>home_edge (x 0)</td><td>[0.0, 0.0] nominal</td><td>[0.0, 0.0] — home ring = AIR at build frame (the straddler's data lands later; §5 finding)</td><td><b>[−0.47, −0.008] ≈ 2.9–0.05 m past the footprint</b></td></tr>
+<tr><td>u_seam (x 16)</td><td>[16.0, 16.0] nominal</td><td>[16.0, 16.0] — (62,1) not yet generated at build frame</td><td><b>[16.716, 16.753] ≈ 4.4–4.6 m past</b> (lean 0.0175·184 + K0)</td></tr>
+<tr><td>v_seam_n (z 16)</td><td>[16.0, 16.0] nominal</td><td>[16.0, 16.0] — (63,2) not yet generated</td><td><b>[16.555, 16.898] ≈ 1.7–2.8 m past</b> (v lean 0.0123·184 ≈ 2.3 m)</td></tr>
+<tr><td>v_seam_s (z 0)</td><td>[0.0, 0.0] nominal</td><td><b>[−0.934, −0.571] ≈ 2.9–1.8 m past</b> — (63,0) was resident at build frame</td><td>[−0.934, −0.571] (unchanged — that ring never changed)</td></tr>
+<tr><td><b>home-edge SIDE faces (the wall)</b></td><td><b>[0.0, 0.0, ymax 186.0, n 886] — a full 0→186 m boundary wall</b></td><td>—</td><td><b>[−0.47, 0.0, ymax 186.0, n 390] — the 0–6 m chasm ledge</b> (ymax = the seam-row top, face_top 188; the −0.47 verts = the AC-0427 extended side-face corners)</td></tr>
+<tr><td>top-face vertex count</td><td>1632</td><td>1672</td><td>1664</td></tr>
+</table>
+<p>The initial-build pattern is the streaming state itself: at build frame only the
+(63,0) ring was live, so only v_seam_s extended; the re-bake (48 face chunks
+resident, the straddler holding data) extends every real edge. Same site, same data
+(genhash green) — the extension tracks the rings, exactly as the home lane does.</p>
+
+<h2>4 — gates (all RC = 0 + zero SCRIPT/SHADER ERROR via <code>gate_census.py</code>; logs in <code>tasks/AC-0433/captures/</code>)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>note</th></tr>
+<tr><td>G0 (headless boot)</td><td class="ok">rc 0, 0/0</td><td><code>captures/g0-r4.log</code> (final, on the exact current tree) + <code>g0-r3.log</code> (post code edits)</td></tr>
+<tr><td>PROBE <code>ac0433probe</code> r6 (post-fix)</td><td class="ok">green</td><td>section A = r5 byte-values (deterministic: f4 2.704/3.732/5.631); section B as §3</td></tr>
+<tr><td>PROBE A/B (pre-fix .so + pre-fix chunk.gd, same harness)</td><td class="ok">green</td><td><code>probe-r7-prefix.log</code> — the wall + nominal bands (the §3 left column)</td></tr>
+<tr><td>genhash 25/25</td><td class="ok">25/25 bit-identical</td><td>vs <code>.scratch/HEAVY-r22/genhash.log</code> (the current reference — the <code>AC-0367</code> log is STALE, 0/25 is the known trap, AC-0450 docs it); GENMS 128. <b>Mesh-only change did not move generation.</b></td></tr>
+<tr><td><code>ac0423probe</code> (home-lane regression)</td><td class="ok">home lane unchanged</td><td>running A/B: pristine-HEAD .so ≡ increment .so, <b>every census field byte-identical</b>; standing contract to the millimetre (ext_overlap 654/752/660/662/758/848/800/1290/1290 mm, ext_edge 16.88/0.33 class, gaps); the OLD baseline's fine-grained counts (n_side/n_ext) drift — pre-existing between AC-0423-era and current tree, identical with or without this increment (§5)</td></tr>
+<tr><td>SMOKE <code>meshprobe</code></td><td class="ok">match_rate 1.0</td><td>1878/1878 arrays, 32 chunks, mismatch [] — the C++ lane is still bit-equal to the GDScript reference with the face path in the build</td></tr>
+<tr><td>SMOKE <code>seamcensus</code> r4</td><td class="red">red — <b>PRE-EXISTING</b>, not this increment</td><td>ok false, fixture self-check 32/44 — <b>byte-identical to the AC-0430-era run</b> (same 12 missing fixture faces; AC-0430's results doc it: the AC-0427 extension vs the AC-0423-rebased census, "a finding, not a re-baseline", owed to AC-0427's closeout). My increment is provably neutral: the fixture output is bit-identical pre/post on this tree. Coordinator: the arm needs its rebaseline ticket.</td></tr>
+<tr><td>far-tier <code>farab</code></td><td class="ok">ok true</td><td>bit0/far/v4 ok, h_mismatch 0, slab_mismatch 0/1080, mat_pierce 0</td></tr>
+<tr><td><code>boundary</code> r4</td><td class="ok">ok true</td><td>crossings 20/20, marker/remesh ok, walk p50 13 / p95 35, footprint missing 0, col_deferred_in_footprint 0, holder_residue 0, built_final 68 = the AC-0445 value; the walk streams the face window (resident 93) so the refactored <code>_face_rings</code> runs in-gate</td></tr>
+</table>
+<p class="small">HEAVY set (crossface 20-min arm, the full standing battery, the Windows build) = the coordinator's. Render not done this round (geometry is mesh-only; the wall/extension are read from the landed mesh in the probe — no renderer needed).</p>
+
+<h2>5 — findings (for the record)</h2>
+<table>
+<tr><th>#</th><th>finding</th></tr>
+<tr><td>F1</td><td><b>The "11 faces" is 10 of 12.</b> The home pair (0/1) already extends (AC-0423, worker-lane ctx). Faces 2–11 all build through the sync-only <code>build_mesh_face</code>, which armed nothing — 10 faces, not 11. (The ticket's 11 probably counted a face whose edge band happened to read extended by its ring state — impossible pre-fix: the face path didn't exist.)</td></tr>
+<tr><td>F2</td><td><b>The raw-ring drop was a live wall.</b> <code>parse_nbs</code> dict-only check (pre-AC-0433) silently dropped every bare PBA ring — face home edges, face window/sector/absent edges, AND the home-lane past-patch edges (<code>_patch_edge_ring</code> stores PBAs too) — so the neighbour read as air and the build emitted full-height boundary walls. Measured at the home/face seam: 0→186 m, 886 wall verts. Fixed in <code>parse_nbs</code> (one branch); the home-lane past-patch edges are fixed by the same branch (their walls pointed face-ward — behind the landing row — invisible to the crossface walk, which is why the arm never caught it).</td></tr>
+<tr><td>F3</td><td><b>The home-edge extension is ring-state-gated (the face re-bake gap).</b> A face chunk's home ring is a snapshot at face-build time; the home straddler's data normally lands AFTER the face build (this run: straddler queued "build" from frame 300, still unbuilt at 2400 — the documented jump-band stall, §F4). Built against an air ring, the home edge extends nothing (measured: r6 initial [0,0]). There is no re-bake hook for home data landing later — the "act requires tn ≥ 0" contract. Closing the ordering = P0.5/P2 of the plan (the re-bake read in the probe shows the mechanism works once the ring is live: [−0.47, −0.008]).</td></tr>
+<tr><td>F4</td><td><b>The jump-band straddler stall (probe artifact, live-mechanism open).</b> Home straddler (196,4) holds DATA (gen ok) but its MESH dispatch is gated by the 8-neighbour <code>_build_ready</code> on past-patch chunks (197,3..5) that never hold data (AC-0309 D2). It stays "build"-queued forever in the headless probe. How it passes in the live game remains open (the crossface C4 proves the 196 sliver builds there). Not this round's blocker; note for P0.5.</td></tr>
+<tr><td>F5</td><td><b>ac0423probe fine-grained census drift is pre-existing.</b> The old baseline (probe-r10, AC-0423 era) differs from BOTH pristine-HEAD and increment runs in the n_side/n_ext counts (e.g. x16_z0.a 38→0 side verts) while the standing contract (overlap/ext/gap) is identical in all three. Intermediate tickets (AC-0335 dispatch gate, streaming changes) shifted the tick/streaming state the census captures; the arm's fine counts are not a byte contract across eras — its overlap/ext_edge min-max are. No action owed by this ticket.</td></tr>
+<tr><td>F6</td><td><b>seamcensus r4 is a broken instrument since the AC-0430 era</b> (fixture 32/44, 1,910 pre-existing missing — documented in AC-0430's results as the AC-0427 extension vs the AC-0423-rebased census; the rebaseline was fenced to AC-0427's closeout and never landed). It is red on the pristine tree and on the increment tree identically. Owed: an arm-repair/rebaseline ticket (coordinator's queue).</td></tr>
+<tr><td>F7</td><td><b>Environment (machine, not code).</b> <code>python3 -m SCons</code> was broken on this box (no module, PEP 668, no ensurepip); fixed with <code>pip3 install --target .scratch/scons-target scons</code> (SCons 4.11.1, git-ignored scratch) — build command <code>PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext platform=linux target=template_release</code> + <code>cp gdext/bin/libchunkio.so godot/bin/libchunkio.so</code>. Candidate for <code>godot/OPS.md</code> harvest at closeout.</td></tr>
+</table>
+
+<h2>6 — files (every one named)</h2>
+<p><b>Modified (tracked):</b>
+<code>gdext/src/sphere_math_cpp.h</code> (the three face-placement defs moved into <code>namespace awesm</code> + the scaled-basis NOTE) ·
+<code>gdext/src/gen.cpp</code> (the defs removed, move-note left; the one usage via <code>using namespace awesm</code>) ·
+<code>gdext/src/mesh.cpp</code> (Ctx fields + <code>copy_ints</code> + parse; <code>SeamExt.scale/max_v</code>; <code>seam_ext_at</code>; <code>build_seam_ext</code> face path + shared <code>ring_top</code>; <code>parse_nbs</code> raw-PBA branch) ·
+<code>godot/world/world.gd</code> (<code>_face_edge_kind</code>; <code>_face_rings</code> refactored to consume it; <code>_face_edge_meta</code>) ·
+<code>godot/world/chunk.gd</code> (<code>build_mesh_face</code> ctx: sphere_r/face/seam_v_max/face_edge_*) ·
+<code>godot/scenes/harness.gd</code> (<code>ac0433probe</code> arm kept standing + <code>_ac0433_face_bands</code> helper + the post-rebake read) ·
+<code>godot/ARCHITECTURE.md</code> (placement bullet: the face-lane arming; cross-face bullet: the unfiled-concern note → filed, the ring drop + measured wall) ·
+<code>godot/bin/libchunkio.so</code> (build output, copied from <code>gdext/bin/libchunkio.so</code>, 1,712,336 bytes)</p>
+<p><b>New (ticket):</b>
+<code>tasks/AC-0433/plan.html</code> (this run) ·
+<code>tasks/AC-0433/AC-0433-results.html</code> (this page) ·
+<code>tasks/AC-0433/continuity.md</code> (run-1 entry appended) ·
+<code>tasks/AC-0433/captures/</code>: <code>probe-r5.log</code>, <code>probe-r6.log</code>, <code>probe-r7-prefix.log</code> (the A/B pre-fix), <code>ac0423probe-r1.log</code>, <code>ac0423probe-pristine.log</code>, <code>genhash-r1.log</code>, <code>genhash-ref2.txt</code> (HEAVY-r22 reference), <code>meshprobe-r1.log</code>, <code>seamcensus-r4.log</code>, <code>farab-r1.log</code>, <code>boundary-r4.log</code>, <code>g0-r3.log</code>, <code>g0-r4.log</code>, <code>results.json</code> (all RESULT dicts)</p>
+<p><b>Scratch (git-ignored, not staged):</b>
+<code>.scratch/AC-0433/</code> (g0-r1..r3, probe-r1..r5, probe-r6, probe-r7-prefix, scons-r1..r4 + the two pre-fix builds, genhash-r1 + ref files, ac0423probe-r1/r2/pristine, meshprobe-r1, seamcensus-r4, farab-r1, boundary-r4) and
+<code>.scratch/scons-target/</code> (the SCons install — F7).</p>
+
+<h2>7 — next run (run 2 guidance)</h2>
+<p><b>P1 (design stage):</b> the plan's §3 P1 — the unified per-chunk placement as the single source
+(the home pair through <code>face_chunk_transform</code>'s face 0/1, or the inverse: stop mirroring the
+transform per lane; the K-table machinery this increment landed is the consumer that makes the
+rest mechanical). <b>P0.5 (owed first):</b> the face re-bake ordering gap (F3) + the straddler
+stall (F4) — the home-edge extension is only as good as the ring at build time; options: a
+home-landing re-bake hook for the ccx-63/ccz-63 face chunks, or a dispatch-order fix so the
+straddler's data lands before the adjacent face chunk builds. Also owed (F6): the seamcensus
+rebaseline ticket. Exit after this increment's gates; the heavy set (crossface) is the
+coordinator's.</p>
+</body></html>
