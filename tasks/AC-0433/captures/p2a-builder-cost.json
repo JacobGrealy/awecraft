@@ -1,0 +1,12 @@
+{
+  "source": "tasks/scripts/builder_stats.py --json",
+  "session": "888781b8-1622-4a26-9903-dfad8db4d121",
+  "depth": 1,
+  "created_at": 1792439779790,
+  "wall_s": 1570.55,
+  "steps": 37,
+  "out_tokens": 48881,
+  "in_tokens": 97353,
+  "scope": "AC-0433 P2a dormant canonical grid/conversion API + standalone probe",
+  "note": "Second medium run under the coordinator-plans flow. One run is not a trend; the structural numbers to watch are steps (37) and output tokens (48,881)."
+}

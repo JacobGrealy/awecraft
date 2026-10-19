@@ -988,6 +988,17 @@ canonical ownership, and a staged consumer/save migration. Sampled equal-height 
 inverse validation passed (AC-0433 P1); production mesh/collision/streaming validation remains
 pending. The implemented grid and placement below stay unchanged until their migration gates pass.
 
+**Dormant, no callers — AC-0433 P2a:** the pure canonical grid/conversion API of the design
+above has landed in `core/planet_grid.gd` (class `PlanetGrid`, extends RefCounted, pure statics
+on the shipped `SphereMath` — preloaded by path, never transcribed): `grid_shape`, `vertex_key`,
+`vertex_to_world`, `cell_to_world`, `world_to_cell`, `address_key`. It implements the one
+radius-derived grid rule (H = face_width(R)/2, N = 16·ceil(H/16); faces 4–7 = (2N,N), others
+(N,2N)) and the shared-vertex radial embedding (canonical integer cube-lattice vertex Q, owning
+chart = the shipped `face_for_dir` tie order on the raw Q, P(h) = (R+h)·n − (0,R,0)). DORMANT:
+zero production callers, no runtime key, save, native or shader change; `address_key` defines
+cell identity only and is NOT an activated save format. Neighbour traversal and key storage are
+the next bounded units. Evidence: tasks/AC-0433/AC-0433-results.html (P2a).
+
 - **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
   12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell
   `CELLS_PER_FACE` grid per face; the non-home faces are sparse data-level chunks).

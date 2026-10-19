@@ -177,3 +177,65 @@
 - Independent rerun: p1-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0; complete RESULT equals builder RESULT excluding ms. This proves sampled mapping algebra, NOT equality to old rigid placement or production mesh/collision/playability.
 - Scoreboard: builder_stats.py session 98307275-2a95-4c9b-9214-a9eb8e8cb4a0: 32 steps, 80,990 output tokens, 2783.357 seconds (46.4 minutes). One run is not a trend; cancelled launch excluded. Recorded in captures/p1-builder-cost.json.
 - Coordinator chose/wrote design and anchored contract; medium only implemented the probe. No runtime change; no Windows rebuild owed. Parent AC-0433 stays in-progress. Next: coordinator writes bounded P2a canonical-API contract, then medium implementation.
+
+## RUN — Mon Oct 19 15:57:34 EDT 2026 — AC-0433 (P2a canonical API implementation, medium)
+- Implementing plan.html as written: dormant PlanetGrid API (godot/core/planet_grid.gd) + standalone p2a_probe.gd. Gates: gate_run g0,smoke,ac0423probe; p2a probe; p1 regression.
+- LANDED (P2a forward/inverse — the dormant canonical API per plan.html, no design decisions made):
+  - godot/core/planet_grid.gd (NEW): class_name PlanetGrid extends RefCounted; const SM =
+    preload("res://core/sphere_math.gd") by path (no class-cache dependency), CHUNK_WIDTH=16, no
+    mutable state. Six public statics: grid_shape(face,R)->Vector2i (N=16*ceil(face_width(R)/2/16);
+    faces 4-7 (2N,N), others (N,2N); invalid face/R -> ZERO); vertex_key(face,i,j,R)->Vector3i
+    (P1 _vertex_q exact integer formulas verbatim, closed domain 0..Nu/0..Nv, invalid ->
+    Vector3i.ZERO); vertex_to_world(face,i,j,h,R)->Vector3 (owner = face_for_dir on raw Q,
+    P1 _canon_uv affine inverse on Q/N, n=uv_to_world(owner,u,v,R).normalized(), P=(R+h)n-(0,R,0);
+    invalid -> (INF,INF,INF)); cell_to_world(face,i,j,k,local,R)->Vector3 (half-open cell domain,
+    local in [0,1] finite, h=k+local.y, both-integer gx/gz routed through vertex_to_world so shared
+    cell corners agree bitwise, else direct chart mapping; chart-index order, no mirror reversal);
+    world_to_cell(pos,R)->Dictionary (+origin shift (0,R,0), h=len-R, shipped world_to_face tie
+    order, clamp u/v, floor cells, local remainder; invalid/planet-centre len<=1e-6 -> {valid:false});
+    address_key(face,i,j,k,R)->String "%d:%d:%d:%d" ("" invalid; identity only, NOT a save format).
+    No production callers anywhere (grep-verified below in the GATES scope note).
+  - tasks/AC-0433/p2a_probe.gd (NEW): standalone SceneTree, const GRID=preload(res://core/planet_grid.gd);
+    P1 _shape/_vertex_q/_incident_charts copied verbatim as the test site construction; grid fixtures
+    (1000/4000/8000), 380 cube-edge groups (t=k/32) + 84 sector-midline samples, adjacent-cell/corner
+    exactness all faces h140, 576+192 inverse round trips, negative + identity controls, 30 invalid-
+    input sentinel cases; one RESULT line, exit 1 on any fail.
+  - docs/ac0433-unified-model.html: status note (P2a forward/inverse landed dormant; neighbours/key
+    storage/migration pending; no redesign) + the §5 P2a row annotated.
+  - godot/ARCHITECTURE.md §6: new "Dormant, no callers — AC-0433 P2a" paragraph (API surface + frame
+    rule + dormancy; legacy bullets below untouched).
+  - No .uid generated for planet_grid.gd (headless --script runs do not run the editor import scan).
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home, ulimit -v 8388608):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600`:
+    g0-r4 rc=0 script=0 shader=0; smoke arms player/interact/light/fluids/genhash all rc=0 script=0
+    shader=0 ok=true; genhash 25/25 byte-identical to the prior references; ac0423probe-r4 rc=0
+    script=0 shader=0, full RESULT dict byte-identical to tasks/AC-0433/captures/ac0423probe-r2.log
+    excluding ms (5574 vs 5515), nine overlaps exactly 654/752/660/662/758/848/800/1290/1290 mm.
+  - P2a standalone (final): pgrep-free check, timeout 120, --script absolute p2a_probe.gd ->
+    .scratch/AC-0433-gates/p2a-probe.log: rc=0, gate_census 0/0, RESULT ok=true — api_cases=2916,
+    shared_key_mismatches=0, shared_position_max_m=0.0 (380 edge groups + 84 midline samples,
+    h=0/140/168, every incident chart), direct_error_max_m=0.0 (<= 0.001), inverse_cases=768
+    (576 main + 192 negative-k) max 0.000598 m (<= 0.002), ownership_mismatches=0, invalid_cases=30
+    invalid_failures=0, negative_detected=true (gap 0.792551 m), radius_short_counts [800, 3152,
+    6288], slots 931416. Draft r1 (test-side shape-class expectation bug, faces 5/6/7) kept as
+    p2a-probe-r1.log — its 9 HONEST DEVIATION lines were the probe's own expectations, not the API.
+  - P1 regression (unchanged p1_probe.gd): .scratch/AC-0433-gates/p1-regression-p2a.log rc=0,
+    census 0/0, RESULT identical to captures/p1-probe.log excluding ms (312 vs 313).
+  - Scope: git status — my changes = godot/core/planet_grid.gd (new), p2a_probe.gd (new),
+    p2a-deviations.txt (new), AC-0433-results.html (P2a report + P0/P0.5/P1 history preserved,
+    pre-P2a backup at .scratch/AC-0433-gates/AC-0433-results-p1.html), continuity.md,
+    docs/ac0433-unified-model.html, godot/ARCHITECTURE.md. plan.html modified = the coordinator's
+    uncommitted P2a contract (session start, untouched); references/ untracked = pre-existing,
+    untouched. Grep: no file in godot/ (other than the new module) references PlanetGrid — the API
+    is dormant as contracted. No render owed (no visual change).
+- OUTCOME: **P2a forward/inverse LANDED DORMANT.** The reusable canonical address/placement API
+  passes every plan §3 test; the legacy runtime is provably unchanged (ac0423probe RESULT
+  byte-identical, genhash 25/25, P1 reference unshifted). Neighbour traversal and key storage are
+  explicitly NOT delivered (next bounded unit, per plan §8). Parent ticket remains in-progress.
+
+## Coordinator triage — P2a dormant canonical API
+- H1–H6: no hard signal on the code. API is dormant (grep: no caller outside core/planet_grid.gd), every plan §3 tolerance met, gates green, genhash 25/25, ac0423probe byte-identical to the run-2 reference. The builder's two deviations (probe-side shape expectation for faces 5/6/7 in the discarded draft; counting 576+192 inverse cases) are honest and did not weaken a bound.
+- H5-adjacent defect, repaired by the coordinator: the plan required prior P0/P0.5/P1 evidence to be preserved, but the rendered page kept only the P1 body — the P0/P0.5 sections (rebake_natural, the 186 m wall, the seam-V band table) were dropped from the ticket page and survived only in git. Repaired in this round: full earlier bodies reproduced verbatim as §4 History, read from git 3cc2339; tag balance verified (h1/h2/h3/body/html/table all matched), single h1.
+- Independent rerun: .scratch/AC-0433-gates/p2a-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0, RESULT identical to the builder's excluding ms — shared_key_mismatches=0, shared_position_max_m=0.0, direct_error_max_m=0.0, inverse_error_max_m=0.000598 (768 cases), ownership_mismatches=0, invalid_failures=0/30, negative detected at 0.792551 m.
+- Scoreboard: builder_stats.py session 888781b8-1622-4a26-9903-dfad8db4d121: 37 steps, 48,881 output tokens, 1570.55 s (26.2 min) — against the P1 run's 32 steps / 80,990 tokens / 46.4 min. Recorded in captures/p2a-builder-cost.json.
+- Scope: no runtime, key, save, native, shader or harness change; legacy behaviour proven unchanged. Windows rebuild not owed (dormant module, no runtime path). Parent AC-0433 stays in-progress; next unit is canonical cross-edge cell adjacency (2:1 at cube edges), which needs its own anchored contract.
