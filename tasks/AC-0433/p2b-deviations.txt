@@ -1,0 +1,37 @@
+AC-0433 P2b-1 — deviations (OUTCOME + evidence; every number in a log)
+
+OUTCOME: P2b-1 LANDED. cell_lattice + cell_owner appended to godot/core/planet_grid.gd
+(existing six statics byte-identical); p2b_probe.gd T1/T2 + negative control all green.
+
+1) GDScript dict-literal syntax (probe-run r1 failed; final run green).
+   First draft used unquoted identifier keys ({ok: false}) in the two new statics.
+   GDScript dict literals require string keys, so planet_grid.gd failed to parse and
+   the probe died: rc=124, gate_census "SCRIPT ERROR 16 (allow 0) ... FAIL", all 16
+   errors "Identifier ... not declared" at planet_grid.gd:170-214 + the probe's
+   compile error. Fix: quoted keys only ({"ok": false} etc.) — identical semantics,
+   no bound changed, no other line touched. r1 log was overwritten by the passing
+   run at the same path (deviation in hygiene, not in bounds); its content is this
+   paragraph. Passing run: .scratch/AC-0433-gates/p2b-probe.log, rc=0, census 0/0.
+
+2) Probe fixture R not named by the plan — chose the live planet R = 4000.0.
+   Basis (both in gate logs, not intuition): the genhash arm's SATDIAG line
+   "configure: planet_id=0 seed=44 R=4000 SEA=126" (.scratch/AC-0433-gates/
+   genhash-r4.log) and P1's measured N=3152 / full axis 6304 (continuity,
+   captures/p1-probe.log). All §3.3 expected values (0/0/0/true) are R-independent;
+   the sample set {0,1,15,N/2,Nu-2,Nu-1} only resolves against a concrete grid.
+
+GATES (plan §4, all green on the final tree):
+- Light set (python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe
+  --timeout 600): g0 r5 / player / interact / light / fluids / genhash / ac0423probe
+  all rc=0, SCRIPT=0 SHADER=0; genhash 25/25 byte-identical to captures/genhash-r2.log
+  (GENMS 128); ac0423probe r5 RESULT equal to captures/ac0423probe-r2.log excluding ms
+  (5431 vs 5515); nine overlaps 654/752/660/662/758/848/800/1290/1290 mm unchanged.
+- P2b-1 standalone (.scratch/AC-0433-gates/p2b-probe.log): rc=0, census 0/0,
+  RESULT {"cells":432,"corner_mismatches":0,"fails":0,"identity_collisions":0,
+  "negative_detected":true,"ok":true,"round_trip_mismatches":0}.
+- P2a regression (.scratch/AC-0433-gates/p2a-regression-p2b1.log): rc=0, census 0/0,
+  RESULT equal to .scratch/AC-0433-gates/p2a-probe.log excluding ms (38 vs 38).
+- P1 regression (.scratch/AC-0433-gates/p1-regression-p2b1.log): rc=0, census 0/0,
+  RESULT equal to captures/p1-probe.log excluding ms (313 vs 313).
+
+No design decisions made or needed. cell_neighbour / adjacency / docs = P2b-2.

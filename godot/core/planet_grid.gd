@@ -156,6 +156,64 @@ static func address_key(face: int, i: int, j: int, k: int, R: float) -> String:
 	return "%d:%d:%d:%d" % [face, i, j, k]
 
 
+# Canonical cube-lattice cell identity of chart cell (i, j): every chart cell
+# covers exactly one unit square of the cube lattice (each face maps its cell
+# index to a lattice corner by an integer offset only), so one face-independent
+# (plane, sign, a, b) addresses every cell on every chart, at one size.
+# plane = the even face id of the cube plane (0, 2, 4, 6, 8, 10); sign = +1
+# for an even face, -1 for an odd one; a, b = the in-plane lattice cell
+# indices, always in [-N, N). Half-open cell domain from grid_shape; invalid
+# face/radius/indices return {ok: false}.
+static func cell_lattice(face: int, i: int, j: int, R: float) -> Dictionary:
+	var sh: Vector2i = grid_shape(face, R)
+	if sh == Vector2i.ZERO:
+		return {"ok": false}
+	if i < 0 or i >= sh.x or j < 0 or j >= sh.y:
+		return {"ok": false}
+	var n: int = sh.y if (face >= 4 and face <= 7) else sh.x
+	var a: int
+	var b: int
+	match face:
+		0, 2, 8, 10:
+			a = i
+			b = j - n
+		1, 3, 9, 11:
+			a = i - n
+			b = j - n
+		4, 6:
+			a = i - n
+			b = j
+		5, 7:
+			a = i - n
+			b = j - n
+		_:
+			return {"ok": false}
+	var plane: int = face - face % 2
+	var sgn: int = 1 if face % 2 == 0 else -1
+	return {"ok": true, "plane": plane, "sign": sgn, "a": a, "b": b}
+
+
+# Exact inverse of cell_lattice: the chart cell covering the unit square with
+# in-plane lattice indices (a, b) on cube plane `plane`. Valid domain: plane
+# in {0, 2, 4, 6, 8, 10}, sign +1/-1, a and b in [-N, N); anything else
+# returns {ok: false}.
+static func cell_owner(plane: int, sign: int, a: int, b: int, R: float) -> Dictionary:
+	var sh: Vector2i = grid_shape(0, R)
+	if sh == Vector2i.ZERO:
+		return {"ok": false}
+	var n: int = sh.x
+	if plane < 0 or plane > 10 or plane % 2 != 0:
+		return {"ok": false}
+	if sign != 1 and sign != -1:
+		return {"ok": false}
+	if a < -n or a >= n or b < -n or b >= n:
+		return {"ok": false}
+	var face: int = plane + (0 if sign > 0 else 1)
+	if plane == 4 or plane == 6:
+		return {"ok": true, "face": face, "i": a + n, "j": b + (n if sign < 0 else 0)}
+	return {"ok": true, "face": face, "i": a + (n if sign < 0 else 0), "j": b + n}
+
+
 # --- internals (stateless; the canonical vertex evaluation is the single
 #     floating computation behind every shared-vertex placement) ---
 

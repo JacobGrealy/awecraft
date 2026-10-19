@@ -239,3 +239,53 @@
 - Independent rerun: .scratch/AC-0433-gates/p2a-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0, RESULT identical to the builder's excluding ms — shared_key_mismatches=0, shared_position_max_m=0.0, direct_error_max_m=0.0, inverse_error_max_m=0.000598 (768 cases), ownership_mismatches=0, invalid_failures=0/30, negative detected at 0.792551 m.
 - Scoreboard: builder_stats.py session 888781b8-1622-4a26-9903-dfad8db4d121: 37 steps, 48,881 output tokens, 1570.55 s (26.2 min) — against the P1 run's 32 steps / 80,990 tokens / 46.4 min. Recorded in captures/p2a-builder-cost.json.
 - Scope: no runtime, key, save, native, shader or harness change; legacy behaviour proven unchanged. Windows rebuild not owed (dormant module, no runtime path). Parent AC-0433 stays in-progress; next unit is canonical cross-edge cell adjacency (2:1 at cube edges), which needs its own anchored contract.
+
+## ESCALATED ladder note — P2b first launch
+- Signal H1 (no diff: the medium run hit its token limit before writing any artifact; only plan.html was dirty, no p2b probe, no log).
+- Plan fix (ladder step 1, no effort change): §3.3 rewritten smaller — 6 tests instead of 7, ~70 sampled cells per face with an explicit sample set, bijection folded into T1's collision counter, per-case strings removed, and the RESULT key list made explicit. Scope and all expected values unchanged.
+- Relaunching subagent_medium with the same contract.
+
+## SPLIT — P2b second launch
+- Second H1 in a row (no diff: the run again hit its token limit before writing; only plan.html/continuity dirty). Cause is output budget, not reasoning quality, so escalating effort would add tokens rather than remove them.
+- Ladder step 3: SPLIT the unit. This run is P2b-1 (cell_lattice + cell_owner + a two-test probe only). cell_neighbour, the sector-seam checks, the cube-edge sentinel and the docs/results update are deferred to P2b-2, which gets its own contract.
+
+## RUN — Mon Oct 19 17:58:11 EDT 2026 — AC-0433 (P2b-1 cell identity + inverse, medium)
+- Applying plan.html exactly (implement.md template). Read in order: plan.html, continuity last section
+  (SPLIT note), .scratch/AC-0433/context.md, planet_grid.gd anchors 40-79 + 155-198 (plan §2).
+- LANDED (P2b-1 — append-only per plan §3; no design decisions made, no P2b-2 scope touched):
+  - godot/core/planet_grid.gd: TWO public statics appended after address_key — cell_lattice(face,i,j,R)
+    -> {ok, plane, sign, a, b} (half-open cell domain from grid_shape; a/b table read off the shipped
+    vertex_key:52-71 exactly per plan §3.1) and cell_owner(plane,sign,a,b,R) -> {ok, face, i, j}
+    (exact inverse; domain plane in {0,2,4,6,8,10}, sign ±1, a,b in [-N,N), formulas verbatim plan §3.2).
+    Existing six statics and internals byte-identical.
+  - tasks/AC-0433/p2b_probe.gd (NEW): standalone SceneTree, const GRID=preload(res://core/planet_grid.gd),
+    R=4000 (live planet — genhash SATDIAG line + P1 N=3152; not named by the plan, see deviations).
+    T1: round trip both ways + collision set on 12 faces × {0,1,15,N/2,Nu-2,Nu-1} clamped/de-duped
+    (432 cells); T2: four corners rebuilt from the identity via the plane table (normal axis carries the
+    plane's own ±N) == vertex_key exactly + Q10-Q00 / Q01-Q00 unit axis steps; negative control: b+1 on
+    fixed cell f2/i1/j1 must break T2. One RESULT line, exit 1 on any failed expectation.
+  - tasks/AC-0433/p2b-deviations.txt (NEW): OUTCOME + evidence, every number logged.
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home, ulimit -v 8388608):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600`
+    (re-run on the FINAL tree after the syntax fix; first pass on the draft tree also green):
+    g0 / player / interact / light / fluids / genhash / ac0423probe all rc=0 SCRIPT=0 SHADER=0 ok=true.
+    genhash-r5: 25/25 byte-identical to captures/genhash-r2.log (GENMS 128).
+    ac0423probe-r6: RESULT equal to captures/ac0423probe-r2.log excluding ms (5424 vs 5515);
+    nine overlaps exactly 654/752/660/662/758/848/800/1290/1290 mm.
+  - P2b-1 standalone (.scratch/AC-0433-gates/p2b-probe.log): rc=0, census 0/0,
+    RESULT ok=true cells=432 round_trip_mismatches=0 identity_collisions=0 corner_mismatches=0
+    negative_detected=true fails=0.
+  - P2a regression (.scratch/AC-0433-gates/p2a-regression-p2b1.log): rc=0, census 0/0, RESULT equal
+    to .scratch/AC-0433-gates/p2a-probe.log excluding ms (38 vs 38).
+  - P1 regression (.scratch/AC-0433-gates/p1-regression-p2b1.log): rc=0, census 0/0, RESULT equal to
+    captures/p1-probe.log excluding ms (313 vs 313).
+- OUTCOME: **P2b-1 LANDED.** Identity and inverse agree both ways on every sampled cell, no two cells
+  share an identity, corners rebuilt from the identity match vertex_key exactly (the "one cell size on
+  every chart" proof), negative control fires so the green is not vacuous; legacy runtime provably
+  unchanged. Scope: git diff = planet_grid.gd (append-only), p2b_probe.gd (new), p2b-deviations.txt
+  (new), continuity.md. No git ops, no registry edits, no new tickets, no docs/results page (P2b-2).
+- Deviations (both honest, no bound weakened; full text in p2b-deviations.txt): (1) first probe run
+  rc=124 — GDScript dict literals require string keys; unquoted {ok: false} in the draft failed to
+  parse (16 SCRIPT ERRORs, census FAIL); fixed by quoting keys only, identical semantics; r1 log
+  overwritten by the passing run. (2) probe fixture R not named by the plan — used live planet R=4000
+  (evidence in gate logs); all §3.3 expected values are R-independent.
