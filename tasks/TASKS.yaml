@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-19T11:12
+  updated_at: 2026-10-19T11:42
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27722,10 +27722,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-15T09:54
+  updated_at: 2026-10-19T11:31
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -27826,7 +27826,11 @@ intake:
     \ changes, the filing rule applies and the new\nbehaviour ships behind a switch defaulting to the\
     \ world the user already knows.\n\nHONEST NOTE. Every file:line and every measured value above is\
     \ from the code, comments and ticket\nrecords. The two arithmetic claims in the HYPOTHESIS block are\
-    \ NOT measured; they must be measured in\nP1 before any design leans on them.\n"
+    \ NOT measured; they must be measured in\nP1 before any design leans on them.\n\n\nP1 classification:\
+    \ design. Coordinator plan.html anchors a design-only xhigh/two-phase run, current-code controls,\
+    \ expected seam values and a negative test. tasks.py set has no labels option, so classification is\
+    \ recorded here rather than hand-editing TASKS.yaml. Resume from run-2 OUTCOME, not interrupted run-3\
+    \ header."
   comments: []
 - id: AC-0434
   title: seam-blocks-stretched-into-each-other
@@ -29486,4 +29490,83 @@ intake:
     \ the whole 12k budget); inline file:line anchor resolution (the AC-0433\nprose plan needs it).\n\
     Known cosmetic, not filed: results_page.py emits the deviations markdown as literal text, so\nbackticks\
     \ and ** markers show raw in the rendered page. Fix whenever the page is next touched."
+  comments: []
+- id: AC-0456
+  title: planning-is-coordinator-only
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: done
+  labels: []
+  created_at: 2026-10-19T11:38
+  updated_at: 2026-10-19T11:42
+  completed_at: 2026-10-19T11:41
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The coordinator does ALL the thinking about what to build; subagents only build\
+    \ it or\n   measure it. Today one path still breaks that rule: the `design`-labelled path hands the\
+    \ builder\n   `tasks/templates/two-phase.md`, whose step 1 is \"PLAN - write tasks/AC-NNNN/plan.html\"\
+    . So on the\n   hardest tickets the expensive local model is still doing the design work, which is\
+    \ exactly the\n   thing that made runs take hours. After this ticket no builder writes a plan, ever:\
+    \ the coordinator\n   designs, and when it is missing a fact it sends a MEASUREMENT run (build this\
+    \ instrument, report\n   these numbers, change no behaviour) instead of asking a builder to decide.\n\
+    \n2) Technical Details:\n   USER RULING 2026-10-19: \"I want planning done by coordinator, implementation\
+    \ by subagents.\"\n   State before: tasks/templates/implement.md (the medium default) already has\
+    \ the coordinator write\n   plan.html, so the default path complies. The gap is two-phase.md - used\
+    \ for `design`-labelled\n   tickets and for escalation - which still contains a builder-written PLAN\
+    \ step. Retire that premise.\n\n   THE MODEL AFTER THIS TICKET - two builder deliverables, both coordinator-planned:\n\
+    \     (a) IMPLEMENT: apply plan.html. tasks/templates/implement.md. subagent_medium.\n     (b) MEASURE:\
+    \ build the instrument the plan specifies, run it, report the numbers, change no\n         behaviour.\
+    \ ALSO tasks/templates/implement.md, as a plan TYPE (\"measurement plan\"), because\n         the\
+    \ deliverable is still \"do what the plan says\" - only the plan's acceptance differs.\n   A `design`\
+    \ ticket therefore becomes TWO runs at most, both cheap: a measurement run (medium) to\n   produce\
+    \ the facts, then the coordinator's design pass, then the implementation run (medium). The\n   xhigh\
+    \ builder survives ONLY as the escalation step when implementation itself needs judgement\n   (second\
+    \ triage hit, per the ratified ladder).\n\n   CHANGES:\n   - tasks/templates/two-phase.md: DELETED\
+    \ (git rm). Its premise - plan + implement in one turn - is\n     the thing being retired. Git history\
+    \ keeps it; a stale template that tells a builder to plan is a\n     trap, not a reference.\n   -\
+    \ tasks/templates/implement.md: add the measurement-plan section (deliverable = numbers + the\n  \
+    \   instrument; it may NOT change game behaviour; its acceptance is \"the numbers are in a log and\
+    \ the\n     behaviour is byte-identical when the instrument is off\"); generalise the effort line\
+    \ to medium-by-\n     default / xhigh-on-escalation.\n   - tasks/templates/plan.html: header generalised\
+    \ (one builder run, medium by default) + a short\n     \"measurement plan\" variant of sections 3/4/5.\n\
+    \   - .dsh/skills/awecraft-plan/SKILL.md: the \"design\" guidance is replaced - the coordinator does\
+    \ the\n     design pass itself and, when facts are missing, dispatches a measurement run and READS\
+    \ ITS\n     NUMBERS BEFORE DECIDING. Design is not delegated.\n   - .dsh/skills/awecraft-delegate/SKILL.md:\
+    \ routing table loses the design->two-phase row; xhigh is\n     escalation only; the launch rules\
+    \ gain \"a builder never writes a plan\".\n   - .dsh/skills/awecraft-file-ticket/SKILL.md: the `design`\
+    \ label now means \"the coordinator's pass is\n     a design pass and will likely need a measurement\
+    \ run first\", NOT \"routes to xhigh\".\n   - AGENTS.md role line: state it explicitly - planning\
+    \ is coordinator-only; subagents implement or\n     measure.\n   - godot/ARCHITECTURE.md:19: the pointers\
+    \ row names tasks/templates/two-phase.md - correct it (keep a\n     single pointer to the templates\
+    \ dir).\n   - tasks/scripts/spec_template.py: its generated note names two-phase.md as \"the prompt\
+    \ template\".\n     Fix the string; it is a GENERATED spec source, so specs written from now on are\
+    \ correct. Do not\n     regenerate historical specs.\n\n   GATES: none - documentation and one generator\
+    \ string, no engine code, no gate value moved, no godot\n   run owed. Proof: `python3 tasks/scripts/test_tasks.py`\
+    \ still reports 53 checks green (spec_template.py\n   is in its tested set), and `python3 tasks/scripts/spec_template.py\
+    \ AC-0456` output contains no\n   two-phase.md reference while an older spec still does (the historical\
+    \ specs are deliberately left\n   alone).\n   DEFERRED: nothing. AC-0433 (next in the queue) is the\
+    \ first design ticket to run under this model.\n\n\nDONE 2026-10-19. Coordinator-only procedure change;\
+    \ no engine code, no gate value moved, no godot run\n(it owes none) and no subagent launched (another\
+    \ process holds the local slot).\nPlanning is now coordinator-only, with NO builder path that writes\
+    \ a plan.\n- DELETED tasks/templates/two-phase.md (git rm) - the design-label and escalation prompt,\
+    \ whose step 1\n  told the BUILDER to write plan.html. One builder prompt remains: tasks/templates/implement.md.\n\
+    - implement.md: two plan TYPES, implement and measure. A measurement plan's deliverable is numbers,\n\
+    \  never behaviour; it must negative-test the instrument; with the instrument off the output must\
+    \ be\n  byte-identical. Effort line generalised (medium, xhigh only on escalation).\n- awecraft-plan:\
+    \ new \"Planning is never delegated\" section - a design ticket is the coordinator's own\n  design\
+    \ pass plus, when a fact is missing, a measurement run whose numbers are read BEFORE deciding.\n \
+    \ Step 3 (Decide) now says do not guess and do not delegate the decision.\n- awecraft-delegate: single-prompt\
+    \ header, routing table (xhigh is escalation only, same prompt), the\n  ladder's second hit no longer\
+    \ changes who plans.\n- awecraft-file-ticket: the `design` label no longer routes to any tool - it\
+    \ shapes the coordinator's\n  pass (expect a measurement run first).\n- AGENTS.md role line; godot/ARCHITECTURE.md\
+    \ pointer row; spec_template.py's generated note.\nVerification: test_tasks.py 53 checks green (spec_template.py\
+    \ is in its tested set); a freshly\ngenerated spec (tasks/AC-0456/spec.html) points at implement.md\
+    \ + plan.html; the only surviving\n\"two-phase\" strings in the live tree are the fluid LIGHTING two-phase\
+    \ algorithm (unrelated) and this\nticket's own notes, which the spec inlines by design.\nNEXT: AC-0433\
+    \ P1 is the first design ticket under this model - measurement run, design pass,\nimplementation run.\
+    \ Note the registry commit also carried AC-0433's open -> in-progress flip\n(updated_at 11:31), which\
+    \ is the OTHER session's change, committed as-is and not authored here."
   comments: []

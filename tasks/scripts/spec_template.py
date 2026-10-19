@@ -15,7 +15,7 @@ Slim vs full: the DEFAULT output is slim — the big AUTO tables (Data.* constan
   rows, so the scaffold stays ~6 KB instead of ~20 KB (every subagent prompt
   that references spec.html pays for the size). Pass --full to inline the
   tables (parsed fresh at run time so the spec never carries stale numbers) —
-  the coordinator's verbatim-constants gate diff (two-phase.md) uses --full.
+  the coordinator's verbatim-constants gate diff uses --full.
 
   The gates section is TIERED: "Builder gates (Run-2, in-session)" (G0 + SMOKE
   + task probe + ≤1 render) vs "Coordinator Heavy Gates (background
@@ -310,8 +310,9 @@ def _build_html(task, task_id, full=False):
     a("</ul>")
     a("<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker "
       "<code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: the "
-      "<code>awecraft-heavy-gates</code> skill (the prompt template itself is "
-      "<code>tasks/templates/two-phase.md</code>).</p>")
+      "<code>awecraft-heavy-gates</code> skill. The builder's prompt is "
+      "<code>tasks/templates/implement.md</code>; the plan it applies is "
+      "<code>tasks/AC-NNNN/plan.html</code>, written by the coordinator.</p>")
 
     # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')

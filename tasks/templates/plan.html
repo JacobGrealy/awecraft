@@ -37,9 +37,10 @@
 <body>
 
 <h1>AC-NNNN — plan</h1>
-<p class="note">Written by the coordinator on &lt;date&gt;. Contract for one <code>subagent_medium</code>
-builder run. Effort: medium · Tool: <code>subagent_medium</code> · Prompt:
-<code>tasks/templates/implement.md</code>.</p>
+<p class="note">Written by the coordinator on &lt;date&gt;. Contract for ONE builder run:
+<code>subagent_medium</code> normally, <code>subagent_xhigh</code> only on escalation; prompt
+<code>tasks/templates/implement.md</code> either way. <strong>Plan type: implement / measure</strong>
+(delete one — a measurement plan's deliverable is numbers, not behaviour; see §5).</p>
 
 <h2>1. Goal</h2>
 <!-- ONE sentence: what changes and why. No history, no options considered. -->
@@ -85,7 +86,14 @@ world.gd  _face_rebake_boundary(…)   [the function at the grep anchor]
 
 <h2>5. Acceptance</h2>
 <!-- The one-sentence statement that makes this done, phrased so it can be checked from the
-     logs. If it cannot be checked from a log, it is not acceptance. -->
+     logs. If it cannot be checked from a log, it is not acceptance.
+
+     IF THIS IS A MEASUREMENT PLAN, acceptance is these three, in this order:
+       (i)  the numbers exist in the named output (a log/JSON, never only in the reply);
+       (ii) the instrument CAN fail — name the negative test that makes it report the wrong thing;
+       (iii) with the instrument off, the output is byte-identical to HEAD (it measures, it does not fix).
+     Name the exact quantities to report and their units: a rounded or cherry-picked number costs
+     the coordinator a whole extra run, because the design decision is made from these numbers. -->
 <ul>
   <li>…</li>
 </ul>

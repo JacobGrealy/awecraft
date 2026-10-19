@@ -47,10 +47,12 @@ more than ~250 lines of plan to describe it; two things the user would call "don
 The plan for a piece is written when the piece starts (`awecraft-plan`), not at filing.
 
 **Label it `design` when the ticket needs architecture judgement** — a hypothesis to measure, a
-mechanism to choose, seam algebra to work out before any edit can be specified. `design` is exactly
-what routes it to `subagent_xhigh` with `two-phase.md` on its FIRST launch; everything else defaults
-to medium. Filing a design ticket without the label is how a medium builder ends up improvising a
-design — the one thing it is forbidden to do.
+mechanism to choose, seam algebra to work out before any edit can be specified. The label does not
+change WHO plans: planning is always the coordinator's (`awecraft-plan`), and there is no
+builder-effort shortcut for a design ticket. What it changes is the shape of the coordinator's pass —
+expect a **measurement run** first (medium, `implement.md`, a measurement plan: build this instrument,
+report these numbers, fix nothing), then the design decision, then the implementation run. Two cheap
+runs beat one expensive one that invents a design.
 
 ## Queue discipline
 

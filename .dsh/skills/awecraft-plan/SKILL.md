@@ -31,8 +31,10 @@ AC-0433 was a builder orienting in `ARCHITECTURE.md` and designing in flight.
    hit. You are looking for one thing per file: the anchor. If a site takes more than two greps,
    the ticket is under-specified — that is itself the finding.
 3. **Decide.** Every fork the builder could hit gets resolved here and written down with its
-   reason: which of two mechanisms, which fallback, which is out of scope. The design is the
-   coordinator's job now — that is the whole point of the split.
+   reason: which of two mechanisms, which fallback, which is out of scope. The design is yours — you
+   are the only one who makes it. **If you cannot decide because a fact is missing, do not guess and
+   do not delegate the decision: dispatch a measurement run** (see "Planning is never delegated") and
+   decide from its numbers.
 4. **Write `tasks/AC-NNNN/plan.html`** from `tasks/templates/plan.html`. Non-negotiables:
    - every file in §2 carries an **anchor** (`file:line` or a grep string);
    - every gate in §4 carries an **expected value**, so a mismatch is a finding not a judgement;
@@ -53,15 +55,25 @@ AC-0433 was a builder orienting in `ARCHITECTURE.md` and designing in flight.
 The coordinator's own reading is cheap (fast model, large window) but not free — if the pass is
 drifting past the box, the ticket is too big and splitting is the answer, not more planning.
 
-## Plans for the two non-default paths
+## Planning is never delegated
 
-- **`design`-labelled tickets** (`awecraft-delegate` routes them to `subagent_xhigh` with
-  `two-phase.md`): the plan's §3 becomes the *question*, not the edit — "measure X three ways and
-  refute one of these two candidate mechanisms", with the expected observation per branch. The
-  builder is allowed to think here; that is what xhigh is for. Even so, §2 anchors and §4 expected
-  values are mandatory — a design run without anchors is how a 6-hour run happens.
-- **`trivial` tickets** (`implement.md` minus the plan, `subagent_medium`): no planning pass. If
-  you find yourself writing a plan for one, it was not trivial — label it properly and plan it.
+**A builder never writes a plan.** There is exactly one builder prompt,
+`tasks/templates/implement.md`, and both of its deliverable types are planned here first:
+
+- **implement** — apply `plan.html` (edit shape, then the gates);
+- **measure** — build the instrument the plan specifies, run it, report the numbers, and change no
+  behaviour (acceptance is "the numbers are in a log, and the behaviour is byte-identical with the
+  instrument off").
+
+So a `design`-labelled ticket does not go to a bigger-effort builder — it goes through **your own
+design pass** here, and if you are missing a fact you cannot decide without, you dispatch a
+**measurement run** (medium, `implement.md`, a measurement plan) and then read its numbers before
+deciding. Two cheap runs, both concrete, both ending in an artifact — instead of one expensive run
+that invents a design. That is the whole point: the design judgement is yours, and a small model is
+never asked to make it.
+
+**`trivial` tickets** (`implement.md` with no `plan.html`, `subagent_medium`): no planning pass. If
+you find yourself writing a plan for one, it was not trivial — label it properly and plan it.
 
 ## Repairing a plan (the escalation loop)
 

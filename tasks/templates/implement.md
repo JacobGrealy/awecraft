@@ -1,19 +1,27 @@
-# The medium builder — implement-to-plan prompt
+# The builder prompt — implement or measure, never plan
 
-The **default** delegation path (owner: `awecraft-delegate`). The coordinator writes
-`tasks/AC-NNNN/plan.html` FIRST (`awecraft-plan`); this prompt hands that plan to one
-`subagent_medium` builder, which applies it, runs the named gates and exits. The design-stage
-prompt — where the plan itself is the work — is `two-phase.md`, routed to `subagent_xhigh`.
+The **only** builder prompt (owner: `awecraft-delegate`). The coordinator writes
+`tasks/AC-NNNN/plan.html` FIRST (`awecraft-plan`) and this prompt hands that plan to one builder,
+which applies it, runs the named gates and exits. There are two plan TYPES and no third:
 
-Why this shape: a builder run's wall clock is `output_tokens / ~15` (measured, R²=0.93 over 127
-sessions), and 64-80% of those tokens are reasoning. A medium builder given exact anchors has
-almost nothing to reason about. The plan is therefore not paperwork — it is how the thinking is
-moved off the slow model without moving it into a wrong turn.
+- **implement** — the plan says what to change and which gates prove it;
+- **measure** — the plan says build this instrument, run it, report these numbers, and change no
+  behaviour.
+
+**A builder never writes a plan.** Only the effort changes with the tool — `subagent_medium` by
+default, `subagent_xhigh` when the coordinator escalated — never who plans.
+
+Why this shape: a builder run's wall clock is `output_tokens / ~15` (measured, R²=0.93 over ~300
+sessions), and 64-80% of those tokens are reasoning. A builder given exact anchors has almost nothing
+to reason about. The plan is not paperwork — it is how the thinking is moved off the slow model
+without moving it into a wrong turn.
 
 Replace every `AC-NNNN`. Reference docs **BY PATH** — never inline a document's contents.
 
 ```
-You are the single builder subagent for AweCraft task AC-NNNN, working at MEDIUM effort.
+You are the single builder subagent for AweCraft task AC-NNNN, working at MEDIUM effort (the
+coordinator escalated this ticket to XHIGH if your launch said so — otherwise do not assume extra
+latitude; the effort is the only thing that changed).
 
 THE PLAN IS ALREADY WRITTEN. tasks/AC-NNNN/plan.html is the contract: it names the files, the
 line anchors, the edit shape, the gate set and the expected values. You apply it. You do not
@@ -43,6 +51,19 @@ run dies with nothing written.
    behaviour. Follow the plan's `Edit shape` and `Acceptance` sections. No new files outside
    the plan's file list. No refactors it does not ask for. If the plan names gates with
    expected values, those values are your target — a mismatch is a FINDING, report it.
+
+   IF THE PLAN IS A MEASUREMENT PLAN (its §1 or §5 says measure / instrument / report), then the
+   deliverable is NUMBERS, not behaviour:
+   - build the instrument exactly as the plan specifies (usually one probe arm or one script), run it,
+     and write the numbers to the plan's named output (a log under .scratch/AC-NNNN-gates/, a JSON, or
+     a script's stdout) — a measurement that lives only in your reply is not a measurement;
+   - do NOT change game behaviour to make the numbers nicer, and do NOT fix what you measure: the
+     instrument precedes the fix, that is the point of the ticket. If the plan wants a behaviour
+     change as well, it says so explicitly;
+   - the arm's `ok`/acceptance is "the numbers are in the log, the instrument CAN fail (negative-test
+     it), and with the instrument off the output is byte-identical";
+   - report the numbers themselves in the results page, small and exact — the coordinator decides the
+     design from them, so a rounded or cherry-picked number costs a whole extra run.
 
 CONTINUITY — three entries ONLY, not one per milestone (each step costs ~1100 output tokens):
    (a) the RUN header at start;  (b) after the code is in place ("LANDED: …");  (c) after the
@@ -98,6 +119,7 @@ except for the probe arm the plan names.
 
 ## Routing
 
-`awecraft-delegate` owns which prompt and which tool: `implement.md` here for the default path
-(`subagent_medium`), `two-phase.md` for `design`-labelled tickets and every escalation
-(`subagent_xhigh`). The triage that decides whether this run worked is in `awecraft-delegate` too.
+`awecraft-delegate` owns which tool and effort: `subagent_medium` normally, `subagent_xhigh` only on
+escalation — this prompt either way. The plan it applies comes from `awecraft-plan` and is written by
+the coordinator, never by you. The triage that decides whether this run worked is in
+`awecraft-delegate` §4.

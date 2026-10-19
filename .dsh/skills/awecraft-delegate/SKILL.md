@@ -5,15 +5,15 @@ description: Use when launching, relaunching or routing a builder subagent for a
 
 # Delegating an AweCraft ticket
 
-The agent is the orchestrator; **subagents do all code and research**. Two verbatim prompts, both
-paste-and-replace-`AC-NNNN`, neither ever inlining a document's contents (paths only; inlining bloats
-the prompt and drifts):
+The agent is the orchestrator; **subagents do all code and research**. There is ONE builder prompt —
+`tasks/templates/implement.md` — pasted with `AC-NNNN` replaced, never inlining a document's contents
+(paths only; inlining bloats the prompt and drifts). The coordinator has already written
+`tasks/AC-NNNN/plan.html` (`awecraft-plan`); the builder applies it, runs the named gates and exits.
 
-- `tasks/templates/implement.md` — **the default**, routed to `subagent_medium`. The coordinator has
-  already written `tasks/AC-NNNN/plan.html` (`awecraft-plan`); the builder applies it, runs the named
-  gates and exits.
-- `tasks/templates/two-phase.md` — `subagent_xhigh`, for `design`-labelled tickets and for escalation.
-  Plan + implement in one turn; there the plan IS the builder's work.
+**A builder never writes a plan**, and there is no builder prompt that asks it to: planning — the
+orienting, the design decisions, the measurement design — belongs to the coordinator, and a builder
+only *implements* a plan or *measures* what a plan specifies (`awecraft-plan`). User ruling
+2026-10-19.
 
 **The split is the speed.** A run's wall clock is roughly its own output-token count divided by 15
 (the measurement and the current values: `godot/OPS.md` §1). Medium-by-default with a
@@ -37,8 +37,8 @@ default implementer:
 
 | Launch tool | Effort | Use for |
 |---|---|---|
-| `subagent_medium` | medium | **the default implementer** — applies a coordinator-written `plan.html`; prompt `implement.md` |
-| `subagent_xhigh` | xhigh | **design stages and escalation only** — `design`-labelled tickets, or a ticket that has already failed twice at medium; prompt `two-phase.md` |
+| `subagent_medium` | medium | **the implementation tool** — applies a coordinator-written `plan.html`, whether the plan says implement or measure; prompt `implement.md` |
+| `subagent_xhigh` | xhigh | **escalation only** — a ticket that has already failed twice at medium (see §4); the SAME `implement.md` prompt, because effort is the only thing that changes, never who plans |
 | `subagent_low` | low | mechanical work only (a one-file formatting pass, "reply SLOT-OK") — never implementation |
 | `subagent_fork` | (unpinned → `subagentEffort`, currently medium) | inherits this conversation: reviews, continuations, follow-up analysis — not primary implementation |
 | `subagent` | agent default model — **NOT the local model** | reviews and analysis. Never implementation: the user's choice is the local 27B, so do not quietly route work to the fast cloud model |
@@ -105,8 +105,10 @@ gate in between, ≥2 boundary probes (the cap is 1), or the same gate re-run �
 1. **First hit → repair the PLAN and relaunch `subagent_medium`.** H1, H3, H5 and H6 are plan defects,
    not effort defects; adding the missing anchor or the expected value is minutes, and paying xhigh
    for under-specified work is exactly what the old routing did wrong. Mechanics: `awecraft-plan`.
-2. **Second hit on the same ticket → `subagent_xhigh`** with the repaired plan and `two-phase.md`. Now
-   the implication is genuine: the work needs design judgement inside the implementation.
+2. **Second hit on the same ticket → `subagent_xhigh`** with the repaired plan and the same
+   `implement.md` prompt. Now the implication is genuine: the implementation itself needs judgement the
+   plan cannot supply. What does NOT change is who plans — if the second run also comes back
+   `PLAN-INSUFFICIENT`, the answer is a better plan, not more effort.
 3. **Third hit → split the ticket** (`awecraft-file-ticket`).
 
 A ticket that needs architecture judgement is filed with the **`design` label** and takes

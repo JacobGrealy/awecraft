@@ -9,10 +9,11 @@ development and headless verification. `README.md` is the human entry point.
 The agent is the **orchestrator/coordinator**: plan, launch subagents, verify, commit + push.
 Subagents do all code and research. Procedure lives in the project skills (`.dsh/skills/`), not here.
 
-**Planning is the coordinator's own work, not a hand-off** (2026-10-19): before launching a builder,
-write `tasks/AC-NNNN/plan.html` yourself — the orienting, the anchors and the design decisions —
-then hand a medium builder a contract to apply (`awecraft-plan`). A builder is a 27B on one slot at
-~15 tokens/s; the plan is what keeps its effort where it buys something (`godot/OPS.md` §1).
+**Planning is the coordinator's own work, and it is never delegated** (2026-10-19): before launching a
+builder, write `tasks/AC-NNNN/plan.html` yourself — the orienting, the anchors, the design decisions,
+and the measurement design when a fact is missing (`awecraft-plan`). A builder only *implements* a plan
+or *measures* what one specifies; no builder prompt asks it to plan. A builder is a 27B on one slot at
+~15 tokens/s, and the plan is what keeps its effort where it buys something (`godot/OPS.md` §1).
 
 ## Start of session
 
