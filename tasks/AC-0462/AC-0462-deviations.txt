@@ -65,3 +65,55 @@ AC-0462 deviations (builder, 2026-10-20):
     position u derivation); (b) player.gd _sim_cell_center's cell->world map still uses the raw
     z+0.5 without the ccz*16 localisation, so diag eye_to_hit_cell_m stays large (2193.84 /
     6188.11 m). Neither is touched by this fix (plan §2/§7: report, do not fix a second place).
+
+11. (AC-0462b scale probe, 2026-10-20) No product code changed — the only addition is
+    tasks/AC-0462/scale_probe.gd (standalone SceneTree probe, no game tree, no autoloads).
+    Ground truth = the cell's own square under face_chunk_transform (the transform the
+    face chunk NODE carries, world.gd:15363 — the mesh's transform, per plan §6; NOT the
+    warp/canonical model). 8192 samples, R=4000, face 5 (mirror) + face 11 (non-mirror),
+    ccx/ccz in {0,1,31,63}, anchor = the sample's own chunk (the player_anchor construction
+    with its pre-divided basis), CCX*16/CCZ*16 + the AC-0462-fix mirror form. Full RESULT:
+    .scratch/AC-0462-gates/scaleprobe-r2.log; per-sample verification: scalediag-r1.log.
+    THE TABLE (pooled n=8192; error in cells, Chebyshev on absolute u/v columns):
+        candidate       worst  mean           exact_frac
+        shipped         15     4.7459716796875   0.1060791015625
+        no_second_div   91     38.468994140625   0.0
+        norm_basis      16     4.0980224609375   0.4422607421875
+        raw_nominal     91     38.468994140625   0.0   (algebraically IDENTICAL to
+                                                        no_second_div — o·(e/sc) ≡ o·e/sc:
+                                                        the plan's list carries a duplicate,
+                                                        so three distinct formulas were measured)
+    Per face (scaleprobe-r2.log candidates_face): face 5 shipped exact 0.107421875,
+    norm_basis 0.440673828125, no_second_div mean 39.940185546875 worst 91; face 11
+    shipped 0.104736328125, norm_basis 0.44384765625, no_second_div mean 36.997802734375
+    worst 91 — the same story on both chart classes.
+    FINDINGS (reported, nothing fixed — this ticket changes no product code):
+    a) NO candidate is exact on every sample. The plan's gate anticipated this branch;
+       the statement is: the correct inverse of the mesh's LSQ placement divides by
+       |e|² AND inverts the full 3x3. norm_basis (o·e/|e|², the plan's candidate 3) is
+       the WINNER but only 0.4422607421875 exact, because at the chart-CORNER chunks the
+       LSQ basis is strongly NON-ORTHOgonal — scalediag-r1.log: chunk 5:0:0 has
+       |bx|=5.7503, |bz|=2.8924, bx.bz=8.1625 (cos ≈ 0.49) — so the orthogonal-projection
+       approximation misses up to a full chunk width (worst 16). The missing fifth
+       candidate is B.affine_inverse() (full 3x3 inverse) — a design decision for the fix
+       ticket, deliberately not invented here.
+    b) The "second division" hypothesis is REFUTED by data: deleting the division
+       (candidates 2/4) is the WORST of the three distinct formulas (mean 38.468994140625
+       cells, worst 91): dividing the pre-divided anchor basis by sc leaves |e|²/sc as the
+       effective divisor, and the non-orthogonal cross term l_z·(e_z·e_x)/sc contributes
+       ≈ 21 cells at the corner (15.8 × 8.1625 / 6.1359, all three in scalediag-r1.log /
+       scaleprobe-r2.log).
+    c) The ~14 m faceedit residual is the v-axis half of the same defect at the 63:63 stand:
+       there sc.x 6.13592338562012 ≈ |bx| 6.13580322265625 (u nearly exact) but sc.y
+       3.06796169281006 vs |bz| 2.19582390785217 (ratio 0.716 — the round-19 "half axis"
+       is the v axis at that stand). scalediag-r1.log at the 5:63:63 chunk centre: shipped
+       cell (1015, 1012) vs truth (1015, 1016) — 4 cells in v × local spacing ≈ the
+       faceedit surface_error_m 14.753/14.332 (faceedit-r9.log).
+    d) Instrument sanity (what makes it trustworthy): truth_recover 8192/8192 — the
+       CONSUMER's own world_to_face (the chart map the anchor derives cells through)
+       recovers the ground-truth cell for every sample; negative self-check (shipped + 5
+       u-cells) exact_frac 0.015625 < 0.5 — the instrument can fail. Caveats: samples sit
+       on the chunk plane (local y = 0; all four candidates share the same y, so cell-y is
+       not part of the comparison), and the warp (shipped default) moves the mesh from the
+       LSQ placement by ≤ the fit residual (~0.4 m << 1 cell), so the truth-model choice
+       (plan §6) cannot flip which candidate wins — if it ever did, the table would show it.

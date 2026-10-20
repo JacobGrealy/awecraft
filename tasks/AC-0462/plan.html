@@ -1,46 +1,43 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462 fix the face aim frame</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0462 (fix) — put the face aim ray in absolute columns</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The bug is proven (ticket journal, round 18): the face aim ray runs in the anchor chunk's LOCAL cell frame while the block API indexes ABSOLUTE face columns, so every edit on a chart other than the spawn pair has been landing on that chart's corner chunk. One function produces the frame.</p>
-<h2>1. Goal</h2><p>Face edits land in the cell the player aims at, on a mirror face and a non-mirror face alike.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462b anchor scale measurement</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0462b — which formula converts a face world point to the right cell?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is a <b>measurement</b> ticket: build the instrument, report which candidate conversion matches ground truth, change no behaviour. The frame bug shipped at e8d2fbc; what remains is a scale error of ~14 m, and the algebra has already fooled me once, so it gets measured rather than reasoned.</p>
+<h2>1. Goal</h2><p>Ground truth: for a set of known face points, the cell whose own geometry actually contains each point. Then, for the same points, the error of each candidate conversion — so the correct one is chosen by data.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810), its face branch (2816-2830); <code>aim_hit</code>'s callback (2796-2798)</td><td>Edit the face branch of <code>_flat_ray</code> ONLY.</td></tr>
-<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — it already returns <code>ccx</code>, <code>ccz</code>, <code>origin</code>, <code>basis</code>, <code>scale</code></td><td>READ ONLY.</td></tr>
-<tr><td>godot/core/sphere_math.gd</td><td><code>face_mirror_x</code> (450), <code>face_local_x</code> (454)</td><td>READ ONLY — the mirror convention is already defined there.</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the <code>faceedit</code> arm added at aa253ce</td><td>Edit: run the edit on a MIRROR face and a NON-MIRROR face and report both.</td></tr>
-<tr><td>tasks/AC-0462/</td><td>journal, deviations, results page</td><td>Append/extend.</td></tr>
+<tr><td>tasks/AC-0462/scale_probe.gd (NEW)</td><td>standalone SceneTree; preload <code>res://core/sphere_math.gd</code> and <code>res://core/planet_grid.gd</code></td><td>Write the probe in §3. No game tree, no autoloads.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>face_cell_scale</code> (435), <code>face_chunk_transform</code> (508), <code>face_cell_size</code>, <code>face_mirror_x</code> (450)</td><td>READ ONLY.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — note it returns <code>basis</code> with each column ALREADY divided by <code>sc</code>: <code>bx = B.basis.x / sc.x</code></td><td>READ ONLY.</td></tr>
+<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810) — for reference only, the code under study</td><td>READ ONLY. <b>Do not edit it in this ticket.</b></td></tr>
+<tr><td>tasks/AC-0462/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the warp, placement, <code>get_block_key</code>/<code>set_block_key</code> (they are correct — they want absolute columns), streaming, keys, saves, SphereMath.</p>
-<h2>3. The mapping (established by the AC-0458 warp inverse; do not re-derive)</h2>
-<p><code>_flat_ray</code>'s face branch currently returns, for the anchor chunk <code>(ccx, ccz)</code>:</p>
-<pre>o_local = ( o.dot(bx)/sc.x , o.dot(bn) , o.dot(bz)/sc.y )
-d_local = ( ad.dot(bx)/sc.x , ad.dot(bn) , ad.dot(bz)/sc.y )      reach = REACH / |d_local|</pre>
-<p><code>o_local.x</code> is the along-u cell offset inside the anchor chunk, <code>o_local.y</code> is height in metres, <code>o_local.z</code> the along-v offset. Convert to ABSOLUTE columns before returning, and flip the direction component when the mirror reverses the axis:</p>
-<pre>mirror = SphereMath.face_mirror_x(face)
-abs_x  = ccx*16 + (16.0 - o_local.x  if mirror else o_local.x)
-abs_z  = ccz*16 + o_local.z
-d_x    = -d_local.x if mirror else d_local.x
-d_z    = d_local.z</pre>
-<p>Return <code>{"o": Vector3(abs_x, o_local.y, abs_z), "d": Vector3(d_x, d_local.y, d_z).normalized(), "reach": reach}</code> — <code>reach</code> unchanged (it is already in cell units). <b>Rationale for the mirror form</b>: the face data layout runs its local +X against u (<code>face_local_x</code> = 15 − k on the mirror class), so local x = 0 is the chunk's absolute column <code>ccx*16 + 16</code>; the AC-0458 native warp uses the same inverse (<code>u1024 = ccx*16 + 16 − lx</code>). <b>Do not "fix" this by changing <code>get_block_key</code></b> — it already applies <code>face_local_x</code> for absolute→slot, and the ray must hand it true absolute columns.</p>
-<p><b>Why the height is untouched:</b> the face frame's y is unscaled metres above the anchor plane, which is exactly what <code>get_block_key</code>'s <code>y</code> means. Do not scale or shift it.</p>
-<h2>4. The arm (extend <code>faceedit</code>)</h2>
+<h2>3. The probe</h2>
+<p>Pick sample face chunks on a mirror face (5) and a non-mirror face (11) at R = 4000: the boundary chunks the faceedit arm lands on (<code>63:63</code>) plus a spread of others (e.g. ccx/ccz in {0, 1, 31, 63}).</p>
 <ul>
-<li>Run the existing faceedit measurement on TWO charts: a MIRROR face (one of 4-7) and a NON-MIRROR face (one of 8-11). Either by an env/arg on the arm or by looping both inside one run — the simplest correct thing.</li>
-<li>Keep every existing assertion: anchor face &gt; 1 (fail loudly otherwise), aim/verify, break then place in the same cell, <code>surface_error_m</code>.</li>
-<li>Report per-chart: face, mirror (0/1), aim_cell, placed_cell, break_ok, place_ok, surface_error_m.</li>
-<li><b>Record <code>surface_error_m</code> BEFORE the fix too</b>, if you can do so in one run (e.g. the arm reports the pre-fix expectation from the anchor alone); otherwise state the pre-fix numbers from the round-18 log (5,841.19 m warp on / 5,840.47 m warp off) as the baseline in the deviations. Do not re-run the old code to simulate it.</li>
+<li><b>Ground truth definition — state it in the RESULT.</b> For a cell (iu, iv), the chunk transform <code>B = face_chunk_transform(face, ccx, ccz, R)</code> maps the cell's own local square, so the cell's world centre is <code>B * Vector3(local_x + 0.5, 0, local_z + 0.5)</code> where <code>local_x = face_local_x(face, iu, ccx)</code> and <code>local_z = iv &amp; 15</code>. Sample a point <b>inside</b> that cell (e.g. local centre plus a small in-cell offset) and use the cell it came from as the truth.</li>
+<li><b>Candidate conversions</b> — evaluate each on the same world point and report the cell it yields, so the probe can say right/wrong and by how many cells:
+  <ol>
+    <li>as shipped by AC-0462: <code>o = world - anchor.origin</code>, then <code>(o·bx/sc.x, o·bn, o·bz/sc.y)</code> with <code>bx = B.basis.x/sc.x</code> (the anchor's pre-divided basis).</li>
+    <li>no second division: <code>(o·bx, o·bn, o·bz)</code>.</li>
+    <li>normalised-basis division: <code>(o·B.basis.x / |B.basis.x|², o·bn, o·B.basis.z / |B.basis.z|²)</code>.</li>
+    <li>nominal-scale division on the RAW basis: <code>(o·B.basis.x / sc.x, o·bn, o·B.basis.z / sc.y)</code>.</li>
+  </ol>
+  Add <code>ccx*16</code>/<code>ccz*16</code> and the mirror form from the AC-0462 fix before comparing to the true absolute column.</li>
+<li><b>Report per candidate</b>: worst cell error (in cells), mean, and the fraction of samples that land in the TRUE cell. The correct formula is the one that lands in the true cell for every sample; report all four so the choice is visible, not asserted.</li>
+<li>Also report, per sample chunk, the three length scales that matter: <code>|B.basis.x|</code>, <code>sc.x</code>, and the distance between adjacent cell centres along u — so the numbers that disagreed are on the record.</li>
 </ul>
-<h2>5. Gates</h2>
+<p>RESULT keys (JSON): ok, R, samples, candidates {name: {worst_cells, mean_cells, exact_frac}}, scales {chunk: {basis_x_len, sc_x, spacing_u}}, fails.</p>
+<h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Warp ON (default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <b>both</b> charts: face &gt; 1, break_ok and place_ok true, placed_cell == aim_cell, and <code>surface_error_m</code> small — target ≤ 2.0 m (a face cell is ~6.14 m across, so under a third of a cell means the aim and the cell agree).</td></tr>
-<tr><td>Warp OFF</td><td>Same with <code>--env 'AWECRAFT_WARP=0'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; same assertions. (The warp changes where geometry sits by ≤ ~1 m at ground level; the aim frame fix is independent of it, so both states should now pass.)</td></tr>
-<tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0.</td></tr></table>
-<h2>6. Acceptance</h2><p>An edit on a mirror face and on a non-mirror face lands in the aimed cell, in both warp states, with the reported error down from kilometres to under a third of a cell.</p>
-<h2>7. Risks</h2><p>(1) The mirror flip is the piece most likely to be wrong — that is what the two-chart arm exists for; if only the non-mirror chart passes, the mirror form is inverted and that is the finding. (2) Other call sites may still mix frames (<code>_sim_get_block</code>/<code>_sim_set_block</code> consume DDA coords, so they inherit this fix; <code>visible_cell_key</code> at 3232-3239 computes its own from world and may still be local — if the arm shows an inconsistency, report it rather than silently fixing a second place).</p>
-<h2>8. Fences</h2><div class="stop"><ul>
+<tr><td>G0 + regression</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,ac0423probe --timeout 600</code></td><td>rc=0, SCRIPT=0/SHADER=0 (no product code changes, so this is the whole regression).</td></tr>
+<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, every candidate reported, at least one candidate with exact_frac 1.0 <b>or</b> a clear statement that none is exact and why.</td></tr>
+</table>
+<p>No renders, no native rebuild, no heavy set.</p>
+<h2>5. Acceptance</h2><p>A logged table that names the conversion matching ground truth on both chart classes, plus the scale numbers that explain the current 14 m residual. <b>No product code changes.</b></p>
+<h2>6. Risks</h2><p>The "ground truth" must come from the chunk transform that the MESH uses — if it instead comes from the warp/canonical model, the comparison measures a different question. State which transform defines truth and why it is the mesh's.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>No edits outside §2. This ticket adds ONE probe file.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>Round 18 proved the bug by trace (journal). This fixes the one function that builds the frame. After it: AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
+<h2>8. Resume point</h2><p>AC-0462 fixed the wrong-chunk bug (5,841 m -> 14.7 m, aim == placed on mirror and non-mirror). This measures the remaining scale error so the fix is chosen from data. Next: apply the winning conversion, then AC-0459 and AC-0463.</p>
 </body></html>
