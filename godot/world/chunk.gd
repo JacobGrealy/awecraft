@@ -1729,6 +1729,17 @@ static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") == "1"
 # proves the counter cannot lie.
 static var warped_chunks: int = 0
 
+# AC-0460 stage 3 (plan.html §4): the warp COST measurement — warp_us (total
+# microseconds inside the warp pass), warp_verts (vertices examined),
+# warp_surfaces (surfaces visited). Reset by the warpcensus arm before its
+# run; accumulated only in _warp_face_slabs, which build_mesh_face calls
+# only when the flag is on — so the flag-off path never touches them and
+# reads 0: the control that the instrumentation sits inside the guarded
+# path. Measurement only: no change to what the warp computes.
+static var warp_us: int = 0
+static var warp_verts: int = 0
+static var warp_surfaces: int = 0
+
 # AC-0458 (plan.html §3.2): rewrite each vertex of a face-lane build from
 # chunk-local metres to world metres, pointwise on the legacy 1024 chart —
 # the same construction as PlanetGrid.cell_to_world on that chart:
@@ -1755,9 +1766,16 @@ func _warp_face_slabs(res: Dictionary) -> void:
 	for row in res.slabs:
 		for di in range(6):
 			var v: PackedVector3Array = row[di].v
+			# AC-0460 stage 3 (plan.html §4): time ONLY this surface's warp
+			# loop (ticks per surface, summed); nothing inside the
+			# per-vertex body.
+			var w0: int = Time.get_ticks_usec()
 			for i in range(v.size()):
 				var p: Vector3 = v[i]
 				v[i] = _warp_cell_point(face_i, R, mirrored, ccx, ccz, p.x, p.z, p.y)
+			warp_us += Time.get_ticks_usec() - w0
+			warp_verts += v.size()
+			warp_surfaces += 1
 
 
 # AC-0460 stage 2b (plan.html §4): the warp construction EXTRACTED from

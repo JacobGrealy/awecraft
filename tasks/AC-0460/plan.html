@@ -1,42 +1,35 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 s2b occluder coverage</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0460 stage 2b — restore occluder coverage for mesh-less solid slabs</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Closes the regression recorded at stage 2a: 89 warp occluders against 335 legacy. Small and bounded.</p>
-<h2>1. Goal</h2><p>Under the warp, a fully-solid slab that emitted no mesh still gets an occluder, derived from its cell footprint, so warp mode does not silently lose ~three quarters of its occlusion coverage.</p>
-<h2>2. The measured problem (stage 2a)</h2>
-<p>Legacy gives every <code>full_solid</code> slab an occluder whether or not it has a mesh (a fully buried slab is invisible but still occludes). Stage 2a can only derive the box FROM a mesh, so buried slabs fall to the guard and lose theirs: <b>89 warp occluders vs 335 legacy</b> under the live renderer. That is the gap this ticket closes.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 s3 warp cost</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0460 stage 3 — what does the warp cost?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. A <b>measurement</b> ticket: instrument, report, change no behaviour. This is the gate in front of any decision to default the warp on.</p>
+<h2>1. Goal</h2><p>A number for the warp's cost per chunk and per vertex, measured inside the warp pass, from the arm that already builds 78 warped face chunks.</p>
+<h2>2. Why not the perf arms</h2>
+<p>The <code>boundary</code> arm walks the HOME pair, and the warp returns early for faces &lt; 2 — it would report 0 cost for a real cost. The existing <code>warpcensus</code> arm is the right vehicle: it stands at the boundary, builds face chunks deterministically, and already reports <code>warped_chunks</code>.</p>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/chunk.gd</td><td>the stage-2a warp branch (<code>elif full_solid and _occl_enabled() and _warp_on:</code>, ~1488); <code>_warp_face_slabs</code> (~1710) for the warp construction and <code>SphereMath</code> use; <code>class Slab</code> (~417) for <code>y0</code></td><td>Edit: extend the warp occluder branch with the footprint fallback of §4. Do not restructure it.</td></tr>
-<tr><td>tasks/AC-0460/occ_probe.gd</td><td>the band assertions added at stage 2a (the <code>comps.sort()</code> block)</td><td>Edit: add the fallback assertions of §5. Keep every existing assertion.</td></tr>
+<tr><td>godot/world/chunk.gd</td><td><code>_warp_face_slabs</code> (~1710), <code>_warp_cell_point</code>, the <code>warped_chunks</code> static (~1690)</td><td>Edit: add timing/vertex accumulators around the existing loop. No change to what the warp computes.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>warpcensus</code> arm's RESULT block</td><td>Edit: add the measured fields. Nothing else.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>the <code>warpcensus</code> row's <code>result_fields</code></td><td>Add the new field names; then <code>harness_doc.py --render</code>.</td></tr>
 <tr><td>tasks/AC-0460/continuity.md</td><td>last section</td><td>Append.</td></tr>
-<tr><td>.scratch/AC-0460-gates/</td><td>logs, including the xvfb occluder counts</td><td>Never staged.</td></tr></table>
-<p><b>Do not touch:</b> the warp math, the legacy branch, collision, streaming, keys, saves, SphereMath, the arm's other fields, docs.</p>
+</table>
+<p><b>Do not touch:</b> the warp maths, the occluder branch, collision, streaming, keys, saves, docs.</p>
 <h2>4. Edit shape</h2>
-<p>In the warp branch, when the mesh AABB is missing or degenerate, fall back to a box derived from the slab's own cell footprint instead of leaving <code>s.occluder = null</code>:</p>
 <ul>
-<li>Take the chunk's 16×16 cell-corner lattice at two heights, <code>h = y0</code> and <code>h = y0 + 16</code> (the slab's own vertical extent — use the slab's real height constants if the file defines them; do not hardcode 16 if a named constant exists), warped by the SAME construction the mesh uses: <code>(R + h) · normalize(SM.uv_to_world(face, u, v, R)) − (0, R, 0)</code> with the mirror-aware chart inverse already implemented in <code>_warp_face_slabs</code>. Reuse that code path rather than writing a second copy of the mapping — extract a small helper if that is the clean way, but do not change what the existing callers compute.</li>
-<li>The box is the AABB of those 34 points (512 corners is unnecessary: the 16 edge samples per side plus the 4 corners are enough; if that is awkward, all 256 cell centres are acceptable but say which you used).</li>
-<li>Same degenerate guard as stage 2a applies to the result.</li>
-<li><b>Flag off: no change at all.</b></li>
+<li>Add statics beside <code>warped_chunks</code>: <code>warp_us</code> (total microseconds inside the warp pass), <code>warp_verts</code> (vertices examined), <code>warp_surfaces</code> (surfaces visited). Reset them in the arm before its run starts, so the numbers belong to that run.</li>
+<li>Time ONLY the warp loop with <code>Time.get_ticks_usec()</code> around it, summed per surface. Do not instrument inside the per-vertex body.</li>
+<li>In <code>warpcensus</code>'s RESULT add: <code>warp_ms_total</code> (warp_us/1000, rounded), <code>warp_verts</code>, <code>warp_us_per_vert</code> (warp_us / max(1, warp_verts), 3 dp), <code>warp_ms_per_chunk</code> (warp_ms_total / max(1, warped_chunks), 3 dp), and keep the existing fields unchanged.</li>
 </ul>
-<h2>5. Probe additions (tasks/AC-0460/occ_probe.gd)</h2>
-<ul>
-<li>For a full-solid slab with NO mesh, the fallback box must (a) have its centre inside the chunk's corner-cloud bounds, and (b) have horizontal sizes in the same documented [16, 110] m band and vertical in [1, 128] m.</li>
-<li>Assert the fallback box and the mesh-derived box for the same chunk agree in CENTRE within half the chunk footprint (say 60 m) — they describe the same slab, so a wild disagreement means the fallback is wrong.</li>
-<li>Keep the negative control firing.</li>
-</ul>
-<h2>6. Gates</h2>
+<h2>5. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Flag off unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to its capture excl ms; warpcensus warped_chunks 0.</td></tr>
-<tr><td>Flag on, headless</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; warped_chunks &gt; 0. (occluders is structurally 0 headless — do not chase it.)</td></tr>
-<tr><td>Flag on, live renderer — THE GATE THAT MATTERS</td><td>Run <code>warpcensus</code> under <code>xvfb-run -a</code> with <code>VK_ICD_FILENAMES</code> and the flag on, exactly as stage 2a did; log it.</td><td><code>occluders</code> must be far above 89 — target parity with the legacy 335 (state whatever it measures; &gt;= 300 passes, 90–150 is a FAILED fix and must be reported as such).</td></tr>
-<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, ok=true.</td></tr></table>
-<h2>7. Acceptance</h2><p>Warp mode recovers occluder coverage close to legacy, the fallback box describes the same slab as the mesh-derived one, and the flag-off path is untouched.</p>
-<h2>8. Risks</h2><p>The fallback uses the chunk footprint, so for a partially filled slab it is looser than the mesh box — acceptable (the legacy box is a constant 15 m for a 98 m chunk, i.e. far looser). Never let an occluder sit so far out that it hides visible geometry: the probe's centre-inside-cloud assertion is the guard.</p>
-<h2>9. Fences</h2><div class="stop"><ul>
+<tr><td>Flag off</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to capture excl ms; <code>warped_chunks 0</code> and <code>warp_verts 0</code> (the cost fields must be zero when the warp is off — that is the control that the instrumentation is inside the guarded path).</td></tr>
+<tr><td>Flag on</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <code>warped_chunks 78</code> (unchanged from stage 1 — the instrumentation must not change behaviour); report <code>warp_ms_total</code>, <code>warp_verts</code>, <code>warp_us_per_vert</code>, <code>warp_ms_per_chunk</code>.</td></tr>
+<tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0.</td></tr></table>
+<p>No renders, no native rebuild, no heavy set. <b>Run the flag-on arm twice and report both numbers</b> — a single sample is not a measurement, and the two must be within ~30% of each other or the variance is itself the finding.</p>
+<h2>6. Acceptance</h2><p>A reproducible per-chunk and per-vertex cost for the warp, with a zero-cost control when the flag is off, and the two-run variance stated.</p>
+<h2>7. Risks</h2><p>Timing a loop that allocates will include allocator noise; that is acceptable as long as it is stated. Do not optimise anything — this ticket measures.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
 <li>No edits outside §3. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>10. Resume point</h2><p>Stage 2a restored occluders from mesh bounds (89 vs 335). This closes the remaining coverage gap. After it: the flag default with perf evidence, then the lane rewrite, keys, consumers.</p>
+<h2>9. Resume point</h2><p>Stage 2b reached occluder parity (335/335, verified). Warp mode is feature-equivalent to legacy. This measures its cost; the default flip decision follows from the number, and the lane rewrite / keys / consumers follow that.</p>
 </body></html>

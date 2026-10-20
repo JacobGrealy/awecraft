@@ -158,3 +158,53 @@ place_ok input-timing flake (deviation 4). No git actions, no TASKS.yaml, no new
 - The warp mapping is now a shared helper (_warp_cell_point extracted from _warp_face_slabs) used by both the mesh warp and the footprint fallback, so there is one chart inverse in the file, not two that could drift. Deviation 14 is honest and bounded: the home pair (face<2) keeps the stage-2a null behaviour because the warp never applies there; the occluder census counts face chunks so the gate is unaffected.
 - Cost: one extra GDScript call per vertex in the warp pass (deviation 15). No p95 was measured because the plan named none — that measurement belongs with the flag-default decision, not here.
 - STATE: warp mode is now feature-equivalent to the legacy path for occlusion, collision, light, and geometry space, with seams fixed. The flag default is the next decision and it needs perf evidence (frame time with the warp on vs off), which this ticket has not produced.
+
+## RUN — Tue Oct 20 14:18 EDT 2026 — AC-0460 stage 3 (warp cost measurement)
+- Started. Anchors confirmed: chunk.gd statics @1730, _warp_face_slabs @1744-1760, _warp_cell_point @1770; harness.gd _warpcensus_test @35929-36008 (RESULT @36008); harness_data.yaml warpcensus row @768. Plan = tasks/AC-0460/plan.html (stage 3).
+- LANDED (stage 3, 2026-10-20): chunk.gd — three statics beside warped_chunks (warp_us, warp_verts, warp_surfaces); _warp_face_slabs loop now times each surface's vertex loop (Time.get_ticks_usec() around the per-surface i-loop only, summed; nothing inside the per-vertex body) and accumulates. harness.gd _warpcensus_test — reset of the three accumulators at arm start (load() cached), and RESULT adds warp_ms_total, warp_verts, warp_us_per_vert, warp_ms_per_chunk; all existing fields unchanged. harness_data.yaml warpcensus row result_fields updated; harness_doc.py --render + --check in sync.
+- GATES (stage 3, 2026-10-20, FINAL tree; logs .scratch/AC-0460-gates/):
+  - Flag-OFF light set (r11, gate_run g0,smoke,ac0423probe,warpcensus): every arm rc=0,
+    SCRIPT=0/SHADER=0, ok=true; warpcensus warp=0, warped_chunks=0, <b>the control:</b>
+    warp_ms_total=0, warp_verts=0, warp_us_per_vert=0.0, warp_ms_per_chunk=0.0 (the cost
+    fields read zero — the instrumentation sits inside the guarded path); face_chunks=72,
+    aabb_delta_m=3099.39, first_chunk 4:63:0 (standing values reproduced); genhash 25/25
+    byte-identical to the stage-2a reference (genhash-r8.log); ac0423probe equal to
+    tasks/AC-0433/captures/ac0423probe-r2.log excl ms. interact place_ok=true (r11).
+  - Flag-ON light set, RUN 1 (r12, same + AWECRAFT_WARP=1): every arm rc=0, 0/0, ok=true;
+    warpcensus warp=1, warped_chunks=78 (UNCHANGED from stage 2b — the instrumentation
+    changes no behaviour), aabb_center [2862.65,-1206.76,17.78] (bit-identical to stage 2b),
+    aabb_delta_m=0.4, occluders=0 (headless-gated); MEASURED: warp_ms_total=687,
+    warp_verts=560288, warp_us_per_vert=1.226, warp_ms_per_chunk=8.808. genhash 25/25;
+    ac0423probe == capture excl ms. interact place_ok=false (documented flake).
+  - Flag-ON light set, RUN 2 (r13): same rc/SCRIPT/SHADER; warped_chunks=78, aabb_delta_m=0.4
+    (bit-identical to run 1); MEASURED: warp_ms_total=695, warp_verts=560248,
+    warp_us_per_vert=1.24, warp_ms_per_chunk=8.91. genhash 25/25 (identical to run 1 and to
+    the flag-OFF run — flag-insensitive); ac0423probe == capture excl ms. interact
+    place_ok=false (documented flake, deviation 17).
+  - VARIANCE (run 1 -> run 2): warp_ms_total 687 -> 695 (+1.2%); warp_ms_per_chunk
+    8.808 -> 8.91 (+1.2%); warp_us_per_vert 1.226 -> 1.24 (+1.1%); warp_verts 560288 vs
+    560248 (40 vertices, 0.007% — the face-lane build schedule at the frame-240 boundary;
+    warped_chunks 78 in both). Well inside the plan's ~30% bar.
+  - harness_doc.py --check: exit 0 (in sync: modes, standing-values) after --render.
+- OUTCOME (stage 3, 2026-10-20): DELIVERED, all gates green, no red. The warp's cost,
+  measured inside the warp pass across the 240-frame boundary run: ~690 ms total for 78
+  warped chunks and ~560,200 vertices = ~8.9 ms/chunk, ~1.23 us/vertex (1.226-1.24 us
+  across the two runs). Flag-off control: every cost field exactly 0 — the accumulators
+  are unreachable without the flag (they sit in _warp_face_slabs, which build_mesh_face
+  calls only when _warp_on). No change to what the warp computes: aabb_center/
+  aabb_delta_m/warped_chunks/face_chunks bit-identical to stage 2b in both flag-ON runs;
+  flag-OFF standing values reproduced (genhash 25/25 identical, ac0423probe byte-equal
+  excl ms). Caveats per plan §7: the timing includes allocator noise (the loop allocates
+  a Vector3 per vertex) and runs on this box's headless CPU, not the shipped platform;
+  nothing was optimised — this ticket measures. Files: godot/world/chunk.gd (three
+  statics + per-surface timing), godot/scenes/harness.gd (arm reset + 4 RESULT fields),
+  tasks/harness_data.yaml (row result_fields; HARNESS.md re-rendered), continuity,
+  deviations 17, results page Stage-3 section. No git actions, no TASKS.yaml, no new
+  tickets.
+
+## Coordinator triage — stage 3 (warp cost) — THE NUMBER CHANGES THE PLAN
+- Independently reproduced: warped_chunks 78, warp_ms_total 689, warp_verts 560,248, warp_us_per_vert 1.231, warp_ms_per_chunk 8.833 — matching the builder's two runs (687/695, 1.2% variance) inside the 30% bar.
+- THE FINDING: `World.FACE_STREAM_BUDGET_MS := 12.0` (world.gd:14990) is the whole per-pass budget for streaming face chunks. Warping ONE face chunk costs **8.8 ms — 73% of an entire streaming pass**, before the mesher's own work. In GDScript, at 1.23 us/vertex over ~7,200 vertices per 98 m chunk, the warp as implemented would cut face-streaming throughput to roughly one chunk per pass and put an 8.8 ms hitch on the frame that builds it. On the Windows target it will not be better.
+- CONCLUSION, stated plainly: **the warp is correct and feature-equivalent (seams 0, occluders 335/335, collision/light in world space) but NOT shippable on the streaming path as written.** The flag must stay off. This is the migration's real engineering problem, and no amount of further correctness work changes it.
+- THE FIX DIRECTION (this ticket's next stage): move the warp into the native lane. The mesher is already C++ (gdext/src/mesh.cpp) and builds the vertex arrays there, so warping in the same pass costs a handful of trig ops per vertex in optimised native code instead of a GDScript loop with per-vertex Vector3 allocations. Expected to fall from ~1.2 us to ~0.02-0.05 us per vertex; that must be measured, not assumed.
+- Cost control recorded: the timing includes allocator noise (per-vertex Vector3 alloc), and it is headless-CPU — both stated in the ticket's deviations, so nobody later mistakes 8.8 ms for a GPU number.

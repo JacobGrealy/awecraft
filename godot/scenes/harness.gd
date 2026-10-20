@@ -35932,6 +35932,12 @@ func _warpcensus_test(spawn: Vector3) -> void:
 	if R <= 0.0:
 		Debug.result({"warpcensus": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
 		return
+	# AC-0460 stage 3 (plan.html §4): reset the warp cost accumulators
+	# BEFORE the run so the numbers belong to this run (load() is cached —
+	# same script object the later static read uses).
+	load("res://world/chunk.gd").warp_us = 0
+	load("res://world/chunk.gd").warp_verts = 0
+	load("res://world/chunk.gd").warp_surfaces = 0
 	var hw: float = SphereMath.face_width(R) * 0.5
 	Game.mode = "play"
 	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
@@ -36005,7 +36011,16 @@ func _warpcensus_test(spawn: Vector3) -> void:
 		ok = (warped == 0)
 	else:
 		ok = (warped > 0 and face_chunks > 0 and aabb_delta_m >= 0.0 and aabb_delta_m <= 120.0)
-	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "ms": Time.get_ticks_msec() - t0}})
+	# AC-0460 stage 3 (plan.html §4): the warp cost, from the accumulators
+	# reset above. With the flag off the guarded path never runs and every
+	# cost field reads 0 — the control that the instrumentation is inside
+	# the guarded path.
+	var warp_us := int(ck.warp_us)
+	var warp_verts := int(ck.warp_verts)
+	var warp_ms_total := int(roundf(float(warp_us) / 1000.0))
+	var warp_us_per_vert := roundf(float(warp_us) / float(maxi(1, warp_verts)) * 1000.0) / 1000.0
+	var warp_ms_per_chunk := roundf(float(warp_ms_total) / float(maxi(1, warped)) * 1000.0) / 1000.0
+	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "warp_ms_total": warp_ms_total, "warp_verts": warp_verts, "warp_us_per_vert": warp_us_per_vert, "warp_ms_per_chunk": warp_ms_per_chunk, "ms": Time.get_ticks_msec() - t0}})
 
 
 # The BEFORE frame (tasks/AC-0423/captures/ac0423-before-ground-north.png,

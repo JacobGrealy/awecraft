@@ -66,6 +66,47 @@
 </tr>
 </table>
 <p><b>Outcomes.</b> Warp mode recovers full occluder coverage: 335 vs 335 legacy under the live renderer (the stage-2a 89 gap — mesh-less buried full-solid slabs — is closed), and the probe shows the footprint fallback box agrees with the mesh-derived box to 0.0 m in centre, sits inside the chunk's corner cloud, and lands in the documented size bands. With the flag off nothing changes (genhash 25/25 identical to the stage-2a reference, ac0423probe byte-equal excl ms, standing values reproduced). Deviations 13–16: the 136-sample superset of the plan's suggested 34-point lattice (deviation 13), the home-pair case left at stage-2a behaviour (14), the per-vertex helper call in the warp pass with no p95 probe named by the plan (15), and the documented interact flake (16).</p>
+<h2>Stage 3 — the warp's cost (2026-10-20)</h2>
+<p class='note'>the tables above are the stage-2b FINAL tree. Stage 3 is a MEASUREMENT ticket: instrument, report, change no behaviour. Every number below is in a log under .scratch/AC-0460-gates/. Deviation 17 in AC-0460-deviations.txt.</p>
+<p>Change: godot/world/chunk.gd — three statics beside <code>warped_chunks</code> (<code>warp_us</code>, <code>warp_verts</code>, <code>warp_surfaces</code>); <code>_warp_face_slabs</code> now times ONLY each surface's vertex loop (<code>Time.get_ticks_usec()</code> around the per-surface i-loop, summed — nothing inside the per-vertex body) and accumulates the counts. godot/scenes/harness.gd <code>_warpcensus_test</code> — resets the accumulators at arm start (before the run) and adds four fields to the RESULT: <code>warp_ms_total</code> (warp_us/1000 rounded), <code>warp_verts</code>, <code>warp_us_per_vert</code> (3 dp), <code>warp_ms_per_chunk</code> (3 dp); every existing field unchanged. tasks/harness_data.yaml warpcensus row: the four field names added to result_fields; harness_doc.py --render + --check in sync. No change to what the warp computes.</p>
+<table>
+<tr>
+<th>run</th>
+<th>log</th>
+<th>rc</th>
+<th>SCRIPT/SHADER</th>
+<th>headline</th>
+</tr>
+<tr>
+<td>flag-OFF light set (stage-3 FINAL tree) — <b>the control</b></td>
+<td>summary.json / *-r11.log</td>
+<td>0</td>
+<td>0/0 all arms</td>
+<td>warpcensus warp=0, warped_chunks=0, <b>warp_ms_total=0, warp_verts=0, warp_us_per_vert=0.0, warp_ms_per_chunk=0.0</b> — the cost fields read zero: the instrumentation sits inside the guarded path; face_chunks=72, aabb_delta_m=3099.39 (standing values); genhash 25/25 byte-identical to the stage-2a reference; ac0423probe equal to the AC-0433 capture excl ms</td>
+</tr>
+<tr>
+<td>flag-ON light set, RUN 1</td>
+<td>warpcensus-r12.log (+ peers)</td>
+<td>0</td>
+<td>0/0 all arms</td>
+<td>warpcensus warp=1, <b>warped_chunks=78</b> (unchanged from stage 2b — the instrumentation changes no behaviour), aabb_center [2862.65,-1206.76,17.78], aabb_delta_m=0.4; <b>warp_ms_total=687, warp_verts=560288, warp_us_per_vert=1.226, warp_ms_per_chunk=8.808</b></td>
+</tr>
+<tr>
+<td>flag-ON light set, RUN 2</td>
+<td>warpcensus-r13.log (+ peers)</td>
+<td>0</td>
+<td>0/0 all arms</td>
+<td>same rc/SCRIPT/SHADER, warped_chunks=78, aabb_delta_m=0.4 (bit-identical to run 1 and stage 2b); <b>warp_ms_total=695, warp_verts=560248, warp_us_per_vert=1.24, warp_ms_per_chunk=8.91</b></td>
+</tr>
+<tr>
+<td>docs</td>
+<td>harness_doc.py --check</td>
+<td>0</td>
+<td>—</td>
+<td>in sync: modes, standing-values (after --render of the updated warpcensus row)</td>
+</tr>
+</table>
+<p><b>Outcomes.</b> The warp's cost, measured inside the warp pass across the 240-frame boundary run: <b>~690 ms total for 78 warped chunks and ~560,200 vertices → ~8.9 ms/chunk, ~1.23 µs/vertex</b>. Two-run variance (the plan's within-~30% bar): warp_ms_total 687→695 (+1.2%), warp_ms_per_chunk 8.808→8.91 (+1.2%), warp_us_per_vert 1.226→1.24 (+1.1%), warp_verts 560288 vs 560248 (40 vertices, 0.007% — the face-lane build schedule at the frame-240 boundary; warped_chunks is 78 in both). Flag-off control: every cost field is exactly 0 — the accumulators are unreachable without the flag. Caveats stated per plan §7: the timing includes allocator noise (the loop allocates a Vector3 per vertex) and runs on this box's headless CPU, not the shipped platform. No optimisation was made — this ticket measures. No git actions, no TASKS.yaml, no new tickets.</p>
 <p class='note'>rendered by tasks/scripts/results_page.py from .scratch/AC-0460-gates — every number on this page is greppable from a log under .scratch/AC-0460-gates/</p>
 </body>
 </html>

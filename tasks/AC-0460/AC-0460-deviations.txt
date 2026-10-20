@@ -135,3 +135,8 @@
 16. interact smoke arm place_ok=false in BOTH the flag-OFF (r9) and flag-ON (r10) light sets —
    the same documented input-timing flake as deviation 4 (r1 true, r2/r4 false; arm ok=true in
    every run).
+
+17. interact smoke arm place_ok=false in BOTH flag-ON light sets (r12 and r13) and the
+   flag-OFF run had place_ok=true (r11) — the same documented input-timing flake as
+   deviation 4 (stage 1) and deviation 16 (stage 2b, r9/r10); arm ok=true in every run,
+   not caused by the stage-3 instrumentation (the flag-OFF tree carries it too).
