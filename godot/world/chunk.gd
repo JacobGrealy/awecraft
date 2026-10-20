@@ -1726,10 +1726,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 # (3.5% of FACE_STREAM_BUDGET_MS; it was 73% as a GDScript loop), occluders at
 # parity with legacy (335/335), and collision/light already in world space
 # because the collision shape is built from this same mesh with an identity node.
-# OWED, NOT done here: consumers that map world->flat with LEGACY maths (mob
-# spawn/walk, drops, the player's flat conversions) still assume the old face
-# placement — filed as AC-0462. Exposure is bounded by the M1 measurement:
-# centimetres at ground level, up to ~2 m at 140 m altitude.
+# OWED, NOT done here: consumers that still call the LEGACY face placement
+# (SphereMath.face_chunk_transform / column_transform) directly. NOTE the
+# scope was narrowed by measurement, not widened: the player anchor, the
+# block keys and the drops all derive cells through SphereMath.world_to_face
+# (world.gd player_anchor :15231, key_for_sphere_pos :15295), which is the
+# CHART mapping — the exact inverse of what this warp evaluates — so those
+# consumers now AGREE with the geometry instead of disagreeing with the old
+# LSQ fit. Tracked as AC-0462.
 static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") != "0"
 
 # AC-0460 stage 1 (plan.html §3.1): the census counter — incremented once

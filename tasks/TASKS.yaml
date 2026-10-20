@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-20T12:15
+  updated_at: 2026-10-20T15:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29786,7 +29786,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-20T09:23
+  updated_at: 2026-10-20T15:30
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29800,7 +29800,18 @@ intake:
     \ world.gd:11728) - movement must use\n   the canonical tangent frame everywhere including spawn.\n\
     \   PRECONDITION: streaming and collision tickets landed.\n   VERIFY: mob spawn census across a face,\
     \ drop landing on a face terrain, player A-to-B walk across a\n   seam on foot, save/reload of a pose\
-    \ on a face, light set + smoke.\n"
+    \ on a face, light set + smoke.\n\n\nSCOPE NARROWED BY MEASUREMENT 2026-10-20 (coordinator), after\
+    \ AC-0460 shipped the warp as the default: the premise \"consumers still assume the old face placement\"\
+    \ is WRONG for the main paths. The player's anchor (world.player_anchor, world.gd:15231), the block\
+    \ keys (key_for_sphere_pos, :15295) and drops all derive cells through SphereMath.world_to_face -\
+    \ the CHART mapping, which is the exact inverse of the pointwise warp. So the warp makes the geometry\
+    \ AGREE with the consumer maths; the OLD per-chunk LSQ fit was the thing that disagreed with it. What\
+    \ remains here: (a) find any consumer that still calls SphereMath.face_chunk_transform / column_transform\
+    \ directly (the round-11 audit found none in production code besides the node transform, which the\
+    \ warp replaces); (b) mob spawn still skips a face spawn rather than placing one, so no mob has ever\
+    \ spawned on a chart other than the home pair - enabling that is a real change with its own gates;\
+    \ (c) verify by arm that placing/breaking a block ON A FACE lands on the block the player is aiming\
+    \ at, with the warp on - that arm does not exist yet and is the concrete deliverable of this ticket."
   comments: []
 - id: AC-0463
   title: migrate-remove-legacy-split-and-prove
