@@ -2811,6 +2811,25 @@ func _flat_ray() -> Dictionary:
 	if Game.world == null:
 		return {"o": camera.global_position, "d": aim_dir(), "reach": REACH}
 	if int(_anchor.get("face", 0)) > 1:
+		# AC-0462c: convert with the chunk transform's OWN inverse (full 3x3) —
+		# the LSQ basis is non-orthogonal at corner chunks (cos ~0.49), so no
+		# per-axis dot product is exact there (tasks/AC-0462 journal, round 20).
+		# If the anchor has no "inv" key (built before this change), fall
+		# through to the per-axis form below.
+		if _anchor.has("inv"):
+			var inv: Transform3D = _anchor["inv"]
+			var lo: Vector3 = inv * camera.global_position  # cells x/z, metres y
+			var dl: Vector3 = inv.basis * aim_dir()         # direction, same units
+			var face: int = int(_anchor["face"])
+			var mirror := SphereMath.face_mirror_x(face)
+			var ax: float = float(int(_anchor["ccx"])) * 16.0 + (16.0 - lo.x if mirror else lo.x)
+			var az: float = float(int(_anchor["ccz"])) * 16.0 + lo.z
+			return {
+				"o": Vector3(ax, lo.y, az),
+				"d": Vector3(-dl.x if mirror else dl.x, dl.y, dl.z).normalized(),
+				"reach": REACH / dl.length(),
+			}
+		# fallback (pre-"inv" anchor): the per-axis form, unchanged
 		var o: Vector3 = camera.global_position - _anchor["origin"]
 		var bx: Vector3 = _anchor["basis"].x
 		var bn: Vector3 = _anchor["basis"].y

@@ -43,7 +43,7 @@ const FACES := [5, 11]        # mirror class / non-mirror class
 const CHUNKS := [0, 1, 31, 63]
 const IN_CELL := 0.3          # in-cell offset from the local centre, cell units
 const NEG_OFFSET := 5.0       # the negative self-check's deliberate u error, cells
-const CANDS := ["shipped", "no_second_div", "norm_basis", "raw_nominal"]
+const CANDS := ["shipped", "no_second_div", "norm_basis", "raw_nominal", "affine_inverse"]
 
 
 func _blank() -> Dictionary:
@@ -107,6 +107,7 @@ func _initialize() -> void:
 				var mirror: bool = SM.face_mirror_x(f)
 				var bx := B.basis.x / sc.x   # player_anchor's pre-divided column
 				var bz := B.basis.z / sc.y
+				var inv: Transform3D = B.affine_inverse()  # AC-0462c candidate 5
 				var ex2: float = B.basis.x.length_squared()
 				var ez2: float = B.basis.z.length_squared()
 				# Per-chunk scale report (plan §3 last bullet): the three
@@ -126,13 +127,15 @@ func _initialize() -> void:
 						var p: Vector3 = B * Vector3(float(lx) + 0.5 + IN_CELL, 0.0, float(lz) + 0.5 + IN_CELL)
 						total += 1
 						var o: Vector3 = p - B.origin
-						# The four candidates of plan §3 (y = o·bn for all four —
-						# identical across candidates, so x/z columns are the comparison).
+						# The five candidates of plan §3 (AC-0462c adds affine_inverse:
+						# the full 3x3 inverse; y = 0 for all five on the chunk plane —
+						# x/z columns are the comparison).
 						var locals: Array = [
 							["shipped", Vector3(o.dot(bx) / sc.x, 0.0, o.dot(bz) / sc.y)],
 							["no_second_div", Vector3(o.dot(bx), 0.0, o.dot(bz))],
 							["norm_basis", Vector3(o.dot(B.basis.x) / ex2, 0.0, o.dot(B.basis.z) / ez2)],
 							["raw_nominal", Vector3(o.dot(B.basis.x) / sc.x, 0.0, o.dot(B.basis.z) / sc.y)],
+							["affine_inverse", inv * p],
 						]
 						for ce in locals:
 							var a: Vector2 = _abs_cols(mirror, ccx, ccz, ce[1])

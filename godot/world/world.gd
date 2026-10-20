@@ -15251,7 +15251,7 @@ func player_anchor(pos: Vector3) -> Dictionary:
 	var bx: Vector3 = B.basis.x / sc.x
 	var bn: Vector3 = B.basis.y
 	var bz: Vector3 = B.basis.z / sc.y
-	return {"face": f, "ccx": ccx, "ccz": ccz, "origin": B.origin, "basis": Basis(bx, bn, bz), "scale": sc}
+	return {"face": f, "ccx": ccx, "ccz": ccz, "origin": B.origin, "basis": Basis(bx, bn, bz), "scale": sc, "inv": B.affine_inverse()}
 
 # C5: the player's sim height above the LOCAL surface (home: the flat
 # height; face: the height above the anchor chunk's tangent plane — the

@@ -117,3 +117,27 @@ AC-0462 deviations (builder, 2026-10-20):
        not part of the comparison), and the warp (shipped default) moves the mesh from the
        LSQ placement by ≤ the fit residual (~0.4 m << 1 cell), so the truth-model choice
        (plan §6) cannot flip which candidate wins — if it ever did, the table would show it.
+
+12. (AC-0462c, 2026-10-20) The plan §3 edits were applied exactly (world.gd "inv" key;
+    player.gd face branch uses the inverse + a one-guard fallback to the unchanged per-axis
+    code; probe gained the affine_inverse candidate). GATE OUTCOME: the faceedit gate FAILS in
+    BOTH flag states (fail no_target, both charts; own_cell_hits 0/0 warp ON, 336/0 warp OFF —
+    336 = the eye was buried that run, spawn variance). This is a failed expectation reported as
+    a finding, NOT a weakened check. Root cause is in the ACCEPTANCE ARM, not the fix: the arm's
+    own eye/candidate/lift maths still computes in the per-axis anchor frame
+    (harness.gd:36142/36167/36179), while the game's ray now runs in the exact inverse frame.
+    At the 63:63 corner stand the two frames diverge by ~4 v-cells (the probe's own measurement:
+    5:63:63 shipped (1015,1012) vs truth (1015,1016), scalediag-r1.log / scaleprobe logs) — more
+    than the arm's +/-3 candidate window and ~6 m (~2-3 cell) reach — so the exact ray aims the
+    true surface cell OUTSIDE the window and no look in the 12x7 scan hits a scanned candidate.
+    The r9 green run was a per-axis ray against per-axis candidates (self-consistent in the
+    wrong frame — the source of the 14.753/14.332 m residual). Plan §2 says harness.gd needs
+    "No edit required", so the arm was left pristine; fixing its frame is the coordinator's
+    design decision (candidate ticket: arm frame -> _anchor["inv"]). The probe's plan-named STOP
+    check PASSED: affine_inverse exact_frac 1.0 on both faces (worst 0 cells, n=8192,
+    scaleprobe-r3.log, rc=0, gate_census 0/0). All other gates green in both flag states:
+    g0/smoke rc=0 script=0 shader=0; genhash 25/25 byte-identical to the pre-change tree
+    (GENMS 128 warp ON / 127 warp OFF); ac0423probe equal excluding ms. Minor: the probe
+    header's relative `-s tasks/AC-0462/scale_probe.gd` launch form does not resolve under
+    `--path godot` (res://tasks/... file not found, rc=1 on first attempt — same shape as
+    scaleprobe-r1.log); the successful run used the absolute filesystem path for -s.

@@ -1,43 +1,44 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462b anchor scale measurement</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0462b — which formula converts a face world point to the right cell?</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is a <b>measurement</b> ticket: build the instrument, report which candidate conversion matches ground truth, change no behaviour. The frame bug shipped at e8d2fbc; what remains is a scale error of ~14 m, and the algebra has already fooled me once, so it gets measured rather than reasoned.</p>
-<h2>1. Goal</h2><p>Ground truth: for a set of known face points, the cell whose own geometry actually contains each point. Then, for the same points, the error of each candidate conversion — so the correct one is chosen by data.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462c affine inverse fix</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0462c — convert face points with the inverse matrix, not per-axis dots</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Round 20 measured the answer: no per-axis projection is exact on a face chunk because the LSQ basis is non-orthogonal at corner chunks (cos ≈ 0.49), and the conversion needs the full 3×3 inverse. This applies it.</p>
+<h2>1. Goal</h2><p>A world point on a face chart converts to the cell whose geometry contains it — verified exact by the existing probe, then by the two-chart edit arm.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>tasks/AC-0462/scale_probe.gd (NEW)</td><td>standalone SceneTree; preload <code>res://core/sphere_math.gd</code> and <code>res://core/planet_grid.gd</code></td><td>Write the probe in §3. No game tree, no autoloads.</td></tr>
-<tr><td>godot/core/sphere_math.gd</td><td><code>face_cell_scale</code> (435), <code>face_chunk_transform</code> (508), <code>face_cell_size</code>, <code>face_mirror_x</code> (450)</td><td>READ ONLY.</td></tr>
-<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — note it returns <code>basis</code> with each column ALREADY divided by <code>sc</code>: <code>bx = B.basis.x / sc.x</code></td><td>READ ONLY.</td></tr>
-<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810) — for reference only, the code under study</td><td>READ ONLY. <b>Do not edit it in this ticket.</b></td></tr>
-<tr><td>tasks/AC-0462/</td><td>journal, deviations</td><td>Append.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — it already builds <code>var B: Transform3D = SphereMath.face_chunk_transform(f, ccx, ccz, R)</code> and returns origin/basis/scale at ~15251</td><td>Edit: add ONE key to the face branch's return, <code>"inv": B.affine_inverse()</code>. Change nothing else.</td></tr>
+<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810), face branch (2816-2830)</td><td>Edit the face branch only.</td></tr>
+<tr><td>tasks/AC-0462/scale_probe.gd</td><td>the candidate list added at d9c9bf9</td><td>Edit: add the affine-inverse candidate and re-run.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the two-chart <code>faceedit</code> arm</td><td>No edit required; it is the acceptance instrument.</td></tr>
+<tr><td>tasks/AC-0462/</td><td>journal, deviations, results</td><td>Append.</td></tr>
 </table>
-<h2>3. The probe</h2>
-<p>Pick sample face chunks on a mirror face (5) and a non-mirror face (11) at R = 4000: the boundary chunks the faceedit arm lands on (<code>63:63</code>) plus a spread of others (e.g. ccx/ccz in {0, 1, 31, 63}).</p>
-<ul>
-<li><b>Ground truth definition — state it in the RESULT.</b> For a cell (iu, iv), the chunk transform <code>B = face_chunk_transform(face, ccx, ccz, R)</code> maps the cell's own local square, so the cell's world centre is <code>B * Vector3(local_x + 0.5, 0, local_z + 0.5)</code> where <code>local_x = face_local_x(face, iu, ccx)</code> and <code>local_z = iv &amp; 15</code>. Sample a point <b>inside</b> that cell (e.g. local centre plus a small in-cell offset) and use the cell it came from as the truth.</li>
-<li><b>Candidate conversions</b> — evaluate each on the same world point and report the cell it yields, so the probe can say right/wrong and by how many cells:
-  <ol>
-    <li>as shipped by AC-0462: <code>o = world - anchor.origin</code>, then <code>(o·bx/sc.x, o·bn, o·bz/sc.y)</code> with <code>bx = B.basis.x/sc.x</code> (the anchor's pre-divided basis).</li>
-    <li>no second division: <code>(o·bx, o·bn, o·bz)</code>.</li>
-    <li>normalised-basis division: <code>(o·B.basis.x / |B.basis.x|², o·bn, o·B.basis.z / |B.basis.z|²)</code>.</li>
-    <li>nominal-scale division on the RAW basis: <code>(o·B.basis.x / sc.x, o·bn, o·B.basis.z / sc.y)</code>.</li>
-  </ol>
-  Add <code>ccx*16</code>/<code>ccz*16</code> and the mirror form from the AC-0462 fix before comparing to the true absolute column.</li>
-<li><b>Report per candidate</b>: worst cell error (in cells), mean, and the fraction of samples that land in the TRUE cell. The correct formula is the one that lands in the true cell for every sample; report all four so the choice is visible, not asserted.</li>
-<li>Also report, per sample chunk, the three length scales that matter: <code>|B.basis.x|</code>, <code>sc.x</code>, and the distance between adjacent cell centres along u — so the numbers that disagreed are on the record.</li>
-</ul>
-<p>RESULT keys (JSON): ok, R, samples, candidates {name: {worst_cells, mean_cells, exact_frac}}, scales {chunk: {basis_x_len, sc_x, spacing_u}}, fails.</p>
+<p><b>Do not touch:</b> the warp, placement, <code>get_block_key</code>/<code>set_block_key</code>, SphereMath, streaming, keys, saves. Keep everything the AC-0462 frame fix already landed (absolute columns + the mirror form).</p>
+<h2>3. Edit shape</h2>
+<p><b>3.1 <code>player_anchor</code></b>: in the face return, add <code>"inv": B.affine_inverse()</code> beside <code>origin</code>/<code>basis</code>/<code>scale</code>. Leave the existing keys untouched so every other consumer (sim_height, the anchor-frame block accessors) keeps working unchanged.</p>
+<p><b>3.2 <code>_flat_ray</code> face branch</b>: replace the per-axis projection with the inverse transform, then keep the ABSOLUTE-column + mirror conversion exactly as it is today (that part is proven):</p>
+<pre>var inv: Transform3D = _anchor["inv"]
+var lo: Vector3 = inv * camera.global_position      # cells in x/z, metres in y
+var dl: Vector3 = inv.basis * aim_dir()             # direction, same units
+# then, as today:
+mirror = SphereMath.face_mirror_x(face)
+abs_x  = ccx*16 + (16.0 - lo.x if mirror else lo.x)
+abs_z  = ccz*16 + lo.z
+d_x    = -dl.x if mirror else dl.x
+return {"o": Vector3(abs_x, lo.y, abs_z), "d": Vector3(d_x, dl.y, dl.z).normalized(),
+        "reach": REACH / dl.length()}</pre>
+<p>Keep the non-face branch and the home path byte-identical. If <code>inv</code> is absent (an anchor built before this change), fall back to the current per-axis code rather than crashing — one guard line.</p>
+<p><b>3.3 The probe</b>: add candidate <code>affine_inverse</code> (<code>inv * p</code>, then the absolute/mirror conversion) to <code>scale_probe.gd</code> and re-run. <b>Expected: exact_frac 1.0</b> on both faces. If it is not 1.0, STOP and report — that would mean the ground truth and the consumer disagree for a reason neither measurement has found yet.</p>
 <h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>G0 + regression</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,ac0423probe --timeout 600</code></td><td>rc=0, SCRIPT=0/SHADER=0 (no product code changes, so this is the whole regression).</td></tr>
-<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, every candidate reported, at least one candidate with exact_frac 1.0 <b>or</b> a clear statement that none is exact and why.</td></tr>
+<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, affine_inverse exact_frac 1.0 (worst 0 cells).</td></tr>
+<tr><td>Warp ON (default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; both charts (mirror + non-mirror): face &gt; 1, break/place true, placed_cell == aim_cell, <b>surface_error_m ≤ 2.0 m</b>.</td></tr>
+<tr><td>Warp OFF</td><td>Same with <code>--env 'AWECRAFT_WARP=0'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; same assertions.</td></tr>
+<tr><td>Standing guards</td><td>genhash inside the smoke set; ac0423probe vs its capture.</td><td>genhash 25/25; ac0423probe equal excl ms — this changes player aim only, so the world must not move.</td></tr>
 </table>
-<p>No renders, no native rebuild, no heavy set.</p>
-<h2>5. Acceptance</h2><p>A logged table that names the conversion matching ground truth on both chart classes, plus the scale numbers that explain the current 14 m residual. <b>No product code changes.</b></p>
-<h2>6. Risks</h2><p>The "ground truth" must come from the chunk transform that the MESH uses — if it instead comes from the warp/canonical model, the comparison measures a different question. State which transform defines truth and why it is the mesh's.</p>
+<h2>5. Acceptance</h2><p>The probe's affine candidate is exact, the two-chart edit arm's error falls from ~14 m to ≤ 2 m in both warp states, and no standing value moves.</p>
+<h2>6. Risks</h2><p><code>affine_inverse()</code> on a valid transform is safe, but a degenerate basis would return garbage — the anchor only ever builds from <code>face_chunk_transform</code>, so guard the fallback in §3.2 and report if it ever triggers. Do not change the reach maths beyond the unit conversion.</p>
 <h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. This ticket adds ONE probe file.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>AC-0462 fixed the wrong-chunk bug (5,841 m -> 14.7 m, aim == placed on mirror and non-mirror). This measures the remaining scale error so the fix is chosen from data. Next: apply the winning conversion, then AC-0459 and AC-0463.</p>
+<h2>8. Resume point</h2><p>Frame bug fixed (e8d2fbc), scale question measured (d9c9bf9, affine inverse named). This applies it. After it: AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
 </body></html>
