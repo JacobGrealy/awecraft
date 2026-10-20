@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-20T10:54
+  updated_at: 2026-10-20T12:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -31,6 +31,7 @@ queue:
 - AC-0412
 - AC-0438
 - AC-0453
+- AC-0464
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -29826,4 +29827,41 @@ intake:
     \ seams are necessary but NOT sufficient.\n   DOCS: ARCHITECTURE.md grid/placement/streaming/consumer\
     \ sections rewritten to the one model, the\n   design essay labelled with what shipped, and the standing\
     \ gate values re-established deliberately.\n   PRECONDITION: every earlier ticket in this series landed.\n"
+  comments: []
+- id: AC-0464
+  title: boundary-face-chunk-renders-unlit-black
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-20T12:15
+  updated_at: 2026-10-20T12:15
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Standing near the edge of the spawn face and looking along the boundary, a large\
+    \ block of the world renders pure black and unlit - it looks like a hole or a missing chunk even though\
+    \ geometry is there. It happens with or without the AC-0458 warp flag, so it is not part of the migration;\
+    \ a player sees it today.\n\n2) Technical Details:\n   FOUND 2026-10-20 while taking the AC-0460 stage-1\
+    \ boundary shot (coordinator).\n   REPRODUCE (renders on this box, lavapipe, ~2 min each):\n     xvfb-run\
+    \ -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \\\n       AWECRAFT_SNAPSHOT=<abs>.png\
+    \ AWECRAFT_AIM=\"3133,60,0,0,-0.4\" AWECRAFT_NOCLIP=1 \\\n       AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5\
+    \ AWECRAFT_SIZE=1280,720 AWECRAFT_SNAP_DRAIN=300 \\\n       ~/tools/godot/godot --path godot --rendering-driver\
+    \ vulkan\n   AWECRAFT_AIM takes FLAT coordinates. x=3133 is just inside the home/face boundary\n \
+    \  (hw = face_width(R)/2 = 3141.59 at R=4000), z=0.\n   OBSERVED: a large black, unlit, angular block\
+    \ in the lower right of the frame, with the rest of\n   the scene heavily fog-washed. Evidence: tasks/AC-0464/captures/boundary-unlit-flagoff.png\
+    \ and\n   boundary-unlit-flagon.png - the two are visually identical apart from noise, i.e. the defect\
+    \ is\n   INDEPENDENT of AWECRAFT_WARP.\n   NOT the cause: the shots carry ZERO script errors (gate_census\
+    \ 0/0) in both flag states, so the\n   \"Invalid access to property or key 'sky'\" lines another run\
+    \ saw at the boundary (light_at\n   world.gd:13609, vm_refresh player.gd:1400, compute_light_split\
+    \ lighting.gd:179) did NOT reproduce\n   here; they are shot-specific and belong to this investigation,\
+    \ not to the migration.\n   LIKELY AREA (unverified): face-lane chunks at the boundary building with\
+    \ no light payload / the\n   fallback material - the same family as the AC-0444 finding that apparent\
+    \ \"sky\" was unlit far-tier\n   faces. Start by identifying WHAT the black object is (project the\
+    \ chunk lattice, the AC-0440/AC-0443\n   method) rather than by guessing at the shader.\n   VERIFY:\
+    \ after a fix, the same recipe must show the block lit and continuous with its neighbours,\n   and\
+    \ the flag on/off pair must still agree.\n"
   comments: []
