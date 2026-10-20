@@ -36064,18 +36064,47 @@ func _faceedit_test(spawn: Vector3) -> void:
 	if R <= 0.0:
 		Debug.result({"faceedit": {"ok": false, "fail": "no_planet_R", "warp": warp, "ms": Time.get_ticks_msec() - t0}})
 		return
-	var fails: Array = []
-	# THE boundary stand — the warpcensus shape, PAST the +x edge (8 m
-	# inside the face chart where warpcensus stands 8 m inside the home
-	# patch): the face > 1 assertion below is what keeps this honest.
 	Game.mode = "play"
 	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
 	await main._await_sim_band(spawn, 3000)
 	var p = main._spawn_player()
+	# the home-side reference flat position for both stands (the arm's
+	# original pf source — the spawn position, before any stand).
+	var pf0: Vector3 = world.flat_of_world_pos(p.position)
+	# AC-0462 (fix): TWO charts in one run — edge 0 = PAST the +x edge
+	# (mirror class, faces 4/5) and edge 1 = PAST the -z edge (non-mirror
+	# class, faces 10/11). The per-chart mirror-class assertion is what
+	# keeps each stand honest (a wrong class is a loud fail, never a
+	# reroute or a softened check).
+	var charts: Array = []
+	charts.append(await _faceedit_chart(p, 0, pf0, R, warp))
+	charts.append(await _faceedit_chart(p, 1, pf0, R, warp))
+	var ok := true
+	for ch in charts:
+		ok = ok and bool(ch.get("ok", false))
+	Debug.result({"faceedit": {
+		"ok": ok,
+		"charts": charts,
+		"warp": warp,
+		"ms": Time.get_ticks_msec() - t0,
+	}})
+
+
+func _faceedit_chart(p, edge: int, pf0: Vector3, R: float, warp: int) -> Dictionary:
+	var t0c := Time.get_ticks_msec()
+	var fails: Array = []
+	# THE boundary stand — the warpcensus shape PAST the patch edge (8 m
+	# inside the face chart): edge 0 = the +x edge (the mirror class),
+	# edge 1 = the -z edge (the non-mirror class). The face > 1 assertion
+	# below is what keeps this honest.
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var pf: Vector3 = world.flat_of_world_pos(p.position)
-	pf.x = hw + 8.0
-	pf.z = 0.0
+	var pf: Vector3 = pf0
+	if edge == 0:
+		pf.x = hw + 8.0
+		pf.z = 0.0
+	else:
+		pf.x = 0.0
+		pf.z = -(hw + 8.0)
 	p.position = world.world_pos_of_flat(pf.x, pf.y, pf.z)
 	# recenter takes FLAT coordinates (the _face_player_flat contract —
 	# with the player 8 m PAST the edge the +x edge face chunks stream).
@@ -36087,13 +36116,17 @@ func _faceedit_test(spawn: Vector3) -> void:
 	while frames < max_frames:
 		frames += 1
 		await get_tree().process_frame
-	# THE assertion: the anchor must be PAST the home pair.
+	# THE assertions: the anchor must be PAST the home pair, and on the
+	# chart class this edge is supposed to produce (the mirror-class check
+	# is what makes the two-chart run meaningful).
 	var anch: Dictionary = world.player_anchor(p.position)
 	var face := int(anch.get("face", 0))
 	var stand: Array = [roundf(p.position.x * 100.0) / 100.0, roundf(p.position.y * 100.0) / 100.0, roundf(p.position.z * 100.0) / 100.0]
 	if face <= 1:
-		Debug.result({"faceedit": {"ok": false, "fail": "anchor_on_home_pair", "face": face, "stand": stand, "anchor_origin": [anch["origin"].x, anch["origin"].y, anch["origin"].z], "warp": warp, "frames": frames, "ms": Time.get_ticks_msec() - t0}})
-		return
+		return {"ok": false, "fail": "anchor_on_home_pair", "edge": edge, "face": face, "stand": stand, "anchor_origin": [anch["origin"].x, anch["origin"].y, anch["origin"].z], "frames": frames, "ms": Time.get_ticks_msec() - t0c}
+	var mirror := 1 if SphereMath.face_mirror_x(face) else 0
+	if (edge == 0 and mirror != 1) or (edge == 1 and mirror != 0):
+		return {"ok": false, "fail": "wrong_mirror_class", "edge": edge, "face": face, "mirror": mirror, "stand": stand, "anchor_origin": [anch["origin"].x, anch["origin"].y, anch["origin"].z], "frames": frames, "ms": Time.get_ticks_msec() - t0c}
 	# stand ABOVE the local surface (fly: no footing needed) so the aim
 	# sees the chart in front — the lift is the game's OWN surface data,
 	# not a guess: the eye goes 2.5 m above the top of the local surface
@@ -36107,8 +36140,15 @@ func _faceedit_test(spawn: Vector3) -> void:
 	var oxw0: Vector3 = p.camera.global_position - pa0["origin"]
 	var sc0: Vector2 = pa0["scale"]
 	var ocell0: Vector3 = Vector3(oxw0.dot(pa0["basis"].x) / sc0.x, oxw0.dot(pa0["basis"].y), oxw0.dot(pa0["basis"].z) / sc0.y)
-	var colx0: int = int(floorf(ocell0.x))
-	var colz0: int = int(floorf(ocell0.z))
+	# AC-0462 (fix): surface_top_key indexes ABSOLUTE columns — convert the
+	# player's anchor-local column (mirror class: local index k is
+	# absolute ccx*16 + 15 - k, the face_local_x data layout).
+	var ccx_p: int = int(pa0.get("ccx", 0))
+	var ccz_p: int = int(pa0.get("ccz", 0))
+	var kx0: int = int(floorf(ocell0.x))
+	var kz0: int = int(floorf(ocell0.z))
+	var colx0: int = ccx_p * 16 + (15 - kx0 if mirror else kx0)
+	var colz0: int = ccz_p * 16 + kz0
 	var local_top: int = world.surface_top_key(face, colx0, colz0)
 	var want_y: float = ocell0.y + 3.0 if local_top < 0 else float(local_top) + 3.5
 	var lift: float = want_y - ocell0.y
@@ -36125,11 +36165,23 @@ func _faceedit_test(spawn: Vector3) -> void:
 	var oxw: Vector3 = p.camera.global_position - pa["origin"]
 	var sc: Vector2 = pa["scale"]
 	var ocell: Vector3 = Vector3(oxw.dot(pa["basis"].x) / sc.x, oxw.dot(pa["basis"].y), oxw.dot(pa["basis"].z) / sc.y)
+	# AC-0462 (fix): the candidates run in ABSOLUTE columns (the block
+	# API's frame — before the fix the arm itself mixed frames, aiming at
+	# the chart-corner chunk the broken ray read).
+	var ccx_a: int = int(pa.get("ccx", 0))
+	var ccz_a: int = int(pa.get("ccz", 0))
+	var kx_a: int = int(floorf(ocell.x))
+	var kz_a: int = int(floorf(ocell.z))
+	var acolx: int = ccx_a * 16 + (15 - kx_a if mirror else kx_a)
+	var acolz: int = ccz_a * 16 + kz_a
+	# the eye's ABSOLUTE-column position (plan §3 origin form) — the
+	# distance ranking compares absolute cells against an absolute eye.
+	var oabs: Vector3 = Vector3(float(ccx_a * 16) + (16.0 - ocell.x if mirror else ocell.x), ocell.y, float(ccz_a * 16) + ocell.z)
 	var cands: Array = []
 	for dx in range(-3, 4, 1):
 		for dz in range(-3, 4, 1):
-			var colx: int = int(floorf(ocell.x)) + dx
-			var colz: int = int(floorf(ocell.z)) + dz
+			var colx: int = acolx + dx
+			var colz: int = acolz + dz
 			if colx < 0 or colz < 0 or colx >= 1024 or colz >= 1024:
 				continue
 			var top: int = world.surface_top_key(face, colx, colz)
@@ -36141,7 +36193,7 @@ func _faceedit_test(spawn: Vector3) -> void:
 					continue
 				if world.get_block_key(face, colx, colz, yy) == 0:
 					continue
-				var d: float = Vector3(float(colx) + 0.5 - ocell.x, float(yy) + 0.5 - ocell.y, float(colz) + 0.5 - ocell.z).length()
+				var d: float = Vector3(float(colx) + 0.5 - oabs.x, float(yy) + 0.5 - ocell.y, float(colz) + 0.5 - oabs.z).length()
 				cands.append([d, Vector3i(colx, yy, colz)])
 	cands.sort_custom(func(a, b): return float(a[0]) < float(b[0]))
 	var hit: Dictionary = {}
@@ -36163,8 +36215,7 @@ func _faceedit_test(spawn: Vector3) -> void:
 			hit = aim_found["hit"]
 			break
 	if hit.is_empty() or not bool(hit.get("hit", false)):
-		Debug.result({"faceedit": {"ok": false, "fail": "no_target", "face": face, "stand": stand, "anchor_col": [int(ocell.x), int(ocell.y), int(ocell.z)], "local_top": local_top, "lift": roundf(lift * 100.0) / 100.0, "own_cell_hits": own_cell_hits, "candidates": cands.size(), "scanned": n_scanned, "warp": warp, "frames": frames, "ms": Time.get_ticks_msec() - t0}})
-		return
+		return {"ok": false, "fail": "no_target", "edge": edge, "face": face, "mirror": mirror, "stand": stand, "anchor_col": [int(ocell.x), int(ocell.y), int(ocell.z)], "aim_col": [acolx, acolz], "local_top": local_top, "lift": roundf(lift * 100.0) / 100.0, "own_cell_hits": own_cell_hits, "candidates": cands.size(), "scanned": n_scanned, "frames": frames, "ms": Time.get_ticks_msec() - t0c}
 	# MEASURE (before any edit): the world point the aim resolves to. The
 	# DDA ran in the cell frame (the _flat_ray map M); the ray's world
 	# displacement for a DDA step dt is dt/|M(ad)| along ad (M is linear,
@@ -36270,9 +36321,13 @@ func _faceedit_test(spawn: Vector3) -> void:
 		"hit_cell_world": [roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).x * 100.0) / 100.0, roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).y * 100.0) / 100.0, roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).z * 100.0) / 100.0],
 		"eye_to_hit_cell_m": roundf((p.camera.global_position - p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z)).length() * 100.0) / 100.0,
 	}
-	Debug.result({"faceedit": {
+	# the per-chart report (the gate reads: face > 1, break_ok AND
+	# place_ok, placed_cell == aim_cell, surface_error_m <= 2.0).
+	return {
 		"ok": break_ok and place_ok,
+		"edge": edge,
 		"face": face,
+		"mirror": mirror,
 		"frames": frames,
 		"stand": stand,
 		"aim_point": [roundf(aim_point.x * 1000.0) / 1000.0, roundf(aim_point.y * 1000.0) / 1000.0, roundf(aim_point.z * 1000.0) / 1000.0],
@@ -36282,14 +36337,13 @@ func _faceedit_test(spawn: Vector3) -> void:
 		"surface_error_m": surface_error_m,
 		"break_ok": break_ok,
 		"place_ok": place_ok,
-		"place_cell": [int(aim_cell.x), int(aim_cell.y), int(aim_cell.z)],
+		"placed_cell": [int(aim_cell.x), int(aim_cell.y), int(aim_cell.z)],
 		"target_chunk": world._key_f(face, ccx0, ccz0),
 		"target_mesh_built": target_mesh_built,
-		"warp": warp,
 		"fails": fails,
 		"diag": pd,
-		"ms": Time.get_ticks_msec() - t0,
-	}})
+		"ms": Time.get_ticks_msec() - t0c,
+	}
 
 
 # AC-0462: the look-scan for a face aim — the interact arm verifies its

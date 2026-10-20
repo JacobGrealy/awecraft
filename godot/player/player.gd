@@ -2818,9 +2818,20 @@ func _flat_ray() -> Dictionary:
 		var sc: Vector2 = _anchor["scale"]
 		var ad: Vector3 = aim_dir()
 		var dcells: Vector3 = Vector3(ad.dot(bx) / sc.x, ad.dot(bn), ad.dot(bz) / sc.y)
+		# AC-0462 (fix): get_block_key indexes ABSOLUTE face columns (0..1023),
+		# but the anchor frame is the anchor chunk's local cell frame [0,16) —
+		# so convert the origin to absolute columns before the DDA, and flip
+		# the x direction on the mirror class (their local +X runs against u).
+		# y is unscaled metres above the anchor plane — untouched. The block
+		# API keeps doing the absolute->slot mirror (face_local_x).
+		var face: int = int(_anchor["face"])
+		var mirror := SphereMath.face_mirror_x(face)
+		var ocells: Vector3 = Vector3(o.dot(bx) / sc.x, o.dot(bn), o.dot(bz) / sc.y)
+		var ax: float = float(int(_anchor["ccx"])) * 16.0 + (16.0 - ocells.x if mirror else ocells.x)
+		var az: float = float(int(_anchor["ccz"])) * 16.0 + ocells.z
 		return {
-			"o": Vector3(o.dot(bx) / sc.x, o.dot(bn), o.dot(bz) / sc.y),
-			"d": dcells.normalized(),
+			"o": Vector3(ax, ocells.y, az),
+			"d": Vector3(-dcells.x if mirror else dcells.x, dcells.y, dcells.z).normalized(),
 			"reach": REACH / dcells.length(),
 		}
 	var o: Vector3 = Game.world.flat_of_world_pos(camera.global_position)

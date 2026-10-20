@@ -33,3 +33,35 @@ AC-0462 deviations (builder, 2026-10-20):
 7. No main.gd entry — BATTSKIP via the battery's fallback match (warpcensus shape; the plan's
    "only if the neighbours need it" test: they don't). Recorded here for completeness; not a
    scope deviation.
+
+8. (fix run) The arm now runs on TWO charts in one run, per plan §4: edge 0 = PAST the +x edge
+   (mirror class, landed face 5, mirror=1) and edge 1 = PAST the -z edge (non-mirror class,
+   landed face 11, mirror=0), each with its own 240-frame settle, the same per-chart asserts
+   (face > 1 kept, now PLUS a per-chart mirror-class assert — a wrong class fails loudly), and a
+   per-chart report (face, mirror, aim_cell, placed_cell, break_ok, place_ok, surface_error_m).
+   The arm's OWN candidate/lift column maths was also converted to absolute columns in the same
+   change: it had the same local/absolute mix the fix corrects in _flat_ray (pre-fix the arm
+   aimed at the corner chunk's cells that the broken ray read — self-consistent with the bug).
+
+9. (fix run) FINDING, reported not fixed — surface_error_m is 14.26-16.55 m, far above the 2.0 m
+   gate target, while EVERY cell-identity assertion passes (both charts, both warp states:
+   placed_cell == aim_cell, break_ok/place_ok true, target_chunk = the player's own anchor chunk
+   5:63:63 / 11:63:63, not the chart corner). The residual is a SECOND, pre-existing frame bug
+   OUTSIDE this plan's scope (SphereMath is read-only per §2): the anchor cell frame uses
+   face_cell_scale's uniform constants (3.068 m/cell on the half axis), but the true chart
+   spacing at the home-edge stand is 2.194 m/cell — verified two independent ways (the game's
+   own LSQ chunk-fit basis length is 2.194; the adjacent chart cell-centre distance is 2.194;
+   the arm's diag basis_lens 0.716 = 2.194/3.068 is the ratio itself). The folded net is
+   equirectangular: per-cell spacing varies ~30% along a face, so the uniform anchor scale cannot
+   agree with the LSQ placement at home-edge stands. The mirror form is NOT inverted (both
+   charts pass), so the column fix stands as plan §3 prescribes; the residual is the anchor's
+   scale, and per plan §7 it is reported rather than silently fixed. Before/after: 5,841.19 m
+   (warp on) / 5,840.47 m (warp off), round-18 baseline, -> 14.753 / 14.332 (warp on) and
+   16.55 / 14.26 (warp off).
+
+10. (fix run) The round-18 secondary findings persist (read-only, reported): (a)
+    world.key_for_sphere_pos still disagrees with the DDA cell on both charts (aim_cell_key
+    5:290:1021 / 11:1021:290 vs aim_cell [1022,183,1014] / [1014,183,1023] — the unshifted-
+    position u derivation); (b) player.gd _sim_cell_center's cell->world map still uses the raw
+    z+0.5 without the ccz*16 localisation, so diag eye_to_hit_cell_m stays large (2193.84 /
+    6188.11 m). Neither is touched by this fix (plan §2/§7: report, do not fix a second place).

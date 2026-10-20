@@ -1,37 +1,46 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462 face edit proof</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0462 — prove an edit on a face lands where the player aims</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The warp is the DEFAULT placement since AC-0460, so the thing to prove is player-facing: when you stand on a chart that is not the spawn face and break or place a block, the block you change is the one you aimed at, and the surface you hit agrees with the cell the game derives. <b>Measure it; change no placement.</b></p>
-<h2>1. Goal</h2><p>One arm that edits a block on a face chart with the warp on and reports, in metres, how far the surface the player hits is from where the game's own cell maths says it is — plus the same numbers with the warp off, for contrast.</p>
-<h2>2. What is already known (do not re-derive)</h2>
-<p>The player anchor (<code>world.player_anchor</code>, world.gd:15231), the block keys (<code>key_for_sphere_pos</code>, :15295) and drops all derive cells through <code>SphereMath.world_to_face</code> — the CHART mapping, which is the exact inverse of the pointwise warp. So with the warp on the geometry should AGREE with the cell maths; with it off, the legacy per-chunk LSQ fit is what disagrees. The arm's job is to show that in numbers, from the player's position, on a face.</p>
-<h2>3. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462 fix the face aim frame</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0462 (fix) — put the face aim ray in absolute columns</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The bug is proven (ticket journal, round 18): the face aim ray runs in the anchor chunk's LOCAL cell frame while the block API indexes ABSOLUTE face columns, so every edit on a chart other than the spawn pair has been landing on that chart's corner chunk. One function produces the frame.</p>
+<h2>1. Goal</h2><p>Face edits land in the cell the player aims at, on a mirror face and a non-mirror face alike.</p>
+<h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the interact arm's place/break pattern (<code>_find_door_spot</code>, <code>Debug.teleport</code>/<code>look</code>, <code>use_selected</code>, <code>world.get_block</code>, ~6355-6400); the <code>warpcensus</code> arm's boundary positioning</td><td>Add ONE arm <code>faceedit</code>. Copy their shapes; invent no new helpers unless a name clash forces it.</td></tr>
-<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225), <code>key_for_sphere_pos</code> (15294), <code>get_block</code>/<code>set_block</code>, <code>_face_stream</code> (14991)</td><td>READ ONLY.</td></tr>
-<tr><td>tasks/harness_data.yaml</td><td>the <code>warpcensus</code> row as the template</td><td>Add the <code>faceedit</code> row; then <code>harness_doc.py --render</code>.</td></tr>
-<tr><td>tasks/AC-0462/</td><td>plan.html, continuity.md, AC-0462-deviations.txt, AC-0462-results.html</td><td>Create; render the results page after the gates.</td></tr>
+<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810), its face branch (2816-2830); <code>aim_hit</code>'s callback (2796-2798)</td><td>Edit the face branch of <code>_flat_ray</code> ONLY.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — it already returns <code>ccx</code>, <code>ccz</code>, <code>origin</code>, <code>basis</code>, <code>scale</code></td><td>READ ONLY.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>face_mirror_x</code> (450), <code>face_local_x</code> (454)</td><td>READ ONLY — the mirror convention is already defined there.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>faceedit</code> arm added at aa253ce</td><td>Edit: run the edit on a MIRROR face and a NON-MIRROR face and report both.</td></tr>
+<tr><td>tasks/AC-0462/</td><td>journal, deviations, results page</td><td>Append/extend.</td></tr>
 </table>
-<p><b>Do not touch:</b> the warp, the placement, the chunk transforms, streaming, keys, saves, SphereMath, docs.</p>
-<h2>4. Edit shape — the arm</h2>
+<p><b>Do not touch:</b> the warp, placement, <code>get_block_key</code>/<code>set_block_key</code> (they are correct — they want absolute columns), streaming, keys, saves, SphereMath.</p>
+<h2>3. The mapping (established by the AC-0458 warp inverse; do not re-derive)</h2>
+<p><code>_flat_ray</code>'s face branch currently returns, for the anchor chunk <code>(ccx, ccz)</code>:</p>
+<pre>o_local = ( o.dot(bx)/sc.x , o.dot(bn) , o.dot(bz)/sc.y )
+d_local = ( ad.dot(bx)/sc.x , ad.dot(bn) , ad.dot(bz)/sc.y )      reach = REACH / |d_local|</pre>
+<p><code>o_local.x</code> is the along-u cell offset inside the anchor chunk, <code>o_local.y</code> is height in metres, <code>o_local.z</code> the along-v offset. Convert to ABSOLUTE columns before returning, and flip the direction component when the mirror reverses the axis:</p>
+<pre>mirror = SphereMath.face_mirror_x(face)
+abs_x  = ccx*16 + (16.0 - o_local.x  if mirror else o_local.x)
+abs_z  = ccz*16 + o_local.z
+d_x    = -d_local.x if mirror else d_local.x
+d_z    = d_local.z</pre>
+<p>Return <code>{"o": Vector3(abs_x, o_local.y, abs_z), "d": Vector3(d_x, d_local.y, d_z).normalized(), "reach": reach}</code> — <code>reach</code> unchanged (it is already in cell units). <b>Rationale for the mirror form</b>: the face data layout runs its local +X against u (<code>face_local_x</code> = 15 − k on the mirror class), so local x = 0 is the chunk's absolute column <code>ccx*16 + 16</code>; the AC-0458 native warp uses the same inverse (<code>u1024 = ccx*16 + 16 − lx</code>). <b>Do not "fix" this by changing <code>get_block_key</code></b> — it already applies <code>face_local_x</code> for absolute→slot, and the ray must hand it true absolute columns.</p>
+<p><b>Why the height is untouched:</b> the face frame's y is unscaled metres above the anchor plane, which is exactly what <code>get_block_key</code>'s <code>y</code> means. Do not scale or shift it.</p>
+<h2>4. The arm (extend <code>faceedit</code>)</h2>
 <ul>
-<li><b>Position</b> the player on a face chart near the home/face boundary, the same way <code>warpcensus</code> does, and let the face lane stream (wait the same bounded frame count it uses). <b>Assert the anchor's face is &gt; 1</b> — if the player is still on the home pair, the arm must FAIL loudly rather than silently testing the spawn face (that would be a green test of the wrong thing).</li>
-<li><b>Find a target</b> with the same aim/verify approach the interact arm uses (a real aim, not a teleport into a wall). If no target is found on the face, report <code>no_target</code> with the anchor and position — that is a finding, not a pass.</li>
-<li><b>Measure</b>, before editing: <code>aim_point</code> (the world position the aim resolves to), <code>aim_cell</code> (the cell the game derives for it), and <code>surface_error_m</code> = the distance from the aim point to the nearest surface of <code>aim_cell</code> as the GAME places it (derive that surface from the cell's own bounds — do not invent a second placement).</li>
-<li><b>Break</b> the aimed block and assert it became air, then <b>place</b> a block back and assert it landed in the SAME cell. Report <code>break_ok</code>, <code>place_ok</code>, and the cell identity before/after.</li>
-<li><b>RESULT</b> keys: ok, face, frames, aim_point, aim_cell, surface_error_m, break_ok, place_ok, warp (0/1), fails.</li>
+<li>Run the existing faceedit measurement on TWO charts: a MIRROR face (one of 4-7) and a NON-MIRROR face (one of 8-11). Either by an env/arg on the arm or by looping both inside one run — the simplest correct thing.</li>
+<li>Keep every existing assertion: anchor face &gt; 1 (fail loudly otherwise), aim/verify, break then place in the same cell, <code>surface_error_m</code>.</li>
+<li>Report per-chart: face, mirror (0/1), aim_cell, placed_cell, break_ok, place_ok, surface_error_m.</li>
+<li><b>Record <code>surface_error_m</code> BEFORE the fix too</b>, if you can do so in one run (e.g. the arm reports the pre-fix expectation from the anchor alone); otherwise state the pre-fix numbers from the round-18 log (5,841.19 m warp on / 5,840.47 m warp off) as the baseline in the deviations. Do not re-run the old code to simulate it.</li>
 </ul>
 <h2>5. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Warp ON (the shipped default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <code>warp 1</code>; face &gt; 1; <code>break_ok</code> and <code>place_ok</code> true; <b>report <code>surface_error_m</code></b> — target ≤ 1.5 m (the M1 ground-level displacement scale).</td></tr>
-<tr><td>Warp OFF (the contrast)</td><td>Same arms with <code>--env 'AWECRAFT_WARP=0'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <code>warp 0</code>; <code>break_ok</code>/<code>place_ok</code> true; report <code>surface_error_m</code> — expect it LARGER than the warp-on value. If it is not, say so; that would mean this measurement cannot discriminate and the arm needs a different quantity.</td></tr>
+<tr><td>Warp ON (default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <b>both</b> charts: face &gt; 1, break_ok and place_ok true, placed_cell == aim_cell, and <code>surface_error_m</code> small — target ≤ 2.0 m (a face cell is ~6.14 m across, so under a third of a cell means the aim and the cell agree).</td></tr>
+<tr><td>Warp OFF</td><td>Same with <code>--env 'AWECRAFT_WARP=0'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; same assertions. (The warp changes where geometry sits by ≤ ~1 m at ground level; the aim frame fix is independent of it, so both states should now pass.)</td></tr>
 <tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0.</td></tr></table>
-<p>No render, no native rebuild, no heavy set.</p>
-<h2>6. Acceptance</h2><p>A player-facing edit on a face works and the numbers show the warped geometry agreeing with the game's cell maths better than the legacy placement does. If either half fails, that is a finding about the shipped default and must be reported as such — <b>do not</b> adjust the placement or the tolerances to make it pass.</p>
-<h2>7. Risks</h2><p>The arm's target search may land on the home pair despite the boundary position — the face &gt; 1 assertion exists for exactly that. A silent <code>no_target</code> must not read as a pass.</p>
+<h2>6. Acceptance</h2><p>An edit on a mirror face and on a non-mirror face lands in the aimed cell, in both warp states, with the reported error down from kilometres to under a third of a cell.</p>
+<h2>7. Risks</h2><p>(1) The mirror flip is the piece most likely to be wrong — that is what the two-chart arm exists for; if only the non-mirror chart passes, the mirror form is inverted and that is the finding. (2) Other call sites may still mix frames (<code>_sim_get_block</code>/<code>_sim_set_block</code> consume DDA coords, so they inherit this fix; <code>visible_cell_key</code> at 3232-3239 computes its own from world and may still be local — if the arm shows an inconsistency, report it rather than silently fixing a second place).</p>
 <h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No refactor the plan did not ask for.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>The warp shipped as the default at b3a0334 after AC-0460 closed. This proves it from the player's hands. Next: AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
+<h2>9. Resume point</h2><p>Round 18 proved the bug by trace (journal). This fixes the one function that builds the frame. After it: AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
 </body></html>
