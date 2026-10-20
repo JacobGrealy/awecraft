@@ -52,6 +52,13 @@ run dies with nothing written.
    the plan's file list. No refactors it does not ask for. If the plan names gates with
    expected values, those values are your target — a mismatch is a FINDING, report it.
 
+   HOW YOU EDIT: change existing files with `edit`, never by re-emitting them with `write`. If one
+   file needs more than ~5 edits, STOP and report it — that means the plan was wrong, and rewriting
+   the file is not the fix. A single response that tries to re-emit a large file dies at the
+   provider's 32,768-token response cap (reasoning and tool arguments are charged against the same
+   budget), leaving a partial file behind and no gate able to prove anything about it. The numbers
+   behind that rule: godot/OPS.md §1.
+
    IF THE PLAN IS A MEASUREMENT PLAN (its §1 or §5 says measure / instrument / report), then the
    deliverable is NUMBERS, not behaviour:
    - build the instrument exactly as the plan specifies (usually one probe arm or one script), run it,

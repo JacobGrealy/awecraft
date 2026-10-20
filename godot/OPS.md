@@ -47,6 +47,16 @@ the machine, the build, the daemons and git. Do not restate one in the other —
   (a quiet run has been measured at 28 tok/s against this 15 tok/s law), so one fast run proves
   nothing on its own.
 
+  **The response cap is 32,768 tokens, and reasoning is charged against it** (`llm-pi-ai`
+  `DEFAULT_MAX_TOKENS`, `packages/llm/llm-pi-ai/src/config.ts`; `~/.dsh/settings.yaml` sets no
+  `maxTokens` for the 27B). Truncation appears as `stopReason: length` in the session log and is RARE:
+  across 9,533 builder responses the median response is 452 tokens and p99 is 8,487, so ordinary work
+  has ~98% headroom. The exposure is therefore one BALLOONED response — in practice a whole-file
+  `write` or a runaway reasoning block, which is why `tasks/templates/implement.md` fences rewriting a
+  file. Note that a child session's header records no `reasoningEffort`, so truncations CANNOT be
+  attributed to an effort level from the logs; record the effort first if that question matters. And
+  do not raise the cap to "fix" truncation — a 60k single response is a bad response, not a saved one.
+
 ## 2. Sandbox rules (why a godot call looks the way it does)
 
 **The rules for issuing a godot call — the `HOME` prefix, the absolute engine path, `--path godot`

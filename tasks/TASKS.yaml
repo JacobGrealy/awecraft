@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-19T11:42
+  updated_at: 2026-10-19T22:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -7,11 +7,7 @@ queue:
 - AC-0433
 - AC-0434
 - AC-0451
-- AC-0452
 - AC-0399
-- AC-0130
-- AC-0294
-- AC-0296
 - AC-0094
 - AC-0141
 - AC-0142
@@ -29211,11 +29207,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-10-18T21:15
-  updated_at: 2026-10-18T21:15
-  completed_at: null
+  updated_at: 2026-10-19T17:05
+  completed_at: 2026-10-19T17:05
   waiting_on: null
   parent_id: null
   notes: '1) User Story:
@@ -29569,4 +29565,72 @@ intake:
     \ P1 is the first design ticket under this model - measurement run, design pass,\nimplementation run.\
     \ Note the registry commit also carried AC-0433's open -> in-progress flip\n(updated_at 11:31), which\
     \ is the OTHER session's change, committed as-is and not authored here."
+  comments: []
+- id: AC-0457
+  title: builder-fence-no-whole-file-write
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: done
+  labels: []
+  created_at: 2026-10-19T22:00
+  updated_at: 2026-10-19T22:01
+  completed_at: 2026-10-19T22:01
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: A builder that gets confused sometimes \"fixes\" a file by re-emitting the whole\
+    \ thing,\n   which is one enormous response - and one enormous response is the only realistic way\
+    \ a local-model\n   run dies mid-sentence with a half-written file and no gate to prove anything.\
+    \ Telling it to make\n   small targeted edits instead costs one paragraph of prompt and removes that\
+    \ failure mode. Nothing\n   about the game changes.\n\n2) Technical Details:\n   MEASURED (2026-10-19,\
+    \ coordinator analysis of ~/.dsh/sessions/):\n   - The local provider's response cap is llm-pi-ai\
+    \ DEFAULT_MAX_TOKENS = 32,768\n     (packages/llm/llm-pi-ai/src/config.ts:64). ~/.dsh/settings.yaml\
+    \ sets no maxTokens for\n     homeserver1/Qwen3.8-27B-UD-Q4_K_XL, so the default applies.\n   - REASONING\
+    \ IS CHARGED AGAINST THAT SAME CAP. The two truncation events inspected carry content\n     blocks\
+    \ of exactly one {\"type\":\"reasoning\"} with nothing else: the model was cut off mid-thought\n \
+    \    with no tool call emitted. So higher reasoning effort moves a single response CLOSER to the cap,\n\
+    \     not further from it.\n   - Truncation is a TAIL event, not chronic: across 9,533 builder responses\
+    \ the median response is\n     452 tokens, p90 2,760, p99 8,487, max 32,768 (= the cap, i.e. the truncated\
+    \ ones). Only 18\n     responses exceed 16k and 8 exceed 24k. Normal work has ~98% headroom.\n   -\
+    \ Therefore the exposure is ONE BALLOONED RESPONSE - in practice a whole-file write or a runaway\n\
+    \     reasoning block - not the ordinary step. Per RUN, a medium builder can still be more exposed\
+    \ than\n     xhigh: more steps (each an independent draw), the whole-file fallback below, context\
+    \ growth\n     squeezing the effective output room (the 250k window is shared), and worse recovery\
+    \ after a\n     truncation.\n   - LIMITATION, recorded so nobody repeats the analysis expecting attribution:\
+    \ the child session\n     header carries only agentPreset/cwd/delegationDepth/origin/parentSession\
+    \ - NO reasoningEffort - so\n     medium-vs-xhigh truncation rates are NOT measurable from the logs\
+    \ today.\n\n   CHANGE:\n   - tasks/templates/implement.md, the IMPLEMENT step: a HOW YOU EDIT paragraph\
+    \ - modify existing files\n     with `edit`, never by re-emitting them with `write`; more than ~5\
+    \ edits in one file means the PLAN\n     was wrong, so stop and report rather than rewrite. Gives\
+    \ the reason (the shared 32,768 cap, the\n     partial file left behind) and points at godot/OPS.md\
+    \ section 1 for the numbers.\n   - godot/OPS.md section 1: harvest the cap facts above (cap value\
+    \ + source, reasoning charged against\n     it, the median/p99 headroom, the \"one ballooned response\"\
+    \ framing, and the effort-not-recorded\n     limitation) so this is answered once and never re-derived.\n\
+    \n   GATES: none - a two-paragraph prompt fence and a documentation harvest. No engine code, no gate\
+    \ value\n   moved, no godot run owed, no subagent needed (a coordinator procedure change like AC-0454/AC-0456).\n\
+    \   Proof: the fence is present in implement.md and its reason resolves to OPS.md section 1; nothing\n\
+    \   else references the old wording.\n   DEFERRED: recording reasoningEffort in the child session\
+    \ header (would make medium-vs-xhigh\n   truncation rate measurable) - a DSH-side change under ~/.dsh,\
+    \ not a repo ticket, and not needed for\n   this fence to work.\n\n\nDONE 2026-10-19. Coordinator\
+    \ procedure change: no engine code, no gate value moved, no godot run owed,\nno subagent launched\
+    \ (another process holds the local slot).\n- tasks/templates/implement.md: the IMPLEMENT step gains\
+    \ a HOW YOU EDIT fence - change existing files\n  with `edit`, never by re-emitting them with `write`;\
+    \ more than ~5 edits in one file means the PLAN was\n  wrong, so stop and report instead of rewriting.\
+    \ Carries its reason and the pointer to OPS.md.\n- godot/OPS.md section 1: harvested the cap facts\
+    \ so this is never re-derived - the cap is 32,768\n  (llm-pi-ai DEFAULT_MAX_TOKENS, no override for\
+    \ the 27B), reasoning is charged against the same budget\n  (the inspected truncations were pure-reasoning\
+    \ responses), truncation is a tail event (median response\n  452 tokens, p99 8,487 over 9,533 builder\
+    \ responses = ~98% headroom), the exposure is ONE ballooned\n  response, a child session header records\
+    \ NO reasoningEffort so effort attribution is not measurable\n  from the logs, and raising the cap\
+    \ is not the fix.\nWHY the fence is worth its paragraph: per RUN a medium builder can be MORE truncation-exposed\
+    \ than xhigh\neven though per RESPONSE xhigh is more exposed (longer thinking, same budget) - because\
+    \ medium takes more\nsteps, is likelier to fall back to a whole-file rewrite, and lets its context\
+    \ grow enough to squeeze the\neffective output room. The fence removes the middle one.\nDEFERRED (not\
+    \ a repo ticket): recording reasoningEffort in the child session header, which would make the\nmedium-vs-xhigh\
+    \ truncation rate measurable. That is a DSH-side change under ~/.dsh.\nNOTE ON THE COMMIT: tasks/TASKS.yaml\
+    \ carries the OTHER session's changes too (a ticket cancelled, four\nqueue removals made while it\
+    \ worked AC-0433 P1/P2a/P2b-1) - committed as-is, not authored here, and\ntasks/AC-0433/plan.html\
+    \ was deliberately left unstaged."
   comments: []
