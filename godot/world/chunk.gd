@@ -1682,6 +1682,46 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	apply_accs(res, ms_full)
 
 
+# AC-0458 (plan.html §3): the face-lane warp switch — an env var like the
+# project's other switches, OFF by default, cached in a static var (resolved
+# once, on first use). With the flag off the build path below is EXACTLY the
+# shipped one (no changed arithmetic, no reordering), so the shipped game
+# stays byte-identical until a later ticket flips it.
+static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") == "1"
+
+# AC-0458 (plan.html §3.2): rewrite each vertex of a face-lane build from
+# chunk-local metres to world metres, pointwise on the legacy 1024 chart —
+# the same construction as PlanetGrid.cell_to_world on that chart:
+# (R + ly) * normalize(SM.uv_to_world(face, u, v, R)) - (0, R, 0), where the
+# local height ly is the radial offset (as cell_to_world's h). The chart
+# coordinate is the EXACT INVERSE of the SM.face_local_x data layout:
+# non-mirror u1024 = ccx*16 + lx; mirror u1024 = ccx*16 + 16 - lx (the
+# mirrored slot runs local +X against the face's u, so the sub-cell fraction
+# runs against u as well — the continuous inverse; see AC-0458 deviations).
+# Normals are deliberately untouched (plan §3.2: the later tessellation
+# ticket owns the normal transform). build_mesh_face is the sole call site
+# (plan §3.3: the face lane only — the home pair is AC-0460's job).
+func _warp_face_slabs(res: Dictionary) -> void:
+	var face_i: int = int(face)
+	if face_i < 2:
+		# one log line, then skip (plan §3.3) — never warp the home pair.
+		print("AC-0458: warp skipped — face %d is not a face-lane build (the home pair is AC-0460)" % face_i)
+		return
+	var R: float = float(Game.planet_R)
+	var mirrored: bool = SphereMath.face_mirror_x(face_i)
+	var ccx: float = float(int(cx)) * 16.0
+	var ccz: float = float(int(cz)) * 16.0
+	for row in res.slabs:
+		for di in range(6):
+			var v: PackedVector3Array = row[di].v
+			for i in range(v.size()):
+				var p: Vector3 = v[i]
+				var u1024: float = ccx + (16.0 - p.x if mirrored else p.x)
+				var v1024: float = ccz + p.z
+				var dir: Vector3 = SphereMath.uv_to_world(face_i, u1024 / 1024.0, v1024 / 1024.0, R)
+				v[i] = (R + p.y) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+
+
 func build_mesh_face(light: Dictionary = {}) -> void:
 	# AC-0309: the face-chunk sync build — the face grid's build lane (the
 	# home drain dispatch is home-grid-keyed and stays untouched). The
@@ -1742,6 +1782,14 @@ func build_mesh_face(light: Dictionary = {}) -> void:
 	else:
 		ms_w = {"rects": {}}
 	var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs_face, ctx_w, ms_w, light_d, 0, -1, 0, Lighting._att, Lighting._glow, PackedByteArray())
+	# AC-0458: the warp post-pass — the flag-off path skips both lines, so
+	# the shipped build stays byte-identical (plan §3.1). The warped
+	# vertices are world-space: the node's placement is identity for this
+	# build only (the later AC-0460 owns the streaming/cull side).
+	if _warp_on:
+		_warp_face_slabs(res)
+		position = Vector3.ZERO
+		basis = Basis.IDENTITY
 	apply_accs(res, ms_full)
 	# the landing light store (the face star drain diffs the settled
 	# payload against it)

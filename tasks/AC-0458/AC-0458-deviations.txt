@@ -1,0 +1,59 @@
+AC-0458 deviations (findings for the coordinator)
+
+1) MIRROR FRACTION — plan §3.2 literal formula is a sawtooth; the continuous
+   inverse was applied (chunk.gd _warp_face_slabs and tasks/AC-0433/warp_probe.gd).
+   The plan's literal form — iu = ccx*16 + (15 - floor(lx)) with u = (iu + frac_x)/1024 —
+   maps local slot s+f to chart coordinate ccx*16 + 15 - s + f. But the shipped data
+   layout (sphere_math.gd:441-448, AC-0309) runs local +X AGAINST the face's u on the
+   mirror class, so the slot's x=s edge sits at the cell's HIGHER-u edge: the exact
+   inverse is u1024 = ccx*16 + 16 - lx, i.e. u = (iu + (1 - frac_x))/1024. The literal
+   formula differs by (2*frac_x - 1) chart cells inside each slot — exactly one chart
+   cell (~6.14 m at R=4000, 1024 cells per 6283 m face) at every local integer x,
+   including the seam edges: the mirror-class mesh would fold one cell at every local
+   metre. The continuous form applied here agrees with the plan's formula on ALL
+   non-mirror faces and at every cell centre (where the legacy LSQ fit anchors, the
+   M1-measured sites), and is the affine the legacy face_chunk_transform actually fits.
+   Both variants give exactly 0 across-chunk seam gap, so the probe's expected value
+   is unchanged — this corrects the in-cell placement, it does not relax a check.
+
+2) KNOWN LIMITATIONS (flag-ON path only, recorded per plan §6 risk 2 — the culler is
+   NOT patched here; AC-0460/AC-0461 own it):
+   - Normals are left untouched (plan §3.2 decision: the later tessellation ticket
+     owns the normal transform).
+   - The full-solid occluder box stays in the old chunk-local frame
+     (chunk.gd _assemble_slab, position (8, s.y0+8, 8)) while the mesh vertices are
+     world-space under the flag — occlusion may disagree with the warped mesh.
+   - The low-LOD placeholder set and the collision bodies derive from node-local
+     assumptions; with the node transform forced identity for warped builds they may
+     mis-place/mis-cull under the flag. Shipped path (flag off) is byte-identical.
+
+3) Flag-ON moves, measured (plan §4: report, do not gate — only rc/census gate).
+   Logs: .scratch/AC-0458-gates/ (flag-off r12/r8/r10/r11 set = summary-flagoff.json;
+   flag-on r13/r9/r11/r12 set = summary-flagon.json; sources under
+   .scratch/AC-0433-gates/). All arms rc=0, SCRIPT=0/SHADER=0, both sets.
+   - interact: place_ok read false (off r8), true (on r9), false (on r10, a
+     dedicated flag-ON rerun). FLAKY arm, not flag-attributable: false in 9 of the
+     last 10 runs across both flag states (AC-0433 r1..r8 off, plus r8/r10 this
+     run). The only non-ms value that differs anywhere in the flag-ON set, and the
+     rerun shows it moves run-to-run with the flag fixed.
+   - ac0423probe: UNMOVED (all nine seams byte-equal to the flag-off run and to
+     tasks/AC-0433/captures/ac0423probe-r2.log) — the probe inspects home-lane chunks
+     at spawn, which the face-lane warp does not touch. Expected per plan ("values
+     may MOVE") but worth noting: these arms never stream a face chunk, so the flag-ON
+     set proves no-crash/no-error only; the warp's geometric correctness is the
+     warp probe's job (item 4).
+   - genhash: 25/25 byte-identical in BOTH sets (generation-only, as the plan states).
+   - light/fluids: only ms timings differ (460->453, 456->473).
+
+4) Warp probe (log: .scratch/AC-0458-gates/warp-probe.log, census 0/0, rc=0,
+   R=4000.0 from Game.planet_R): RESULT ok=true, pairs=20, warp_max_gap_m=0.0 (exactly
+   0, as expected), negative_detected=true with negative_gap_m=6.135892 (one chart
+   cell, as designed). FINDING: legacy_max_gap_m=0.450873 — above the gate's 0.1
+   threshold but BELOW the plan §3.4 "order 1-2 m" text. Reconciliation: the probe
+   measures the shared edge at h=0 (the chunk base plane); M1 (tasks/AC-0433/
+   m1_probe.gd, .scratch/AC-0433-gates/m1-probe.log) found the legacy-vs-pointwise
+   displacement is centimetre-scale at h=0 (0.156 m at the documented corner site)
+   and only reaches its 1.86-2.00 m maxima at h=140, and the LSQ fit's own contract
+   (sphere_math.gd:479-481) is "adjacent shared edges within ~0.8 m". 0.45 m at h=0
+   is inside that documented band — the "1-2 m" text describes terrain height. The
+   gate expectation (> 0.1) is met; the order-of-magnitude text is not, at h=0.

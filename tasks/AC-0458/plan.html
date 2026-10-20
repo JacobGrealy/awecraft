@@ -1,0 +1,47 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0458 warp face-lane placement</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0458 — warp the face-lane placement onto shared vertices (flag off by default)</h1>
+<p>Coordinator contract, first ticket of the AC-0433 migration series. Medium builder applies it with tasks/templates/implement.md. <b>Scope is deliberately narrow:</b> the face lane only, behind a flag that defaults OFF, so the shipped game is byte-identical until a later ticket flips it.</p>
+<h2>1. Goal</h2><p>Give the face lane's meshes a pointwise placement so two chunks that meet at a seam evaluate the same surface point, replacing the per-chunk least-squares fit that leaves the 2.19 m crossing / 3.73 m corner disagreement.</p>
+<h2>2. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/chunk.gd</td><td><code>build_mesh_face</code> (grep <code>func build_mesh_face</code>, ~1643); the slab apply block that creates the ArrayMesh (grep <code>var fmesh := ArrayMesh.new()</code>, ~1436); the mesh apply comment block at ~1937</td><td>Edit: add the warp post-pass and its flag. Nothing else.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>uv_to_world</code> (90), <code>face_width</code> (62), <code>face_local_x</code> (454), <code>face_chunk_transform</code> (508 — the OLD placement, kept as the off path)</td><td>Read only.</td></tr>
+<tr><td>tasks/AC-0433/warp_probe.gd (NEW)</td><td>standalone SceneTree; preload SphereMath by path</td><td>Write the probe in §3.4. Reuse the AC-0433 probe style (one <code>RESULT {…}</code> JSON line).</td></tr>
+<tr><td>tasks/AC-0458/continuity.md (NEW)</td><td>new ticket journal</td><td>Create with a RUN header.</td></tr>
+<tr><td>tasks/AC-0458/AC-0458-results.html</td><td>new</td><td>Render with results_page.py after the gates.</td></tr>
+<tr><td>tasks/AC-0458/AC-0458-deviations.txt (NEW)</td><td>findings</td><td>Every number in a log.</td></tr>
+<tr><td>.scratch/AC-0458-gates/</td><td>summary.json, warp-probe.log</td><td>Logs; never staged.</td></tr></table>
+<p><b>Do not touch:</b> the home lane (World._tm_ctx / the native worker ctx / <code>column_transform</code>), collision, the streaming scheduler, save code, keys, shaders, SphereMath, harness, registry. Those are later tickets in the series (AC-0459..AC-0463).</p>
+<h2>3. Edit shape</h2>
+<p><b>3.1 The flag.</b> Read once per build: <code>OS.get_environment("AWECRAFT_WARP") == "1"</code> (an env var, like the project's other switches), defaulting OFF. Build a cached <code>static var _warp_on</code> resolved on first use. <b>With the flag off the code path must be exactly the current one</b> — no changed arithmetic, no reordering, so G0, genhash and every standing arm stay identical.</p>
+<p><b>3.2 What the warp does (face lane only).</b> After the C++ emitter returns a slab's arrays and before they are committed to the ArrayMesh, when the flag is on, rewrite each vertex from chunk-local metres to world metres and set the chunk node's placement to identity for that build:</p>
+<ul>
+<li>For a vertex at local (lx, ly, lz) in face chunk (face, ccx, ccz): the chart cell is <code>iu = ccx*16 + (15 - floor(lx) if mirror else floor(lx))</code> using the SAME mirror convention <code>SM.face_local_x</code> uses, and <code>iv = ccz*16 + floor(lz)</code>; the sub-cell fractions are the fractional parts of lx and lz. Use <code>u = (iu + frac_x) / 1024.0</code>, <code>v = (iv + frac_z) / 1024.0</code>.</li>
+<li>World position = <code>(R + ly) * normalize(SM.uv_to_world(face, u, v, R)) - Vector3(0, R, 0)</code>, with <code>R = Game.planet_R</code>. <b>Note the height axis</b>: the legacy lane treats local Y as metres of height, so it enters as the radial offset, exactly as <code>cell_to_world</code> does. State in the code comment that this is the same construction as PlanetGrid.cell_to_world, on the legacy 1024 chart.</li>
+<li>Normals: rotate each emitted normal by the same pointwise frame? <b>Decision: leave normals untouched in this ticket</b> and record it as a known limitation — the meshes here are voxel faces whose shading is vertex-colour/AO driven, and normal correction is part of the later tessellation ticket. Do not invent a normal transform.</li>
+<li>Set the node's transform to identity for warped builds only (position 0, Basis.IDENTITY), because the vertices are now world-space.</li>
+</ul>
+<p><b>3.3 Guard rails.</b> The warp must not run for any lane, mode or call site other than the face build. If <code>face &lt; 2</code> or the face is not a face-lane build, log one line and skip warping (do not silently warp the home pair — that is AC-0460's job).</p>
+<p><b>3.4 The probe (new tasks/AC-0433/warp_probe.gd).</b> Pure SphereMath, no world: prove that under the warp construction, two adjacent face chunks' shared edge evaluates identically.</p>
+<ul>
+<li>For a grid of adjacent chunk pairs on faces 2..11 (including the mirror class), take the 17 shared-edge vertices of both chunks, compute each side's world position by the §3.2 formula from its OWN local coordinates, and report the max gap.</li>
+<li>Expected: <b>max gap exactly 0</b> (the same chart point, the same evaluation). Report pairs and max_gap_m.</li>
+<li>Report the same measurement under the LEGACY construction (<code>SM.face_chunk_transform</code> per chunk, local centres) for contrast, so the log shows what the warp buys. Expected: non-zero, order 1-2 m.</li>
+<li>Negative control: perturb one side's v by one cell and confirm the gap becomes non-zero (negative_detected).</li>
+</ul>
+<p>RESULT keys: ok, pairs, warp_max_gap_m, legacy_max_gap_m, negative_detected, fails (JSON).</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Flag OFF — the shipped path must not move</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600</code> (no AWECRAFT_WARP set)</td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25 (byte-identical to .scratch/AC-0433-gates); ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms, nine overlaps 654/752/660/662/758/848/800/1290/1290.</td></tr>
+<tr><td>Flag ON — it must not crash or log errors</td><td>Same arms with <code>--env 'AWECRAFT_WARP=1'</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0. <b>Values are expected to MOVE</b> (geometry moved deterministically) — report them, do not gate against the old ones; genhash is generation-only and must stay 25/25.</td></tr>
+<tr><td>Warp probe</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute warp_probe.gd; log .scratch/AC-0458-gates/warp-probe.log; gate_census.py.</td><td>rc=0, census 0/0, ok=true, warp_max_gap_m == 0, legacy_max_gap_m &gt; 0.1, negative_detected true.</td></tr></table>
+<p>No render, no native rebuild, no heavy set (no shipped path changes with the flag off). Do not run the boundary/flake/r50 sets.</p>
+<h2>5. Acceptance</h2><p>With the flag off nothing moves (proven by the standing gates). With it on, the face lane's shared edges agree exactly across chunk joins, the probe shows the legacy gap it replaces, and the flag is the only thing standing between the game and the new placement.</p>
+<h2>6. Risks</h2><p>(1) Cost: the warp evaluates <code>uv_to_world</code> per vertex, which is trig — the plan requires a cheap guard (only when the flag is on) but a frame-time measurement belongs to the later streaming ticket; do not optimise speculatively. (2) Flood fill/light: node transform identity changes the culling AABB, so the flag-on path may mis-cull; if an arm shows missing geometry with the flag on, record it as a finding for AC-0460 rather than patching the culler here. (3) The mirror convention is the easy mistake — the probe's negative control exists for exactly that.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>AC-0433's dormant API is complete (commits 3cc2339..ab5da03) and the migration is decomposed as AC-0458..AC-0463, the user having directed the split. This ticket is the placement slice. Next: AC-0459 (canonical keys + save bump) then AC-0460 (one streaming lane) then AC-0461 (collision consumes warped vertices).</p>
+</body></html>

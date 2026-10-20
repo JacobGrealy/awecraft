@@ -1,10 +1,15 @@
 meta:
-  updated_at: 2026-10-19T22:01
+  updated_at: 2026-10-20T09:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0433
+- AC-0458
+- AC-0459
+- AC-0460
+- AC-0461
+- AC-0462
+- AC-0463
 - AC-0434
 - AC-0451
 - AC-0399
@@ -27721,7 +27726,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-19T11:31
+  updated_at: 2026-10-20T09:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -27826,7 +27831,13 @@ intake:
     \ design. Coordinator plan.html anchors a design-only xhigh/two-phase run, current-code controls,\
     \ expected seam values and a negative test. tasks.py set has no labels option, so classification is\
     \ recorded here rather than hand-editing TASKS.yaml. Resume from run-2 OUTCOME, not interrupted run-3\
-    \ header."
+    \ header.\n\nDECOMPOSED 2026-10-19 by user direction (\"break it down into multiple tickets to work\
+    \ in order\"). AC-0433 remains the parent epic: the dormant one-world API is its delivered part (P1/P2a/P2b/P2c/M1,\
+    \ commits 3cc2339..ab5da03). The migration is now the ordered series AC-0458 (placement/shared seam\
+    \ vertices) -> AC-0459 (canonical chunk keys + save bump/reject) -> AC-0460 (single streaming lane)\
+    \ -> AC-0461 (collision consumes warped vertices) -> AC-0462 (mob/player consumers) -> AC-0463 (remove\
+    \ the legacy split and prove it end to end). AC-0433 leaves the queue while those six run and closes\
+    \ when they land."
   comments: []
 - id: AC-0434
   title: seam-blocks-stretched-into-each-other
@@ -29633,4 +29644,170 @@ intake:
     \ carries the OTHER session's changes too (a ticket cancelled, four\nqueue removals made while it\
     \ worked AC-0433 P1/P2a/P2b-1) - committed as-is, not authored here, and\ntasks/AC-0433/plan.html\
     \ was deliberately left unstaged."
+  comments: []
+- id: AC-0458
+  title: migrate-placement-shared-seam-vertices
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-10-20T09:22
+  updated_at: 2026-10-20T09:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Today two chunks that meet at a seam place their shared edge with two different\
+    \ independent fits, so the ground disagrees across the join by up to 2.19 m at a crossing and 3.73\
+    \ m at a corner. That is the visible cliff/stretch a player sees when standing on a seam. When this\
+    \ lands, the two sides of every seam evaluate the SAME surface point, so the join is exact at equal\
+    \ height and the cliff is gone - without changing the block grid, the chunk keys or the save format.\n\
+    \n2) Technical Details:\n   PREMISE (measured, AC-0433 M1 - tasks/AC-0433/m1_probe.gd, .scratch/AC-0433-gates/m1-probe.log):\n\
+    \   switching from the legacy per-chunk LSQ fit (SphereMath.face_chunk_transform, sphere_math.gd:470-549)\n\
+    \   to pointwise shared-vertex placement moves the ground a mean 0.955 m on the non-home interiors\n\
+    \   (max 1.861), 0.978 m at the home/face seam (max 2.003), 0.054 m on the home pair. Every maximum\
+    \ is\n   at h=140; the h=0 displacements are centimetres (0.156 m at the documented corner site).\
+    \ The\n   displacement IS the radial-shear term of the legacy rigid tilted frames.\n   WHY THIS IS\
+    \ FIRST: it removes the seam defect the user photographed while keeping the 1024 grid,\n   the \"\
+    face:ccx:ccz\" keys and the save format intact, so it is reversible and cannot desynchronise\n   saves.\
+    \ The uniform-grid work is a later ticket in this series.\n   DEPENDENCY: the verification instrument\
+    \ already exists and is verified - PlanetGrid\n   (godot/core/planet_grid.gd, dormant, tasks/AC-0433/p2a..p2c2\
+    \ probes).\n   SCOPE (decided by the coordinator in the ticket plan, not here): placement emission\
+    \ only.\n   VERIFY: the seam-V/AC-0423 probe set (ac0423probe must keep its standing overlaps), genhash\
+    \ 25/25,\n   light gate set, plus a seam probe showing the across-seam gap at equal height going to\
+    \ 0.\n   NOTE: chunk.gd/world.gd/native lane all consume placement; the plan must state which lanes\
+    \ change.\n"
+  comments: []
+- id: AC-0459
+  title: migrate-canonical-chunk-keys-and-save-bump
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T09:22
+  updated_at: 2026-10-20T09:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Once placement is unified, the world's chunks are named the same way everywhere,\
+    \ and an old save from the old naming is refused cleanly with a clear message instead of loading half\
+    \ a world into the wrong shapes.\n\n2) Technical Details:\n   Activates the canonical chunk key already\
+    \ implemented and verified in godot/core/planet_grid.gd\n   (chunk_key / chunk_from_key, AC-0433 P2c-2\
+    \ at 87d2c58) as the runtime chunk identity, replacing the\n   flat \"(cx,cz)\" home keys and the\
+    \ \"face:ccx:ccz\" face keys.\n   SAVE: the user has WAIVED old-save compatibility for AC-0433 (2026-10-15,\
+    \ pre-alpha). The decision is\n   therefore a SAVE VERSION BUMP plus a CLEAN REJECT (a log line +\
+    \ a fresh world, no migration path),\n   enforced where _continue_slot's version_ok gate lives.\n\
+    \   PRECONDITION: the placement ticket in this series must have landed first, otherwise saves describe\n\
+    \   geometry that no longer exists.\n   VERIFY: genhash becomes a REBASELINE (the user waived stability)\
+    \ - record the old anchor before the\n   change and state the new one deliberately; save accept/reject\
+    \ both exercised; light gate set.\n"
+  comments: []
+- id: AC-0460
+  title: migrate-single-streaming-lane
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T09:23
+  updated_at: 2026-10-20T09:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The world streams the same way everywhere - the spawn patch and the far side\
+    \ of the planet are the same kind of thing, so walking off the spawn face changes nothing about what\
+    \ loads, how far you can see, or how the seams behave.\n\n2) Technical Details:\n   Collapses the\
+    \ two streaming paths into one lane: the home worker lane (World._tm_ctx, the ctx key\n   sphere_r\
+    \ set at world.gd:3860/5607/6092) and the sync face lane (chunk.build_mesh_face,\n   chunk.gd:1643)\
+    \ become a single dispatch/landing contract over canonical chunks.\n   CARRIES FORWARD: the landing-order\
+    \ fix already proven in AC-0433 P0.5 (_face_rebake_boundary,\n   the _build_ready 8-neighbor gate)\
+    \ - do not regress a straddler whose data lands after its neighbour builds.\n   PRECONDITION: placement\
+    \ and key tickets landed.\n   VERIFY: boundary r4 A/B (resident count, p95), the ac0423probe standing\
+    \ values, genhash, light set,\n   plus a spawn-to-face walk that never shows a seam wall or an unloaded\
+    \ band.\n"
+  comments: []
+- id: AC-0461
+  title: migrate-collision-consumes-warped-vertices
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T09:23
+  updated_at: 2026-10-20T09:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The ground you stand on and the ground you see are the same surface - collision\
+    \ matches the rendered mesh exactly on every chart, including where chunks meet, so you never fall\
+    \ through or float above a seam.\n\n2) Technical Details:\n   Collision and the mesher must consume\
+    \ the SAME displaced vertices: the placement ticket emits\n   pointwise vertices, so _build_slab_collision\
+    \ (chunk.gd) and the native SMC lane must consume the\n   warped positions rather than an independent\
+    \ rigid slab transform.\n   TESSELLATION: a non-linear placement cannot keep one greedy quad flat\
+    \ - exposed quads must be split\n   on the shared one-cell vertex lattice with a deterministic diagonal\
+    \ before warping, or T-junctions\n   appear at merged faces. This is a measured cost, not a free change:\
+    \ state vertex/triangle growth.\n   PRECONDITION: the streaming ticket landed (one lane means one\
+    \ collision path).\n   VERIFY: player walk/collision arms, drop-a-body-on-a-seam test, vertex-count\
+    \ and frame-time budget\n   recorded before/after, light set + heavy boundary/flake.\n"
+  comments: []
+- id: AC-0462
+  title: migrate-mob-and-player-consumers
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T09:23
+  updated_at: 2026-10-20T09:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: Mobs, spawns, drops and the player all live in the same coordinates on the whole\
+    \ planet - nothing silently skips the far side, and where you stand, what you can reach and what can\
+    \ reach you agree everywhere.\n\n2) Technical Details:\n   The consumers that are home-only today\
+    \ must consume canonical addresses: mob spawn picks the home\n   pair and SKIPS a face spawn rather\
+    \ than misplacing it; mob walk/facing, drops, entity placement and\n   the player recenter/sim use\
+    \ the legacy flat conversion. Each becomes a separately gateable switch to\n   the canonical API (PlanetGrid.world_to_cell\
+    \ / cell_to_world / chunk keys).\n   PLAYER: recenter takes flat coordinates today (world.recenter,\
+    \ world.gd:11728) - movement must use\n   the canonical tangent frame everywhere including spawn.\n\
+    \   PRECONDITION: streaming and collision tickets landed.\n   VERIFY: mob spawn census across a face,\
+    \ drop landing on a face terrain, player A-to-B walk across a\n   seam on foot, save/reload of a pose\
+    \ on a face, light set + smoke.\n"
+  comments: []
+- id: AC-0463
+  title: migrate-remove-legacy-split-and-prove
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T09:23
+  updated_at: 2026-10-20T09:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: "1) User Story: The old split is gone - there is one way the world works, with no leftover special\
+    \ case for the spawn face, and the game has been walked end to end to prove it.\n\n2) Technical Details:\n\
+    \   REMOVAL: delete the transitional machinery - the AC-0423 seam-V extension and its K tables (now\n\
+    \   unnecessary when incident charts share vertices), the SEAM_FILL grout if it is no longer load-bearing,\n\
+    \   the home flat/face routing split (world.gd:14741-14744), the special face sync mesher, and the\n\
+    \   legacy SphereMath column/face transforms once nothing calls them.\n   ACCEPTANCE: the full-planet\
+    \ walk - both directions across sectors, cube edges and corners; floor\n   contact everywhere; no\
+    \ void or light seam; streamed takeoff and descent; return to spawn; save/reload.\n   Numerical equal-height\
+    \ seams are necessary but NOT sufficient.\n   DOCS: ARCHITECTURE.md grid/placement/streaming/consumer\
+    \ sections rewritten to the one model, the\n   design essay labelled with what shipped, and the standing\
+    \ gate values re-established deliberately.\n   PRECONDITION: every earlier ticket in this series landed.\n"
   comments: []
