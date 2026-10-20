@@ -25,6 +25,47 @@
 <tr><td>probe (pure math)</td><td>occ_probe-r7.log</td><td>0</td><td>0/0 (gate_census ok)</td><td>chunk 4:63:0 (face 4 mirrored, R=4000): corner cloud min [2828.32,-1241.95,0] max [3175.1,-900.04,38.96]; all 24 slab-derived CENTRES inside the cloud; sizes z 35.69-38.96 m (in band), x 80.26-86.57 / y 81.69-88.16 m — <b>OUTSIDE the plan's [1,40] band → ok=false, honest deviation 9</b>; guard predicate verified (degenerate_rejected=true); legacy_offset_m=3105.51</td></tr>
 </table>
 <p><b>Outcomes.</b> Under the warp a solid slab again carries an occluder built from its own world-space bounds (xvfb 89 &gt; 0, 0 script errors; probe centres inside the corner cloud); with the flag off nothing changes (byte-identical branch, standing values reproduced incl. warped_chunks 0). The probe's plan size band [1,40] m x/y is not met (derived 80.3-88.2 m) because a face-lane chunk is a documented 49-98 m world footprint (sphere_math.gd:470-487; 1 local unit = 1 chart cell = 6.14 m arc at R=4000) — deviation 9, a coordinator re-scope, not a builder loosening. <code>occluders</code> is structurally 0 in the headless light set (DisplayServer gate, chunk.gd:453-456) — deviation 10; the render-recipe runs carry its evidence.</p>
+<h2>Stage 2b — footprint fallback for mesh-less full-solid slabs (2026-10-20)</h2>
+<p class='note'>the tables above are the stage-2a FINAL tree. Stage 2b re-ran the full plan-§6 set on its FINAL tree; every number below is in a log under .scratch/AC-0460-gates/. Deviations 13–16 in AC-0460-deviations.txt.</p>
+<p>Change: godot/world/chunk.gd <code>_assemble_slab</code> warp branch — a full-solid slab whose mesh AABB is missing or degenerate (a fully buried slab is invisible but still occludes, the way legacy boxes it unconditionally) now falls back to a box derived from the slab's OWN cell footprint: the 16x16 corner lattice at h = y0 and h = y0 + 16, boundary-sampled (136 points) and warped through <code>_warp_cell_point</code> — the warp construction EXTRACTED from <code>_warp_face_slabs</code> so the mapping lives in one place (same arithmetic, same order). Face-lane (face &gt;= 2) only; the same degenerate guard applies to the fallback result; the flag-off branch is byte-identical. tasks/AC-0460/occ_probe.gd: plan-§5 fallback assertions added (centre inside the corner cloud, documented [16,110]/[1,128] m bands, fallback-vs-mesh centre agreement &le; 60 m); every existing assertion and the guard negative control kept.</p>
+<table>
+<tr>
+<th>run</th>
+<th>log</th>
+<th>rc</th>
+<th>SCRIPT/SHADER</th>
+<th>headline</th>
+</tr>
+<tr>
+<td>flag-OFF light set (stage-2b FINAL tree)</td>
+<td>summary.json / *-r9.log</td>
+<td>0</td>
+<td>0/0 all arms</td>
+<td>warpcensus warp=0, warped_chunks=0, aabb_delta_m=3099.39, occluders=0 (headless); genhash 25 GENHASH lines byte-identical to the stage-2a reference; ac0423probe equal to capture excl ms — nothing changed under the flag-off path</td>
+</tr>
+<tr>
+<td>flag-ON light set (stage-2b FINAL tree)</td>
+<td>summary.json / warpcensus-r10.log</td>
+<td>0</td>
+<td>0/0 all arms</td>
+<td>warpcensus warp=1, warped_chunks=78, aabb_center [2862.65,-1206.76,17.78], aabb_delta_m=0.4 — bit-identical to stage 2a through the helper extraction; occluders=0 (headless-gated)</td>
+</tr>
+<tr>
+<td>render recipe, flag ON — the decisive gate</td>
+<td>warpcensus-xvfb-on3.log</td>
+<td>0</td>
+<td>0/0</td>
+<td>Forward+ boot line asserted; <b>occluders=335</b> — parity with the legacy 335 (warpcensus-xvfb-off.log), target &gt;= 300 MET (stage 2a measured 89); warped_chunks=78, aabb_delta_m=0.4</td>
+</tr>
+<tr>
+<td>probe, standalone</td>
+<td>occ_probe-r8.log</td>
+<td>0</td>
+<td>0/0</td>
+<td>ok=true, fails=[]; fallback worst size [86.57, 88.16, 38.96] m (the documented face-lane bands hold), worst fallback-vs-mesh centre delta <b>0.0 m</b> (the fallback describes the same slab); degenerate_rejected=true (negative control firing)</td>
+</tr>
+</table>
+<p><b>Outcomes.</b> Warp mode recovers full occluder coverage: 335 vs 335 legacy under the live renderer (the stage-2a 89 gap — mesh-less buried full-solid slabs — is closed), and the probe shows the footprint fallback box agrees with the mesh-derived box to 0.0 m in centre, sits inside the chunk's corner cloud, and lands in the documented size bands. With the flag off nothing changes (genhash 25/25 identical to the stage-2a reference, ac0423probe byte-equal excl ms, standing values reproduced). Deviations 13–16: the 136-sample superset of the plan's suggested 34-point lattice (deviation 13), the home-pair case left at stage-2a behaviour (14), the per-vertex helper call in the warp pass with no p95 probe named by the plan (15), and the documented interact flake (16).</p>
 <p class='note'>rendered by tasks/scripts/results_page.py from .scratch/AC-0460-gates — every number on this page is greppable from a log under .scratch/AC-0460-gates/</p>
 </body>
 </html>

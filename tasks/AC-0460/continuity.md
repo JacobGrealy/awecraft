@@ -112,3 +112,49 @@ place_ok input-timing flake (deviation 4). No git actions, no TASKS.yaml, no new
 - MY PLAN'S BAND WAS WRONG (third plan-level error the builders have caught in this series, and the second mine in two tickets): I asserted an occluder axis size in [1, 40] m. A face chunk is 16 cells at ~6.14 m of arc = a documented 49-98 m footprint (sphere_math.gd:470-487), so the measured 80-88 m horizontal and 36-39 m vertical boxes are CORRECT. The builder reported red rather than loosening the band, which is exactly the behaviour the fence asks for. Fixed by the coordinator in tasks/AC-0460/occ_probe.gd: the two largest axes must be in [16, 110] m and the smallest in [1, 128] m, both derived from the documented footprint; rerun rc=0, census 0/0, ok=true, worst horizontal 86.57/88.16 m.
 - REAL FINDING, not yet fixed: under the live renderer the warp path creates 89 occluders where the legacy path creates 335. The cause is structural, not sloppy: legacy gave a full-solid slab an occluder whether or not it had a mesh, while the warp path can only derive the box FROM a mesh, so fully-buried mesh-less full-solid slabs fall to the guard and lose theirs. That is a ~73% reduction in occlusion coverage in warp mode — a perf caveat that must be closed before the flag default is considered, by deriving the box for a mesh-less full-solid slab from its cell footprint instead of skipping it.
 - Occluder counting is structurally 0 headless (DisplayServer gate), so this evidence necessarily comes from the xvfb runs; noted so nobody "fixes" a zero again.
+
+## RUN — 2026-10-20 13:44 EDT — AC-0460 stage 2b (footprint fallback for mesh-less slabs)
+- Started. Reading anchors: chunk.gd warp branch (1482-1511), _warp_face_slabs (1733-1752), Slab (417), probe occ_probe.gd (stage-2a band assertions 62-88). Plan = tasks/AC-0460/plan.html §4/§5/§6.
+- LANDED (stage 2b, 2026-10-20): godot/world/chunk.gd — (1) `_assemble_slab` warp branch: a
+  full-solid slab whose mesh AABB is missing or degenerate now falls back to a box from the
+  slab's own cell footprint (`_warp_slab_footprint_aabb`: the 16x16 corner lattice at h = y0 and
+  h = y0 + 16, 4 edges x 17 cell-step points x both heights = 136 samples, same degenerate guard
+  on the result) — face-lane (face >= 2) only, the home pair keeps stage-2a behaviour (deviation
+  14); flag-off branch untouched. (2) The warp construction EXTRACTED from `_warp_face_slabs`'
+  loop body into `_warp_cell_point` (same arithmetic, same order — no second copy of the chart
+  inverse); the loop calls it. tasks/AC-0460/occ_probe.gd — stage-2b fallback assertions added
+  (plan §5): fallback box centre inside the corner cloud, sizes in the same [16,110]/[1,128] m
+  bands, fallback-vs-mesh (8-corner) centre agreement <= 60 m; every existing assertion and the
+  guard negative control kept. No other files touched.
+- GATES (stage 2b, 2026-10-20, FINAL tree; logs .scratch/AC-0460-gates/):
+  - Flag-OFF light set (r9, gate_run g0,smoke,ac0423probe,warpcensus): every arm rc=0,
+    SCRIPT=0/SHADER=0, ok=true; genhash 25 GENHASH lines byte-identical to the stage-2a
+    reference (genhash-r8.log); ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log
+    excl ms; warpcensus warp=0, warped_chunks=0, aabb_delta_m=3099.39, occluders=0 (headless) —
+    stage-1 standing values reproduced. interact place_ok=false (documented flake, deviation 16).
+  - Flag-ON light set (r10, same + AWECRAFT_WARP=1): same rc/SCRIPT/SHADER; warpcensus warp=1,
+    warped_chunks=78, aabb_center [2862.65,-1206.76,17.78], aabb_delta_m=0.4 (bit-identical to
+    stage 2a through the helper extraction), occluders=0 (headless-gated).
+  - Render recipe, flag ON — THE GATE THAT MATTERS (warpcensus-xvfb-on3.log; xvfb-run -a +
+    VK_ICD_FILENAMES lvp_icd.json + --rendering-driver vulkan, boot line asserts Forward+):
+    rc=0, SCRIPT=0/SHADER=0, warped_chunks=78, aabb_delta_m=0.4, **occluders=335** — parity with
+    the legacy 335 (warpcensus-xvfb-off.log, stage 2a); target >= 300 MET (stage 2a was 89).
+  - Probe (occ_probe-r8.log; rc=0, gate_census 0/0): ok=true, fails=[]; fallback worst size
+    [86.57, 88.16, 38.96] m (same bands as the mesh-derived boxes), worst
+    fallback-vs-mesh centre delta 0.0 m; degenerate_rejected=true (negative control firing);
+    chunk cloud + 24 slab centres/bands as before.
+- OUTCOME (stage 2b, 2026-10-20): DELIVERED, all four gates green, no red. Under the warp a
+  mesh-less full-solid slab again gets an occluder — the live-renderer count is 335 vs 335
+  legacy (the stage-2a 89 is closed), derived from the slab's own warped cell footprint through
+  the SAME construction the mesh uses (the mapping now lives in one helper). The probe proves
+  the fallback box describes the same slab (centre delta 0.0 m, inside the cloud, in the
+  documented bands) and the guard still rejects degenerate boxes. Flag off: nothing changes
+  (genhash 25/25 identical, ac0423probe byte-equal excl ms, standing values reproduced). No git
+  actions, no TASKS.yaml, no new tickets.
+
+## Coordinator triage — stage 2b (occluder coverage)
+- INDEPENDENTLY VERIFIED, because it is the claim that unblocks the flag default: coordinator-run xvfb warpcensus with the flag on gives **occluders 335, warped_chunks 78**, rc=0, SCRIPT/SHADER 0/0 — exact parity with the legacy 335 and recovery from the 89 that stage 2a shipped.
+- Probe: ok=true, fallback box worst size 86.57 x 88.16 x 38.96 m (inside the documented bands), centre inside the cloud, and the fallback-vs-mesh centre delta is 0.0 m — i.e. the footprint fallback lands on the same slab as the mesh-derived box rather than approximating it loosely.
+- The warp mapping is now a shared helper (_warp_cell_point extracted from _warp_face_slabs) used by both the mesh warp and the footprint fallback, so there is one chart inverse in the file, not two that could drift. Deviation 14 is honest and bounded: the home pair (face<2) keeps the stage-2a null behaviour because the warp never applies there; the occluder census counts face chunks so the gate is unaffected.
+- Cost: one extra GDScript call per vertex in the warp pass (deviation 15). No p95 was measured because the plan named none — that measurement belongs with the flag-default decision, not here.
+- STATE: warp mode is now feature-equivalent to the legacy path for occlusion, collision, light, and geometry space, with seams fixed. The flag default is the next decision and it needs perf evidence (frame time with the warp on vs off), which this ticket has not produced.

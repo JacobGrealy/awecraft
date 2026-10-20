@@ -1493,20 +1493,31 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		# size and the OccluderInstance3D sits at its centre (the child's position is
 		# the world centre directly). An empty/degenerate AABB leaves s.occluder null
 		# rather than a zero-volume occluder.
+		# AC-0460 stage 2b (plan §4): a full-solid slab that emitted NO mesh (or a
+		# degenerate one - a fully buried slab is invisible but still occludes, the
+		# way legacy boxes it unconditionally) falls back to a box derived from the
+		# slab's OWN cell footprint instead of dropping it: the 16x16 corner lattice
+		# at h = y0 and h = y0 + 16, warped by the SAME construction the mesh
+		# vertices use (_warp_cell_point, extracted from _warp_face_slabs). Face-lane
+		# chunks only: they are identity, so the warped points ARE the world
+		# placement. The home pair is never warped (AC-0458 guard) - a mesh-less
+		# home slab keeps stage-2a behaviour (null) until the home-pair ticket.
+		var aabb := AABB()
 		if s.mesh_instance != null and s.mesh_instance.mesh != null:
-			var aabb := s.mesh_instance.mesh.get_aabb()
-			if aabb.size.x > 0.01 and aabb.size.y > 0.01 and aabb.size.z > 0.01:
-				var oc := OccluderInstance3D.new()
-				var box := BoxOccluder3D.new()
-				box.size = aabb.size
-				oc.occluder = box
-				oc.position = aabb.get_center()
-				add_child(oc)
-				s.occluder = oc
-			else:
-				s.occluder = null  # degenerate/empty AABB: no zero-volume occluder
+			aabb = s.mesh_instance.mesh.get_aabb()
+		var degen: bool = aabb.size.x <= 0.01 or aabb.size.y <= 0.01 or aabb.size.z <= 0.01
+		if degen and int(face) >= 2:
+			aabb = _warp_slab_footprint_aabb(float(s.y0))
+		if aabb.size.x > 0.01 and aabb.size.y > 0.01 and aabb.size.z > 0.01:
+			var oc := OccluderInstance3D.new()
+			var box := BoxOccluder3D.new()
+			box.size = aabb.size
+			oc.occluder = box
+			oc.position = aabb.get_center()
+			add_child(oc)
+			s.occluder = oc
 		else:
-			s.occluder = null  # no opaque mesh: nothing to occlude with
+			s.occluder = null  # degenerate (and no fallback applies): no zero-volume occluder
 	else:
 		s.occluder = null
 	s.sidx = sidx
@@ -1746,10 +1757,54 @@ func _warp_face_slabs(res: Dictionary) -> void:
 			var v: PackedVector3Array = row[di].v
 			for i in range(v.size()):
 				var p: Vector3 = v[i]
-				var u1024: float = ccx + (16.0 - p.x if mirrored else p.x)
-				var v1024: float = ccz + p.z
-				var dir: Vector3 = SphereMath.uv_to_world(face_i, u1024 / 1024.0, v1024 / 1024.0, R)
-				v[i] = (R + p.y) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+				v[i] = _warp_cell_point(face_i, R, mirrored, ccx, ccz, p.x, p.z, p.y)
+
+
+# AC-0460 stage 2b (plan.html §4): the warp construction EXTRACTED from
+# _warp_face_slabs' loop body - the SAME arithmetic in the SAME order, in
+# ONE place. The local point (lx, ly, lz) maps to chart (u1024, v1024) by
+# the exact inverse of the face_local_x layout, then to world by
+# (R + ly) * normalize(SM.uv_to_world(face, u, v, R)) - (0, R, 0). Callers:
+# _warp_face_slabs (the mesh vertices) and _warp_slab_footprint_aabb (the
+# stage-2b occluder fallback lattice) - neither re-copies the mapping.
+func _warp_cell_point(face_i: int, R: float, mirrored: bool, ccx: float, ccz: float, lx: float, lz: float, ly: float) -> Vector3:
+	var u1024: float = ccx + (16.0 - lx if mirrored else lx)
+	var v1024: float = ccz + lz
+	var dir: Vector3 = SphereMath.uv_to_world(face_i, u1024 / 1024.0, v1024 / 1024.0, R)
+	return (R + ly) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+
+
+# AC-0460 stage 2b (plan.html §4): the occluder fallback box for a face-lane
+# full-solid slab whose mesh is missing or degenerate - the AABB of the slab's
+# OWN cell footprint: the 16x16 corner lattice at the slab's two heights
+# h = y0 and h = y0 + 16 (the 16x16x16 slab shape, AC-0108; the per-slab 16 is
+# the hardcoded slab layout - no named constant exists), boundary-sampled (the
+# 4 edges at 1-cell steps at BOTH heights; the warp is smooth over a 16-cell
+# span, so the AABB extrema sit on the boundary - 136 samples, a superset of
+# the plan's suggested 34, same construction) and warped through
+# _warp_cell_point, the SAME construction _warp_face_slabs runs on the mesh
+# vertices.
+func _warp_slab_footprint_aabb(y0: float) -> AABB:
+	var R: float = float(Game.planet_R)
+	var face_i: int = int(face)
+	var mirrored: bool = SphereMath.face_mirror_x(face_i)
+	var ccx: float = float(int(cx)) * 16.0
+	var ccz: float = float(int(cz)) * 16.0
+	var mn := Vector3(INF, INF, INF)
+	var mx := Vector3(-INF, -INF, -INF)
+	for h in [y0, y0 + 16.0]:
+		for e in range(17):
+			var t: float = float(e)
+			var ps: Array = [
+				_warp_cell_point(face_i, R, mirrored, ccx, ccz, 0.0, t, h),
+				_warp_cell_point(face_i, R, mirrored, ccx, ccz, 16.0, t, h),
+				_warp_cell_point(face_i, R, mirrored, ccx, ccz, t, 0.0, h),
+				_warp_cell_point(face_i, R, mirrored, ccx, ccz, t, 16.0, h),
+			]
+			for p in ps:
+				mn = Vector3(minf(mn.x, p.x), minf(mn.y, p.y), minf(mn.z, p.z))
+				mx = Vector3(maxf(mx.x, p.x), maxf(mx.y, p.y), maxf(mx.z, p.z))
+	return AABB(mn, mx - mn)
 
 
 func build_mesh_face(light: Dictionary = {}) -> void:

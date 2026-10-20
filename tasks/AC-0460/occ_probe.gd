@@ -15,6 +15,11 @@
 # It also reports how far the legacy constant box centre (local (8, y0+8, 8))
 # would sit from the derived centre under the identity node — the distance
 # that made AC-0461 disable the occluder.
+# Stage 2b (plan §5) adds the FOOTPRINT FALLBACK assertions: a mesh-less
+# full-solid slab's fallback box (chunk.gd _warp_slab_footprint_aabb, re-run
+# here with the same sampling) must have its centre inside the corner cloud,
+# its sizes in the same documented bands, and its centre must agree with the
+# mesh-derived (8-corner) box within half the chunk footprint (60 m).
 # Standalone SceneTree, one RESULT {…} JSON line (the AC-0433 probe style).
 extends SceneTree
 
@@ -45,6 +50,8 @@ func _initialize() -> void:
 	var cc := _aabb_of(0.0, 0.0, 16.0, float(HEIGHT), 16.0)
 	var slab0: Dictionary = {}
 	var worst := Vector3.ZERO
+	var worst_fb := Vector3.ZERO   # stage 2b: worst fallback-box size
+	var worst_delta := 0.0         # stage 2b: worst fallback-vs-mesh centre delta
 	var legacy_offset_m := -1.0
 	for si in range(int(HEIGHT) / int(SLAB_H)):
 		var y0: float = float(si) * SLAB_H
@@ -78,6 +85,32 @@ func _initialize() -> void:
 		if comps[0] < 1.0 or comps[0] > 128.0:
 			_fails.append("slab %d vertical size %f outside [1, 128] m" % [si, comps[0]])
 		worst = Vector3(maxf(worst.x, size.x), maxf(worst.y, size.y), maxf(worst.z, size.z))
+		# AC-0460 stage 2b (plan.html §5): the FOOTPRINT FALLBACK box a mesh-less
+		# full-solid slab gets (chunk.gd _warp_slab_footprint_aabb) — re-run here
+		# with the SAME sampling: the 4 footprint edges at 1-cell steps at both
+		# heights h = y0 and y0 + 16, through the SAME _warp_pos. It must
+		#   (a) have its centre inside the chunk's corner-cloud bounds and its
+		#       sizes in the same documented [16, 110] / [1, 128] m bands;
+		#   (b) agree in CENTRE with the mesh-derived (8-corner) box for the same
+		#       slab within half the chunk footprint (60 m, the plan's bound) —
+		#       they describe the same slab, a wild disagreement means the
+		#       fallback is wrong.
+		var fb: AABB = _fallback_aabb(y0)
+		var fb_centre: Vector3 = fb.get_center()
+		if not _inside(cc, fb_centre):
+			_fails.append("slab %d fallback centre outside the chunk corner-cloud AABB" % si)
+		var fcomps: Array = [fb.size.x, fb.size.y, fb.size.z]
+		fcomps.sort()
+		for ax in range(2):
+			if fcomps[1 + ax] < 16.0 or fcomps[1 + ax] > 110.0:
+				_fails.append("slab %d fallback horizontal size %f outside [16, 110] m" % [si, fcomps[1 + ax]])
+		if fcomps[0] < 1.0 or fcomps[0] > 128.0:
+			_fails.append("slab %d fallback vertical size %f outside [1, 128] m" % [si, fcomps[0]])
+		var centre_delta_m: float = (fb_centre - centre).length()
+		if centre_delta_m > 60.0:
+			_fails.append("slab %d fallback/mesh centre disagreement %f m > 60 m" % [si, centre_delta_m])
+		worst_fb = Vector3(maxf(worst_fb.x, fb.size.x), maxf(worst_fb.y, fb.size.y), maxf(worst_fb.z, fb.size.z))
+		worst_delta = maxf(worst_delta, centre_delta_m)
 	# Guard negative test (the §4 guard operates on the MESH aabb — an
 	# empty/degenerate one leaves s.occluder null): the exact predicate the
 	# code uses must reject a zero-size aabb and accept a full-slab aabb.
@@ -101,6 +134,10 @@ func _initialize() -> void:
 		},
 		"slab0": slab0,
 		"worst_size": [_r2(worst.x), _r2(worst.y), _r2(worst.z)],
+		"fallback": {
+			"worst_size": [_r2(worst_fb.x), _r2(worst_fb.y), _r2(worst_fb.z)],
+			"worst_centre_delta_m": _r2(worst_delta),
+		},
 		"legacy_offset_m": legacy_offset_m,
 		"degenerate_rejected": degen_rejected,
 		"fails": _fails,
@@ -116,6 +153,29 @@ func _warp_pos(f: int, ccx: int, ccz: int, lx: float, ly: float, lz: float) -> V
 	var v1024: float = float(ccz) * 16.0 + lz
 	var dir: Vector3 = SM.uv_to_world(f, u1024 / CELL, v1024 / CELL, _R)
 	return (_R + ly) * (dir / dir.length()) - Vector3(0.0, _R, 0.0)
+
+
+# AC-0460 stage 2b: the FOOTPRINT FALLBACK box (chunk.gd
+# _warp_slab_footprint_aabb), re-run with the SAME sampling: the 4 footprint
+# edges of the slab's 16x16 cell lattice at 1-cell steps (17 points each,
+# step 1.0) at BOTH heights h = y0 and h = y0 + 16 (SLAB_H) — 136 warped
+# points, the AABB of which is the fallback occluder box.
+func _fallback_aabb(y0: float) -> AABB:
+	var mn := Vector3(INF, INF, INF)
+	var mx := Vector3(-INF, -INF, -INF)
+	for h in [y0, y0 + SLAB_H]:
+		for e in range(17):
+			var t: float = float(e)
+			var ps: Array = [
+				_warp_pos(FACE, CCX, CCZ, 0.0, h, t),
+				_warp_pos(FACE, CCX, CCZ, 16.0, h, t),
+				_warp_pos(FACE, CCX, CCZ, t, h, 0.0),
+				_warp_pos(FACE, CCX, CCZ, t, h, 16.0),
+			]
+			for p in ps:
+				mn = Vector3(minf(mn.x, p.x), minf(mn.y, p.y), minf(mn.z, p.z))
+				mx = Vector3(maxf(mx.x, p.x), maxf(mx.y, p.y), maxf(mx.z, p.z))
+	return AABB(mn, mx - mn)
 
 
 # The warped corner cloud of one local box: the AABB of its 8 warped corners.

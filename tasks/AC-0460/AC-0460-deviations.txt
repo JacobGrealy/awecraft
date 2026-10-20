@@ -103,3 +103,35 @@
     modelled the guard on a warped synthetic flat box (the curved warp gives any angular spread a
     non-zero world thickness) — replaced in r7 with the exact guard predicate on a zero-size and a
     full-slab AABB (degenerate_rejected=true). r7 is the evidence.
+
+--- stage 2b (2026-10-20) ---
+
+13. Plan §4 fallback sampling count — the plan proposes "34 points (16 edge samples per side plus
+   the 4 corners)"; that number does not correspond to a consistent lattice (16 per side + 4
+   corners = 68 per height). Implemented 136 boundary samples — the 4 footprint edges at 17
+   cell-corner-step points (step 1.0) at BOTH heights (h = y0 and h = y0 + 16) — a strict
+   superset of the plan's suggestion, through the SAME warp construction (_warp_cell_point,
+   extracted from _warp_face_slabs). The warp is smooth over the 16-cell span, so the AABB
+   extrema sit on the footprint boundary; the probe confirms the fallback box agrees with the
+   8-corner mesh-derived box to 0.0 m in centre (worst_centre_delta_m=0.0) — the extra samples
+   change nothing.
+
+14. The plan §4 fallback is specified for the warp case (face lane, identity node); the plan does
+   not decide the home-pair (face < 2) case under the flag — the chart inverse (u1024 = ccx*16 +
+   lx) is undefined there (home chunks are never warped, AC-0458 guard). The fallback was
+   implemented for face >= 2 only; a mesh-less full-solid HOME slab under the flag keeps stage-2a
+   behaviour (s.occluder = null) — unchanged from the stage-2a tree, no widening. The warpcensus
+   `occluders` field counts resident FACE chunks, so the plan's gate is unaffected; home-pair
+   occluders ride the later home-pair/lane ticket.
+
+15. The existing _warp_face_slabs loop body now calls the extracted _warp_cell_point (plan §4:
+   "extract a small helper ... do not change what the existing callers compute"). The arithmetic
+   is the same operations in the same order — the flag-ON headless warpcensus reproduces stage
+   2a's aabb_center [2862.65,-1206.76,17.78] and aabb_delta_m 0.4 bit-identically, and the
+   flag-OFF genhash is 25/25 identical to the stage-2a reference. One GDScript call is added per
+   mesh vertex on the face-lane warp pass; plan §6 names no boundary p95 probe, so none was run —
+   the coordinator's heavy gate owns that number.
+
+16. interact smoke arm place_ok=false in BOTH the flag-OFF (r9) and flag-ON (r10) light sets —
+   the same documented input-timing flake as deviation 4 (r1 true, r2/r4 false; arm ok=true in
+   every run).
