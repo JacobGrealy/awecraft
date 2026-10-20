@@ -1478,7 +1478,8 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		s.fsidx = fsidx
 	else:
 		s.flora_instance = null
-	if full_solid and _occl_enabled():
+	# AC-0461: the box is authored in the legacy node frame (local (8, y0+8, 8)); under the AC-0458 warp the chunk node is identity, so the box would sit in the wrong place and occlude the wrong volume - occlusion culling is an optimisation, off under the warp until a later ticket re-derives it.
+	if full_solid and _occl_enabled() and not _warp_on:
 		var oc := OccluderInstance3D.new()
 		var box := BoxOccluder3D.new()
 		box.size = Vector3(15.0, 15.0, 15.0)

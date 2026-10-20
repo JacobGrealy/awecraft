@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0461 flag-ON correctness</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0461 — make the warp flag-ON path correct (occluder + world-space proof)</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. AC-0458 put the face-lane warp behind <code>AWECRAFT_WARP</code>, off by default. This ticket removes the last packaged assumption that still lives in the old frame, and leaves evidence that vertices and collision are world-space. <b>Small on purpose.</b></p>
+<h2>1. Goal</h2><p>With the warp on, nothing in the face-lane build still assumes the legacy node transform: the occluder is not mis-placed, and a probe proves the emitted vertices and the collision shape are world-space.</p>
+<h2>2. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/chunk.gd</td><td>the occluder block at 1481-1490 (<code>if full_solid and _occl_enabled():</code> ... <code>s.occluder = null</code>); <code>static var _warp_on</code> at 1690; <code>_build_slab_collision</code> at 1906</td><td>Edit ONLY the occluder condition and (if needed) one guard line. Do not touch the warp math, the collision builder, or anything else.</td></tr>
+<tr><td>tasks/AC-0461/warp_space_probe.gd (NEW)</td><td>standalone SceneTree; preloads sphere_math.gd by path</td><td>Write the probe in §3.3.</td></tr>
+<tr><td>tasks/AC-0461/continuity.md, AC-0461-deviations.txt, AC-0461-results.html</td><td>new ticket artifacts</td><td>Create; render the results page after the gates.</td></tr>
+<tr><td>.scratch/AC-0461-gates/</td><td>summary.json, probe log</td><td>Logs; never staged.</td></tr></table>
+<p><b>Do not touch:</b> the warp math (AC-0458 owns it), <code>_build_slab_collision</code>, the streaming scheduler, keys, saves, shaders, SphereMath, harness, registry.</p>
+<h2>3. Edit shape</h2>
+<p><b>3.1 The occluder.</b> Today a slab adds <code>OccluderInstance3D</code> with a 15×15×15 <code>BoxOccluder3D</code> at local <code>(8, y0+8, 8)</code>. That position is only meaningful while the chunk node carries the legacy placement; under the warp the node is identity, so the box lands in the wrong place and would occlude the wrong volume (a correctness bug that can hide geometry).</p>
+<p>Change the occluder condition to also require <code>not _warp_on</code>: with the warp on, <code>s.occluder</code> is left null and no occluder node is added. Add one comment line saying why (the box is authored in the legacy frame; occlusion culling is an optimisation and is off under the warp until a later ticket re-derives it). Do not attempt to reposition the box — a single axis-aligned box cannot represent a warped slab.</p>
+<p><b>3.2 Collision — verify, do not change.</b> <code>_build_slab_collision</code> reads <code>mesh.surface_get_arrays(0)</code> and adds the body as a child of the chunk, so when the mesh vertices are world-space and the node is identity, the shape is world-space. Confirm that by reading the function and state it in the deviations; make no edit.</p>
+<p><b>3.3 The probe (new tasks/AC-0461/warp_space_probe.gd).</b> Pure math, no world: it reproduces the §3.2 warp construction of AC-0458 for a face chunk and asserts the space it lands in.</p>
+<ul>
+<li>For face chunks on faces 2..11 (both mirror classes), take the chunk's 16×16 cell corner lattice and compute the warped world position of every corner from local coordinates.</li>
+<li><b>A1 world-space magnitude</b>: the warped positions must lie on the sphere shell, i.e. <code>|P + (0,R,0)| - R</code> is 0 within 1e-3 m for h=0 corners (report max shell error). A legacy-framed vertex would sit at a few metres from the origin and fail this by kilometres — that is the point of the check.</li>
+<li><b>A2 neighbour agreement</b>: for each pair of adjacent chunks, the shared edge's corner positions computed from each side's own locals must agree (max gap 0), re-using the AC-0458 result so a regression is visible from this ticket too.</li>
+<li><b>A3 no local-frame leftovers</b>: assert no corner of a warped chunk has <code>|y| &lt; 1</code> AND <code>|x|,|z| &lt; 40</code> simultaneously — i.e. nothing is still sitting near the origin in chunk-local metres on a chunk whose canonical position is far away. Report the count of suspicious points (must be 0).</li>
+<li><b>Negative control</b>: skip the warp for one chunk (use the legacy transform product) and confirm A1 fails on it (negative_detected true).</li>
+</ul>
+<p>RESULT keys: ok, chunks, corners, max_shell_error_m, max_paired_gap_m, local_frame_suspects, negative_detected, fails (JSON, one line).</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Flag OFF unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0461 --arms g0,smoke,ac0423probe --timeout 600</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25 identical to <code>.scratch/AC-0433-gates/genhash-r9-lines.txt</code> (or the newest standing reference you can find there); ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms.</td></tr>
+<tr><td>Flag ON clean</td><td>Same arms with <code>--env 'AWECRAFT_WARP=1'</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25. Report any value that moved.</td></tr>
+<tr><td>Probe</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute warp_space_probe.gd; log .scratch/AC-0461-gates/probe.log; gate_census.py.</td><td>rc=0, census 0/0, ok=true, max_shell_error_m &lt;= 0.001, max_paired_gap_m == 0, local_frame_suspects 0, negative_detected true.</td></tr></table>
+<p>No render in this run — the coordinator takes the rendered proof after it (a render needs a composed camera at a seam, which is coordinator work). No native rebuild, no heavy set.</p>
+<h2>5. Acceptance</h2><p>Under the warp the face lane emits world-space geometry with no packaged assumption left in the old frame, the occluder no longer pretends to be in a frame that does not exist, and collision is shown to follow the warped vertices rather than being rewritten.</p>
+<h2>6. Risks</h2><p>Disabling the occluder under the warp costs some occlusion culling in that mode — acceptable and temporary, and it must be stated in the commit, not hidden. Do not "fix" it by moving the box.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>AC-0458 landed the warp behind an off flag (seam gap 0.451 → 0). The coordinator REORDERED this ticket ahead of the key/save ticket: switching keys before the flag-ON path is correct would break saves for no benefit. After this: a rendered proof, then AC-0460/AC-0459.</p>
+</body></html>
