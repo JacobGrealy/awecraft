@@ -1,41 +1,41 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 stage 1 warp reaches the world</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0460 stage 1 — prove the warp reaches the world</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>This is stage 1 of the streaming ticket, not the whole of it:</b> it closes the open proof obligation recorded at AC-0461 — nothing yet shows that <code>AWECRAFT_WARP=1</code> produces warped geometry in a live world. The single-lane rewrite follows in a later stage, informed by what this measures.</p>
-<h2>1. Goal</h2><p>An arm that stands the player at the home/face boundary with the warp on and reports, in numbers and in a pixel A/B, that face chunks really are built warped.</p>
-<h2>2. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 s2 occluder from warped AABB</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0460 stage 2a — restore occlusion culling under the warp</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Small, bounded, and it removes the one acknowledged cost of the AC-0461 decision before the flag's default is considered. <b>This is not the lane rewrite.</b></p>
+<h2>1. Goal</h2><p>With the warp on, a solid slab gets an occluder again — built from its own warped mesh bounds instead of a legacy-frame constant.</p>
+<h2>2. Why this is safe now (coordinator audit, 2026-10-20)</h2>
+<p><code>SphereMath.face_chunk_transform</code> has exactly ONE production caller — <code>world.gd:15363</code>, the chunk node's transform assignment — plus harness arms. No production code reads a face chunk's node transform back, so the warp's identity node is not consumed by anything except Godot's own parenting. That is what makes restoring the occluder, and later the default, tractable; the audit is recorded in this ticket's journal rather than left as folklore.</p>
+<h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/chunk.gd</td><td><code>_warp_face_slabs</code> (grep <code>func _warp_face_slabs</code>, ~1704); <code>static var _warp_on</code> (~1690); <code>first_opaque_mesh()</code> (~1362)</td><td>Edit: one static counter incremented only where the warp actually runs. Nothing else.</td></tr>
-<tr><td>godot/world/world.gd</td><td><code>_face_stream</code> (14991); the face chunk map / <code>_face_free_chunk</code> (15104); <code>recenter</code> (11728)</td><td>READ ONLY — understand the streaming gate; do not edit.</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td>copy the shape of an existing compact world arm (e.g. the block at <code>func _ac0423probe_test</code>, 35906): boot, place, wait, RESULT, quit</td><td>Add ONE arm <code>warpcensus</code>. Read only the arm you copy.</td></tr>
-<tr><td>godot/scenes/main.gd</td><td>the <code>AWECRAFT_LOGIC</code> dispatch (grep <code>AWECRAFT_LOGIC</code>, ~112-160) and the arm-name table it uses</td><td>Edit: register the new arm name in the dispatch exactly as its neighbours are.</td></tr>
-<tr><td>tasks/harness_data.yaml</td><td>the entry rows for other <code>*probe</code> arms</td><td>Add the <code>warpcensus</code> row (entry / tests / result_fields / envs / wall / notes), then run <code>python3 tasks/scripts/harness_doc.py --render</code>.</td></tr>
-<tr><td>tasks/AC-0460/</td><td>plan.html, continuity.md, AC-0460-deviations.txt, AC-0460-results.html</td><td>Create; render the results page after the gates.</td></tr>
-<tr><td>.scratch/AC-0460-gates/</td><td>summary.json, arm logs, the two boundary renders</td><td>Logs; never staged. Renders go to <code>tasks/AC-0460/captures/</code>.</td></tr></table>
-<p><b>Do not touch:</b> the warp math (AC-0458), the occluder decision (AC-0461), keys/saves (AC-0459), SphereMath, the design docs.</p>
-<h2>3. Edit shape</h2>
-<p><b>3.1 The counter.</b> In chunk.gd add <code>static var warped_chunks: int = 0</code> and increment it once per build inside <code>_warp_face_slabs</code>, after the face-lane guard, at the point the warp actually runs. The flag-off path must not touch it, so the shipped path stays byte-identical.</p>
-<p><b>3.2 The arm <code>warpcensus</code>.</b> A world arm in harness.gd that:</p>
+<tr><td>godot/world/chunk.gd</td><td>the occluder block (~1481-1490, the AC-0461 comment + <code>if full_solid and _occl_enabled() and not _warp_on:</code>); <code>_warp_on</code> (~1690); <code>_build_slab_collision</code> (~1906) shows how the mesh's arrays are read</td><td>Edit: replace the occluder condition/placement with the warp-aware form of §4. Nothing else.</td></tr>
+<tr><td>tasks/AC-0460/occ_probe.gd (NEW)</td><td>standalone SceneTree</td><td>Write the probe in §5.</td></tr>
+<tr><td>tasks/AC-0460/continuity.md</td><td>last section</td><td>Append.</td></tr>
+<tr><td>.scratch/AC-0460-gates/</td><td>logs</td><td>Never staged.</td></tr></table>
+<p><b>Do not touch:</b> the warp math, the collision builder, the legacy (flag-off) occluder behaviour, streaming, keys, saves, SphereMath, docs.</p>
+<h2>4. Edit shape</h2>
 <ul>
-<li>boots the normal world at a small radius (reuse the compact arm's boot sequence — do not invent one);</li>
-<li>places the player near the home/face boundary: flat x at about <code>SphereMath.face_width(R)/2 - 8</code>, z near 0, so <code>_face_stream</code>'s edge-normal gate is satisfied and faces 4/6 stream;</li>
-<li>runs a bounded, deterministic number of frames (state the number; 240 is a starting point) so face chunks build and land;</li>
-<li>reports: the flag state, how many face chunks are resident in the world map, <code>Chunk.warped_chunks</code>, and for the first resident face chunk with a mesh: the mesh AABB centre in world space, the chunk's EXPECTED world centre from SphereMath (the chunk's canonical surface point at its middle), and the distance between them (aabb_delta_m).</li>
+<li><b>Flag off — byte-identical.</b> Keep the existing branch exactly as it is: a 15×15×15 <code>BoxOccluder3D</code> at local <code>(8, y0+8, 8)</code>, gated by <code>full_solid and _occl_enabled()</code>.</li>
+<li><b>Flag on — derive from the mesh.</b> When <code>_warp_on</code> and the same <code>full_solid and _occl_enabled()</code> gates hold, take the slab's own opaque mesh AABB (<code>s.mesh_instance.mesh.get_aabb()</code>, which is world-space under the warp) and create the occluder from it: a <code>BoxOccluder3D</code> whose <code>size</code> is the AABB size, with the <code>OccluderInstance3D</code> positioned at the AABB's world centre (the node is identity under the warp, so the child's <code>position</code> IS the world centre — set it to <code>aabb.get_center()</code>).</li>
+<li><b>Guard</b>: if the mesh or its AABB is empty/degenerate (any size component ≤ 0.01), leave <code>s.occluder = null</code> rather than creating a zero-volume occluder.</li>
+<li><b>Do not shrink by a fudge factor</b> unless the existing flag-off path does (it does not — it uses 15 for a 16 m chunk). If a margin is needed to stop an occluder covering the camera, that is a finding for the probe to show, not a guess to bake in.</li>
 </ul>
-<p><b>Expected values.</b> Flag OFF: <code>warped_chunks == 0</code> and the mesh AABB is in the legacy local frame (delta large — that is the control). Flag ON: <code>warped_chunks &gt; 0</code>, and the AABB centre must be within one chunk footprint of the expected world centre (state the tolerance: 120 m, generous because the AABB centre of an arbitrary mesh is not the chunk centre) — the point is that it is in world space at all, not centimetre-precise.</p>
-<p>RESULT keys: ok, warp, face_chunks, warped_chunks, aabb_center, expected_center, aabb_delta_m, frames.</p>
-<p><b>3.3 The pixel A/B.</b> With the player at the boundary, take TWO renders of the same frame — one with <code>AWECRAFT_WARP=1</code>, one without — and compare md5. <b>A byte-identical pair is a FAILED proof</b> (it means the warp still is not reaching the frame); a different pair with a coherent image is the pass. Use the standing snapshot recipe (no <code>AWECRAFT_LOGIC</code> arm for the shot — the arm owns the frame, so use the harness's own shot hook, or drive the player pose with the existing env-gated position hooks rather than inventing one). If composing a boundary shot needs a hook that does not exist, say so and deliver the arm only — do not invent a new shot system.</p>
-<h2>4. Gates</h2>
+<h2>5. The probe (new tasks/AC-0460/occ_probe.gd) and the arm evidence</h2>
+<p>A pure-math probe cannot see occluders, so pair the code change with the existing arm rather than inventing a new world harness:</p>
+<ul>
+<li>Probe (pure): for a representative face chunk's warped corner cloud (the AC-0461 construction), compute the AABB centre and size that §4 would produce, and assert the centre lies within the chunk's own corner cloud bounds and the size is within [1, 40] m on each axis. Report the values. This proves the arithmetic the code performs, not the node tree.</li>
+<li>Arm evidence: re-run the existing <code>warpcensus</code> arm with the flag on and report, in the RESULT or the log, that slabs built warped still succeed (no SCRIPT ERROR, chunk count unchanged). <b>Do not add a new arm</b>; if you need an occluder count, add ONE field to <code>warpcensus</code>'s RESULT (e.g. <code>occluders</code>) and its harness_data row.</li>
+</ul>
+<h2>6. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Flag OFF unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms; warpcensus <code>warped_chunks == 0</code>.</td></tr>
-<tr><td>Flag ON</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code> (or the arm's own documented env)</td><td>Every arm rc=0, SCRIPT=0/SHADER=0; warpcensus <code>warped_chunks &gt; 0</code> and <code>aabb_delta_m &lt;= 120</code>.</td></tr>
-<tr><td>Docs sync</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0 (the arm's row rendered).</td></tr></table>
-<p>No native rebuild. Renders only as §3.3 describes, at most two, with the standing recipe and a 1200 s budget each.</p>
-<h2>5. Acceptance</h2><p>The warp is provably applied to real face chunks in a live world (counter and AABB in world space), the flag-off control proves the counter cannot lie, and — if a boundary shot is composable — the pixel A/B differs. If the shot is not composable, the arm alone is the deliverable and the gap is recorded, not papered over.</p>
-<h2>6. Risks</h2><p>The player-position hook may not exist for a boundary spawn; then extend the arm's own setup (it runs inside the game) rather than adding env vars. A "difference" in the render could come from anything — pair it with the counter so the pixels and the number agree.</p>
-<h2>7. Fences</h2><div class="stop"><ul>
+<tr><td>Flag off unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to its capture excl ms; warpcensus warped_chunks 0 (control).</td></tr>
+<tr><td>Flag on</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; warpcensus warped_chunks &gt; 0 and (if you added the field) occluders &gt; 0.</td></tr>
+<tr><td>Probe</td><td>Standalone, HOME=/tmp/dsh_home, ulimit cap, 120 s, gate_census on the log.</td><td>rc=0, census 0/0, ok=true, the assertions above hold.</td></tr>
+<tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0 if you touched harness_data.yaml.</td></tr></table>
+<h2>7. Acceptance</h2><p>Under the warp a solid slab again carries an occluder, positioned from its own world-space bounds; with the flag off nothing changes at all; and the audit that makes this safe is recorded.</p>
+<h2>8. Risks</h2><p>The AABB of a full slab may be nearly chunk-sized, so the occluder is coarse — that is acceptable (the flag-off one is coarse too). Do not attempt per-face occluders.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>No edits outside §3. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>AC-0458 landed the warp (seam gap 0.451 → 0), AC-0461 made the flag-ON path correct in space and occluder-free. The coordinator's render A/B at spawn was byte-identical and therefore proved nothing — that is the obligation this stage closes. Next stages of AC-0460: the actual single-lane rewrite; then AC-0459 keys/saves; then AC-0462/AC-0463.</p>
+<h2>10. Resume point</h2><p>Stage 1 proved the warp reaches the world (78 chunks, AABB delta 0.4 m). AC-0461 disabled occluders under the warp as an honest stopgap; this restores them properly. After it: consider the flag default with perf evidence, then the lane rewrite, keys, consumers.</p>
 </body></html>

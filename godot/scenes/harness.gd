@@ -35988,13 +35988,24 @@ func _warpcensus_test(spawn: Vector3) -> void:
 		expected_center = [roundf(ec.x * 100.0) / 100.0, roundf(ec.y * 100.0) / 100.0, roundf(ec.z * 100.0) / 100.0]
 		aabb_delta_m = roundf((ec - ac).length() * 100.0) / 100.0
 		first_key = world._key_f(int(first.face), int(first.cx), int(first.cz))
+	# AC-0460 stage 2a: the face chunks' slab occluders (count). Under the
+	# warp they are derived from each slab's own world-space mesh AABB
+	# (chunk.gd §4); flag-off they are the legacy local constant box. The
+	# placement arithmetic itself is the occ_probe's job (pure math).
+	var occluders := 0
+	for k in world._face_order:
+		var c: Node3D = world.chunks.get(k)
+		if c != null:
+			for s in c.slabs:
+				if s.occluder != null:
+					occluders += 1
 	var ok: bool
 	if warp == 0:
 		# the control: the flag-off path never touches the counter.
 		ok = (warped == 0)
 	else:
 		ok = (warped > 0 and face_chunks > 0 and aabb_delta_m >= 0.0 and aabb_delta_m <= 120.0)
-	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "ms": Time.get_ticks_msec() - t0}})
+	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "ms": Time.get_ticks_msec() - t0}})
 
 
 # The BEFORE frame (tasks/AC-0423/captures/ac0423-before-ground-north.png,

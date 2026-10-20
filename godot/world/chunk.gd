@@ -1478,7 +1478,7 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		s.fsidx = fsidx
 	else:
 		s.flora_instance = null
-	# AC-0461: the box is authored in the legacy node frame (local (8, y0+8, 8)); under the AC-0458 warp the chunk node is identity, so the box would sit in the wrong place and occlude the wrong volume - occlusion culling is an optimisation, off under the warp until a later ticket re-derives it.
+	# AC-0461: the box is authored in the legacy node frame (local (8, y0+8, 8)); under the AC-0458 warp the chunk node is identity, so that frame is wrong - AC-0460 stage 2a re-derives the warped box from the slab's own world-space mesh bounds below.
 	if full_solid and _occl_enabled() and not _warp_on:
 		var oc := OccluderInstance3D.new()
 		var box := BoxOccluder3D.new()
@@ -1487,6 +1487,26 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		oc.position = Vector3(8.0, float(s.y0) + 8.0, 8.0)
 		add_child(oc)
 		s.occluder = oc
+	elif full_solid and _occl_enabled() and _warp_on:
+		# AC-0460 stage 2a (plan §4): under the AC-0458 warp the node is identity, so
+		# the slab's mesh AABB IS its world-space bound - the BoxOccluder3D takes its
+		# size and the OccluderInstance3D sits at its centre (the child's position is
+		# the world centre directly). An empty/degenerate AABB leaves s.occluder null
+		# rather than a zero-volume occluder.
+		if s.mesh_instance != null and s.mesh_instance.mesh != null:
+			var aabb := s.mesh_instance.mesh.get_aabb()
+			if aabb.size.x > 0.01 and aabb.size.y > 0.01 and aabb.size.z > 0.01:
+				var oc := OccluderInstance3D.new()
+				var box := BoxOccluder3D.new()
+				box.size = aabb.size
+				oc.occluder = box
+				oc.position = aabb.get_center()
+				add_child(oc)
+				s.occluder = oc
+			else:
+				s.occluder = null  # degenerate/empty AABB: no zero-volume occluder
+		else:
+			s.occluder = null  # no opaque mesh: nothing to occlude with
 	else:
 		s.occluder = null
 	s.sidx = sidx

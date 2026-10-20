@@ -58,3 +58,48 @@
    same-flag control render (render non-determinism is the only confound at this magnitude) or a
    larger R (bigger warp displacement) would make the pixel axis decisive; the plan's at-most-2
    render budget was spent (two earlier attempts were the invalid death-screen pair, deviation 6).
+
+--- stage 2a (2026-10-20) ---
+
+9. PLAN GATE NOT MET (probe size band) — tasks/AC-0460/occ_probe.gd, plan.html §5: "the size is
+   within [1, 40] m on each axis". HONEST FAILURE, reported not loosened: the derived occluder
+   sizes are x 80.26-86.57 m, y 81.69-88.16 m (worst slab 86.57 x 88.16 x 38.96) for all 24 slabs
+   of face chunk 4:63:0 (R=4000); only the z axis (35.69-38.96 m) is inside the band. The probe's
+   ok=false with 48 size-band fails is the recorded result (occ_probe-r7.log). CAUSE: a face-lane
+   chunk is a documented 49-98 m WORLD footprint — sphere_math.gd:470-487 (the face_chunk_transform
+   header): "one local unit = one cell (face_cell_scale - anisotropic)" and "no ... construction
+   can place every cell close over the full 49-98 m chunk". The 1024-cell chart spans the 6283 m
+   face width (W = pi*R/2, the AC-0306 grid lock), so 16 local m = 98.2 m of arc in u and 49.1 m
+   in v; the AC-0458 warp re-expresses EXACTLY that legacy scale (its seam probe proves the two
+   constructions agree to 0 m). The plan's band assumed a ~16 m chunk (the home-lane intuition);
+   §8's "nearly chunk-sized, coarse - acceptable" still holds, just at the face-lane scale.
+   WHAT HOLDS: the centre assertion (all 24 slab-derived centres inside the chunk's own corner
+   cloud), the guard predicate, and the live-world execution (xvfb occluders=89, 0 script errors).
+   The band is a coordinator re-scope (plan repair), not a builder judgment call.
+
+10. warpcensus `occluders` reads 0 in the HEADLESS light set in BOTH flag states (plan §6 flag-ON
+    expectation "occluders > 0 if you added the field" is unsatisfiable under the gate command):
+    the occlusion nodes are gated off by the DisplayServer check in chunk.gd `_occl_enabled`
+    (453-456: `1 if DisplayServer.get_name() != "headless" else 0`) — the same gate the `occlude`
+    arm's standing row documents ("headless: occluders 0 (gated off, DisplayServer check)").
+    The field's evidence therefore rides the render recipe: xvfb + Forward+/lavapipe (AC-0391
+    recipe, boot line asserts Forward+) — flag-ON occluders=89 (warpcensus-xvfb-on2.log, final
+    code), flag-OFF occluders=335 (warpcensus-xvfb-off.log; its flag-OFF path is byte-identical in
+    the final tree). Both rc=0, SCRIPT ERROR 0.
+
+11. The occluder counts are asymmetric by construction (89 warp vs 335 legacy face-slab occluders),
+    not a regression: the legacy branch boxes EVERY full_solid slab unconditionally (the 15 m box
+    does not consult the mesh), including fully-buried slabs whose opaque mesh is EMPTY (all six
+    neighbours solid -> no exposed faces -> no mesh). The warp branch derives the box from the
+    slab's own mesh AABB (plan §4), so those mesh-less buried slabs take the guard path and stay
+    null — which is the right behaviour (nothing is visible there to occlude with). The restoration
+    proof is 89 > 0 under the warp plus the probe's centre arithmetic; the 335 vs 89 delta is the
+    count of mesh-less full-solid face slabs at this boundary stand (logged, not gated).
+
+12. The probe's first four runs (occ_probe-r1..r5 logs) are authoring-bug iterations, superseded:
+    r1 a wrong (project-relative) script path; r2-r5 GDScript parse errors in the probe itself
+    (undeclared loop variable, no Vector3.MAX / AABB(Vector3) / merge(Vector3) / encapsulate_point
+    in this engine, fixed by a manual min/max corner fold). r6 ran but its degenerate-guard test
+    modelled the guard on a warped synthetic flat box (the curved warp gives any angular spread a
+    non-zero world thickness) — replaced in r7 with the exact guard predicate on a zero-size and a
+    full-slab AABB (degenerate_rejected=true). r7 is the evidence.
