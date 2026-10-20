@@ -1690,6 +1690,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 # stays byte-identical until a later ticket flips it.
 static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") == "1"
 
+# AC-0460 stage 1 (plan.html §3.1): the census counter — incremented once
+# per build at the point the warp actually runs (inside _warp_face_slabs,
+# past the face-lane guard; build_mesh_face calls it only when _warp_on, so
+# the flag-off path never touches it and the shipped build stays
+# byte-identical). The warpcensus arm reads it; the flag-off control (== 0)
+# proves the counter cannot lie.
+static var warped_chunks: int = 0
+
 # AC-0458 (plan.html §3.2): rewrite each vertex of a face-lane build from
 # chunk-local metres to world metres, pointwise on the legacy 1024 chart —
 # the same construction as PlanetGrid.cell_to_world on that chart:
@@ -1708,6 +1716,7 @@ func _warp_face_slabs(res: Dictionary) -> void:
 		# one log line, then skip (plan §3.3) — never warp the home pair.
 		print("AC-0458: warp skipped — face %d is not a face-lane build (the home pair is AC-0460)" % face_i)
 		return
+	warped_chunks += 1  # AC-0460 stage 1: the warp actually runs here
 	var R: float = float(Game.planet_R)
 	var mirrored: bool = SphereMath.face_mirror_x(face_i)
 	var ccx: float = float(int(cx)) * 16.0

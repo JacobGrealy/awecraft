@@ -1,0 +1,60 @@
+1. main.gd: the plan's file table names an AWECRAFT_LOGIC dispatch edit in main.gd ("register the
+   new arm name ... exactly as its neighbours are"). No per-arm table exists there — main.gd reads
+   the env (main.gd:111) and routes every arm through harness.run (main.gd:825-866); the arm
+   neighbours (ac0423probe, ac0433probe, crossface) appear ONLY in the harness.gd dispatch. The
+   registration landed in harness.gd exactly as the neighbours are; main.gd is untouched (verified,
+   not a skipped step).
+
+2. chunk.gd has no class_name — the plan's RESULT spec reads "Chunk.warped_chunks". The arm reads
+   the static through load("res://world/chunk.gd") (the same object the live chunks are built
+   from); no new const or symbol added.
+
+3. RESULT carries two extra evidence fields beyond the plan's key list: first_chunk ("face:ccx:ccz"
+   key of the measured chunk) and ms. All plan keys (ok, warp, face_chunks, warped_chunks,
+   aabb_center, expected_center, aabb_delta_m, frames) are present.
+
+4. interact smoke arm: place_ok read true in the flag-OFF gate run (rev 1) but false in BOTH the
+   flag-ON gate run (rev 2) and a flag-OFF re-run (rev 4) — an input-timing flake in the
+   mine/place drive (mine_diag frames 69/72 vary per run), not a flag effect: the warp path never
+   runs in the spawn region (no face chunk streams there — warpcensus face_chunks only rise at the
+   boundary) and this change adds no home-lane code. arm ok stayed true in every run; rc=0,
+   SCRIPT=0/SHADER=0. Coordinator may want a re-run if interact standing values are enforced.
+
+5. genhash: 25/25 identical against the last verified tree (.scratch/AC-0461-gates/genhash-r2.log);
+   ac0423probe RESULT byte-equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms, in BOTH
+   flag states.
+
+6. §3.3 render A/B — the first pair is INVALID and is superseded, not part of the proof:
+   AWECRAFT_AIM coordinates are FLAT (Debug.teleport routes them through
+   world_pos_of_flat; main.gd:909-917) while the plan §3.3/§2 framing assumed world coords, so the
+   first pair teleported the player to flat y = -1013 (1 km under the surface) and both frames are
+   "You Died!" death screens (md5 differs by ~150 bytes — a dead-camera pair, FAILED proof, not a
+   pass). The valid pair uses flat AIM coords (3116.59, 205, 0) + AWECRAFT_NOCLIP=1 (existing
+   hook; the death at that spot was the void/lava class from the misread position).
+   No new shot system invented (plan §3.3).
+
+7. FINDING for the coordinator (pre-existing, not introduced here, NOT fixed by this ticket):
+   with the live Forward+ renderer, a player standing at the home/face boundary logs a recurring
+   pair of runtime script errors — "Out of bounds get index '-985xx' (PackedByteArray)" at
+   compute_light_split (world/lighting.gd:179) and "Invalid access to property or key 'sky'" at
+   light_at (world.gd:13609) + vm_refresh (player.gd:1400), every frame (9 lines per render log).
+   The face chunks in the shot are the dark wedge at the frame's bottom right (unlit — consistent
+   with the broken light read). The headless warpcensus arm is clean (0 script errors, both flag
+   states), so the class is renderer/live-light-path only; a ticket is owed for it.
+
+8. §3.3 pixel A/B OUTCOME (valid pair: .scratch/AC-0460-gates/render-off3.log + render-on3.log,
+   captures/warpcensus-boundary-{off,on}.png, flat AIM 3116.59,205,0,90,0 + AWECRAFT_NOCLIP=1,
+   Forward+ asserted in both logs, 0 SCRIPT ERROR in both): the pair DIFFERS (md5 905622bc… vs
+   8fe39134…) and both frames are coherent boundary shots (home snow terrain + the face-chunk edge
+   wedge) — per plan §3.3 that is the pass condition (a byte-identical pair would have been a
+   FAILED proof). Magnitude, stated plainly: 1903 of 921600 pixels differ (0.21%), max per-pixel
+   channel-sum 2 of 765, differences scattered across the frame (424 in the wedge zone) — i.e. at
+   the rasterization-noise floor. That is the EXPECTED geometry: the warp re-expresses the same
+   placement the AC-0433 face_chunk_transform already makes (the crossface arm measured the two
+   constructions agree to <= 0.4 m at this R), so the visible displacement is sub-pixel at
+   R = 4000 / ~30 m camera distance. The pixel A/B therefore confirms the flag reaches the frame
+   (unlike AC-0461's byte-identical spawn-preset A/B, which proved nothing) but is confirmatory,
+   not the proof — the census (warped_chunks 0 vs 78, aabb_delta_m 3099.39 vs 0.4) is. A
+   same-flag control render (render non-determinism is the only confound at this magnitude) or a
+   larger R (bigger warp displacement) would make the pixel axis decisive; the plan's at-most-2
+   render budget was spent (two earlier attempts were the invalid death-screen pair, deviation 6).

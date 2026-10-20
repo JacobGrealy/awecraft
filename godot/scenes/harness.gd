@@ -339,6 +339,21 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _ac0433probe_test()
 			get_tree().quit()
 			return
+		if logic == "warpcensus":
+			# AC-0460 stage 1: the warp census (plan.html §3.2) — the
+			# player stands at the home/face boundary (flat x = hw - 8,
+			# z = 0) so _face_stream's edge-normal gate streams the +x
+			# edge face chunks (faces 4/5); a bounded frame count lets
+			# them build and land, then the census: the flag state, the
+			# resident face-chunk count, Chunk.warped_chunks, and the
+			# first resident meshed face chunk's mesh-AABB centre vs its
+			# SphereMath expected world centre (aabb_delta_m). Flag OFF
+			# is the control: warped_chunks must stay 0 (the counter
+			# cannot lie) and the AABB sits in the legacy local frame
+			# (the delta is large by construction).
+			await _warpcensus_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -35891,6 +35906,97 @@ func _rayline_test(spawn: Vector3) -> void:
 
 # ============================================================================
 # AC-0423 TEMPORARY (REMOVED AT CLOSEOUT) — the see-through census.
+# ============================================================================
+# AC-0460 stage 1: the warp census (plan.html §3.2). The player stands at
+# the home/face boundary (flat x = hw - 8, z = 0) so _face_stream's
+# edge-normal gate (8 m < the sim window) streams the +x edge face chunks
+# (faces 4/5); a bounded, deterministic frame count (240) lets them build
+# and land, then the census reports the numbers that prove the AC-0458
+# warp reaches a live world: the flag state, the resident face-chunk
+# count, Chunk.warped_chunks, and the first resident meshed face chunk's
+# mesh-AABB centre vs its EXPECTED world centre — the chunk's canonical
+# surface point at its middle (uv_to_world at the chunk-centre cell,
+# minus the (0, R, 0) planet-frame shift the global frame applies).
+# Flag OFF is the control: the counter must stay 0 (it cannot lie) and
+# the raw mesh AABB sits in the legacy chunk-local frame, so the delta is
+# large by construction. Flag ON: warped > 0 and aabb_delta_m <= 120 (the
+# AABB centre of a full solid column is ~top/2 m below the surface, not
+# the chunk centre — 120 m is generous on purpose; the point is that the
+# AABB is in WORLD space at all).
+# RESULT: ok, warp, face_chunks, warped_chunks, aabb_center,
+# expected_center, aabb_delta_m, frames (+ first_chunk key, ms).
+# ============================================================================
+func _warpcensus_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		Debug.result({"warpcensus": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var hw: float = SphereMath.face_width(R) * 0.5
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p: Node3D = main._spawn_player()
+	# the boundary stand: flat x = hw - 8, z = 0, at the player's own
+	# height (the footing is irrelevant — no render, no walk). The flat
+	# -> world map is the SphereMath inverse (the global frame is the
+	# planet frame shifted by (0, -R, 0); flat and global agree near the
+	# patch).
+	var pf: Vector3 = world.flat_of_world_pos(p.position)
+	pf.x = hw - 8.0
+	pf.z = 0.0
+	p.position = world.world_pos_of_flat(pf.x, pf.y, pf.z)
+	# recenter takes FLAT coordinates (the _face_player_flat contract) —
+	# with _rec_player_wx = hw - 8 the edge-normal gate sees 8 m to the
+	# +x edge and faces 4/5 stream (the z edges are hw away, inert).
+	world.recenter(pf.x, pf.z, true)
+	# the bounded, deterministic frame count: _face_stream paces its
+	# ensures at the 12 ms/frame budget, edge chunks first; 240 frames
+	# is the stated cap (plan.html §3.2).
+	var max_frames := 240
+	var frames := 0
+	while frames < max_frames:
+		frames += 1
+		await get_tree().process_frame
+	# chunk.gd declares no class_name — the statics come through the
+	# loaded script (the same object the live chunks are built from).
+	var ck: GDScript = load("res://world/chunk.gd")
+	var warp := 1 if bool(ck._warp_on) else 0
+	var warped := int(ck.warped_chunks)
+	var face_chunks := int(world._face_order.size())
+	var first: Node3D = null
+	for k in world._face_order:
+		var c: Node3D = world.chunks.get(k)
+		if c != null and c.first_opaque_mesh() != null:
+			first = c
+			break
+	var aabb_center: Array = [null, null, null]
+	var expected_center: Array = [null, null, null]
+	var aabb_delta_m := -1.0
+	var first_key := ""
+	if first != null:
+		var m: ArrayMesh = first.first_opaque_mesh()
+		var ac: Vector3 = m.get_aabb().get_center()
+		aabb_center = [roundf(ac.x * 100.0) / 100.0, roundf(ac.y * 100.0) / 100.0, roundf(ac.z * 100.0) / 100.0]
+		# the chunk's canonical surface point at its middle: the
+		# chunk-centre cell (u, v) on the 1024-cell chart, at radius R,
+		# minus the (0, R, 0) global-frame shift (the same shift the
+		# warp itself applies to every warped vertex).
+		var uu: float = (float(int(first.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+		var vv: float = (float(int(first.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+		var ec: Vector3 = SphereMath.uv_to_world(int(first.face), uu, vv, R) - Vector3(0.0, R, 0.0)
+		expected_center = [roundf(ec.x * 100.0) / 100.0, roundf(ec.y * 100.0) / 100.0, roundf(ec.z * 100.0) / 100.0]
+		aabb_delta_m = roundf((ec - ac).length() * 100.0) / 100.0
+		first_key = world._key_f(int(first.face), int(first.cx), int(first.cz))
+	var ok: bool
+	if warp == 0:
+		# the control: the flag-off path never touches the counter.
+		ok = (warped == 0)
+	else:
+		ok = (warped > 0 and face_chunks > 0 and aabb_delta_m >= 0.0 and aabb_delta_m <= 120.0)
+	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "ms": Time.get_ticks_msec() - t0}})
+
+
 # The BEFORE frame (tasks/AC-0423/captures/ac0423-before-ground-north.png,
 # ground level at spawn facing +Z, R24/F83) shows: bright slits along the
 # 16 m chunk seams (the pale-cyan (140,193,203) class pixels), a dark banded
