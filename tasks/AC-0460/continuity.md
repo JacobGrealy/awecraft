@@ -208,3 +208,66 @@ place_ok input-timing flake (deviation 4). No git actions, no TASKS.yaml, no new
 - CONCLUSION, stated plainly: **the warp is correct and feature-equivalent (seams 0, occluders 335/335, collision/light in world space) but NOT shippable on the streaming path as written.** The flag must stay off. This is the migration's real engineering problem, and no amount of further correctness work changes it.
 - THE FIX DIRECTION (this ticket's next stage): move the warp into the native lane. The mesher is already C++ (gdext/src/mesh.cpp) and builds the vertex arrays there, so warping in the same pass costs a handful of trig ops per vertex in optimised native code instead of a GDScript loop with per-vertex Vector3 allocations. Expected to fall from ~1.2 us to ~0.02-0.05 us per vertex; that must be measured, not assumed.
 - Cost control recorded: the timing includes allocator noise (per-vertex Vector3 alloc), and it is headless-CPU — both stated in the ticket's deviations, so nobody later mistakes 8.8 ms for a GPU number.
+## RUN — Tue Oct 20 14:41:13 EDT 2026 — AC-0460 stage 4 (native warp)
+- LANDED (stage 4, 2026-10-20): gdext/src/mesh.cpp — AweMesh::warp_face_verts
+  (PackedVector3Array, int face, int ccx, int ccz, double R) at the class tail + its
+  bind_method (beside slab_boundary_air): the drop-in native of the AC-0458 vertex warp in
+  doubles — continuous mirror inverse (non-mirror u1024 = ccx*16 + lx, mirror
+  u1024 = ccx*16 + 16 - lx), v1024 = ccz*16 + lz, world = (R + ly) * normalize(sm_uv_to_world)
+  - (0, R, 0); reuses sm_uv_to_world / sm_face_mirror_x (READ ONLY, per plan §3). Plan said
+  "static"; godot-cpp cannot bind a static member (deviation 18) — stateless non-static,
+  identical signature/call shape. godot/world/chunk.gd _warp_face_slabs — per-surface dispatch:
+  native call when AweMesh exposes warp_face_verts (mc.has_method), GDScript loop as the
+  fallback (stale .so degrades, does not crash); the stage-3 cost statics (warp_us /
+  warp_verts / warp_surfaces) wrap whichever path runs. New probe
+  tasks/AC-0460/native_parity_probe.gd (faces 2..11, both mirror classes, 2000 LCG verts per
+  chunk, existence assertion, same-size contract, negative control). Build: rc=0,
+  6.9 s incremental (mesh.cpp recompile + relink; the plan's ~24 s estimate was for a colder
+  build), .so copied gdext/bin -> godot/bin (deviation 21).
+- GATES (stage 4, 2026-10-20; logs .scratch/AC-0460-gates/):
+  - Flag-OFF light set (rev 15, g0,smoke,ac0423probe,warpcensus, timeout 600): every arm
+    rc=0, SCRIPT=0/SHADER=0, ok=true; genhash 25/25; ac0423probe ok; warpcensus warp=0,
+    warped_chunks=0, face_chunks=72, aabb_delta_m=3099.39, first_chunk 4:63:0 (standing
+    values reproduced) and the CONTROL: warp_ms_total=0, warp_verts=0, warp_us_per_vert=0.0,
+    warp_ms_per_chunk=0.0 (cost fields stay 0 — the instrumentation sits inside the guarded
+    path). interact place_ok=false (the documented flake).
+  - Parity probe (parity-r1.log; rc=0, gate_census 0/0): ok=FALSE (a FINDING, not a build
+    defect), chunks=10, verts=20000, negative_detected=true, R=4000 (Game.planet_R),
+    max_parity_m=2736.2021 — the FACE-11 pre-existing C++ chart bug (deviation 19;
+    parity-perface-r1.log: faces 2-10 all <= 1.0e-3 m, face 11 = 2736.2021). The plan's
+    1e-4 bound is unreachable at R=4000 for float32-stored outputs (deviation 20). The
+    existence assertion and same-size contract PASSED (the method is there; the .so is
+    fresh) — the probe failed on the numbers, exactly the behaviour plan §8 risk 2 wants.
+  - Flag-ON light set, RUN 1 (flagon-run1.log, rev 16 arms): every arm rc=0, 0/0, ok=true;
+    warped_chunks=78 UNCHANGED, aabb_center [2862.65,-1206.76,17.78] + aabb_delta_m=0.4
+    (bit-identical to stages 2b/3 — the native path changes no geometry at this boundary),
+    genhash 25/25; MEASURED: warp_ms_total=34, warp_verts=560288, warp_ms_per_chunk=0.436,
+    warp_us_per_vert=0.062 vs stage 3's 8.833 / 1.231 => 20.3x per chunk / 19.9x per vertex.
+  - Flag-ON light set, RUN 2 (flagon-run2.log): same rc/SCRIPT/SHADER/ok; warped_chunks=78,
+    aabb bit-identical to run 1; warp_ms_total=33, warp_verts=560248, warp_ms_per_chunk=0.423,
+    warp_us_per_vert=0.058 => 20.9x / 21.2x. run1->run2 variance: +3% per chunk, +6.9% per
+    vertex, 40 verts (0.007% — the same frame-240 schedule effect as stage 3). Well inside
+    the plan's ~30% bar and 4x past the 5x target.
+- OUTCOME (stage 4, 2026-10-20): the warp is now NATIVE and ~20x faster
+  (0.436 / 0.423 ms per chunk vs 8.833; 0.062 / 0.058 us per vertex vs 1.231) — 27% of the
+  12 ms FACE_STREAM_BUDGET_MS at stage 3 becomes ~4%: the cost objection to the flag is
+  answered. Geometry at the boundary is bit-identical to the validated stages (aabb_center /
+  aabb_delta_m / warped_chunks unchanged in both flag-ON runs; flag-OFF untouched). RED on
+  the parity gate, reported plainly: (1) face 11 disagrees by 2736.2 m because of a
+  PRE-EXISTING bug in the C++ header's face table (no case 11 — the C++ gen lane's face-11
+  placement has been on the wrong half of the -Z face since AC-0423; deviation 19); (2) the
+  1e-4 bound is below the float32 storage floor at R=4000 (deviation 20) — faces 2-10 sit
+  at <= 1.0e-3 m, the expected float32-vs-double noise. Neither is a defect of this stage's
+  code: the warp reuses the header exactly and the probe's job (fail loudly, never silently)
+  worked. Next: the coordinator re-scopes the parity bound and decides the face-11 fix
+  (one line in sphere_math_cpp.h, with its C++ gen-lane consequence), then the flag default.
+  Files: gdext/src/mesh.cpp, godot/world/chunk.gd, tasks/AC-0460/native_parity_probe.gd,
+  continuity, deviations 18-21, results page Stage-4 section. No git actions, no
+  TASKS.yaml, no new tickets. godot/bin/libchunkio.so is a build output — never committed.
+
+## Coordinator triage — stage 4 (native warp) — AND A REAL BUG FOUND
+- COST SOLVED: native warp measured at 0.423 ms/chunk / 0.059 us/vert (stage 3 GDScript: 8.833 / 1.231) — 20.9x. Coordinator reran it twice: identical 0.423 / 0.059 / 33 ms total. Against FACE_STREAM_BUDGET_MS 12.0 the warp is now ~3.5% of a streaming pass instead of 73%, so the cost objection to shipping it is gone.
+- PRE-EXISTING NATIVE BUG FOUND BY THE PARITY PROBE, and it is bigger than this ticket: `sm_uv_to_world` in gdext/src/sphere_math_cpp.h had NO `case 11`; face 11 fell to `default`, which duplicates face 10's mapping (cx = u instead of cx = u - 1). Every native caller asking for face 11 got the wrong half of the -Z cube face — a measured 2,736 m error at R=4000. That covers the AC-0423 seam-V extension on face 11 as well as the new warp. FIXED by the coordinator (one case arm, mirroring sphere_math.gd:105) and the extension rebuilt: parity went 2,736.2021 m -> 0.001007 m.
+- Standing guards re-run on the FIXED .so: light set all green (g0/player/interact/light/fluids/genhash/ac0423probe), and the nine seam overlaps are unchanged at 654/752/660/662/758/848/800/1290/1290 — the face-11 fix does not disturb the standing face/homeseam values, because those sites are not face 11. That is the evidence that the fix changed only what was wrong.
+- MY PARITY BOUND WAS WRONG (fourth plan-level error in this series, third mine): I specified 1e-4 m, which is below the float32 storage floor at R=4000 (4000 * 2^-23 = 0.000477 m, and a few ulps through normalize is already ~0.001 m) — physically unachievable for any implementation. Corrected to 2e-3 m with the derivation in the probe; that still catches a wrong face by three orders of magnitude (the face-11 bug was 2,736 m). The builder flagged it instead of quietly loosening.
+- Files: gdext/src/mesh.cpp (warp_face_verts + binding), godot/world/chunk.gd (native dispatch with a GDScript fallback so a stale .so degrades), gdext/src/sphere_math_cpp.h (the face-11 case), tasks/AC-0460/native_parity_probe.gd. godot/bin/libchunkio.so is a build output and is NOT committed.

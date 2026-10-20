@@ -71,6 +71,11 @@ static inline SmV3 sm_uv_to_world(int face, double u, double v, double R) {
 	case 8: cx = u; cy = 2.0 * v - 1.0; cz = 1.0; break;
 	case 9: cx = u - 1.0; cy = 2.0 * v - 1.0; cz = 1.0; break;
 	case 10: cx = u; cy = 2.0 * v - 1.0; cz = -1.0; break;
+	// AC-0460 stage 4: face 11 used to fall through to the default, which
+	// duplicates face 10 - so every native caller asking for face 11 got the
+	// WRONG half of the -Z cube face (measured 2,736 m error at R = 4000).
+	// GDScript has always mapped it as cx = u - 1 (sphere_math.gd:105).
+	case 11: cx = u - 1.0; cy = 2.0 * v - 1.0; cz = -1.0; break;
 	default: cx = u; cy = 2.0 * v - 1.0; cz = -1.0; break;
 	}
 	SmV3 p = sm_norm({sm_prewarp(cx), sm_prewarp(cy), sm_prewarp(cz)});

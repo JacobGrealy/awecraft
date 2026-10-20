@@ -1,35 +1,44 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 s3 warp cost</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0460 stage 3 — what does the warp cost?</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. A <b>measurement</b> ticket: instrument, report, change no behaviour. This is the gate in front of any decision to default the warp on.</p>
-<h2>1. Goal</h2><p>A number for the warp's cost per chunk and per vertex, measured inside the warp pass, from the arm that already builds 78 warped face chunks.</p>
-<h2>2. Why not the perf arms</h2>
-<p>The <code>boundary</code> arm walks the HOME pair, and the warp returns early for faces &lt; 2 — it would report 0 cost for a real cost. The existing <code>warpcensus</code> arm is the right vehicle: it stands at the boundary, builds face chunks deterministically, and already reports <code>warped_chunks</code>.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0460 s4 native warp</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0460 stage 4 — the warp, in native code</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Stage 3 measured the warp at <b>8.8 ms per chunk / 1.231 us per vertex</b> — 73% of the 12 ms <code>FACE_STREAM_BUDGET_MS</code> for one chunk — so it is not shippable as a GDScript loop. This stage moves the same mapping into the native lane as a <b>drop-in post-pass</b>: same place in the pipeline, same data, native speed. The emitters are not touched.</p>
+<h2>1. Goal</h2><p>The identical warp output, computed in C++, materially faster, with a measured before/after and a parity proof against the GDScript reference.</p>
+<h2>2. Toolchain (verified by the coordinator, 2026-10-20)</h2>
+<p>Build with <code>PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext platform=linux target=template_release</code> — SCons is installed at <code>.scratch/scons-target</code> and an incremental build takes ~24 s. <code>godot/bin/libchunkio.so</code> is a build output: never commit it, and never edit it by hand.</p>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/chunk.gd</td><td><code>_warp_face_slabs</code> (~1710), <code>_warp_cell_point</code>, the <code>warped_chunks</code> static (~1690)</td><td>Edit: add timing/vertex accumulators around the existing loop. No change to what the warp computes.</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the <code>warpcensus</code> arm's RESULT block</td><td>Edit: add the measured fields. Nothing else.</td></tr>
-<tr><td>tasks/harness_data.yaml</td><td>the <code>warpcensus</code> row's <code>result_fields</code></td><td>Add the new field names; then <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>gdext/src/mesh.cpp</td><td><code>class AweMesh : public RefCounted</code> (~3560) and its <code>_bind_methods()</code> (~3564)</td><td>Add ONE static method + its binding. Do not touch any emitter.</td></tr>
+<tr><td>gdext/src/sphere_math_cpp.h</td><td><code>sm_uv_to_world</code> (60), <code>sm_face_mirror_x</code>, and the S/S-half helpers</td><td>Read only — reuse, do not duplicate.</td></tr>
+<tr><td>godot/world/chunk.gd</td><td><code>_warp_face_slabs</code> (~1710), <code>_warp_cell_point</code>, the cost statics (stage 3), <code>mesh_cpp()</code> (~394)</td><td>Edit: call the native method when available; keep the GDScript loop as the fallback path.</td></tr>
+<tr><td>tasks/AC-0460/native_parity_probe.gd (NEW)</td><td>standalone SceneTree that loads the extension</td><td>Write the parity proof in §5.</td></tr>
 <tr><td>tasks/AC-0460/continuity.md</td><td>last section</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the warp maths, the occluder branch, collision, streaming, keys, saves, docs.</p>
+<p><b>Do not touch:</b> the emitters, gen.cpp, the collision builder, the occluder branch, streaming, keys, saves, SphereMath GDScript, docs.</p>
 <h2>4. Edit shape</h2>
 <ul>
-<li>Add statics beside <code>warped_chunks</code>: <code>warp_us</code> (total microseconds inside the warp pass), <code>warp_verts</code> (vertices examined), <code>warp_surfaces</code> (surfaces visited). Reset them in the arm before its run starts, so the numbers belong to that run.</li>
-<li>Time ONLY the warp loop with <code>Time.get_ticks_usec()</code> around it, summed per surface. Do not instrument inside the per-vertex body.</li>
-<li>In <code>warpcensus</code>'s RESULT add: <code>warp_ms_total</code> (warp_us/1000, rounded), <code>warp_verts</code>, <code>warp_us_per_vert</code> (warp_us / max(1, warp_verts), 3 dp), <code>warp_ms_per_chunk</code> (warp_ms_total / max(1, warped_chunks), 3 dp), and keep the existing fields unchanged.</li>
+<li><b>The native method.</b> <code>static PackedVector3Array warp_face_verts(PackedVector3Array verts, int face, int ccx, int ccz, double R)</code>, bound as <code>warp_face_verts</code>. For each vertex (lx, ly, lz) it must reproduce EXACTLY the GDScript mapping that stage 1-3 validated, including the deviation the builder corrected at AC-0458: the chart coordinate is the continuous inverse of the legacy local-X layout — non-mirror <code>u1024 = ccx*16 + lx</code>, mirror <code>u1024 = ccx*16 + 16 - lx</code> — with <code>u = u1024 / 1024</code>, <code>v = (ccz*16 + lz) / 1024</code>, and the position <code>(R + ly) * normalize(sm_uv_to_world(face, u, v, R)) - (0, R, 0)</code>. Use the double-precision helpers so the parity tolerance is met.</li>
+<li><b>The call site.</b> In <code>_warp_face_slabs</code>, when the extension exposes <code>warp_face_verts</code>, call it per surface and write the result back; otherwise fall back to the existing GDScript loop. Keep the stage-3 timing statics around whichever path runs, so the comparison is like-for-like.</li>
+<li><b>Nothing else changes</b>: flag off still does nothing at all; the node identity assignment, the occluder derivation and the warp's inputs/outputs stay exactly as they are.</li>
 </ul>
-<h2>5. Gates</h2>
+<h2>5. Parity probe (tasks/AC-0460/native_parity_probe.gd)</h2>
+<ul>
+<li>Load the extension the same way the game does; for a sample of face chunks (faces 2..11, both mirror classes), build a deterministic pseudo-random vertex set in local metres covering the chunk's extent.</li>
+<li>Compute the reference in GDScript with the stage-3 <code>_warp_cell_point</code>-equivalent formula, and the native result, and report the max per-vertex distance.</li>
+<li>Expected: <b>max parity error &lt;= 1e-4 m</b>. Also assert the native function returns the same array size it was given.</li>
+<li>Negative control: perturb one input vertex and confirm parity breaks (negative_detected).</li>
+</ul>
+<p>RESULT keys: ok, chunks, verts, max_parity_m, negative_detected, fails (JSON).</p>
+<h2>6. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Flag off</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to capture excl ms; <code>warped_chunks 0</code> and <code>warp_verts 0</code> (the cost fields must be zero when the warp is off — that is the control that the instrumentation is inside the guarded path).</td></tr>
-<tr><td>Flag on</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <code>warped_chunks 78</code> (unchanged from stage 1 — the instrumentation must not change behaviour); report <code>warp_ms_total</code>, <code>warp_verts</code>, <code>warp_us_per_vert</code>, <code>warp_ms_per_chunk</code>.</td></tr>
-<tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0.</td></tr></table>
-<p>No renders, no native rebuild, no heavy set. <b>Run the flag-on arm twice and report both numbers</b> — a single sample is not a measurement, and the two must be within ~30% of each other or the variance is itself the finding.</p>
-<h2>6. Acceptance</h2><p>A reproducible per-chunk and per-vertex cost for the warp, with a zero-cost control when the flag is off, and the two-run variance stated.</p>
-<h2>7. Risks</h2><p>Timing a loop that allocates will include allocator noise; that is acceptable as long as it is stated. Do not optimise anything — this ticket measures.</p>
-<h2>8. Fences</h2><div class="stop"><ul>
-<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<tr><td>Native build</td><td><code>PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext platform=linux target=template_release</code></td><td>rc=0, <code>libchunkio.so</code> rebuilt; report the wall time.</td></tr>
+<tr><td>Flag off</td><td><code>python3 tasks/scripts/gate_run.py AC-0460 --arms g0,smoke,ac0423probe,warpcensus --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to capture excl ms; warped_chunks 0 and the cost fields 0.</td></tr>
+<tr><td>Flag on — the point of the ticket</td><td>Same with <code>--env 'AWECRAFT_WARP=1'</code>, run TWICE.</td><td>All rc=0, SCRIPT=0/SHADER=0; warped_chunks 78 unchanged; <b>report warp_ms_per_chunk / warp_us_per_vert against stage 3's 8.833 / 1.231</b>. Target: at least 5x faster (&lt;= 1.77 ms/chunk). If it is not faster, report that plainly — the measurement decides, not the plan.</td></tr>
+<tr><td>Parity</td><td>Standalone probe, paired rc + gate_census.</td><td>rc=0, census 0/0, ok=true, max_parity_m &lt;= 1e-4, negative_detected true.</td></tr></table>
+<h2>7. Acceptance</h2><p>The native warp reproduces the validated mapping within 1e-4 m, the measured cost drops materially, and the flag-off path stays untouched. A stale or missing extension must degrade to the GDScript path rather than crash.</p>
+<h2>8. Risks</h2><p>(1) Double vs float: the GDScript reference is float32 Vector3 while the C++ path can use doubles — that is exactly why the parity bound is 1e-4 m and not 0. (2) A stale <code>.so</code> would silently use the fallback: the probe must assert the native method EXISTS, not just that the result looks right. (3) Do not "optimise" by interpolating a coarse grid — the seam guarantee depends on evaluating every vertex exactly.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets. Do not commit <code>godot/bin/libchunkio.so</code>.</li>
 <li>No edits outside §3. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>Stage 2b reached occluder parity (335/335, verified). Warp mode is feature-equivalent to legacy. This measures its cost; the default flip decision follows from the number, and the lane rewrite / keys / consumers follow that.</p>
+<h2>10. Resume point</h2><p>Stages 1-3: warp proven in-world (78 chunks, AABB delta 0.4 m), occluder parity 335/335, cost measured 8.833 ms/chunk. This addresses the cost. After it: re-measure, then decide the flag default, then the lane rewrite / keys / consumers.</p>
 </body></html>

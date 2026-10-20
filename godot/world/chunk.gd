@@ -1763,16 +1763,30 @@ func _warp_face_slabs(res: Dictionary) -> void:
 	var mirrored: bool = SphereMath.face_mirror_x(face_i)
 	var ccx: float = float(int(cx)) * 16.0
 	var ccz: float = float(int(cz)) * 16.0
+	# AC-0460 stage 4 (plan.html §4): the drop-in native post-pass when the
+	# extension exposes warp_face_verts (one AweMesh call per surface — the
+	# same mapping the stages 1-3 validated, in doubles). A stale .so
+	# WITHOUT the method degrades to the GDScript loop below instead of
+	# crashing (plan §7 acceptance).
+	var mc: Variant = mesh_cpp()
+	var native_warp: bool = mc != null and mc.has_method("warp_face_verts")
 	for row in res.slabs:
 		for di in range(6):
 			var v: PackedVector3Array = row[di].v
 			# AC-0460 stage 3 (plan.html §4): time ONLY this surface's warp
 			# loop (ticks per surface, summed); nothing inside the
-			# per-vertex body.
+			# per-vertex body. Stage 4: whichever path runs (the native call
+			# or the fallback loop) is what gets timed — like-for-like.
 			var w0: int = Time.get_ticks_usec()
-			for i in range(v.size()):
-				var p: Vector3 = v[i]
-				v[i] = _warp_cell_point(face_i, R, mirrored, ccx, ccz, p.x, p.z, p.y)
+			if native_warp:
+				# fresh same-size array; written back before apply_accs
+				# assembles this surface (build_mesh_face calls the warp
+				# post-pass first, then the assembly).
+				row[di]["v"] = mc.warp_face_verts(v, face_i, int(cx), int(cz), R)
+			else:
+				for i in range(v.size()):
+					var p: Vector3 = v[i]
+					v[i] = _warp_cell_point(face_i, R, mirrored, ccx, ccz, p.x, p.z, p.y)
 			warp_us += Time.get_ticks_usec() - w0
 			warp_verts += v.size()
 			warp_surfaces += 1

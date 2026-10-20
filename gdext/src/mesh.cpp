@@ -3577,6 +3577,9 @@ public:
 		ClassDB::bind_method(D_METHOD("sync_snap", "own_d", "own_f", "rings", "h"), &AweMesh::sync_snap);
 		ClassDB::bind_method(D_METHOD("rows_eq", "a", "b", "y_lo", "y_hi"), &AweMesh::rows_eq);
 		ClassDB::bind_method(D_METHOD("slab_boundary_air", "d", "lo", "hi"), &AweMesh::slab_boundary_air);
+		// AC-0460 stage 4 (plan.html §4): the face-lane warp post-pass —
+		// the drop-in native of chunk.gd _warp_face_slabs' vertex loop.
+		ClassDB::bind_method(D_METHOD("warp_face_verts", "verts", "face", "ccx", "ccz", "R"), &AweMesh::warp_face_verts);
 		// AC-0236 part 2: the low placeholder emit (the worker-side
 		// 4x4x4 grid + greedy mesh; the node attach stays main-thread).
 		// AC-0252: the med/low AVERAGE-COLOR emit (grid 8 = MED / 4 = LOW,
@@ -4454,6 +4457,40 @@ public:
 			}
 		}
 		return false;
+	}
+
+	// AC-0460 stage 4 (plan.html §4): the face-lane warp post-pass — the
+	// DROP-IN NATIVE of chunk.gd _warp_face_slabs' per-vertex loop (the
+	// AC-0458 mapping stages 1-3 validated, in doubles): each local vertex
+	// (lx, ly, lz) charts by the EXACT INVERSE of the face_local_x layout —
+	// non-mirror u1024 = ccx*16 + lx, mirror u1024 = ccx*16 + 16 - lx (the
+	// continuous mirror inverse), v1024 = ccz*16 + lz — and lands in world
+	// as (R + ly) * normalize(sm_uv_to_world(face, u, v, R)) - (0, R, 0)
+	// (ly = the radial height, as the GDScript _warp_cell_point). The
+	// mirror class and the cube chart come from sphere_math_cpp.h
+	// (sm_face_mirror_x / sm_uv_to_world) — reused, not duplicated.
+	// Stateless (no member state — the plan's "static" in form; godot-cpp's
+	// ClassDB::bind_method binds member pointers only, so the binding
+	// needs the non-static form — identical signature and call shape).
+	// verts = the surface's local PackedVector3Array; the result is a
+	// fresh same-size array the caller writes back.
+	PackedVector3Array warp_face_verts(const PackedVector3Array &verts, int face, int ccx, int ccz, double R) {
+		const bool mirrored = awesm::sm_face_mirror_x(face);
+		const double bx = (double)ccx * 16.0;
+		const double bz = (double)ccz * 16.0;
+		const int n = (int)verts.size();
+		PackedVector3Array out;
+		out.resize(n);
+		for (int i = 0; i < n; i++) {
+			const Vector3 p = verts[i];
+			const double u1024 = bx + (mirrored ? 16.0 - (double)p.x : (double)p.x);
+			const double v1024 = bz + (double)p.z;
+			const awesm::SmV3 dir = awesm::sm_uv_to_world(face, u1024 / 1024.0, v1024 / 1024.0, R);
+			const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+			const double s = (R + (double)p.y) / len;
+			out[i] = Vector3(dir.x * s, dir.y * s - R, dir.z * s);
+		}
+		return out;
 	}
 };
 

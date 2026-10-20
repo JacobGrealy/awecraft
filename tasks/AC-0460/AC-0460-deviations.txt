@@ -140,3 +140,40 @@
    flag-OFF run had place_ok=true (r11) — the same documented input-timing flake as
    deviation 4 (stage 1) and deviation 16 (stage 2b, r9/r10); arm ok=true in every run,
    not caused by the stage-3 instrumentation (the flag-OFF tree carries it too).
+
+--- stage 4 (2026-10-20) ---
+
+18. The plan says "ONE static method warp_face_verts ... plus its bind_method": godot-cpp's
+    ClassDB::bind_method binds MEMBER pointers only (there is no MethodBind overload for a
+    free-function pointer — the build failed on the static form), so the method is a STATELESS
+    NON-STATIC member of AweMesh. Same signature, same bound name, same GDScript call shape
+    (mesh.cpp: the binding beside slab_boundary_air; the method at the class tail).
+
+19. FINDING (pre-existing, NOT introduced or fixed here): the plan's parity spec (faces 2..11,
+    <= 1e-4 m) exposes a CHART DISAGREEMENT in the C++ sphere math. gdext/src/sphere_math_cpp.h
+    sm_uv_to_world (lines 60-78) has no explicit case 11 — its `default:` duplicates face 10's
+    row (cx = u), while the GDScript reference (godot/core/sphere_math.gd uv_to_world:90) charts
+    face 11 (odd sector, like faces 1/3/9) with cx = u - 1.0 (its match `_` default). Measured:
+    face-11 parity 2736.2021 m (the probe's worst vertex, parity-r1.log); faces 2-10 agree to
+    <= 1.0e-3 m (parity-perface-r1.log). The bug predates this ticket (git: no "case 11" ever
+    in gdext/; the header arrived in that shape at AC-0423) and it ALSO affects the C++ GEN lane's
+    face-11 placement via sm_face_chunk_transform — i.e. face-11 face chunks have been C++-placed
+    on the wrong half of the -Z cube face since AC-0423. The plan names sphere_math_cpp.h READ
+    ONLY and names the GDScript the validated reference, so the one-line fix (default: cx =
+    u - 1.0) was NOT applied: it would move the C++ gen lane's face-11 placement — a coordinator
+    decision outside this ticket. The new warp reuses the header exactly (consistent with the
+    C++ lane); the probe reports the disagreement rather than hiding it.
+
+20. The plan's parity bound (<= 1e-4 m) is UNREACHABLE at R = 4000 for this comparison: both
+    sides store output in float32 PackedVector3Array, world coordinates are O(R) = O(4000 m)
+    where the float32 half-ulp is ~2.4e-4 m, and the GD reference itself is float32 arithmetic
+    (Godot 4 GDScript float). Measured worst over faces 2-10: <= 1.0e-3 m
+    (parity-perface-r1.log) — plan §8 risk 1 anticipated the float/double split but set the
+    bound an order of magnitude below the storage floor. The coordinator may re-scope the bound
+    (e.g. 1e-3 m) or demand the face-11 fix first (deviation 19) before the probe can go green.
+
+21. The build gate's command does not include the COPY step: SCons emits
+    gdext/bin/libchunkio.so, but the local gates load godot/bin/libchunkio.so (res://bin per
+    godot/res/libchunkio.gdextension). The .so was copied after the build; without the copy the
+    whole gate set would gate STALE code (gdext/AGENTS.md warns exactly this — a stale .so
+    "silently gates the old code"). Coordinator may want gate_run to own the copy.
