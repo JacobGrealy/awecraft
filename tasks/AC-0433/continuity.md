@@ -470,3 +470,58 @@
 - Why this matters: chunk_neighbour resolves through cell_neighbour, so the fold rule stays in one place. The straddle test (all 16 crossing cells must land in the one returned chunk) is what proves a chunk never straddles a chart edge — it was checked, not assumed.
 - Scope: planet_grid.gd + new probe + journal + plan + ARCHITECTURE.md paragraph. No caller, no save key, no runtime change; Windows rebuild not owed.
 - AC-0433 stays in-progress. Remaining: storage key format + save-version decision, then the streaming/collision/consumer migration.
+## RUN — Mon Oct 19 23:10:29 EDT 2026 — AC-0433 (P2c-2 chunk keys, medium)
+- LANDED: per plan.html §3: godot/core/planet_grid.gd gains two public
+  statics after chunk_neighbour (nothing existing changed): chunk_key
+  (valid chunk -> "%d:%d:%d" % [face,cx,cz] plain integers, invalid
+  face/radius/chunk -> "") and chunk_from_key (strict canonical parse:
+  exactly three colon parts, each a non-empty run of ASCII digits, no
+  signs/spaces, no leading zeros beyond the value zero itself, each part
+  <= 9 digits, then the face/radius/chunk-domain check via
+  chunk_cell_origin; {ok:true,face,cx,cz} or {ok:false}). NEW
+  tasks/AC-0433/p2c2_probe.gd: T1 round trip on sampled chunks {0,1,last}
+  per axis on all 12 faces, T2 uniqueness + stability (two calls and a
+  fresh R of the same value), T3 the 20-case reject table, T4 near-miss
+  (one character deleted from a valid key must not parse back to the
+  same chunk); one RESULT line, exit 1 on any failure.
+  p2c2-deviations.txt (new).
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home,
+  ulimit -v 8388608, absolute engine path):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600`
+    (summary.json + per-arm logs): g0/player/interact/light/fluids/
+    genhash/ac0423probe all rc=0 script=0 shader=0 ok=true. genhash-r9:
+    25/25 GENHASH lines. ac0423probe-r10 equal to
+    captures/ac0423probe-r2.log excluding ms-named fields (overlaps
+    654/752/660/662/758/848/800/1290/1290 mm; probe ms 5417).
+  - P2c-2 (p2c2-probe.log): rc=0, census 0/0, RESULT ok=true keys=108
+    round_trip_failures=0 duplicates=0 stable=true reject_cases=20
+    reject_failures=0 near_miss_detected=true fails=0.
+  - Regressions (each rc=0, census 0/0, RESULT equal to its baseline
+    excluding ms): p2c1-regression-p2c2.log vs p2c1-probe.log (chunks 960,
+    crossings 12288, pairs 768/768, invalid 21/21); p2b3 vs p2b3-probe.log
+    (checks 1728, folds 216); p2b2 vs p2b2-probe-p2b3.log (adjacency_pairs
+    1728); p2b vs p2b-probe.log (cells 432); p2a vs p2a-probe.log (ms 38
+    vs 38); p1 vs captures/p1-probe.log (ms 314 vs 313).
+- OUTCOME: **P2c-2 LANDED.** One canonical spelling per chunk: 108/108
+  sampled chunks (cx,cz in {0,1,last} on all 12 faces) round-trip
+  exactly through chunk_key -> chunk_from_key, all produced keys
+  distinct and stable across two calls and a fresh R of the same value,
+  the full 20-case reject table rejects (empty/wrong part count,
+  non-digits, signs, spaces, floats, leading zeros, face 12 out of
+  range, negative, out-of-domain 999999, hex), and the one-character
+  near-miss key no longer parses to its chunk. The runtime is provably
+  unchanged (p2c1/p2b3/p2b2/p2b/p2a/p1 RESULTS equal to their baselines
+  excluding ms; light set all rc=0 script=0 shader=0, genhash 25/25,
+  ac0423probe equal to its capture). planet_grid.gd still has no
+  caller and no save key. Scope: planet_grid.gd (2 statics),
+  p2c2_probe.gd (new), p2c2-deviations.txt (new), continuity.md. No git
+  ops, no registry edits, no new tickets, no docs/results page. Next
+  (plan §8): the save schema + version bump decision, then the
+  streaming/consumer migration.
+
+## Coordinator triage — P2c-2 (chunk key)
+- H1-H6: clean. Independent rerun rc=0, SCRIPT=0, SHADER=0 and the RESULT line is identical to the builder's (keys 108, round_trip_failures 0, duplicates 0, stable true, reject_cases 20, reject_failures 0, near_miss_detected true).
+- Format deviation, mine not the builder's: the plan said "one RESULT line" and listed keys without demanding JSON, so this probe emits key=value while p1/p2a/p2b*/p2c1 emit a JSON object. Every value is present and greppable, so the evidence rule holds, but future plans must say "one RESULT JSON line" explicitly to keep machine parsing uniform.
+- Strict parse inspected by hand (not just trusted): chunk_from_key rejects empty parts, length > 9, leading zeros, any non-digit, and validates the chunk against the face domain through chunk_cell_origin — the reject table's 20 cases plus the near-miss control are real, not vacuous.
+- Scope: planet_grid.gd + new probe + journal + plan + an ARCHITECTURE.md clause. No caller, no save-file involvement, no runtime change.
+- AC-0433 stays in-progress. Remaining: the save schema/version decision (user waived old-save compatibility, so: version bump + clean reject, no migration) and then the streaming/consumer migration.

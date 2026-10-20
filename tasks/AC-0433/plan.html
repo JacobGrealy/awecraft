@@ -1,44 +1,42 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P2c-1 chunk addressing</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0433 P2c-1 — chunk addressing and chunk-level adjacency</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Cells became total last unit; this lifts the same identity one level to the 16×16 chunk, which is the unit storage and streaming will use. Dormant: no caller, no save key.</p>
-<h2>1. Goal</h2><p>Address a chunk by (face, cx, cz), prove chunk boundaries never straddle a chart edge, and resolve chunk neighbours — including across cube edges — so streaming can walk the world at chunk granularity.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P2c-2 chunk keys</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{font-family:ui-monospace;border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0433 P2c-2 — the canonical chunk key and its inverse</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The chunk identity landed last unit; this gives it one stable, parseable string form plus the inverse — the shape storage and the streaming dictionary will key on. Dormant: nothing reads it yet and no save file is written.</p>
+<h2>1. Goal</h2><p>One canonical chunk key string for every chart, invertible and platform-stable, so the same chunk cannot be named two ways and a key always parses back to its chunk.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/core/planet_grid.gd</td><td>CHUNK_WIDTH (near line 31); <code>cell_lattice</code>, <code>cell_owner</code>, <code>cell_neighbour</code>, <code>grid_shape</code></td><td>Append three public statics; nothing existing changes.</td></tr>
-<tr><td>tasks/AC-0433/p2c1_probe.gd (NEW)</td><td>standalone SceneTree, const GRID=preload(res://core/planet_grid.gd)</td><td>Write the tests in §3.3. Keep it SHORT.</td></tr>
-<tr><td>tasks/AC-0433/p2c1-deviations.txt (NEW)</td><td>OUTCOME + evidence</td><td>Every number in a log.</td></tr>
+<tr><td>godot/core/planet_grid.gd</td><td><code>chunk_of</code>, <code>chunk_cell_origin</code>, <code>chunk_neighbour</code>, <code>grid_shape</code> (all appended last unit, after <code>cell_neighbour</code>)</td><td>Append two public statics; nothing existing changes.</td></tr>
+<tr><td>tasks/AC-0433/p2c2_probe.gd (NEW)</td><td>standalone SceneTree, const GRID=preload(res://core/planet_grid.gd)</td><td>Write the tests in §3.3. Keep it SHORT.</td></tr>
+<tr><td>tasks/AC-0433/p2c2-deviations.txt (NEW)</td><td>OUTCOME + evidence</td><td>Every number in a log.</td></tr>
 <tr><td>tasks/AC-0433/continuity.md</td><td>last section</td><td>Append RUN / LANDED / GATES+OUTCOME.</td></tr>
-<tr><td>.scratch/AC-0433-gates/</td><td>summary.json, p2c1-probe.log</td><td>Logs; never staged.</td></tr></table>
-<p><b>Do not touch:</b> ARCHITECTURE.md, docs/, results page, the p1/p2a/p2b/p2b2/p2b3 probes, any runtime caller, SphereMath, native, shaders, harness, registry.</p>
+<tr><td>.scratch/AC-0433-gates/</td><td>summary.json, p2c2-probe.log</td><td>Logs; never staged.</td></tr></table>
+<p><b>Do not touch:</b> ARCHITECTURE.md, docs/, results page, any earlier probe, any runtime caller, SphereMath, native, shaders, harness, registry. In particular do NOT touch any save code — this unit defines identity only.</p>
 <h2>3. Edit shape</h2>
-<p><b>3.1 Three statics</b> (append after cell_neighbour; same sentinel style):</p>
+<p><b>3.1 Two statics.</b></p>
 <ol>
-<li><code>chunk_of(face:int, i:int, j:int, R:float) -&gt; Vector2i</code> — the chunk holding cell (i,j): integer division of i and j by CHUNK_WIDTH. Invalid face/radius/cell -&gt; <code>Vector2i(-1, -1)</code> (never a valid chunk, since real cx/cz are &gt;= 0).</li>
-<li><code>chunk_cell_origin(face:int, cx:int, cz:int, R:float) -&gt; Vector2i</code> — the chunk's cell-min corner (cx*16, cz*16); invalid chunk (outside that face's chunk grid) -&gt; <code>Vector2i(-1, -1)</code>.</li>
-<li><code>chunk_neighbour(face:int, cx:int, cz:int, dir:int, R:float) -&gt; Dictionary</code> — the neighbouring chunk in dir (0 = -i, 1 = +i, 2 = -j, 3 = +j), <code>{ok:true, face, cx, cz}</code> or <code>{ok:false}</code>. Implement it as: take the chunk's cell origin, pick the crossing cell (dir 1 -&gt; i0+15, dir 0 -&gt; i0, dir 3 -&gt; j0+15, dir 2 -&gt; j0), call <code>cell_neighbour</code> on it, and return <code>chunk_of</code> of the result. Do not invent a second fold rule.</li>
+<li><code>chunk_key(face:int, cx:int, cz:int, R:float) -&gt; String</code> — the canonical key of a valid chunk, formatted <code>"%d:%d:%d" % [face, cx, cz]</code> with plain integer formatting (no locale, no padding, no floats). Invalid face/radius/chunk -&gt; <code>""</code> (empty is never a valid key).</li>
+<li><code>chunk_from_key(key:String, R:float) -&gt; Dictionary</code> — the inverse: <code>{ok:true, face, cx, cz}</code>, or <code>{ok:false}</code>. Accept ONLY the canonical form: split on ":", require exactly three parts, each a non-empty run of ASCII digits, no leading "+"/"-", no spaces, no leading zeros beyond the value zero itself (so "0" is fine but "00" and "007" are not), then validate face/radius/face-domain. A key produced by <code>chunk_key</code> must always parse; anything else must be rejected rather than coerced.</li>
 </ol>
-<p><b>3.2 Why that is exact — and what the probe must prove rather than assume.</b> Every face's cell dimensions are multiples of 16 (N = 16·ceil(…), long axis 2N), so no chunk straddles a face edge; and a fold rotates a 16-wide strip onto a 16-wide strip, so the far chunk is well defined.</p>
-<p><b>3.3 Probe (new p2c1_probe.gd; one RESULT line; exit 1 on any failure).</b></p>
+<p><b>3.2 Why strict parsing.</b> A streaming dictionary keyed on strings silently accepts a second spelling of the same chunk and then holds two copies of one chunk — the classic double-load. Strict canonical parsing is what makes the key a real identity. The probe must show the rejects actually reject.</p>
+<p><b>3.3 Probe (new p2c2_probe.gd; one RESULT line; exit 1 on any failure).</b> Sample chunks on all 12 faces (cx, cz from {0, 1, last} within each face's chunk grid).</p>
 <ul>
-<li><b>T1 chunk grid exactness.</b> For all 12 faces: <code>grid_shape</code> divisible by 16 on both axes (exactness_failures 0), and <code>chunk_of(chunk_cell_origin(c))</code> returns c for every sampled chunk (cx, cz from {0, 1, last-1, last} within the face's chunk grid).</li>
-<li><b>T2 chunk neighbour is one chunk wide.</b> For every sampled chunk and dir: call chunk_neighbour, then for ALL 16 crossing cells of the source chunk, <code>chunk_of(cell_neighbour(cell, dir))</code> must equal the returned chunk. A cell landing anywhere else is a straddle. Report chunks_checked, crossing_cells, straddle_failures (0).</li>
-<li><b>T3 reciprocity.</b> For each neighbour found, the far chunk must have SOME dir whose chunk_neighbour returns the source chunk — search all four, do not mirror (folds rotate the return dir, measured last unit). Report pairs and reciprocal (must equal pairs).</li>
-<li><b>T4 invalid.</b> face -1/12, R 0/negative/INF, negative and out-of-range cx/cz, dir -1/4 -&gt; the documented sentinels, no SCRIPT ERROR. Report invalid_cases, invalid_failures (0).</li>
-<li><b>Negative control.</b> Take one valid T2 result, shift the far chunk's cz by 1, and confirm the crossing-cell check then fails (negative_detected true).</li>
+<li><b>T1 round trip.</b> For every sampled chunk: <code>chunk_from_key(chunk_key(c))</code> returns exactly c. Report keys and round_trip_failures (0).</li>
+<li><b>T2 uniqueness.</b> All produced keys are distinct, and the count equals the sampled chunk count (duplicates 0). Also assert chunk_key is stable across two calls and across a fresh R of the same value (same string).</li>
+<li><b>T3 reject table.</b> These must ALL return ok:false: "", "1", "1:2", "1:2:3:4", "a:b:c", "1::3", ":2:3", "1:2:", " 1:2:3", "1 :2:3", "+1:2:3", "-1:2:3", "1.0:2:3", "01:2:3", "1:02:3", "1:2:03", "12:0:0" (face out of range), "1:-2:3", "1:2:999999", "0x1:2:3". Report reject_cases and reject_failures (0).</li>
+<li><b>T4 near-miss control.</b> Take one valid key, delete one character, and confirm it no longer parses (or parses to a DIFFERENT chunk) — proving the parse is not sloppy in the accepting direction (near_miss_detected true).</li>
 </ul>
-<p>RESULT keys: ok, faces, exactness_failures, chunks_checked, crossing_cells, straddle_failures, pairs, reciprocal, invalid_cases, invalid_failures, negative_detected, fails.</p>
+<p>RESULT keys: ok, keys, round_trip_failures, duplicates, stable, reject_cases, reject_failures, near_miss_detected, fails.</p>
 <h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
 <tr><td>Light set</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms.</td></tr>
-<tr><td>P2c-1</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute p2c1_probe.gd; log .scratch/AC-0433-gates/p2c1-probe.log; gate_census.py on the log.</td><td>rc=0, census 0/0, ok=true, exactness_failures 0, straddle_failures 0, reciprocal == pairs, invalid_failures 0, negative_detected true.</td></tr>
-<tr><td>Regressions</td><td>Same call for p2b3, p2b2, p2b, p2a, p1 probes.</td><td>Each rc=0, census 0/0, RESULT equal to its capture excluding ms.</td></tr></table>
+<tr><td>P2c-2</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute p2c2_probe.gd; log .scratch/AC-0433-gates/p2c2-probe.log; gate_census.py on the log.</td><td>rc=0, census 0/0, ok=true, round_trip_failures 0, duplicates 0, stable true, reject_failures 0, near_miss_detected true.</td></tr>
+<tr><td>Regressions</td><td>Same call for p2c1, p2b3, p2b2, p2b, p2a, p1 probes.</td><td>Each rc=0, census 0/0, RESULT equal to its capture excluding ms.</td></tr></table>
 <p>No render, no native rebuild, no heavy set.</p>
-<h2>5. Acceptance</h2><p>Chunks tile each face exactly, a chunk neighbour is one chunk wide with no straddle, reciprocity holds, and the module still has no caller and no save key.</p>
-<h2>6. Risks</h2><p>Deriving chunk folds independently instead of through cell_neighbour is the failure mode — reuse it. An off-by-one on the crossing cell (i0 vs i0+15) shows up as a straddle failure.</p>
+<h2>5. Acceptance</h2><p>One canonical spelling per chunk, exact inverse, non-canonical input rejected, and still no caller and no save-file involvement.</p>
+<h2>6. Risks</h2><p>A lenient parse (trimming, int coercion) passes the round trip and fails the job — the reject table is the real test. Do not relax it to make a case pass; report the discrepancy.</p>
 <h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
 <li>No edits outside §2. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>Cell topology complete at 9d6fe02. This lifts it to chunks. After it: the storage key format and the save-version decision, then streaming.</p>
+<h2>8. Resume point</h2><p>Chunks addressable at 8f1b67c. This gives them a key. After it: the save schema + version bump decision (user has waived old-save compatibility, so the plan is version bump + clean reject, no migration) and then the streaming/consumer migration.</p>
 </body></html>

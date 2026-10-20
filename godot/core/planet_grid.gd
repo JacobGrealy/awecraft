@@ -292,6 +292,48 @@ static func chunk_neighbour(face: int, cx: int, cz: int, dir: int, R: float) -> 
 	return {"ok": true, "face": int(nb["face"]), "cx": int(c.x), "cz": int(c.y)}
 
 
+# Canonical chunk key (P2c-2): the one stable spelling "%d:%d:%d" % [face,
+# cx, cz] of a valid chunk - plain integers, no locale, no padding, no
+# floats. Identity only: no caller yet, no save file yet. Invalid
+# face/radius/chunk -> "" (the empty string is never a valid key).
+static func chunk_key(face: int, cx: int, cz: int, R: float) -> String:
+	if chunk_cell_origin(face, cx, cz, R) == Vector2i(-1, -1):
+		return ""
+	return "%d:%d:%d" % [face, cx, cz]
+
+
+# Inverse of chunk_key (P2c-2) - {ok: true, face, cx, cz} or {ok: false}.
+# Accepts ONLY the canonical form: exactly three parts split on ":", each a
+# non-empty run of ASCII digits, no signs, no spaces, no leading zeros beyond
+# the value zero itself ("0" yes, "00" and "007" no; each part is at most 9
+# digits - every chunk coordinate is far smaller), then the face/radius/
+# chunk-domain check. A key chunk_key produced always parses back to that
+# chunk; anything else is rejected, never coerced - a lenient parse is how a
+# string-keyed dictionary double-loads one chunk.
+static func chunk_from_key(key: String, R: float) -> Dictionary:
+	var parts: Array = key.split(":")
+	if parts.size() != 3:
+		return {"ok": false}
+	var vals: Array = []
+	for p in parts:
+		if p == "" or p.length() > 9:
+			return {"ok": false}
+		if p.length() > 1 and p[0] == "0":
+			return {"ok": false}
+		var v: int = 0
+		for c in p:
+			if c < "0" or c > "9":
+				return {"ok": false}
+			v = v * 10 + int(c)
+		vals.append(v)
+	var face: int = int(vals[0])
+	var cx: int = int(vals[1])
+	var cz: int = int(vals[2])
+	if chunk_cell_origin(face, cx, cz, R) == Vector2i(-1, -1):
+		return {"ok": false}
+	return {"ok": true, "face": face, "cx": cx, "cz": cz}
+
+
 # The 90-degree cube-edge fold (P2b-3): one rule for all 24 cases. The far
 # plane's normal is the overflow axis with the overflow sign (an a-step
 # overflow is the current plane's a axis, a b-step the b axis); on the far

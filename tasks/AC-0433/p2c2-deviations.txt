@@ -1,0 +1,24 @@
+AC-0433 P2c-2 — deviations: none.
+
+OUTCOME: P2c-2 LANDED. Two public statics appended to planet_grid.gd
+(chunk_key, chunk_from_key with strict canonical parsing); every gate
+green, zero deviations from plan expectations.
+
+EVIDENCE (every number in a log under .scratch/AC-0433-gates/):
+- p2c2-probe.log: rc=0, census 0/0, RESULT ok=true keys=108
+  round_trip_failures=0 duplicates=0 stable=true reject_cases=20
+  reject_failures=0 near_miss_detected=true fails=0.
+- Light set summary.json (g0,smoke,ac0423probe, --timeout 600): g0/player/
+  interact/light/fluids/genhash/ac0423probe all rc=0 script=0 shader=0 ok=true.
+  genhash-r9.log: 25/25 GENHASH lines. ac0423probe-r10.log equal to
+  captures/ac0423probe-r2.log excluding ms-named fields (overlaps
+  654/752/660/662/758/848/800/1290/1290 mm; probe ms 5417).
+- Regressions (each rc=0, census 0/0, RESULT equal to its baseline
+  excluding ms):
+  p2c1-regression-p2c2.log vs p2c1-probe.log (chunks_checked 960,
+  crossing_cells 12288, pairs 768, reciprocal 768, invalid 21/21);
+  p2b3-regression-p2c2.log vs p2b3-probe.log (checks 1728, folds 216);
+  p2b2-regression-p2c2.log vs p2b2-probe-p2b3.log (adjacency_pairs 1728);
+  p2b-regression-p2c2.log vs p2b-probe.log (cells 432);
+  p2a-regression-p2c2.log vs p2a-probe.log (api_cases 2916, ms 38 vs 38);
+  p1-regression-p2c2.log vs captures/p1-probe.log (ms 314 vs 313).
