@@ -289,3 +289,78 @@
   parse (16 SCRIPT ERRORs, census FAIL); fixed by quoting keys only, identical semantics; r1 log
   overwritten by the passing run. (2) probe fixture R not named by the plan — used live planet R=4000
   (evidence in gate logs); all §3.3 expected values are R-independent.
+
+## RUN — Mon Oct 19 22:04:33 EDT 2026 — AC-0433 (P2b-2 cell adjacency, medium)
+- Applying plan.html exactly (implement.md template). Read in order: plan.html, continuity last
+  section (P2b-1 LANDED), .scratch/AC-0433/context.md, planet_grid.gd cell_lattice/cell_owner
+  anchors (lines 152-214). Nothing else opened.
+- Precheck before any edit: does the landed cell_owner support plan T2 owners under plan §3.1 step 4?
+  Evidence script + log in .scratch/AC-0433-gates/ (p2b2-precheck.gd / p2b2-precheck.log, rc=0, no
+  SCRIPT/SHADER errors, N=3152 at R=4000):
+  - lat(0,0,7) = plane 0 sign +1 a 0 b -3145; the T2 seam step (dir 0) gives a=-1.
+  - Plan step 4 (plan.html:19) says return cell_owner(plane, sign, a', b') with the original sign:
+    own(0,+1,-1,-3145) -> {face:0, i:-1, j:7} — a chart index out of domain, NOT the T2 owner
+    face 1 i=3151. own(0,-1,-1,-3145) -> {face:1, i:3151, j:7} — the T2 owner is reachable ONLY
+    with a sign flip the contract never states.
+  - T2's (4, j=0, dir 2) -> face 6 (plan.html:27) contradicts the landed geometry: face 4 is
+    plane 4 (planet_grid.gd:183-192), whose b<0 half is chart 5. own(4,+1,a7,-1) -> {face:4, j:-1};
+    own(4,-1,a7,-1) -> {face:5, j:3151}. face 6 is a different cube plane and is unreachable by an
+    in-plane b step from chart 4. Same for the 5/7 pair.
+  - T2's (6, j=N-1, dir 3): stepped b = 3152 = N, outside the [-N, N) lattice domain
+    (planet_grid.gd:209) — the contract's own step 3 mandates the "cube_edge" sentinel
+    (plan.html:18), not the ok:true owner face 4 j=0 that T2 demands.
+- PLAN-INSUFFICIENT: plan.html:27 T2 owners are unreachable from the plan's own step 4
+  (plan.html:19) through the landed cell_owner (godot/core/planet_grid.gd:211-214) — the
+  sector-crossing sign flip is never stated, and the 4->6 / 5->7 targets contradict the plane
+  geometry ((4, j=0, dir 2) lands on chart 5; (6, j=N-1, dir 3) is a cube edge).
+- OUTCOME: EXIT, no code changes (planet_grid.gd untouched, no probe written, no gates owed —
+  nothing landed). Files touched: this continuity entry + precheck script/log under
+  .scratch/AC-0433-gates/. For the coordinator: the plan needs the sign re-derivation rule in
+  §3.1 step 4 and corrected T2 owners for the 4/5 and 6/7 cube faces (precheck numbers above).
+
+## PLAN REPAIR — P2b-2 (first launch returned PLAN-INSUFFICIENT)
+- Builder signal (correct, and cheap): the plan's cell_owner took the sector `sign` as authoritative, so a sector crossing produced an out-of-domain index (measured cell_owner(0,+1,-1,-3145) -> i=-1), and the T2 pair list named 4/6 and 5/7, which are OPPOSITE cube planes, not sector pairs.
+- Coordinator fix: ownership is now DERIVED from the lattice coordinates (non-X planes split on a, X planes split on b; a/b >= 0 -> even chart, < 0 -> odd chart), cell_owner loses the sign parameter, and the seam pairs are (0,1), (2,3), (8,9), (10,11) on a and (4,5), (6,7) on b. P2b-1's probe T1 is the only file allowed to change besides the two P2b-2 files.
+- This is the fence working as intended: a plan contradiction cost one cheap run instead of a wrong API.
+
+## RUN — Mon Oct 19 22:14:10 EDT 2026 — AC-0433 (P2b-2 cell adjacency relaunch, medium)
+- LANDED: per plan.html §3.1 (repaired): cell_owner in godot/core/planet_grid.gd loses the sign
+  parameter and DERIVES the owner (non-X planes 0,2,8,10 split on a; X planes 4,6 split on b;
+  coordinate >= 0 even face, < 0 odd face; a/b outside [-N,N) -> {ok:false}); ONE new public static
+  cell_neighbour(face, i, j, dir, R) appended after cell_owner (lattice step; dir 0=-i, 1=+i,
+  2=-j, 3=+j; stepped a/b outside [-N,N) -> {ok:false, reason:"cube_edge"}; no 90-degree fold).
+  tasks/AC-0433/p2b_probe.gd: only the cell_owner call changed to the derived signature
+  (assertions untouched). NEW tasks/AC-0433/p2b2_probe.gd: T1 shared corners + opposite-dir round
+  trip, T2 the twelve named seam checks, T3 independent fold prediction, T4 invalid, sign/range
+  rule agreement, negative control; one RESULT line. cell_lattice and everything else unchanged.
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home, ulimit -v 8388608):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600`
+    (lightset-p2b2.log, summary.json): g0/player/interact/light/fluids/genhash/ac0423probe all
+    rc=0 script=0 shader=0 ok=true. genhash-r6: 25/25 GENHASH lines, GENMS 129.
+    ac0423probe-r7 RESULT equal to captures/ac0423probe-r2.log excluding ms (5490);
+    overlaps 654/752/660/662/758/848/800/1290/1290 mm.
+  - P2b-2 (p2b2-probe.log): rc=0, census 0/0, RESULT ok=true sign_disagreements=0
+    adjacency_pairs=1512 adjacency_mismatches=0 sector_checks=12 sector_failures=0 fold_probes=0
+    fold_wrong_ok=0 invalid_cases=11 invalid_failures=0 negative_detected=true fails=0.
+    (First attempt rc=127: engine path expanded against overridden HOME; re-ran with absolute
+    path — honest deviation, see p2b2-deviations.txt.)
+  - Regressions (each rc=0, census 0/0; json diff of RESULT excluding ms == capture):
+    p2b-regression-p2b2.log vs p2b-probe.log (cells=432); p2a-regression-p2b2.log vs
+    p2a-probe.log (ms 38 vs 38); p1-regression-p2b2.log vs captures/p1-probe.log (ms 310 vs 313).
+- OUTCOME: **P2b-2 LANDED.** In-plane neighbours resolve with exact shared corners on all 12 faces
+  (1512 pairs), sector crossings land on the paired chart with the along-seam coordinate carried
+  (12/12 named checks), the cube-edge sentinel fires exactly where the independent lattice
+  prediction says (0 mispredictions, 0 wrong-oks), cell_lattice's sign agrees with the derived
+  range rule everywhere (0 disagreements), invalid inputs all return ok:false with a reason
+  (11/11), negative control fires, legacy runtime provably unchanged. Scope: git diff =
+  planet_grid.gd (cell_owner derived + one appended static), p2b_probe.gd (one call), p2b2_probe.gd
+  (new), p2b2-deviations.txt (new), continuity.md. No git ops, no registry edits, no new tickets,
+  no docs/results page. No 90-degree fold implemented — sentinel only, per the contract.
+
+## Coordinator triage — P2b-2 (after the plan repair)
+- H1-H6: clean. The one ambiguous field (`fold_probes`, which the run reported as 0 = "no mispredictions") was checked by the coordinator with .scratch/AC-0433-gates/foldcount.gd rather than trusted: 1728 checks over 432 cells, **216 cube-edge folds exercised, 216 correct sentinels, 0 wrong** — the sentinel path is genuinely tested, only the field name was misleading.
+- Independent rerun: p2b2-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0, RESULT identical to the builder's excluding ms: adjacency_pairs 1512, adjacency_mismatches 0, sector_checks 12 / failures 0, invalid 11 / failures 0, sign_disagreements 0, negative_detected true.
+- cell_owner SIGNATURE CHANGE is real: it now derives the owning chart from (plane, a, b) instead of trusting a caller-supplied sign. That is the fix for the contradiction the builder reported; P2b-1's probe T1 was updated to match and still passes (cells 432).
+- Docs written by the coordinator (the plan kept them off the builder): godot/ARCHITECTURE.md §6 gains the cell-identity/adjacency paragraph including the derived-ownership rule and the not-yet-implemented fold; docs/ac0433-unified-model.html gains an implementation-status note.
+- Scope: planet_grid.gd, two probes, the journal, plan, docs. No runtime, save, native, shader or harness change; no caller anywhere. Windows rebuild still not owed.
+- AC-0433 stays in-progress. Next bounded unit: the 90 degree cube-edge fold (its own contract and probe), then key storage / streaming migration.

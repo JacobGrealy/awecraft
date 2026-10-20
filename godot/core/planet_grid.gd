@@ -193,25 +193,53 @@ static func cell_lattice(face: int, i: int, j: int, R: float) -> Dictionary:
 	return {"ok": true, "plane": plane, "sign": sgn, "a": a, "b": b}
 
 
-# Exact inverse of cell_lattice: the chart cell covering the unit square with
-# in-plane lattice indices (a, b) on cube plane `plane`. Valid domain: plane
-# in {0, 2, 4, 6, 8, 10}, sign +1/-1, a and b in [-N, N); anything else
+# Exact inverse of cell_lattice with a DERIVED sector (P2b-2): the owning
+# chart is a pure function of the lattice coordinates, never carried by a
+# caller - the non-X planes (0, 2, 8, 10) split on a and the X planes (4, 6)
+# split on b; the coordinate >= 0 owns the even face, < 0 the odd one. Valid
+# domain: plane in {0, 2, 4, 6, 8, 10} with a and b in [-N, N); anything else
 # returns {ok: false}.
-static func cell_owner(plane: int, sign: int, a: int, b: int, R: float) -> Dictionary:
+static func cell_owner(plane: int, a: int, b: int, R: float) -> Dictionary:
 	var sh: Vector2i = grid_shape(0, R)
 	if sh == Vector2i.ZERO:
 		return {"ok": false}
 	var n: int = sh.x
 	if plane < 0 or plane > 10 or plane % 2 != 0:
 		return {"ok": false}
-	if sign != 1 and sign != -1:
-		return {"ok": false}
 	if a < -n or a >= n or b < -n or b >= n:
 		return {"ok": false}
-	var face: int = plane + (0 if sign > 0 else 1)
+	var x: int = b if (plane == 4 or plane == 6) else a
+	var face: int = plane + (0 if x >= 0 else 1)
 	if plane == 4 or plane == 6:
-		return {"ok": true, "face": face, "i": a + n, "j": b + (n if sign < 0 else 0)}
-	return {"ok": true, "face": face, "i": a + (n if sign < 0 else 0), "j": b + n}
+		return {"ok": true, "face": face, "i": a + n, "j": b + (n if x < 0 else 0)}
+	return {"ok": true, "face": face, "i": a + (n if x < 0 else 0), "j": b + n}
+
+
+# Neighbour of chart cell (i, j) in one in-plane lattice direction, resolved
+# through the identity (P2b-2): dir 0 = -i, 1 = +i, 2 = -j, 3 = +j are
+# uniform on every face (P2b-1), so a neighbour is a lattice step and the
+# owning chart is re-derived from the stepped coordinates - a sector crossing
+# lands on the paired chart with no special case. A step leaving the
+# half-open lattice domain [-N, N) reports {ok: false, reason: "cube_edge"};
+# the 90-degree fold is a later contract, not implemented here. Invalid face,
+# radius, indices or dir report {ok: false, reason: "invalid"}.
+static func cell_neighbour(face: int, i: int, j: int, dir: int, R: float) -> Dictionary:
+	if dir < 0 or dir > 3:
+		return {"ok": false, "reason": "invalid"}
+	var idl: Dictionary = cell_lattice(face, i, j, R)
+	if not idl.get("ok", false):
+		return {"ok": false, "reason": "invalid"}
+	var n: int = grid_shape(0, R).x
+	var a: int = idl.a
+	var b: int = idl.b
+	match dir:
+		0: a -= 1
+		1: a += 1
+		2: b -= 1
+		_: b += 1
+	if a < -n or a >= n or b < -n or b >= n:
+		return {"ok": false, "reason": "cube_edge"}
+	return cell_owner(idl.plane, a, b, R)
 
 
 # --- internals (stateless; the canonical vertex evaluation is the single

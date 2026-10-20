@@ -1,0 +1,33 @@
+AC-0433 P2b-2 — OUTCOME: LANDED, all gates green, no bound weakened.
+
+Deviations from plan.html (both honest, no expectation changed):
+
+1. T2 along-seam coordinate fixture not named by the plan ("each must return ok:true with the
+   stated owner, carrying the along-seam coordinate unchanged"). Used j=7 for the a-split seams
+   (0/1, 2/3, 8/9, 10/11) and i=7 for the b-split seams (4/5, 6/7) — the same j=7 the P2b-2
+   precheck evidence already exercised. Any in-domain value satisfies the check; the owner and
+   the carried coordinate are what the plan fixes.
+
+2. RESULT key naming: plan §3.3 lists "fold_probes" among the keys and separately says "both the
+   misprediction count and fold_wrong_ok must be 0". Interpreted fold_probes as the misprediction
+   count (prediction != API answer, either direction); fold_wrong_ok (API ok where a fold was
+   predicted) is reported alongside and is a subset of it. Both are 0 in the run.
+
+3. First p2b2 probe attempt rc=127: the shell expanded the engine path against the already-
+   overridden HOME (/tmp/dsh_home). Re-ran with the absolute engine path
+   (/home/angrygiant/tools/godot/godot) as the godot/AGENTS.md rule requires; the passing run's
+   log is .scratch/AC-0433-gates/p2b2-probe.log.
+
+Evidence (every number lives in a log):
+- Light set: .scratch/AC-0433-gates/lightset-p2b2.log + summary.json — g0/player/interact/light/
+  fluids/genhash/ac0423probe all rc=0, script=0, shader=0, ok=true. genhash-r6.log: 25/25
+  GENHASH lines, GENMS 129. ac0423probe-r7.log RESULT equal to captures/ac0423probe-r2.log
+  excluding ms (ms 5490); overlaps 654/752/660/662/758/848/800/1290/1290 mm.
+- P2b-2: .scratch/AC-0433-gates/p2b2-probe.log — rc=0, census 0/0,
+  RESULT ok=true sign_disagreements=0 adjacency_pairs=1512 adjacency_mismatches=0
+  sector_checks=12 sector_failures=0 fold_probes=0 fold_wrong_ok=0 invalid_cases=11
+  invalid_failures=0 negative_detected=true fails=0.
+- Regressions (each rc=0, census 0/0, RESULT equal to its capture excluding ms — verified by
+  json diff): .scratch/AC-0433-gates/p2b-regression-p2b2.log (vs p2b-probe.log, cells=432),
+  p2a-regression-p2b2.log (vs p2a-probe.log, ms 38 vs 38), p1-regression-p2b2.log
+  (vs tasks/AC-0433/captures/p1-probe.log, ms 310 vs 313).

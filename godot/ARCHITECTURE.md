@@ -996,8 +996,22 @@ radius-derived grid rule (H = face_width(R)/2, N = 16·ceil(H/16); faces 4–7 =
 (N,2N)) and the shared-vertex radial embedding (canonical integer cube-lattice vertex Q, owning
 chart = the shipped `face_for_dir` tie order on the raw Q, P(h) = (R+h)·n − (0,R,0)). DORMANT:
 zero production callers, no runtime key, save, native or shader change; `address_key` defines
-cell identity only and is NOT an activated save format. Neighbour traversal and key storage are
-the next bounded units. Evidence: tasks/AC-0433/AC-0433-results.html (P2a).
+cell identity only and is NOT an activated save format. Evidence: tasks/AC-0433/AC-0433-results.html
+(P2a).
+
+**Cell identity and adjacency (AC-0433 P2b, still dormant):** `cell_lattice`, `cell_owner` and
+`cell_neighbour` give every chart cell ONE face-independent identity — `(plane, a, b)` on the cube
+lattice, plane being the even face id of a cube plane and a/b in-plane cell indices in
+[-N, N) — which is what makes the two historical grid scales (1 m on the home pair, ~6.14 m on
+the other charts) an artefact of the two grids rather than a property of the sphere: every chart
+cell is exactly one unit lattice square, and a cell's four corners rebuilt from the identity equal
+`vertex_key` exactly on all 12 faces. **The owning chart is DERIVED, never carried** — non-X
+planes (0, 2, 8, 10) split on `a`, X planes (4, 6) split on `b`, and the coordinate's sign selects
+the even or odd chart — so a sector crossing falls out of the derivation and needs no special
+case (`cell_owner` therefore takes no `sign` argument). `cell_neighbour` is one lattice step plus
+that derivation; a step leaving [-N, N) returns `{ok:false, reason:"cube_edge"}` because the 90°
+cube-edge fold is NOT implemented yet (its own unit). Key storage, streaming and the player/mob
+consumers remain unmigrated. Evidence: tasks/AC-0433/p2b_probe.gd, p2b2_probe.gd.
 
 - **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
   12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell

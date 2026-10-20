@@ -31,7 +31,7 @@ func _initialize() -> void:
 				if not idl.get("ok", false):
 					rt += 1
 					continue
-				var ow: Dictionary = GRID.cell_owner(idl.plane, idl.sign, idl.a, idl.b, R)
+				var ow: Dictionary = GRID.cell_owner(idl.plane, idl.a, idl.b, R)
 				if not ow.get("ok", false) or ow.face != face or ow.i != i or ow.j != j:
 					rt += 1
 				var back: Dictionary = {}

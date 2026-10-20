@@ -1,47 +1,64 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P2b-1 cell identity</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0433 P2b-1 — canonical cell identity + inverse (split unit)</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is the <b>first half</b> of P2b, split after two runs died at their token limit: it adds the cell identity and its inverse only. <b>cell_neighbour and all adjacency work belong to P2b-2 and are out of scope here.</b></p>
-<h2>1. Goal</h2><p>Give every chart cell one face-independent integer identity on the cube lattice plus an exact inverse, proving every chart's cells are the same size.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P2b-2 cell adjacency</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0433 P2b-2 — cell adjacency: in-plane, sector seam, cube-edge sentinel</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Second half of the split P2b. One new API method plus one short probe. <b>Docs and the results page are the coordinator's; do not touch them.</b></p>
+<h2>1. Goal</h2><p>Resolve the neighbour of any chart cell in the four in-plane directions through the lattice identity, so a sector crossing lands on the paired chart automatically and a cube-edge crossing reports a sentinel instead of a guess.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/core/planet_grid.gd</td><td>48-71 grid_shape + vertex_key; 159-178 internals</td><td>Edit: append exactly TWO public statics and any internals needed. Existing six methods stay byte-identical.</td></tr>
-<tr><td>tasks/AC-0433/p2b_probe.gd (NEW)</td><td>standalone SceneTree, const GRID=preload(res://core/planet_grid.gd)</td><td>Write the two tests in §3.3. Keep it SHORT — that is the point of the split.</td></tr>
-<tr><td>tasks/AC-0433/p2b-deviations.txt (NEW)</td><td>OUTCOME + evidence</td><td>Every number in a log.</td></tr>
+<tr><td>godot/core/planet_grid.gd</td><td>cell_lattice and cell_owner appended after address_key (greppable: <code>static func cell_lattice</code>, <code>static func cell_owner</code>)</td><td>Edit: append exactly ONE public static, <code>cell_neighbour</code>. cell_owner changes signature per §3.1 (derived owner); cell_lattice, grid_shape, vertex_key, vertex_to_world, cell_to_world and world_to_cell are unchanged.</td></tr>
+<tr><td>tasks/AC-0433/p2b2_probe.gd (NEW)</td><td>standalone SceneTree, const GRID=preload(res://core/planet_grid.gd)</td><td>Write the four tests in §3.3. Keep it SHORT.</td></tr>
+<tr><td>tasks/AC-0433/p2b_probe.gd</td><td>T1 round-trip block that calls cell_owner</td><td>Edit ONLY the cell_owner call to the derived signature of §3.1; all assertions unchanged. Re-run it as a regression.</td></tr>
+<tr><td>tasks/AC-0433/p2b2-deviations.txt (NEW)</td><td>OUTCOME + evidence</td><td>Every number in a log.</td></tr>
 <tr><td>tasks/AC-0433/continuity.md</td><td>last section</td><td>Append RUN / LANDED / GATES+OUTCOME.</td></tr>
-<tr><td>.scratch/AC-0433-gates/</td><td>summary.json, p2b-probe.log</td><td>Logs; never staged.</td></tr>
-</table>
-<p><b>This run does NOT touch:</b> the results page, ARCHITECTURE.md, docs, the design essay, or the P2a/P1 probes (read-only regressions). Documentation for the whole P2b lands with P2b-2.</p>
+<tr><td>.scratch/AC-0433-gates/</td><td>summary.json, p2b2-probe.log</td><td>Logs; never staged.</td></tr></table>
+<p><b>Do not touch:</b> ARCHITECTURE.md, docs/, the results page, p2a_probe.gd, p1_probe.gd (read-only), any runtime caller, SphereMath, native, shaders, harness, registry.</p>
 <h2>3. Edit shape</h2>
-<p><b>3.1 The lattice fact.</b> Read off the shipped <code>vertex_key</code> (planet_grid.gd:52-71) — every chart cell covers exactly one unit square of the cube lattice, because each face maps its cell index to a lattice corner by adding only an integer offset. Encode (plane, sign, a, b), plane = the even face id of a cube plane (0,2,4,6,8,10), sign = +1 even / -1 odd, a and b in-plane lattice cell indices in [-N, N):</p>
-<table><tr><th>face</th><th>a =</th><th>b =</th></tr>
-<tr><td>0, 2, 8, 10</td><td>i</td><td>j - N</td></tr>
-<tr><td>1, 3, 9, 11</td><td>i - N</td><td>j - N</td></tr>
-<tr><td>4, 6</td><td>i - N</td><td>j</td></tr>
-<tr><td>5, 7</td><td>i - N</td><td>j - N</td></tr></table>
-<p><b>3.2 Two new public statics</b> (append after address_key, same sentinel style as P2a):</p>
+<p><b>3.1 The rule (corrected after PLAN-INSUFFICIENT at run 1).</b> Two facts decide everything, and the second one was missing from the first version of this contract:</p>
 <ol>
-<li><code>cell_lattice(face:int,i:int,j:int,R:float) -&gt; Dictionary</code> — <code>{ok:true, plane:int, sign:int, a:int, b:int}</code> for a valid cell (half-open i,j domain from grid_shape), else <code>{ok:false}</code>. plane = face - (face % 2); sign = +1 if face even else -1; a,b from the table.</li>
-<li><code>cell_owner(plane:int, sign:int, a:int, b:int, R:float) -&gt; Dictionary</code> — exact inverse, <code>{ok:true, face:int, i:int, j:int}</code> or <code>{ok:false}</code>. plane must be 0,2,4,6,8,10, sign +1/-1, a,b in [-N,N). face = plane + (0 if sign &gt; 0 else 1). Non-X planes (0,2,8,10): i = a + (N if sign &lt; 0 else 0), j = b + N. X planes (4,6): i = a + N, j = b + (N if sign &lt; 0 else 0).</li>
+<li>In chart index space the lattice directions are uniform on every face (verified in P2b-1): dir 0 = -i, dir 1 = +i, dir 2 = -j, dir 3 = +j. A neighbour is a lattice step, not a geometric operation.</li>
+<li><b>The sector/sign is DERIVED from the lattice coordinates, never carried.</b> P2b-1's <code>cell_owner(plane, sign, a, b, R)</code> takes <code>sign</code> as authoritative, so a lattice point that crosses the sector boundary comes back with an out-of-domain index (measured: <code>cell_owner(0, +1, -1, -3145)</code> returns i = -1). The owning chart is a pure function of (plane, a, b):</li>
 </ol>
-<p><b>3.3 The probe — two tests, one RESULT line, exit 1 on any failure.</b></p>
+<table><tr><th>plane class</th><th>splitting coordinate</th><th>even face (owner)</th><th>odd face (owner)</th></tr>
+<tr><td>0, 2, 8, 10 (non-X)</td><td>a</td><td>a in [0, N)</td><td>a in [-N, 0)</td></tr>
+<tr><td>4, 6 (X)</td><td>b</td><td>b in [0, N)</td><td>b in [-N, 0)</td></tr></table>
+<p>So this unit <b>changes cell_owner's signature</b> to <code>cell_owner(plane:int, a:int, b:int, R:float)</code>, deriving the owner rather than trusting a caller:</p>
 <ul>
-<li><b>T1 round trip + collisions.</b> All 12 faces, i,j from {0, 1, 15, N/2, Nu-2, Nu-1} clamped to each face's domain and de-duplicated: cell_lattice -&gt; cell_owner returns the identical (face,i,j); cell_owner -&gt; cell_lattice returns the identical (plane,sign,a,b). Collect identities in a set keyed "plane:sign:a:b"; require set size == distinct cells tested (identity_collisions 0).</li>
-<li><b>T2 corner agreement with vertex_key.</b> For each tested cell, Q00=vertex_key(face,i,j), Q10=vertex_key(face,i+1,j), Q01=vertex_key(face,i,j+1), Q11=vertex_key(face,i+1,j+1). Rebuild the same four corners from the lattice identity with a plane table (normal axis coordinate sign*N; the two in-plane axes carry a,b, and +1 for the opposite corner). Require exact integer equality and that Q10-Q00 and Q01-Q00 are single unit axis steps. corner_mismatches must be 0 — this is the "one cell size on every chart" proof.</li>
-<li><b>Negative control.</b> Corrupt one identity (b+1 on a fixed cell) and assert T2 then fails on it (negative_detected=true), so a green run cannot be vacuous.</li>
+<li>Non-X planes: face = plane (a &gt;= 0) or plane + 1 (a &lt; 0); i = a (even) or a + N (odd); j = b + N.</li>
+<li>X planes (4, 6): face = plane (b &gt;= 0) or plane + 1 (b &lt; 0); i = a + N; j = b (even) or b + N (odd).</li>
+<li>Invalid plane (not 0,2,4,6,8,10), or a or b outside [-N, N) -&gt; <code>{ok:false}</code>.</li>
 </ul>
-<p>RESULT keys: ok, cells, round_trip_mismatches, identity_collisions, corner_mismatches, negative_detected, fails.</p>
+<p>Then:</p>
+<ol>
+<li>Take <code>cell_lattice(face,i,j,R)</code>; if not ok return <code>{ok:false, reason:"invalid"}</code>.</li>
+<li>Step per dir on a or b.</li>
+<li>If the stepped a or b leaves [-N, N) return <code>{ok:false, reason:"cube_edge"}</code>. <b>Do not implement the 90° fold.</b></li>
+<li>Otherwise return <code>cell_owner(plane, a', b', R)</code> with <code>"ok": true</code>. The sector crossing now falls out of the derivation - no special case.</li>
+<li>Any dir outside 0-3 returns <code>{ok:false, reason:"invalid"}</code>.</li>
+</ol>
+<p><b>Also update P2b-1's probe</b> (<code>tasks/AC-0433/p2b_probe.gd</code>): its T1 calls cell_owner with the old four-argument form and must be changed to the derived call; its assertions stay identical (round trip, no collisions, corners match vertex_key, negative control fires). This probe is the only permitted edit outside the two files above.</p>
+<p>Signature: <code>static func cell_neighbour(face:int, i:int, j:int, dir:int, R:float) -&gt; Dictionary</code>. <code>cell_lattice</code> keeps returning <code>sign</code> as derived convenience data, which must always agree with the range rule (the probe checks it).</p>
+<p><b>3.2 Keep it small.</b> Roughly 25 lines of code with a short doc comment. No helper tables, no per-edge cases.</p>
+<p><b>3.3 The probe — four tests, one RESULT line, exit 1 on any failure.</b> Sample cells as P2b-1 did: all 12 faces, i and j from {0, 1, 15, N/2, Nu-2, Nu-1} clamped to the face domain, de-duplicated.</p>
+<ul>
+<li><b>T1 adjacency + shared corners.</b> For every sampled cell and dir 0-3, ask cell_neighbour. When it returns ok, the two cells' four-corner vertex_key sets must intersect in exactly 2 keys and those must be the expected pair — dir 1: {vertex_key(face,i+1,j), vertex_key(face,i+1,j+1)}; dir 0: {vertex_key(face,i,j), vertex_key(face,i,j+1)}; dir 3: {vertex_key(face,i,j+1), vertex_key(face,i+1,j+1)}; dir 2: {vertex_key(face,i,j), vertex_key(face,i+1,j)}. Also verify that applying the opposite dir (1&lt;-&gt;0, 3&lt;-&gt;2) to the neighbour returns the original cell. Report adjacency_pairs (must be &gt; 100) and adjacency_mismatches (0).</li>
+<li><b>T2 sector seam, 12 named checks.</b> Each pair below is the two charts of ONE cube plane, and each must return ok:true with the stated owner, carrying the along-seam coordinate unchanged. A-split planes: (0, i=0, dir 0) -&gt; face 1 i=N-1 and (1, i=N-1, dir 1) -&gt; face 0 i=0; the same two-way pair for 2/3, 8/9 and 10/11. B-split X planes: (4, j=0, dir 2) -&gt; face 5 j=N-1 and (5, j=N-1, dir 3) -&gt; face 4 j=0; the same two-way pair for 6/7. (An earlier version of this plan named 4/6 and 5/7 - those are opposite cube planes, not a sector pair.)</li>
+<li><b>T3 fold sentinel, computed independently.</b> For every sampled cell and dir, compute in the probe from cell_lattice whether the stepped a or b would leave [-N, N). That prediction must equal the API's answer: cube_edge exactly where predicted, ok everywhere else. Report fold_probes and fold_wrong_ok (calls that returned ok where a fold was predicted) — both the misprediction count and fold_wrong_ok must be 0.</li>
+<li><b>T4 invalid.</b> face -1/12, R 0/negative/INF, i/j -1 and Nu/Nv, dir -1 and 4: all ok:false with a reason, no SCRIPT ERROR. Report invalid_cases and invalid_failures (0).</li>
+<li><b>Negative control.</b> Take one valid T1 pair, shift the neighbour's j by 1 and confirm the shared-corner test then fails on it (negative_detected=true).</li>
+</ul>
+<p>Additionally assert, for every sampled cell, that cell_lattice's <code>sign</code> agrees with the range rule of §3.1 (field <code>sign_disagreements</code>, must be 0).</p>
+<p>RESULT keys: ok, sign_disagreements, adjacency_pairs, adjacency_mismatches, sector_checks, sector_failures, fold_probes, fold_wrong_ok, invalid_cases, invalid_failures, negative_detected, fails.</p>
 <h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
 <tr><td>Light set</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600</code></td><td>Every arm rc=0 with SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe RESULT equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms.</td></tr>
-<tr><td>P2b-1</td><td>pgrep slot check, then HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute p2b_probe.gd; log .scratch/AC-0433-gates/p2b-probe.log; gate_census.py on the log.</td><td>rc=0, census 0/0, ok=true, round_trip_mismatches 0, identity_collisions 0, corner_mismatches 0, negative_detected=true.</td></tr>
-<tr><td>P2a + P1 regression</td><td>Same standalone call for p2a_probe.gd and p1_probe.gd.</td><td>Both rc=0, census 0/0, RESULT equal to their captures excluding ms.</td></tr></table>
+<tr><td>P2b-2</td><td>pgrep slot check, then HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute p2b2_probe.gd; log .scratch/AC-0433-gates/p2b2-probe.log; gate_census.py on the log.</td><td>rc=0, census 0/0, ok=true, adjacency_mismatches 0, adjacency_pairs &gt; 100, sector_checks 12, sector_failures 0, fold_wrong_ok 0 and fold mispredictions 0, invalid_failures 0, negative_detected=true.</td></tr>
+<tr><td>Regressions</td><td>Same standalone call for p2b_probe.gd, p2a_probe.gd and p1_probe.gd.</td><td>Each rc=0, census 0/0, RESULT equal to its capture excluding ms.</td></tr></table>
 <p>No render, no native rebuild, no heavy set.</p>
-<h2>5. Acceptance</h2><p>Identity and inverse agree both ways on every sampled cell, no two cells share an identity, the corners rebuilt from the identity match vertex_key exactly, and nothing built on the API has a caller.</p>
-<h2>6. Risks</h2><p>The table must come from vertex_key, not intuition — T2 is the check. A cell that maps outside [-N,N) is a plan bug: report it, do not shift the range.</p>
+<h2>5. Acceptance</h2><p>In-plane neighbours resolve with exact shared corners on all 12 faces, sector crossings land on the paired chart with the along-seam coordinate carried, cube edges report the sentinel exactly where the lattice predicts, and the module still has no caller.</p>
+<h2>6. Risks</h2><p>A "helpful" fold implementation is the failure mode: return the sentinel. A direction convention that disagrees with the lattice will show up as a shared-corner mismatch, which is the check.</p>
 <h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
 <li>No edits outside §2. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>P2a verified at 41708aa. P2b split after two token-limit failures; this is half one. P2b-2 adds cell_neighbour (in-plane, sector seam, cube-edge sentinel), its probe, and the docs/results update.</p>
+<h2>8. Resume point</h2><p>P2b-1 landed at e646f99 (identity + inverse verified). This unit completes P2b's code. Next: the 90° cube-edge fold as its own contract, then persistence/streaming migration planning.</p>
 </body></html>
