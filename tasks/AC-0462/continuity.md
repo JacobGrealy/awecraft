@@ -1,0 +1,86 @@
+# AC-0462 — continuity journal (append-only)
+
+## RUN — Tue Oct 20 15:33:53 EDT 2026 — AC-0462
+Started. Plan read (tasks/AC-0462/plan.html). No prior entries; fresh run.
+Anchors located: warpcensus dispatch harness.gd:342, _warpcensus_test :35929, interact arm ~6355.
+
+## LANDED — Tue Oct 20 17:20:00 EDT 2026
+- godot/scenes/harness.gd: ONE new arm `_faceedit_test` (dispatch branch after the warpcensus
+  branch, BATTSKIP by the battery's fallback match — no main.gd entry, the neighbour arms don't
+  need it) + helper `_faceedit_scan_aim` (the interact arm's aim/verify, bounded 12x7 look
+  sweep). Stand = the warpcensus shape PAST the +x edge (flat x = hw + 8, z = 0); asserts the
+  anchor face > 1 (fails loudly `anchor_on_home_pair`); data-driven lift 2.5 m above the game's
+  own surface_top_key; candidates around the anchor column (domain-guarded), each set to a known
+  breakable (id 2) before a REAL aim via the player's own aim_hit, verified hit.cell == the
+  candidate. BEFORE any edit it measures aim_point (camera + aim_dir * t/|M(aim_dir)|),
+  aim_cell (the DDA cell), aim_cell_key (world.key_for_sphere_pos), and surface_error_m (aim
+  point -> nearest placed surface of the aimed cell's own unit box, six faces x 4x4 samples, the
+  chunk node's LIVE transform applied — under the warp the node is identity and the box runs
+  through _warp_cell_point, the same construction the mesh uses; flag off the node transform IS
+  the legacy placement). Then break (wall-clock mine wait, 3 s cap, assert air) and place (re-aim
+  until cell + normal == the hole, wood back in the SAME cell, assert id 2). RESULT: ok, face,
+  frames, stand, aim_point, aim_cell, aim_cell_key, aim_id, surface_error_m, break_ok, place_ok,
+  place_cell, target_chunk, target_mesh_built, warp, fails, diag (frame diagnostics incl. the
+  game's own _sim_cell_center on the aimed cell), ms.
+- tasks/harness_data.yaml: the faceedit row (tests/result_fields/envs/wall/notes incl. the gate-
+  run findings) -> harness_doc.py --render + --check green. godot/HARNESS.md regenerated.
+- NO product changes: warp, placement, transforms, streaming, keys, saves, SphereMath, docs all
+  untouched. Read-only anchors used: player.gd 2776/2786/2810/2891/3030/3454, world.gd
+  15225/15398, chunk.gd 1737/1817/1921, sphere_math.gd 90/110.
+
+## GATES + OUTCOME — Tue Oct 20 17:20:00 EDT 2026
+- Light set g0,smoke,ac0423probe,faceedit via tasks/scripts/gate_run.py, both flag states,
+  one godot at a time, logs .scratch/AC-0462-gates/ (saved copies .scratch/AC-0462/*.final):
+  - WARP ON (set rev 2; faceedit faceedit-r7.log): every arm rc=0, SCRIPT=0, SHADER=0, ok=true
+    (g0 3s, player 16s sprint_ok=true, interact 8s place_ok=false [standing], light 9s, fluids
+    12s sea_stable=true, genhash 3s, ac0423probe 8-9s ok=true). faceedit (15 s, ms=13425):
+    ok=true, face=5, frames=240, stand [2918.49,-1091.94,-1.44], aim_cell [0,136,7],
+    aim_cell_key 5:281:1023, aim_point [2931.005,-1080.211,-1.307], aim_id=2, break_ok=true,
+    place_ok=true, place_cell [0,136,7], target_chunk 5:0:0, target_mesh_built=true,
+    warp=1, chunk_identity=true, ocell [0.93,139.49,7.93], anchor_cc [63,63],
+    surface_error_m=5841.189 (target <= 1.5 m — NOT MET), eye_to_hit_cell_m=6274.25,
+    hit_cell_world [7311.88,-5570.99,-45.96].
+  - WARP OFF (set rev 3; faceedit faceedit-r8.log): same all-green. faceedit (15 s, ms=12348):
+    face=5, stand [2912.87,-1097.42,-2.14], aim_cell [0,136,7], aim_id=2, break_ok=true,
+    place_ok=true, warp=0, chunk_identity=false, chunk_origin [2346.69,-6233.86,-2346.43],
+    surface_error_m=5840.47, eye_to_hit_cell_m=6274.16.
+- harness_doc.py --check: in sync (modes, standing-values).
+- OUTCOME — the gate expectations and what the numbers say (plan §6: a failed expectation is a
+  FINDING about the shipped default; reported, nothing adjusted):
+  1. face > 1: MET (face 5, both states; the home-pair guard never tripped in 7/7 faceedit
+     result runs — the 8th run was the builder's own parse-error revision, no RESULT).
+     break_ok AND place_ok: MET (both states — the face-routed edit pipeline, AC-0309 C5, runs
+     clean end-to-end and writes face data).
+  2. surface_error_m vs the 1.5 m target: NOT MET — 5841.189 m (warp on) / 5840.47 m (warp off).
+     The cause is a STRUCTURAL coordinate-space mismatch in the shipped face aim, not the
+     placement residual: the DDA origin (player.gd _flat_ray face branch) is the player's offset
+     in the ANCHOR CHUNK's local cell frame (measured ocell ~ (0.94, 139.5, 7.76) for a player
+     whose anchor chunk is (63,63) — the (u~1, v~1) corner of face 5), but the block callback
+     feeds those local indices to world.get_block_key, whose contract is ABSOLUTE face-grid
+     columns 0..1023 (_ensure_face_chunk floors by 16). The ray therefore walks local cells
+     (0,136,7)-ish while the data it reads is the CHART CORNER CHUNK (0,0) — the OPPOSITE corner
+     of the face. The game's OWN _sim_cell_center (the drop spawn's cell->world map) puts the
+     aimed cell 6274.25 m from the eye (warp on) / 6274.16 m (warp off); the arm's placed-
+     surface model puts it 5841.189 / 5840.47 m from the aim point. A player-facing face edit
+     does NOT land on the block the player's ray points at — only a player standing in the
+     chart's corner chunk (0,0) region would see aim and data agree.
+  3. Flag comparison: warp OFF (5840.47) is NOT larger than warp ON (5841.189) — 0.719 m SMALLER,
+     inside the ~7 m run-to-run noise floor (spawn variation; deviation 6). The measurement
+     CANNOT DISCRIMINATE the warp flag here, for a reason now understood: the frame mismatch
+     (~5.8 km) dwarfs the placement residual (the cm-m scale the flag actually toggles — visible
+     only in the node transform: identity under the warp vs the LSQ chunk_origin (2346.69,
+     -6233.86, -2346.43) with the flag off).
+  4. Secondary finding (reported, not fixed — keys are read-only per plan §3):
+     world.key_for_sphere_pos derives (u,v) from the UN-shifted position while player_anchor
+     shifts by (0, R, 0) into the planet frame before world_to_face — the two disagree on u for
+     the same point (281 vs ~1009: diag.player_key 5:281:102x vs diag.anchor_cc [63,63]). A
+     second, independent frame bug in the key API.
+- Resume point: none — the ticket's deliverables are complete (arm, yaml+doc, gates, findings,
+  this journal, AC-0462-deviations.txt, AC-0462-results.html). A follow-up ticket (aim frame
+  fix) is a COORDINATOR decision; the builder made no product change per plan §6/§8.
+
+## Coordinator triage — the faceedit arm (round 17)
+- WHAT THE ARM MEASURED: with the player on face 5, break_ok/place_ok both true, but the aimed cell resolves to a cell whose surface is ~5,841 m from the aim point. The SAME numbers appear with the warp ON and OFF (5,841.19 vs 5,840.47 — the 0.7 m difference is inside the arm's own spawn-variation noise). So whatever this is, it is NOT caused by the warp, and the arm cannot discriminate between the two placements.
+- I DID NOT ACCEPT THE "PRE-EXISTING AIM BUG" HEADLINE. Reading the code before reporting it: `get_block_key` (world.gd:15398) treats `colx` as an ABSOLUTE face column (`_ensure_face_chunk` does floor(colx/16), and `face_local_x(face, colx, c.cx)` needs the absolute index), while `player_anchor` (world.gd:15246-15251) returns `origin = B.origin`, i.e. the ANCHOR CHUNK's own origin — so the anchor-frame cell coordinates the player computes at player.gd:3232-3239 are chunk-LOCAL [0,16). If the aim/DDA (`hit.cell` -> `_sim_get_block` -> `get_block_key`) actually hands those local coordinates to an absolute-indexed API, every face edit lands in chunk (0,0) — which is precisely the ~5.8 km this arm measured (chunk 0,0 of face 5 is the chart corner).
+- WHY THAT IS STILL UNPROVEN: I have not yet found where `hit.cell` is produced and whether it is absolute or anchor-local. Two very different conclusions are live — (a) a real, long-standing bug in face editing that predates this migration, or (b) the arm mixing frames when it samples the aim, exactly the class of error that produced the AC-0460 "death screen" A/B and the AC-0449 blue/blur confusion. Reporting (a) without locating `hit.cell` would repeat that mistake.
+- STATE: the arm is kept (it is a good instrument) and the ticket STAYS OPEN. The next step is one focused question — locate the producer of `hit.cell` and state the frame — not a placement change. The warp is not implicated either way.

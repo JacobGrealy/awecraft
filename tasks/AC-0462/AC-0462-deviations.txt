@@ -1,0 +1,35 @@
+AC-0462 deviations (builder, 2026-10-20):
+
+1. Scan pitch set is 7 pitches x 12 yaw (84 looks) instead of the plan's 6 pitches (72 looks).
+   The first run with the 6-pitch set no_target'd (no aim landed on any candidate); the added
+   -0.25 and -1.40 ends cover near-horizontal and steeper aims. Bounded-scan contract intact
+   (12-step yaw sweep, 2 settle frames per look, max 4 candidates scanned) — arm-internal only.
+
+2. The lift is DATA-DRIVEN, not the fixed 3 m: the eye is placed 2.5 m above the local surface
+   top read from the game's own surface_top_key for the anchor column (fallback: +3 m when the
+   column has no data). The fixed 3 m left the eye below/inside the local terrain on the first
+   run (no_target). The lift runs along the anchor's y axis (the radial up of the cell frame).
+
+3. Candidate window is +/-3 step 1 (9x9 columns x 2 heights, domain-guarded to the 0..1023 face
+   grid) instead of the plan's +/-4 step 2 (5x5 x 2). After the stand landed at the (u~1, v~1)
+   chart corner, the step-2 window placed candidates outside the DDA's reachable cell region;
+   the scanned cap stays at 4, sorted by mixed distance as planned.
+
+4. RESULT carries an added diag block (frame diagnostics: player_key, anchor_cc, anchor_origin,
+   anchor_scale, basis_lens, ocell, lift, t, dcell_len, chunk_origin, chunk_identity, and the
+   game's own _sim_cell_center applied to the aimed cell: hit_cell_world / eye_to_hit_cell_m).
+   It is the evidence for the two frame findings below and is documented in the
+   tasks/harness_data.yaml result_fields for the arm.
+
+5. An EARLY revision of the arm had a GDScript parse error (the 16:00 gate set: g0 reported
+   4 SCRIPT ERROR lines — builder code, that log no longer on disk); the final revision is clean
+   in every gate run (script=0 shader=0 all arms, both flag states).
+
+6. The spawn position varies run-to-run (~15-100 m; stand differs between all 7 faceedit result runs) —
+   a pre-existing property of the spawn search, not the arm. The arm's assertions (face > 1,
+   target found, break_ok/place_ok) held in every run; the surface_error_m run-to-run spread
+   (~7 m: 5833.815..5841.189 across runs r5-r8) is the noise floor for the flag comparison.
+
+7. No main.gd entry — BATTSKIP via the battery's fallback match (warpcensus shape; the plan's
+   "only if the neighbours need it" test: they don't). Recorded here for completeness; not a
+   scope deviation.

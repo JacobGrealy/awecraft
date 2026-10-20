@@ -354,6 +354,20 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _warpcensus_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "faceedit":
+			# AC-0462 (plan.html): the player-facing edit proof on a face
+			# chart — the warpcensus boundary stand PAST the +x edge (the
+			# anchor's face must be > 1; a green test of the home pair is
+			# worthless, the arm fails loudly), a REAL aim (the interact
+			# arm's aim/verify: the player's own aim_hit, verified
+			# hit.cell == the candidate), the surface error (the world
+			# point the aim resolves to, vs the aimed cell's own bounds
+			# as the game places them), then break + place back in the
+			# SAME cell. Standalone (it quits) — like warpcensus, it is
+			# BATTSKIP by the battery's fallback, no main.gd entry.
+			await _faceedit_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -36021,6 +36035,293 @@ func _warpcensus_test(spawn: Vector3) -> void:
 	var warp_us_per_vert := roundf(float(warp_us) / float(maxi(1, warp_verts)) * 1000.0) / 1000.0
 	var warp_ms_per_chunk := roundf(float(warp_ms_total) / float(maxi(1, warped)) * 1000.0) / 1000.0
 	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "warp_ms_total": warp_ms_total, "warp_verts": warp_verts, "warp_us_per_vert": warp_us_per_vert, "warp_ms_per_chunk": warp_ms_per_chunk, "ms": Time.get_ticks_msec() - t0}})
+
+
+# ============================================================================
+# AC-0462 (plan.html): the player-facing edit proof on a face chart.
+# The warp is the shipped default (AC-0460), so this proves it from the
+# player's hands: stand PAST the home/face boundary on a chart that is NOT
+# the spawn face (the anchor's face must be > 1 — a green test of the home
+# pair is worthless, the arm fails loudly), aim a REAL aim (the interact
+# arm's approach: the player's own aim_hit, verified hit.cell == the
+# candidate — no teleport into a wall), measure, BEFORE any edit, how far
+# the world point the aim resolves to sits from the aimed cell's own
+# surface AS THE GAME PLACES IT (the chunk node's live transform applied
+# to the cell's unit box — under the warp the vertices are world-space and
+# the node is identity, so the node transform is the placement in BOTH
+# flag states; the warped box runs through the SAME _warp_cell_point the
+# mesh uses — no second placement invented), then break the block (assert
+# air) and place one back in the SAME cell.
+# RESULT: ok, face, frames, stand, aim_point, aim_cell, aim_cell_key,
+# aim_id, surface_error_m, break_ok, place_ok, place_cell, target_chunk,
+# target_mesh_built, warp, fails, ms.
+# ============================================================================
+func _faceedit_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	var ck: GDScript = load("res://world/chunk.gd")
+	var warp := 1 if bool(ck._warp_on) else 0
+	if R <= 0.0:
+		Debug.result({"faceedit": {"ok": false, "fail": "no_planet_R", "warp": warp, "ms": Time.get_ticks_msec() - t0}})
+		return
+	var fails: Array = []
+	# THE boundary stand — the warpcensus shape, PAST the +x edge (8 m
+	# inside the face chart where warpcensus stands 8 m inside the home
+	# patch): the face > 1 assertion below is what keeps this honest.
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var pf: Vector3 = world.flat_of_world_pos(p.position)
+	pf.x = hw + 8.0
+	pf.z = 0.0
+	p.position = world.world_pos_of_flat(pf.x, pf.y, pf.z)
+	# recenter takes FLAT coordinates (the _face_player_flat contract —
+	# with the player 8 m PAST the edge the +x edge face chunks stream).
+	world.recenter(pf.x, pf.z, true)
+	# the bounded, deterministic frame count — the warpcensus cap (240):
+	# _face_stream paces its ensures at the 12 ms/frame budget.
+	var max_frames := 240
+	var frames := 0
+	while frames < max_frames:
+		frames += 1
+		await get_tree().process_frame
+	# THE assertion: the anchor must be PAST the home pair.
+	var anch: Dictionary = world.player_anchor(p.position)
+	var face := int(anch.get("face", 0))
+	var stand: Array = [roundf(p.position.x * 100.0) / 100.0, roundf(p.position.y * 100.0) / 100.0, roundf(p.position.z * 100.0) / 100.0]
+	if face <= 1:
+		Debug.result({"faceedit": {"ok": false, "fail": "anchor_on_home_pair", "face": face, "stand": stand, "anchor_origin": [anch["origin"].x, anch["origin"].y, anch["origin"].z], "warp": warp, "frames": frames, "ms": Time.get_ticks_msec() - t0}})
+		return
+	# stand ABOVE the local surface (fly: no footing needed) so the aim
+	# sees the chart in front — the lift is the game's OWN surface data,
+	# not a guess: the eye goes 2.5 m above the top of the local surface
+	# block (the reach of 6 m then keeps the whole player's column
+	# aimable in-plane). The lift runs along the anchor's y (the radial
+	# up of the cell frame — the same axis the sim uses).
+	Debug.fly(true)
+	for i in 8:
+		await get_tree().physics_frame
+	var pa0: Dictionary = p._anchor
+	var oxw0: Vector3 = p.camera.global_position - pa0["origin"]
+	var sc0: Vector2 = pa0["scale"]
+	var ocell0: Vector3 = Vector3(oxw0.dot(pa0["basis"].x) / sc0.x, oxw0.dot(pa0["basis"].y), oxw0.dot(pa0["basis"].z) / sc0.y)
+	var colx0: int = int(floorf(ocell0.x))
+	var colz0: int = int(floorf(ocell0.z))
+	var local_top: int = world.surface_top_key(face, colx0, colz0)
+	var want_y: float = ocell0.y + 3.0 if local_top < 0 else float(local_top) + 3.5
+	var lift: float = want_y - ocell0.y
+	if lift > 0.05:
+		p.position = p.position + (pa0["basis"] as Basis).y * lift
+		for i in 8:
+			await get_tree().physics_frame
+	# THE target candidates — the interact arm's candidate shape (its
+	# _find_aim_spot scans the breakable surface tops near spawn; here the
+	# scan is the face cell frame around the player's own column, top and
+	# top-1). The aim/verify is the player's LIVE aim_hit (the AC-0309 C5
+	# face branch) — a real aim, verified, no teleport into a wall.
+	var pa: Dictionary = p._anchor
+	var oxw: Vector3 = p.camera.global_position - pa["origin"]
+	var sc: Vector2 = pa["scale"]
+	var ocell: Vector3 = Vector3(oxw.dot(pa["basis"].x) / sc.x, oxw.dot(pa["basis"].y), oxw.dot(pa["basis"].z) / sc.y)
+	var cands: Array = []
+	for dx in range(-3, 4, 1):
+		for dz in range(-3, 4, 1):
+			var colx: int = int(floorf(ocell.x)) + dx
+			var colz: int = int(floorf(ocell.z)) + dz
+			if colx < 0 or colz < 0 or colx >= 1024 or colz >= 1024:
+				continue
+			var top: int = world.surface_top_key(face, colx, colz)
+			if top < 0:
+				continue
+			for dy in [0, -1]:
+				var yy: int = top + dy
+				if yy < 1 or yy >= Data.HEIGHT:
+					continue
+				if world.get_block_key(face, colx, colz, yy) == 0:
+					continue
+				var d: float = Vector3(float(colx) + 0.5 - ocell.x, float(yy) + 0.5 - ocell.y, float(colz) + 0.5 - ocell.z).length()
+				cands.append([d, Vector3i(colx, yy, colz)])
+	cands.sort_custom(func(a, b): return float(a[0]) < float(b[0]))
+	var hit: Dictionary = {}
+	var n_scanned := 0
+	var own_cell_hits := 0
+	for cand in cands:
+		if n_scanned >= 4:
+			break
+		var tc: Vector3i = cand[1]
+		n_scanned += 1
+		# the interact arm sets its target to a known breakable (id 2,
+		# wood) before the aim — the same here (deterministic, quick mine).
+		world.set_block_key(face, tc.x, tc.z, tc.y, 2)
+		for i in 4:
+			await get_tree().physics_frame
+		var aim_found: Dictionary = await _faceedit_scan_aim(p, tc, false)
+		own_cell_hits += int(aim_found.get("own_cell", 0))
+		if aim_found.has("hit"):
+			hit = aim_found["hit"]
+			break
+	if hit.is_empty() or not bool(hit.get("hit", false)):
+		Debug.result({"faceedit": {"ok": false, "fail": "no_target", "face": face, "stand": stand, "anchor_col": [int(ocell.x), int(ocell.y), int(ocell.z)], "local_top": local_top, "lift": roundf(lift * 100.0) / 100.0, "own_cell_hits": own_cell_hits, "candidates": cands.size(), "scanned": n_scanned, "warp": warp, "frames": frames, "ms": Time.get_ticks_msec() - t0}})
+		return
+	# MEASURE (before any edit): the world point the aim resolves to. The
+	# DDA ran in the cell frame (the _flat_ray map M); the ray's world
+	# displacement for a DDA step dt is dt/|M(ad)| along ad (M is linear,
+	# M(ad) = the unnormalized cell-frame direction), so the aim point is
+	# camera + ad * (t / |M(ad)|).
+	var a3: Dictionary = p._anchor
+	var ad: Vector3 = p.aim_dir()
+	var dcell: Vector3 = Vector3(ad.dot(a3["basis"].x) / float(a3["scale"].x), ad.dot(a3["basis"].y), ad.dot(a3["basis"].z) / float(a3["scale"].y))
+	var s_aim: float = float(hit["t"]) / dcell.length()
+	var aim_point: Vector3 = p.camera.global_position + ad * s_aim
+	var aim_cell: Vector3i = hit["cell"]
+	# the cell the game's own key maths derives for the aim point — the
+	# cross-check that the DDA cell and the world_to_face key agree.
+	var kd: Dictionary = world.key_for_sphere_pos(aim_point, R)
+	# THE surface: the aimed cell's unit box (its own bounds, six faces),
+	# AS THE GAME PLACES IT — the chunk node's live transform applied to
+	# the box. Warp ON: the node is identity (build_mesh_face) and the box
+	# runs through _warp_cell_point — the SAME construction the mesh
+	# vertices use, which IS the game's placement. Warp OFF: the node
+	# transform IS the legacy placement, the box stays local. 4x4 samples
+	# per face (the box is ~one cell wide; the placement is smooth over a
+	# cell, so the sampled quads carry the surface to well under a metre).
+	var ccx0: int = aim_cell.x >> 4
+	var ccz0: int = aim_cell.z >> 4
+	var c: Node3D = world.chunks.get(world._key_f(face, ccx0, ccz0))
+	var surface_error_m := -1.0
+	var target_mesh_built := false
+	if c != null:
+		target_mesh_built = bool(c.mesh_built)
+		var lx0: int = SphereMath.face_local_x(face, aim_cell.x, ccx0)
+		var lz0: int = aim_cell.z - ccz0 * 16
+		var mir: bool = SphereMath.face_mirror_x(face)
+		var e_min := INF
+		var uvs: Array = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]
+		for u in uvs:
+			for v in uvs:
+				var pts: Array = [
+					Vector3(float(lx0), float(aim_cell.y) + float(u), float(lz0) + float(v)),
+					Vector3(float(lx0) + 1.0, float(aim_cell.y) + float(u), float(lz0) + float(v)),
+					Vector3(float(lx0) + float(u), float(aim_cell.y), float(lz0) + float(v)),
+					Vector3(float(lx0) + float(u), float(aim_cell.y) + 1.0, float(lz0) + float(v)),
+					Vector3(float(lx0) + float(u), float(aim_cell.y) + float(v), float(lz0)),
+					Vector3(float(lx0) + float(u), float(aim_cell.y) + float(v), float(lz0) + 1.0),
+				]
+				for lp in pts:
+					var wp: Vector3
+					if warp == 1:
+						wp = c._warp_cell_point(face, R, mir, float(ccx0) * 16.0, float(ccz0) * 16.0, lp.x, lp.z, lp.y)
+					else:
+						wp = lp
+					var pw: Vector3 = c.global_transform * wp
+					var d: float = (aim_point - pw).length()
+					if d < e_min:
+						e_min = d
+		surface_error_m = roundf(e_min * 1000.0) / 1000.0
+	# BREAK the aimed block and assert it became air (the interact arm's
+	# wall-clock mine wait — 3 s cap, the headless fps is not 60).
+	p.start_mine()
+	var t_end := Time.get_ticks_msec() + 3000
+	while Time.get_ticks_msec() < t_end and world.get_block_key(face, aim_cell.x, aim_cell.z, aim_cell.y) != 0:
+		await get_tree().physics_frame
+	p.release_mine()
+	for i in 3:
+		await get_tree().physics_frame
+	var break_ok: bool = world.get_block_key(face, aim_cell.x, aim_cell.z, aim_cell.y) == 0
+	if not break_ok:
+		fails.append("break_not_air")
+	# PLACE one back, and assert it landed in the SAME cell. Re-aim until
+	# the live aim resolves hit.cell + hit.normal == the hole (the
+	# interact arm's place: target = hit cell + normal), then place a wood.
+	var place_ok := false
+	if break_ok:
+		var place_aim: Dictionary = await _faceedit_scan_aim(p, aim_cell, true)
+		if place_aim.has("hit"):
+			p.sel = 0
+			p.held = {}
+			p.inv[0] = {"id": 2, "n": 3}
+			p.place()
+			for i in 3:
+				await get_tree().physics_frame
+			place_ok = world.get_block_key(face, aim_cell.x, aim_cell.z, aim_cell.y) == 2
+		if not place_ok:
+			fails.append("place_failed")
+	# AC-0462 frame diagnostics (one-off, for the first gate runs): the
+	# facts that pin down the cell frame <-> chart <-> node-frame chain.
+	var pkey: Dictionary = world.key_for_sphere_pos(p.position, R)
+	var pd: Dictionary = {
+		"player_key": "%d:%d:%d" % [int(pkey.get("face", -1)), int(pkey.get("cx", -1)), int(pkey.get("cz", -1))],
+		"anchor_cc": [int(a3.get("ccx", -1)), int(a3.get("ccz", -1))],
+		"anchor_origin": [roundf(float(a3["origin"].x) * 100.0) / 100.0, roundf(float(a3["origin"].y) * 100.0) / 100.0, roundf(float(a3["origin"].z) * 100.0) / 100.0],
+		"anchor_scale": [roundf(float(a3["scale"].x) * 1000.0) / 1000.0, roundf(float(a3["scale"].y) * 1000.0) / 1000.0],
+		"basis_lens": [roundf(a3["basis"].x.length() * 1000.0) / 1000.0, roundf(a3["basis"].y.length() * 1000.0) / 1000.0, roundf(a3["basis"].z.length() * 1000.0) / 1000.0],
+		"ocell": [roundf(ocell.x * 100.0) / 100.0, roundf(ocell.y * 100.0) / 100.0, roundf(ocell.z * 100.0) / 100.0],
+		"lift": roundf(lift * 100.0) / 100.0,
+		"t": roundf(float(hit["t"]) * 1000.0) / 1000.0,
+		"dcell_len": roundf(dcell.length() * 1000.0) / 1000.0,
+		"chunk_origin": [roundf(c.global_transform.origin.x * 100.0) / 100.0, roundf(c.global_transform.origin.y * 100.0) / 100.0, roundf(c.global_transform.origin.z * 100.0) / 100.0] if c != null else null,
+		"chunk_identity": bool(c.global_transform.basis.is_equal_approx(Basis.IDENTITY) and c.global_transform.origin.length() < 0.001) if c != null else null,
+		# the game's OWN cell->world map (the drop spawn's home,
+		# player.gd _sim_cell_center) applied to the aimed cell — where
+		# the game itself says the aimed cell is, and how far the eye is
+		# from there.
+		"hit_cell_world": [roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).x * 100.0) / 100.0, roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).y * 100.0) / 100.0, roundf(p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z).z * 100.0) / 100.0],
+		"eye_to_hit_cell_m": roundf((p.camera.global_position - p._sim_cell_center(aim_cell.x, aim_cell.y, aim_cell.z)).length() * 100.0) / 100.0,
+	}
+	Debug.result({"faceedit": {
+		"ok": break_ok and place_ok,
+		"face": face,
+		"frames": frames,
+		"stand": stand,
+		"aim_point": [roundf(aim_point.x * 1000.0) / 1000.0, roundf(aim_point.y * 1000.0) / 1000.0, roundf(aim_point.z * 1000.0) / 1000.0],
+		"aim_cell": [int(aim_cell.x), int(aim_cell.y), int(aim_cell.z)],
+		"aim_cell_key": "%d:%d:%d" % [int(kd.get("face", -1)), int(kd.get("cx", -1)), int(kd.get("cz", -1))],
+		"aim_id": int(hit["id"]),
+		"surface_error_m": surface_error_m,
+		"break_ok": break_ok,
+		"place_ok": place_ok,
+		"place_cell": [int(aim_cell.x), int(aim_cell.y), int(aim_cell.z)],
+		"target_chunk": world._key_f(face, ccx0, ccz0),
+		"target_mesh_built": target_mesh_built,
+		"warp": warp,
+		"fails": fails,
+		"diag": pd,
+		"ms": Time.get_ticks_msec() - t0,
+	}})
+
+
+# AC-0462: the look-scan for a face aim — the interact arm verifies its
+# candidate with a real DDA and teleports to the found cam; the stand
+# here is the measurement, so the player stays put and ONLY the look
+# moves (a full yaw sweep x a pitch set covering the ground ahead).
+# place=false: a break aim (hit.cell == the candidate); place=true: a
+# place aim (hit.cell + hit.normal == the hole). Bounded: 12 yaw x 7
+# pitch = 84 looks per candidate, 2 settle frames each. A hit at
+# t <= 0.001 is the DDA striking the cell the camera sits in (the eye
+# is buried) — counted in "own_cell", the burial diagnostic.
+func _faceedit_scan_aim(p, tc: Vector3i, place: bool) -> Dictionary:
+	var own_cell := 0
+	for yi in range(12):
+		var yaw: float = -PI + float(yi) * (2.0 * PI / 12.0)
+		for pitch in [-0.25, -0.45, -0.65, -0.85, -1.05, -1.25, -1.40]:
+			p.look(yaw, pitch)
+			for i in 2:
+				await get_tree().physics_frame
+			var h: Dictionary = p.aim_hit()
+			if not bool(h.get("hit", false)) or int(h.get("id", 0)) == 0:
+				continue
+			if float(h["t"]) <= 0.001:
+				own_cell += 1
+				continue
+			var cell: Vector3i = h["cell"]
+			if place:
+				if cell + h["normal"] == tc:
+					return {"yaw": yaw, "pitch": pitch, "hit": h, "own_cell": own_cell}
+			elif cell == tc:
+				return {"yaw": yaw, "pitch": pitch, "hit": h, "own_cell": own_cell}
+	return {"own_cell": own_cell}
 
 
 # The BEFORE frame (tasks/AC-0423/captures/ac0423-before-ground-north.png,
