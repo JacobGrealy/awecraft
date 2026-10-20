@@ -1719,7 +1719,18 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 # once, on first use). With the flag off the build path below is EXACTLY the
 # shipped one (no changed arithmetic, no reordering), so the shipped game
 # stays byte-identical until a later ticket flips it.
-static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") == "1"
+# AC-0460 stage 5: DEFAULT ON. The warp is the shipped face-lane placement
+# from here; AWECRAFT_WARP=0 restores the legacy per-chunk LSQ fit exactly
+# (that path is unchanged). Readiness, all measured before this flip: seams
+# exact at equal height (0.451 m -> 0), cost 0.423 ms/chunk in the native lane
+# (3.5% of FACE_STREAM_BUDGET_MS; it was 73% as a GDScript loop), occluders at
+# parity with legacy (335/335), and collision/light already in world space
+# because the collision shape is built from this same mesh with an identity node.
+# OWED, NOT done here: consumers that map world->flat with LEGACY maths (mob
+# spawn/walk, drops, the player's flat conversions) still assume the old face
+# placement — filed as AC-0462. Exposure is bounded by the M1 measurement:
+# centimetres at ground level, up to ~2 m at 140 m altitude.
+static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") != "0"
 
 # AC-0460 stage 1 (plan.html §3.1): the census counter — incremented once
 # per build at the point the warp actually runs (inside _warp_face_slabs,
