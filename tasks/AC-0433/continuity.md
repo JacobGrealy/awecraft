@@ -525,3 +525,47 @@
 - Strict parse inspected by hand (not just trusted): chunk_from_key rejects empty parts, length > 9, leading zeros, any non-digit, and validates the chunk against the face domain through chunk_cell_origin — the reject table's 20 cases plus the near-miss control are real, not vacuous.
 - Scope: planet_grid.gd + new probe + journal + plan + an ARCHITECTURE.md clause. No caller, no save-file involvement, no runtime change.
 - AC-0433 stays in-progress. Remaining: the save schema/version decision (user waived old-save compatibility, so: version bump + clean reject, no migration) and then the streaming/consumer migration.
+
+## RUN — Mon Oct 19 23:37:58 EDT 2026 — AC-0433 (M1 migration blast radius, medium)
+- LANDED: per plan.html §3: NEW tasks/AC-0433/m1_probe.gd — standalone
+  SceneTree probe, const GRID/SM preloads; per site (chart coords + h
+  in {0,140}): |P_canonical - P_legacy| with P_c = (R+h)*
+  normalize(SM.uv_to_world(face,u,v,R)) - (0,R,0); legacy = home pair
+  column_transform on the flat mapping (x=(u-off)*hw, z=hw*(2v-1)),
+  non-home face_chunk_transform with iu=floor(u*1024), ccx=iu>>4,
+  mirror-aware local.x = face_local_x(face,iu,ccx)+0.5, local.z =
+  (iv&15)+0.5. Sites: G1 faces 4-11 x cell centres 256/512/768 both
+  axes (144); G2 faces 4-11 last cell at the home edge x 3 edge
+  positions (48); G3 home pair flat (8,8)/(-8,8)/(500,500)/(-500,-500)
+  (8); G4 face 4 home-edge column at the arm's corner row iv=1000 (2).
+  One RESULT JSON line, quit() at the end. R from the Game autoload
+  (it instantiates in a standalone SceneTree; r_source in the RESULT).
+  m1-deviations.txt (new).
+- MEASURED (gates, plan §4): G0 `gate_run.py AC-0433 --arms g0
+  --timeout 600` rc=0 script=0 shader=0 (g0-r11.log). M1: slot check,
+  HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine,
+  --headless --path godot --script absolute m1_probe.gd -> rc=0,
+  gate_census 0/0, one JSON RESULT, all four groups non-empty,
+  skipped=0, fails=[] (m1-probe.log). First probe run rc=124 (missing
+  quit() + per-group overwrite across heights) — fixed, logged in
+  deviations item 1.
+- OUTCOME: **M1 MEASURED.** Legacy vs canonical displacement, metres
+  (n / max / mean): G1 interior non-home 144 / 1.861395 / 0.955476
+  (worst f4 u0.250488 v0.750488 h140); G2 home/face seam 48 / 2.002804
+  / 0.977617 (worst f4 u0.999512 v0.750488 h140); G3 home pair 8 /
+  0.116227 / 0.053735 (worst f0 flat (500,500) h140); G4 corner site 2
+  / 1.601715 / 0.878908 (h0 0.156101 / h140 1.601715). Overall max
+  2.002804 m at f4 (0.999512, 0.750488) h=140. h=0 values small
+  everywhere (radial-shear term vanishes at h=0). G4 is NOT the
+  3.732 m standing corner figure — that is the legacy-vs-legacy
+  across-seam gap, a different quantity (deviations item 4). Scope:
+  m1_probe.gd (new), m1-deviations.txt (new), continuity.md. No git
+  ops, no registry edits, no new tickets, no production code changes.
+
+## Coordinator triage — M1 (blast radius measurement)
+- H1-H6: clean for a measurement run. Independent rerun (m1-probe-coordinator.log) rc=0, SCRIPT=0, SHADER=0, JSON RESULT identical to the builder's. G0 alone used as the regression because no production file changed.
+- RESULT (R=4000, h=0/140, skipped 0): G1 interior non-home n=144 max 1.861395 mean 0.955476; G2 home/face seam n=48 max 2.002804 mean 0.977617 (overall max, f4 u .999512 v .750488 h140); G3 home pair n=8 max 0.116227 mean 0.053735; G4 corner site n=2 max 1.601715.
+- THE FINDING THAT DECIDES THE MIGRATION: every maximum is at h=140, not at the surface. The h=0 displacements are small (0.156 m at the corner site, all groups < ~1 m). The difference is the radial-shear term of the legacy rigid tilted frames, which vanishes at h=0 — so the migration moves the walkable surface by centimetres-to-a-metre while removing a 2.19 m crossing / 3.73 m corner legacy seam entirely.
+- Builder honesty, worth keeping: it flagged that G4's 0.156 m at h=0 is NOT the documented 3.732 m corner figure, and explained why (that figure is the legacy-vs-legacy across-seam gap, a different quantity). It also cross-checked the h=140 maxima against first-order radial-shear arithmetic (1.80/1.68 predicted vs 1.86/2.00 measured). A broken instrument reporting small numbers would have been the failure here; this one cross-checks.
+- Instrument defect caught and fixed inside the run: first attempt rc=124 (missing quit()) with per-group stats overwritten across heights — re-run after the fix, and the coordinator's independent rerun confirms the final numbers.
+- Recorded in docs/ac0433-unified-model.html as the measured blast radius. AC-0433 stays in-progress; the next unit migrates placement with these numbers as its acceptance budget.

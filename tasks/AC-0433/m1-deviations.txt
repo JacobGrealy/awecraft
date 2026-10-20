@@ -1,0 +1,58 @@
+M1 — migration blast radius: findings (log: .scratch/AC-0433-gates/m1-probe.log)
+
+1. INSTRUMENT BUGS, FOUND AND FIXED IN-RUN (first run only): the first
+   run had no quit() (extends SceneTree loops forever -> rc=124 at the
+   120 s timeout; the RESULT it printed showed per-group stats for h=140
+   only) and _group overwrote instead of accumulating across heights
+   (n came back 72/24/4/1 instead of 144/48/8/2). Fixed (quit() added;
+   both heights accumulate per group); rerun rc=0, census 0/0, n =
+   144/48/8/2. The first run's log was replaced by the final run's log
+   at the plan's single log path; the final log is the evidence.
+
+2. R SOURCE: the Game autoload IS instantiated in a standalone SceneTree
+   script, so r_source = "Game.planet_R" (game.gd:63, 4000.0); the 4000
+   fallback was not needed.
+
+3. G4 SITE RECONSTRUCTED, NOT READ: the harness arm labels the corner
+   site by [face, row] = [4, 1000] (captures/results.json section_a
+   det_corner). harness.gd was out of scope (read fence), so the column
+   was reconstructed as the home-edge column (iu = 1023, the last cell
+   next to the home boundary — the same class as G2). If the arm's
+   column differs, G4's two numbers shift slightly; the site is still
+   "the same construction" (plan §3.2 escape clause).
+
+4. G4 IS NOT THE 3.732 m NUMBER, AND THAT IS EXPECTED: my G4 h=0
+   displacement is 0.156101 m, not the documented 3.732 m corner. The
+   standing 3.732 m (f_seam_max 3.732444, arm ds0) is the LEGACY-VERSUS-
+   LEGACY across-seam gap (home net vs face chart at the seam line,
+   h = 0); this probe measures the LEGACY-VERSUS-CANONICAL pointwise
+   displacement at the site. Different quantities — not an instrument
+   defect. The 3.732 m base split at h=0 is a folded-net/LSQ residual;
+   the pointwise canonical displacement has no such term at h=0 (the
+   radial-shear term vanishes at h=0, which is why h=0 values are small
+   everywhere: G4 0.156 m, G1/G2 h=0 values all < ~1 m).
+
+5. SANITY (not implausibly uniform, not implausibly huge): the h=140
+   maxima match first-order radial-shear arithmetic (site offset from
+   chunk centre x h / R): G1 worst ~46 m/~23 m from the chunk centre
+   -> predicted 140*0.0129 = 1.80 m, measured 1.861 m; G2 worst
+   ~43 m/~21 m -> 1.68 m + LSQ fit residual, measured 2.003 m; G3 worst
+   5.7 m from centre -> ~0.2 m, measured 0.116 m. mean/max ratios ~0.5
+   in G1/G2 (spread, not uniform). No site exceeded 1000 m (plan §3.4
+   plain-report threshold not triggered). skipped = 0 (all 202 sites in
+   the legacy grid), fails = [].
+
+6. HEADLINE: overall_max_m = 2.002804 at face 4 (u=0.999512, v=0.750488)
+   h=140 — the home-edge (G2) class. Per group (n / max / mean, metres):
+   G1 144 / 1.861395 / 0.955476 (worst f4 0.250488,0.750488 h140);
+   G2 48 / 2.002804 / 0.977617 (worst f4 0.999512,0.750488 h140);
+   G3 8 / 0.116227 / 0.053735 (worst f0 flat (500,500) h140);
+   G4 2 / 1.601715 / 0.878908 (worst f4 0.999512,0.977051 h140).
+   Interpretation for the coordinator: the canonical model moves the
+   ground by < ~0.2 m on the home pair, by ~1-2 m on non-home charts,
+   growing with height (h=0 values are small) — dominated by the
+   per-chunk-frame radial-shear term the context's hypothesis predicted.
+
+GATES: G0 gate_run AC-0433 --arms g0 --timeout 600 -> rc=0 script=0
+shader=0 (g0-r11.log, summary.txt). M1 probe rc=0, gate_census 0/0, one
+JSON RESULT, all four groups non-empty, skipped=0, fails=[] (m1-probe.log).

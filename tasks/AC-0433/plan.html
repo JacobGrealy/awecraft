@@ -1,42 +1,45 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 P2c-2 chunk keys</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{font-family:ui-monospace;border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0433 P2c-2 — the canonical chunk key and its inverse</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The chunk identity landed last unit; this gives it one stable, parseable string form plus the inverse — the shape storage and the streaming dictionary will key on. Dormant: nothing reads it yet and no save file is written.</p>
-<h2>1. Goal</h2><p>One canonical chunk key string for every chart, invertible and platform-stable, so the same chunk cannot be named two ways and a key always parses back to its chunk.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0433 M1 migration blast radius</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0433 M1 — how far does the world move if the model switches?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is a <b>measurement</b> run: it builds one instrument, reports numbers, and changes no behaviour. Nothing outside the new probe and the journal is written.</p>
+<h2>1. Goal</h2><p>Quantify the displacement between the shipped legacy placement and the canonical placement at the same physical surface points, so the migration has a known blast radius instead of a guess.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/core/planet_grid.gd</td><td><code>chunk_of</code>, <code>chunk_cell_origin</code>, <code>chunk_neighbour</code>, <code>grid_shape</code> (all appended last unit, after <code>cell_neighbour</code>)</td><td>Append two public statics; nothing existing changes.</td></tr>
-<tr><td>tasks/AC-0433/p2c2_probe.gd (NEW)</td><td>standalone SceneTree, const GRID=preload(res://core/planet_grid.gd)</td><td>Write the tests in §3.3. Keep it SHORT.</td></tr>
-<tr><td>tasks/AC-0433/p2c2-deviations.txt (NEW)</td><td>OUTCOME + evidence</td><td>Every number in a log.</td></tr>
-<tr><td>tasks/AC-0433/continuity.md</td><td>last section</td><td>Append RUN / LANDED / GATES+OUTCOME.</td></tr>
-<tr><td>.scratch/AC-0433-gates/</td><td>summary.json, p2c2-probe.log</td><td>Logs; never staged.</td></tr></table>
-<p><b>Do not touch:</b> ARCHITECTURE.md, docs/, results page, any earlier probe, any runtime caller, SphereMath, native, shaders, harness, registry. In particular do NOT touch any save code — this unit defines identity only.</p>
-<h2>3. Edit shape</h2>
-<p><b>3.1 Two statics.</b></p>
-<ol>
-<li><code>chunk_key(face:int, cx:int, cz:int, R:float) -&gt; String</code> — the canonical key of a valid chunk, formatted <code>"%d:%d:%d" % [face, cx, cz]</code> with plain integer formatting (no locale, no padding, no floats). Invalid face/radius/chunk -&gt; <code>""</code> (empty is never a valid key).</li>
-<li><code>chunk_from_key(key:String, R:float) -&gt; Dictionary</code> — the inverse: <code>{ok:true, face, cx, cz}</code>, or <code>{ok:false}</code>. Accept ONLY the canonical form: split on ":", require exactly three parts, each a non-empty run of ASCII digits, no leading "+"/"-", no spaces, no leading zeros beyond the value zero itself (so "0" is fine but "00" and "007" are not), then validate face/radius/face-domain. A key produced by <code>chunk_key</code> must always parse; anything else must be rejected rather than coerced.</li>
-</ol>
-<p><b>3.2 Why strict parsing.</b> A streaming dictionary keyed on strings silently accepts a second spelling of the same chunk and then holds two copies of one chunk — the classic double-load. Strict canonical parsing is what makes the key a real identity. The probe must show the rejects actually reject.</p>
-<p><b>3.3 Probe (new p2c2_probe.gd; one RESULT line; exit 1 on any failure).</b> Sample chunks on all 12 faces (cx, cz from {0, 1, last} within each face's chunk grid).</p>
+<tr><td>tasks/AC-0433/m1_probe.gd (NEW)</td><td>standalone SceneTree; <code>const GRID := preload("res://core/planet_grid.gd")</code>, <code>const SM := preload("res://core/sphere_math.gd")</code></td><td>Write the measurement in §3.2. Keep it SHORT.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>face_width</code>, <code>uv_to_world</code>, <code>world_to_face</code>, <code>column_transform</code>, <code>flat_to_world</code>, <code>face_chunk_transform</code>, <code>face_local_x</code></td><td>READ ONLY — the legacy side of every comparison.</td></tr>
+<tr><td>godot/core/planet_grid.gd</td><td><code>grid_shape</code>, <code>vertex_to_world</code>, <code>cell_to_world</code>, <code>world_to_cell</code></td><td>READ ONLY — the canonical side.</td></tr>
+<tr><td>tasks/AC-0433/m1-deviations.txt (NEW)</td><td>findings</td><td>Every number in the log.</td></tr>
+<tr><td>tasks/AC-0433/continuity.md</td><td>last section</td><td>Append RUN / MEASURED / OUTCOME.</td></tr>
+<tr><td>.scratch/AC-0433-gates/</td><td>m1-probe.log</td><td>Log only.</td></tr></table>
+<p><b>Do not touch:</b> any production file, any existing probe, docs, results page, registry. <b>This run writes no game code.</b></p>
+<h2>3. The measurement</h2>
+<p><b>3.1 What is compared.</b> Both models place a surface point from the same chart direction; they differ in HOW. So compare, at identical chart coordinates and identical heights, the position each model produces:</p>
 <ul>
-<li><b>T1 round trip.</b> For every sampled chunk: <code>chunk_from_key(chunk_key(c))</code> returns exactly c. Report keys and round_trip_failures (0).</li>
-<li><b>T2 uniqueness.</b> All produced keys are distinct, and the count equals the sampled chunk count (duplicates 0). Also assert chunk_key is stable across two calls and across a fresh R of the same value (same string).</li>
-<li><b>T3 reject table.</b> These must ALL return ok:false: "", "1", "1:2", "1:2:3:4", "a:b:c", "1::3", ":2:3", "1:2:", " 1:2:3", "1 :2:3", "+1:2:3", "-1:2:3", "1.0:2:3", "01:2:3", "1:02:3", "1:2:03", "12:0:0" (face out of range), "1:-2:3", "1:2:999999", "0x1:2:3". Report reject_cases and reject_failures (0).</li>
-<li><b>T4 near-miss control.</b> Take one valid key, delete one character, and confirm it no longer parses (or parses to a DIFFERENT chunk) — proving the parse is not sloppy in the accepting direction (near_miss_detected true).</li>
+<li><b>Canonical</b>: P_c = (R+h)·normalize(SM.uv_to_world(face, u, v, R)) − (0,R,0).</li>
+<li><b>Legacy, non-home charts</b>: P_l = SM.face_chunk_transform(face, ccx, ccz, R) · local, where local is the cell's local centre in the legacy 1024-grid chunk that contains (u,v) — compute iu = floor(u·1024), iv = floor(v·1024), ccx = iu&gt;&gt;4, ccz = iv&gt;&gt;4, local.x = SM.face_local_x(face, iu, ccx) + 0.5 (the mirror-aware slot), local.z = (iv &amp; 15) + 0.5, local.y = h.</li>
+<li><b>Legacy, home pair</b> (faces 0/1): P_l = SM.column_transform(cx, cz, R) · (x−cx·16, h, z−cz·16), where the flat coords come from SM.world_to_flat of the canonical point's direction — or equivalently from the flat (x,z) that correspond to (u,v) on the home pair via hw = face_width(R)/2, x = (u − (face==0 ? 0 : 1))·hw, z = hw·(2v−1).</li>
 </ul>
-<p>RESULT keys: ok, keys, round_trip_failures, duplicates, stable, reject_cases, reject_failures, near_miss_detected, fails.</p>
+<p>Report |P_c − P_l| — the distance the ground would move at that point.</p>
+<p><b>3.2 Sample sites (all at R = Game.planet_R if available without the game tree, else 4000 — state which in the RESULT).</b> For each of these groups, sample at h = 0 and h = 140:</p>
+<ul>
+<li><b>G1 interior non-home chart</b>: for faces 4..11, chart coords (u,v) at the centre of 3 cells along each axis, sampled from {0.25, 0.5, 0.75} — interior only.</li>
+<li><b>G2 home/face seam</b>: the crossing sites — for faces 4..11, the cells adjacent to the home edge (the same class as the arms' F audit): take v (or u) at the last cell next to the home boundary, several positions along the edge.</li>
+<li><b>G3 home pair interior</b>: flat points near spawn and 500 m out, both faces.</li>
+<li><b>G4 the documented corner site</b>: face 4 at the site the harness arm uses (iv = 1000), if reachable by the same construction.</li>
+</ul>
+<p><b>3.3 Report per group</b>: count, max displacement, mean displacement, and the worst site (face, u, v, h). Plus the overall max. All distances in metres, rounded to 6 dp.</p>
+<p><b>3.4 Sanity guards (these are also findings, not failures to hide).</b> If a legacy transform cannot be built for a site (out of the legacy grid), count it as <code>skipped</code> and report the count rather than inventing a value. If a displacement exceeds 1000 m, report it plainly — that is information about the legacy model, not an error in the probe.</p>
+<p><b>3.5 Output.</b> ONE <code>RESULT {…}</code> <b>JSON</b> line (this time JSON, not key=value), including: ok, R, h_values, groups {G1..G4: {n, max_m, mean_m, worst}}, overall_max_m, overall_worst, skipped, fails. Exit 0 always unless the probe itself errors; this is a measurement, so a large displacement is a RESULT, not a failure.</p>
 <h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Light set</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600</code></td><td>Every arm rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe equal to tasks/AC-0433/captures/ac0423probe-r2.log excluding ms.</td></tr>
-<tr><td>P2c-2</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute p2c2_probe.gd; log .scratch/AC-0433-gates/p2c2-probe.log; gate_census.py on the log.</td><td>rc=0, census 0/0, ok=true, round_trip_failures 0, duplicates 0, stable true, reject_failures 0, near_miss_detected true.</td></tr>
-<tr><td>Regressions</td><td>Same call for p2c1, p2b3, p2b2, p2b, p2a, p1 probes.</td><td>Each rc=0, census 0/0, RESULT equal to its capture excluding ms.</td></tr></table>
-<p>No render, no native rebuild, no heavy set.</p>
-<h2>5. Acceptance</h2><p>One canonical spelling per chunk, exact inverse, non-canonical input rejected, and still no caller and no save-file involvement.</p>
-<h2>6. Risks</h2><p>A lenient parse (trimming, int coercion) passes the round trip and fails the job — the reject table is the real test. Do not relax it to make a case pass; report the discrepancy.</p>
+<tr><td>G0</td><td><code>python3 tasks/scripts/gate_run.py AC-0433 --arms g0 --timeout 600</code></td><td>rc=0, SCRIPT=0, SHADER=0 (the tree is otherwise untouched, so G0 alone is the regression).</td></tr>
+<tr><td>M1</td><td>pgrep slot check, HOME=/tmp/dsh_home, ulimit -v 8388608, timeout 120, absolute engine, --headless --path godot --script absolute m1_probe.gd; log .scratch/AC-0433-gates/m1-probe.log; gate_census.py on it.</td><td>rc=0, census 0/0, one JSON RESULT with all four groups non-empty (or a stated skip count) and every number derived in the probe.</td></tr></table>
+<p>No other arm is owed: no production file changes. Do not run the heavy set.</p>
+<h2>5. Acceptance</h2><p>A logged, reproducible table of how far the canonical model moves the ground versus the shipped one, per group, with the worst sites named.</p>
+<h2>6. Risks</h2><p>The legacy side is easy to get subtly wrong (mirror-aware local x, the 16-cell chunking, the home flat mapping) — if a group's numbers look implausibly uniform or implausibly huge, say so in the deviations rather than massaging the code to look right. A broken instrument that reports small numbers is worse than no instrument.</p>
 <h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>No edits outside §2. This run adds ONE probe file.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>Chunks addressable at 8f1b67c. This gives them a key. After it: the save schema + version bump decision (user has waived old-save compatibility, so the plan is version bump + clean reject, no migration) and then the streaming/consumer migration.</p>
+<h2>8. Resume point</h2><p>Dormant API complete (chunk keys at 87d2c58). This measures the migration's blast radius. The next unit after it is chosen from these numbers: if the displacement is small and the seam improves, migrate the placement; if it is large, the finding reshapes the ticket.</p>
 </body></html>
