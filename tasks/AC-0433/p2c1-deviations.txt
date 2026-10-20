@@ -1,0 +1,22 @@
+AC-0433 P2c-1 deviations (all numbers logged under .scratch/AC-0433-gates/)
+
+OUTCOME: LANDED, all gates green, no plan deviations.
+
+Evidence:
+- Light set (gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600; summary.json):
+  g0/player/interact/light/fluids/genhash/ac0423probe all rc=0, script=0 shader=0, ok=true.
+  genhash-r8.log: 25/25 GENHASH lines, GENMS 128. ac0423probe-r9.log equal to
+  tasks/AC-0433/captures/ac0423probe-r2.log excluding ms-named fields (overlap set
+  654/752/660/662/758/848/800/1290/1290 mm, identical; ms 5404).
+- p2c1 probe (p2c1-probe.log, second run after fixing a probe-side typo GRID.CW ->
+  GRID.CHUNK_WIDTH; first run RC=1, 14 parse errors, the probe did its job, no
+  module change needed): rc=0, census 0/0, RESULT ok=true faces=12
+  exactness_failures=0 chunks_checked=960 crossing_cells=12288
+  straddle_failures=0 pairs=768 reciprocal=768 invalid_cases=21 invalid_failures=0
+  negative_detected=true fails=0.
+- Regressions (each rc=0, census 0/0, RESULT equal to its baseline excluding ms):
+  p2b3-regression-p2c1.log vs p2b3-probe.log (checks 1728, folds 216);
+  p2b2-regression-p2c1.log vs p2b2-probe-p2b3.log (adjacency_pairs 1728);
+  p2b-regression-p2c1.log vs p2b-probe.log (cells 432);
+  p2a-regression-p2c1.log vs p2a-probe.log (ms 38 vs 38);
+  p1-regression-p2c1.log vs captures/p1-probe.log (ms 315 vs 313).

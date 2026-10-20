@@ -243,6 +243,55 @@ static func cell_neighbour(face: int, i: int, j: int, dir: int, R: float) -> Dic
 	return cell_owner(idl.plane, a, b, R)
 
 
+# Chunk holding chart cell (i, j) (P2c-1): integer division of i and j by
+# CHUNK_WIDTH; a valid chunk address is always >= 0, so the (-1, -1)
+# sentinel is impossible for one. Invalid face/radius/cell -> (-1, -1).
+static func chunk_of(face: int, i: int, j: int, R: float) -> Vector2i:
+	var sh: Vector2i = grid_shape(face, R)
+	if sh == Vector2i.ZERO or i < 0 or i >= sh.x or j < 0 or j >= sh.y:
+		return Vector2i(-1, -1)
+	var cxi: int = i / CHUNK_WIDTH
+	var czi: int = j / CHUNK_WIDTH
+	return Vector2i(cxi, czi)
+
+
+# Cell-min corner of chunk (cx, cz): (cx * CHUNK_WIDTH, cz * CHUNK_WIDTH)
+# (P2c-1); a chunk outside that face's chunk grid -> Vector2i(-1, -1).
+static func chunk_cell_origin(face: int, cx: int, cz: int, R: float) -> Vector2i:
+	var sh: Vector2i = grid_shape(face, R)
+	if sh == Vector2i.ZERO or cx < 0 or cx >= sh.x / CHUNK_WIDTH \
+			or cz < 0 or cz >= sh.y / CHUNK_WIDTH:
+		return Vector2i(-1, -1)
+	var i0: int = cx * CHUNK_WIDTH
+	var j0: int = cz * CHUNK_WIDTH
+	return Vector2i(i0, j0)
+
+
+# Chunk neighbouring chunk (cx, cz) in dir (0 = -i, 1 = +i, 2 = -j, 3 = +j)
+# (P2c-1) - {ok: true, face, cx, cz} or {ok: false}. Exact by delegation to
+# cell_neighbour, never a second fold rule: take the chunk's cell origin,
+# pick the crossing cell (dir 1 -> i0+15, dir 0 -> i0, dir 3 -> j0+15,
+# dir 2 -> j0), resolve that cell's neighbour (in-plane, sector crossing or
+# the 90-degree cube-edge fold), and chunk_of the result - a fold maps a
+# 16-wide strip onto a 16-wide strip, so the far chunk is unique. Invalid
+# face/radius/chunk/dir -> {ok: false}.
+static func chunk_neighbour(face: int, cx: int, cz: int, dir: int, R: float) -> Dictionary:
+	if dir < 0 or dir > 3:
+		return {"ok": false}
+	var o: Vector2i = chunk_cell_origin(face, cx, cz, R)
+	if o == Vector2i(-1, -1):
+		return {"ok": false}
+	var ci: int = o.x + (CHUNK_WIDTH - 1 if dir == 1 else 0)
+	var cj: int = o.y + (CHUNK_WIDTH - 1 if dir == 3 else 0)
+	var nb: Dictionary = cell_neighbour(face, ci, cj, dir, R)
+	if not nb.get("ok", false):
+		return {"ok": false}
+	var c: Vector2i = chunk_of(int(nb["face"]), int(nb["i"]), int(nb["j"]), R)
+	if c == Vector2i(-1, -1):
+		return {"ok": false}
+	return {"ok": true, "face": int(nb["face"]), "cx": int(c.x), "cz": int(c.y)}
+
+
 # The 90-degree cube-edge fold (P2b-3): one rule for all 24 cases. The far
 # plane's normal is the overflow axis with the overflow sign (an a-step
 # overflow is the current plane's a axis, a b-step the b axis); on the far

@@ -414,3 +414,59 @@
 - Docs written by the coordinator: ARCHITECTURE.md §6 fold paragraph updated (total adjacency, rotated return dir); design essay status note updated.
 - Scope: planet_grid.gd, p2b2 fold block, new p2b3 probe, journal, plan, docs. No runtime, save, native, shader or harness change; still no caller. Windows rebuild not owed.
 - Cell topology is now complete. AC-0433 stays in-progress: what remains is the migration itself (key/storage schema, streaming, collision, player/mob consumers), which is a much larger design pass.
+
+## RUN — Mon Oct 19 22:56:18 EDT 2026 — AC-0433 (P2c-1 chunk addressing, medium)
+- LANDED: per plan.html §3: godot/core/planet_grid.gd gains three public statics
+  appended after cell_neighbour (nothing existing changed): chunk_of (cell -> chunk
+  by integer division by CHUNK_WIDTH, invalid -> Vector2i(-1,-1)), chunk_cell_origin
+  (chunk -> cell-min corner cx*16/cz*16, out-of-grid -> (-1,-1)), chunk_neighbour
+  (dir 0=-i/1=+i/2=-j/3=+j; implemented exactly as §3.1 prescribes: take the chunk's
+  cell origin, pick the crossing cell (dir 1 -> i0+15, dir 0 -> i0, dir 3 -> j0+15,
+  dir 2 -> j0), resolve via cell_neighbour — in-plane, sector crossing and the P2b-3
+  90-degree fold all reuse _fold_edge, no second fold rule — then chunk_of the
+  result; {ok:true, face, cx, cz} or {ok:false}). NEW tasks/AC-0433/p2c1_probe.gd:
+  T1 grid_shape %16 both axes + chunk round-trip on sampled chunks {0,1,last-1,last},
+  T2 all 16 crossing cells per (chunk, dir) land in the returned chunk, T3 reciprocity
+  by searching all four dirs on the far chunk (not mirrored), T4 invalid sentinels
+  (face -1/12, R 0/neg/INF, negative/out-of-range cx,cz, dir -1/4), negative control
+  on the first valid T2 pair with the far chunk's cz shifted by 1; one RESULT line.
+  p2c1-deviations.txt (new).
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home,
+  ulimit -v 8388608, absolute engine path):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe
+    --timeout 600` (summary.json + per-arm logs): g0/player/interact/light/fluids/
+    genhash/ac0423probe all rc=0 script=0 shader=0 ok=true. genhash-r8: 25/25 GENHASH
+    lines (GENMS 128). ac0423probe-r9 equal to captures/ac0423probe-r2.log excluding
+    ms-named fields (overlaps 654/752/660/662/758/848/800/1290/1290 mm; ms 5404).
+  - P2c-1 (p2c1-probe.log, second run after a probe-side typo GRID.CW ->
+    GRID.CHUNK_WIDTH — first run RC=1 with 14 parse errors, probe did its job, no
+    module change): rc=0, census 0/0, RESULT ok=true faces=12 exactness_failures=0
+    chunks_checked=960 crossing_cells=12288 straddle_failures=0 pairs=768
+    reciprocal=768 invalid_cases=21 invalid_failures=0 negative_detected=true
+    fails=0.
+  - Regressions (each rc=0, census 0/0, RESULT equal to its baseline excluding ms):
+    p2b3-regression-p2c1.log vs p2b3-probe.log (checks 1728, folds 216);
+    p2b2-regression-p2c1.log vs p2b2-probe-p2b3.log (adjacency_pairs 1728);
+    p2b-regression-p2c1.log vs p2b-probe.log (cells 432);
+    p2a-regression-p2c1.log vs p2a-probe.log (ms 38 vs 38);
+    p1-regression-p2c1.log vs captures/p1-probe.log (ms 315 vs 313).
+- OUTCOME: **P2c-1 LANDED.** Chunks tile every face exactly (all 12 grid shapes
+  divisible by 16 both axes, 960/960 chunk round-trips), every chunk neighbour is
+  one chunk wide (12288/12288 crossing cells in 768 neighbour checks land in the
+  returned chunk — 0 straddles, including the cube-edge folds, which map the 16-wide
+  crossing strip onto one far chunk), reciprocity holds (768/768 far chunks return
+  the source via some dir), invalid inputs return the documented sentinels
+  (21/21), and the negative control fails as required on a cz-shifted far chunk.
+  The runtime is provably unchanged (p2b3/p2b2/p2b/p2a/p1 RESULTS equal to their
+  baselines excluding ms). planet_grid.gd still has no caller and no save key.
+  Scope: planet_grid.gd (3 statics), p2c1_probe.gd (new), p2c1-deviations.txt (new),
+  continuity.md. No git ops, no registry edits, no new tickets, no docs/results
+  page. Next (plan §8): the storage key format and the save-version decision, then
+  streaming.
+
+## Coordinator triage — P2c-1 (chunk addressing)
+- H1-H6: clean. The builder's only red was its own probe typo (GRID.CW -> GRID.CHUNK_WIDTH, 14 parse errors, rc=1), fixed and logged; the module never failed a gate.
+- Independent rerun: p2c1-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0, RESULT identical to the builder's excluding ms — 12 faces, exactness_failures 0, 960 chunks, 12288 crossing cells, straddle_failures 0, pairs 768 == reciprocal 768, invalid 21/0, negative_detected true.
+- Why this matters: chunk_neighbour resolves through cell_neighbour, so the fold rule stays in one place. The straddle test (all 16 crossing cells must land in the one returned chunk) is what proves a chunk never straddles a chart edge — it was checked, not assumed.
+- Scope: planet_grid.gd + new probe + journal + plan + ARCHITECTURE.md paragraph. No caller, no save key, no runtime change; Windows rebuild not owed.
+- AC-0433 stays in-progress. Remaining: storage key format + save-version decision, then the streaming/collision/consumer migration.

@@ -1015,8 +1015,13 @@ directions and no sentinel remains. **A fold is a real 90° rotation, so the way
 opposite dir** — of 216 measured folds the return lands on dir 0/1/2/3 for 48/48/60/60 of them,
 each fold reciprocal in exactly one direction. A consumer navigating across a cube edge must ask
 the far cell which dir returns, never mirror the dir it came by. Key storage, streaming and the
-player/mob consumers remain unmigrated. Evidence: tasks/AC-0433/p2b_probe.gd, p2b2_probe.gd,
-p2b3_probe.gd.
+player/mob consumers remain unmigrated. **Chunk level (AC-0433 P2c-1):** the same identity now
+lifts to the 16×16 chunk — `chunk_of`, `chunk_cell_origin`, `chunk_neighbour`. Every face's cell
+dimensions are multiples of 16, so no chunk straddles a chart edge, and `chunk_neighbour` resolves
+through `cell_neighbour` rather than a second fold rule (960 chunks, 12288 crossing cells, zero
+straddles, every pair reciprocal). There is still no save key: `address_key` and the chunk
+addressing define identity only. Evidence: tasks/AC-0433/p2b_probe.gd, p2b2_probe.gd,
+p2b3_probe.gd, p2c1_probe.gd.
 
 - **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
   12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell
