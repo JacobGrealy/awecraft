@@ -55,19 +55,18 @@ func _initialize() -> void:
 				_: b += 1
 			var expect_fold: bool = a < -n or a >= n or b < -n or b >= n
 			var r: Dictionary = GRID.cell_neighbour(face, i, j, dir, R)
-			if expect_fold:
-				if r.get("ok", false):
-					fold_ok += 1
-					fold_bad += 1
-				elif str(r.get("reason", "")) != "cube_edge":
-					fold_bad += 1
-			elif not r.get("ok", false):
+			# P2b-3: the fold now resolves - assert its two shared corners
+			# instead of the sentinel (the dir^1 back check stays in-plane:
+			# across a cube edge the far chart's opposite dir is not the way
+			# back, the fold's own dir is).
+			if not r.get("ok", false):
 				fold_bad += 1
 			else:
 				pairs += 1
 				var shared: Array = _shared(face, i, j, r.face, r.i, r.j, R)
-				if shared.size() != 2 or not _same_set(shared, _expect_shared(face, i, j, dir, R)) \
-						or not _back(r, face, i, j, dir, R):
+				if shared.size() != 2 or not _same_set(shared, _expect_shared(face, i, j, dir, R)):
+					mis += 1
+				elif not expect_fold and not _back(r, face, i, j, dir, R):
 					mis += 1
 	var seams: Array = []
 	for p in [0, 2, 8, 10]:

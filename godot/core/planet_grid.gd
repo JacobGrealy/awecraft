@@ -216,13 +216,14 @@ static func cell_owner(plane: int, a: int, b: int, R: float) -> Dictionary:
 
 
 # Neighbour of chart cell (i, j) in one in-plane lattice direction, resolved
-# through the identity (P2b-2): dir 0 = -i, 1 = +i, 2 = -j, 3 = +j are
-# uniform on every face (P2b-1), so a neighbour is a lattice step and the
-# owning chart is re-derived from the stepped coordinates - a sector crossing
-# lands on the paired chart with no special case. A step leaving the
-# half-open lattice domain [-N, N) reports {ok: false, reason: "cube_edge"};
-# the 90-degree fold is a later contract, not implemented here. Invalid face,
-# radius, indices or dir report {ok: false, reason: "invalid"}.
+# through the identity: dir 0 = -i, 1 = +i, 2 = -j, 3 = +j are uniform on
+# every face (P2b-1), so a neighbour is a lattice step and the owning chart
+# is re-derived from the stepped coordinates - a sector crossing lands on the
+# paired chart with no special case, and a step leaving the half-open lattice
+# domain [-N, N) folds 90 degrees onto the adjacent cube plane (P2b-3,
+# _fold_edge): every valid cell has four real neighbours, no sentinel.
+# Invalid face, radius, indices or dir report
+# {ok: false, reason: "invalid"}.
 static func cell_neighbour(face: int, i: int, j: int, dir: int, R: float) -> Dictionary:
 	if dir < 0 or dir > 3:
 		return {"ok": false, "reason": "invalid"}
@@ -238,8 +239,33 @@ static func cell_neighbour(face: int, i: int, j: int, dir: int, R: float) -> Dic
 		2: b -= 1
 		_: b += 1
 	if a < -n or a >= n or b < -n or b >= n:
-		return {"ok": false, "reason": "cube_edge"}
+		return _fold_edge(idl.plane, n, a, b, dir, R)
 	return cell_owner(idl.plane, a, b, R)
+
+
+# The 90-degree cube-edge fold (P2b-3): one rule for all 24 cases. The far
+# plane's normal is the overflow axis with the overflow sign (an a-step
+# overflow is the current plane's a axis, a b-step the b axis); on the far
+# plane the (a, b) are assigned BY AXIS MATCH against the current plane -
+# the far slot whose axis is the current plane's normal axis takes the
+# boundary row (N-1 when the current PLANE's normal sign is +1, -N when it
+# is -1; the plane sign, from the plane table, never the sector sign), the
+# other slot takes the carried, unstepped in-plane coordinate. A fold result
+# always lies in cell_owner's domain; nothing is clamped.
+static func _fold_edge(plane: int, n: int, a: int, b: int, dir: int, R: float) -> Dictionary:
+	# Plane table [normal axis, a axis, b axis]; axis 0 = x, 1 = y, 2 = z.
+	var tab: Dictionary = {0: [1, 0, 2], 2: [1, 0, 2], 4: [0, 1, 2],
+			6: [0, 1, 2], 8: [2, 0, 1], 10: [2, 0, 1]}
+	var cur: Array = tab[plane]
+	var na: int = int(cur[0])
+	var axis: int = int(cur[1]) if dir < 2 else int(cur[2])
+	var far: int = int([4, 0, 8][axis]) + (2 if (dir == 0 or dir == 2) else 0)
+	var ftab: Array = tab[far]
+	var boundary: int = n - 1 if (plane == 0 or plane == 4 or plane == 8) else -n
+	var carried: int = b if dir < 2 else a
+	var fa: int = boundary if int(ftab[1]) == na else carried
+	var fb: int = boundary if int(ftab[2]) == na else carried
+	return cell_owner(far, fa, fb, R)
 
 
 # --- internals (stateless; the canonical vertex evaluation is the single

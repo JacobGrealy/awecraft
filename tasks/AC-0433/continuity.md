@@ -365,3 +365,52 @@
 - Scope: planet_grid.gd, two probes, the journal, plan, docs. No runtime, save, native, shader or harness change; no caller anywhere. Windows rebuild still not owed.
 - AC-0433 stays in-progress. Next bounded unit: the 90 degree cube-edge fold (its own contract and probe), then key storage / streaming migration.
 - NOTE (AC-0457, landed mid-round by the user): the two dead P2b launches are explained by the provider's 32,768-token RESPONSE cap with reasoning charged against it — one ballooned response, not a slow model. Practical rule for this ticket from here on: keep each plan short, prefer small targeted edits over whole-file writes, and split rather than grow. AC-0433 P2a/P2b-1/P2b-2 all landed under that rule.
+
+## RUN — Mon Oct 19 22:38:39 EDT 2026 — AC-0433 (P2b-3 cube-edge fold, medium)
+- LANDED: per plan.html §3: cell_neighbour in godot/core/planet_grid.gd now folds a lattice step
+  leaving [-N, N) onto the adjacent cube plane via ONE new private static _fold_edge (far normal =
+  overflow axis with overflow sign; far (a,b) assigned BY AXIS MATCH — the far slot whose axis is
+  the current plane's normal axis takes the boundary row N-1/-N, the other slot the carried
+  coordinate; nothing clamped). The "cube_edge" reason is gone; signature/return shape unchanged.
+  tasks/AC-0433/p2b2_probe.gd: ONLY its fold block — the sentinel assertion is replaced by the
+  two-shared-corners assertion (the dir^1 back check stays in-plane; across a cube edge the far
+  chart's opposite dir is not the way back). NEW tasks/AC-0433/p2b3_probe.gd: T1 total adjacency,
+  T2 shared corners for every neighbour, T3 fold census (>100), T4 invalid, negative control on a
+  real fold's carried coordinate; one RESULT line. cell_lattice/cell_owner/vertex_key unchanged.
+- GATES (plan §4 set, all green, one godot at a time, HOME=/tmp/dsh_home, ulimit -v 8388608):
+  - Light set `python3 tasks/scripts/gate_run.py AC-0433 --arms g0,smoke,ac0423probe --timeout 600`
+    (summary.json + per-arm logs): g0/player/interact/light/fluids/genhash/ac0423probe all rc=0
+    script=0 shader=0 ok=true. genhash-r7: 25/25 GENHASH lines. ac0423probe-r8 equal to
+    captures/ac0423probe-r2.log excluding ms (only .ac0423.ms: 5445 vs 5515; overlaps
+    654/752/660/662/758/848/800/1290/1290 mm).
+  - P2b-3 (p2b3-probe.log, second run after the fix in p2b3-deviations.txt): rc=0, census 0/0,
+    RESULT ok=true checks=1728 sentinel_count=0 pairs=1728 folds=216 shared_mismatches=0
+    fold_shared_mismatches=0 invalid_cases=11 invalid_failures=0 negative_detected=true fails=0.
+    First run was RC=1 with fold_shared_mismatches=108: _fold_edge used the sector sign instead
+    of the plane normal sign for the boundary row — the probe did its job; fixed and re-run.
+  - Regressions (each rc=0, census 0/0; RESULT equal to its capture excluding ms):
+    p2b2-probe-p2b3.log — all green with the updated fold block (adjacency_pairs 1728 = 1512
+    in-plane + 216 folds now asserting their two shared corners; adjacency_mismatches=0,
+    sector_checks=12/failures=0, fold_probes=0, invalid 11/0, negative_detected=true).
+    p2b-regression-p2b3.log vs p2b-probe.log (cells=432); p2a-regression-p2b3.log vs
+    p2a-probe.log (ms 38 vs 38); p1-regression-p2b3.log vs captures/p1-probe.log (ms 318 vs 313).
+- OUTCOME: **P2b-3 LANDED.** Every valid cell now has four real neighbours: in-plane steps,
+  sector crossings and the 90-degree cube-edge folds all resolve through cell_owner, and the
+  "cube_edge" sentinel is gone for valid input. All 216 sampled folds (the coordinator's own
+  foldcount number) land on the adjacent cube plane's last row touching the edge with the
+  carried coordinate intact, sharing exactly the two expected corner vertex_keys (0 mismatches
+  across 1728 neighbour checks); the negative control fails as required on a shifted carried
+  coordinate; invalid inputs all return ok:false (11/11); the runtime is provably unchanged
+  (p2b/p2a/p1 RESULTS equal to their captures excluding ms). Scope: planet_grid.gd
+  (cell_neighbour fold + one private _fold_edge), p2b3_probe.gd (new), p2b2_probe.gd (fold
+  block only), p2b3-deviations.txt (new), continuity.md. No git ops, no registry edits, no new
+  tickets, no docs/results page. Next: the key/storage schema and the streaming migration
+  (plan §8), its own design pass.
+
+## Coordinator triage — P2b-3 (cube-edge fold)
+- H1-H6: clean, and the run's own red-first behaviour is the good outcome: `_fold_edge` initially used the sector sign instead of the plane's normal sign, the probe caught it (fold_shared_mismatches 108), and it was fixed before the final run.
+- Independent rerun: p2b3-probe-coordinator.log rc=0, SCRIPT=0, SHADER=0, RESULT identical to the builder's excluding ms — checks 1728, sentinel_count 0, pairs 1728, folds 216, shared_mismatches 0, fold_shared_mismatches 0, invalid 11/0, negative_detected true. 216 also matches the coordinator's own fold count from round 1.
+- The builder dropped the dir^1 round-trip check on folds, claiming the fold's own dir is the way back. Checked rather than accepted (.scratch/AC-0433-gates/foldback{,2,3}.gd): the claim is only true for 84 of 216. A fold is a real 90 degree rotation, so the return direction rotates — measured return dirs 0/1/2/3 for 48/48/60/60, and every one of the 216 folds is reciprocal in exactly one direction. The API is correct (the shared-corner invariant is the proof); the navigation rule is now recorded in ARCHITECTURE.md so no consumer mirrors the dir it came by.
+- Docs written by the coordinator: ARCHITECTURE.md §6 fold paragraph updated (total adjacency, rotated return dir); design essay status note updated.
+- Scope: planet_grid.gd, p2b2 fold block, new p2b3 probe, journal, plan, docs. No runtime, save, native, shader or harness change; still no caller. Windows rebuild not owed.
+- Cell topology is now complete. AC-0433 stays in-progress: what remains is the migration itself (key/storage schema, streaming, collision, player/mob consumers), which is a much larger design pass.

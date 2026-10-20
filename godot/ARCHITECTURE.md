@@ -1009,9 +1009,14 @@ cell is exactly one unit lattice square, and a cell's four corners rebuilt from 
 planes (0, 2, 8, 10) split on `a`, X planes (4, 6) split on `b`, and the coordinate's sign selects
 the even or odd chart — so a sector crossing falls out of the derivation and needs no special
 case (`cell_owner` therefore takes no `sign` argument). `cell_neighbour` is one lattice step plus
-that derivation; a step leaving [-N, N) returns `{ok:false, reason:"cube_edge"}` because the 90°
-cube-edge fold is NOT implemented yet (its own unit). Key storage, streaming and the player/mob
-consumers remain unmigrated. Evidence: tasks/AC-0433/p2b_probe.gd, p2b2_probe.gd.
+that derivation, and it is **total**: a step leaving [-N, N) folds onto the adjacent cube plane
+(the axis-parallel rule in the AC-0433 plan), so every valid cell has a real neighbour in all four
+directions and no sentinel remains. **A fold is a real 90° rotation, so the way back is NOT the
+opposite dir** — of 216 measured folds the return lands on dir 0/1/2/3 for 48/48/60/60 of them,
+each fold reciprocal in exactly one direction. A consumer navigating across a cube edge must ask
+the far cell which dir returns, never mirror the dir it came by. Key storage, streaming and the
+player/mob consumers remain unmigrated. Evidence: tasks/AC-0433/p2b_probe.gd, p2b2_probe.gd,
+p2b3_probe.gd.
 
 - **Planet coordinate convention — the grid lock (AC-0143 → AC-0306)**: the planet is a
   12-face cube-sphere (`core/sphere_math.gd`, face = axis*2 + sector, 1024-cell

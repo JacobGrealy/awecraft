@@ -1,0 +1,27 @@
+AC-0433 P2b-3 — OUTCOME + deviations (every number in a log under .scratch/AC-0433-gates/)
+
+OUTCOME: LANDED, all gates green (see continuity.md GATES entry).
+
+Deviation 1 (caught by the probe, fixed, re-run green): the first p2b3 run
+RC=1, RESULT sentinel_count=0, folds=216, fold_shared_mismatches=108,
+shared_mismatches=108, fails=216 (first run overwritten; the fix is
+recorded here). Root cause: _fold_edge took the boundary row from the
+current CHART's sector sign (cell_lattice's "sign", face % 2) instead of
+the current PLANE's normal sign from plan §3.1/§3.2 — planes 0/4/8 are
+always + and 2/6/10 always -, independent of sector. Folds out of odd
+sectors (faces 1, 3, 5, 7, 9, 11) landed on the far plane's opposite edge
+row (108 = exactly the odd-sector share of the 216 folds). Fixed by
+deriving the plane sign from the plane id in _fold_edge (the "sign"
+parameter was dropped); second run: rc=0, ok=true, all counters 0,
+folds=216 (= the coordinator's independent foldcount.gd count),
+negative_detected=true.
+
+Deviation 2 (informational): p2b2's updated fold block keeps its original
+RESULT keys; adjacency_pairs rose 1512 -> 1728 because the 216 folds now
+resolve and are asserted (two shared corners each). The dir^1 back check
+stays in-plane: across a cube edge the far chart's opposite dir is not the
+way back (the fold's own dir is), so folds are not back-checked there —
+plan §3.4 asserts only the shared corners for folds.
+
+Note: the p2b3-probe.log in .scratch/ is the SECOND (green) run; the
+red first-run RESULT is quoted in this file only.
