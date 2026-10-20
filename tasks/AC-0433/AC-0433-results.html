@@ -306,5 +306,19 @@ seamcensus rebaseline ticket (F6, coordinator's queue) and the coordinator's hea
 geometry the re-bake produces is run 1's measured geometry; a render arm is a P2 concern when the
 placement itself moves).</p>
 </div>
+
+<h2>2a. Later units — P2b-1 to M1 (appended by the coordinator; evidence in .scratch/AC-0433-gates/)</h2>
+<p class="note">Each row's numbers are the RESULT line of the named standalone probe log, rerun independently by the coordinator and found identical to the builder's (excluding the timing field). Every unit was dormant: no production caller, no save or runtime change, so the light gate set (g0 + smoke + ac0423probe) with genhash 25/25 is the regression for each.</p>
+<table>
+<tr><th>unit</th><th>what it added</th><th>headline result</th><th>log</th></tr>
+<tr><td>P2b-1</td><td>cell_lattice / cell_owner — one identity per cell on the cube lattice; every chart cell is one unit square</td><td>432 cells, round-trip 0 mismatches, 0 identity collisions, 0 corner mismatches, negative control fired</td><td>p2b-probe.log</td></tr>
+<tr><td>P2b-2</td><td>cell_neighbour — in-plane adjacency and the sector seam, owning chart DERIVED not carried</td><td>1512 pairs, 0 mismatches, 12/12 sector seams, 0 sign disagreements</td><td>p2b2-probe.log</td></tr>
+<tr><td>P2b-3</td><td>the 90 degree cube-edge fold — adjacency now total</td><td>1728 checks, 0 sentinels, 216 folds, 0 shared-corner mismatches</td><td>p2b3-probe.log</td></tr>
+<tr><td>P2c-1</td><td>chunk_of / chunk_cell_origin / chunk_neighbour — the 16x16 chunk</td><td>960 chunks, 12288 crossing cells, 0 straddles, 768/768 reciprocal</td><td>p2c1-probe.log</td></tr>
+<tr><td>P2c-2</td><td>chunk_key / chunk_from_key — one canonical spelling, strict inverse</td><td>108 keys, 0 round-trip failures, 0 duplicates, 20/20 rejects, near-miss fired</td><td>p2c2-probe.log</td></tr>
+<tr><td>M1</td><td>measurement only: how far the canonical model moves the ground</td><td>interior mean 0.955 m (max 1.861), home/face seam mean 0.978 m (max 2.003), home pair mean 0.054 m; EVERY maximum at h=140, none at the surface</td><td>m1-probe.log</td></tr>
+</table>
+<p><b>Two corrections worth keeping in the record.</b> (1) P2b-2's first contract was wrong and the builder said so instead of guessing: it let a caller supply the sector sign, so a seam crossing returned i = -1. Ownership is now derived from (plane, a, b), and the plane pairs are 0/1, 2/3, 4/5, 6/7, 8/9, 10/11 — not the 4/6 and 5/7 an earlier draft named. (2) P2b-3's fold is a real 90 degree rotation, so the way back is not the opposite direction: over all 216 folds the return lands on dir 0/1/2/3 for 48/48/60/60, each fold reciprocal in exactly one direction. Both are now in godot/ARCHITECTURE.md rather than only in a run report.</p>
+
 </body>
 </html>
