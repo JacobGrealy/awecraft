@@ -11401,11 +11401,6 @@ func _key(cx: int, cz: int) -> String:
 		chunk_keys[k] = s
 	return s
 
-# AC-0465: public chunk-key producer (delegates to _key; the single spot
-# AC-0459 flips — format unchanged by this ticket).
-func chunk_key(cx: int, cz: int) -> String:
-	return _key(cx, cz)
-
 func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	var c: Node3D = _column_checkout()  # AC-0247: pooled column (fresh state) or a fresh node
 	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
@@ -15287,10 +15282,6 @@ func surface_top_key(face: int, colx: int, colz: int) -> int:
 
 func _key_f(face: int, ccx: int, ccz: int) -> String:
 	return "%d:%d:%d" % [face, ccx, ccz]
-
-# AC-0465: public face-chunk-key producer (delegates to _key_f).
-func chunk_key_face(face: int, ccx: int, ccz: int) -> String:
-	return _key_f(face, ccx, ccz)
 
 # Single position->key resolver for planet-surface positions (radius R).
 # +Y halves (faces 0,1) = the flat home world (1m columns). AC-0306 grid lock:
