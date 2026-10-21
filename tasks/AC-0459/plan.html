@@ -1,0 +1,35 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0459 canonical keys</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0459 — one chunk-key format, and a save version that says so</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Measured blast radius: <b>120 call sites of <code>_key()</code> but only ~5 key PARSERS</b>, so the format changes in one producer and a handful of readers. That is what makes this ticket bounded.</p>
+<h2>1. Goal</h2><p>Every chunk key in the game has the same shape — <code>face:ccx:ccz</code> — for the home pair (<code>0:…</code>) and for chart faces (<code>4:…</code>) alike, and the save version records the change so an old save is rejected cleanly.</p>
+<h2>2. Files and anchors (verified by the coordinator, 2026-10-20)</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td><code>_key</code> (11396) — currently emits <code>"%d,%d"</code> from the <code>chunk_keys</code> int cache; <code>_key_f</code> (~11380, already <code>face:ccx:ccz</code>)</td><td>Edit <code>_key</code>'s FORMAT only. Keep the int cache and its lifetime semantics exactly as they are.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the parsers: <b>13685</b> (<code>String(k).split(",")</code>) and <b>14597</b> (<code>String(key).split(":")</code>)</td><td>Edit to parse the canonical form (and see §3.3).</td></tr>
+<tr><td>godot/scenes/main.gd</td><td>parsers at <b>593</b>, <b>635</b>, <b>1732</b>, <b>1805</b> (<code>split(":")</code> / <code>str(k).split(",")</code>)</td><td>Edit only the chunk-key ones. Do NOT touch 766/770 (hotbar pairs — different format).</td></tr>
+<tr><td>godot/autoload/save.gd</td><td><code>const SAVE_VERSION := 4</code> (line 5)</td><td>Bump to 5 with a comment naming this ticket and the key-format reason.</td></tr>
+<tr><td>godot/ARCHITECTURE.md</td><td>§5 (save format) and §6 (chunk identity/keys)</td><td>Update in the same task — the invariant.</td></tr>
+<tr><td>tasks/AC-0459/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the warp, placement, streaming bands, SphereMath, <code>_key_f</code>'s format, hotbar/entity keys that are not chunk keys.</p>
+<h2>3. Edit shape</h2>
+<p><b>3.1 Producer.</b> <code>_key(cx, cz)</code> returns <code>"0:%d:%d" % [cx, cz]</code>. The cache key (<code>cx * 65536 + cz</code>) and its lazy fill stay as they are; only the string changes. Home chunks are one flat space, so the <code>0</code> is a constant — do not invent a second home index.</p>
+<p><b>3.2 Save version.</b> <code>SAVE_VERSION 4 → 5</code>, comment naming AC-0459. <code>main.gd:628</code> already rejects a mismatch cleanly (edits + player pose dropped, fresh world at the same seed, one log line) — <b>do not change that rejection path</b>, and confirm in the gates that it still fires.</p>
+<p><b>3.3 Parsers.</b> Each site must extract <code>face, ccx, ccz</code> from <code>face:ccx:ccz</code> and from the legacy <code>cx,cz</code> (which means home, face 0). Keep a legacy branch <b>only</b> where the string can originate outside this process (a save loaded from disk); the version bump makes that impossible in practice, so a legacy branch is allowed but must be commented as defensive. <b>Do not</b> silently treat a mis-shaped key as chunk 0 — an unparseable key must return a clearly invalid result (e.g. <code>null</code>/empty) and be reported by the caller as it is today.</p>
+<p><b>3.4 What must NOT move.</b> Which chunk a coordinate maps to. This is a pure relabelling: the same <code>(cx,cz)</code> must resolve to the same node before and after. <code>genhash 25/25</code> and the light set are the evidence.</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>World unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0459 --arms g0,genhash,light,ac0423probe --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <b>genhash 25/25 byte-identical</b>; ac0423probe equal excl ms; light's cave/surface fields unchanged.</td></tr>
+<tr><td>Save round-trip</td><td>the <code>save</code> and <code>load</code> arms (<code>tasks/harness_data.yaml</code> 464, 589)</td><td>rc=0, SCRIPT=0/SHADER=0, and their own <code>ok</code> — <b>report the RESULT values</b>. An edit made, saved and reloaded must read back.</td></tr>
+<tr><td>Version rejection (the negative control)</td><td>Any arm that continues a save, run against a save with <code>version</code> forced to 4 (write the JSON by hand in <code>.scratch</code> and point the arm/slot at it; if that is not reachable, construct the rejection through <code>main.gd</code>'s continue path)</td><td>The log contains the version-mismatch rejection line and the game starts a FRESH world at the same seed — no partial load, no crash. <b>If this cannot be exercised, say so explicitly</b> — never claim the rejection is proven because the code path exists.</td></tr>
+<tr><td>Key shape</td><td>Grep the run logs and the save file for any remaining <code>"cx,cz"</code>-shaped chunk key</td><td>None produced by this build. Report what you grepped.</td></tr>
+</table>
+<h2>5. Acceptance</h2><p>One key shape everywhere, the world provably unchanged, saves round-trip, and an old save is rejected cleanly.</p>
+<h2>6. Risks</h2><p>The 120 call sites are producers only, but a hidden sixth parser would now see a colon (it may have been splitting on "," and would silently get one token) — that is why §4 greps the logs and the save file. If a parser is found that the plan did not list, STOP and report it rather than improvising a sixth edit.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §2. No refactor the plan did not ask for.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>The placement is unified and default (AC-0460), face editing is correct on both chart classes (AC-0462). This unifies the key format; AC-0463 then removes the legacy split and proves the planet end to end.</p>
+</body></html>

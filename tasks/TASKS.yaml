@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-20T20:07
+  updated_at: 2026-10-20T20:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0465
 - AC-0459
 - AC-0463
 - AC-0434
@@ -29684,10 +29685,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-20T09:22
-  updated_at: 2026-10-20T09:22
+  updated_at: 2026-10-20T20:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29702,7 +29703,26 @@ intake:
     \   PRECONDITION: the placement ticket in this series must have landed first, otherwise saves describe\n\
     \   geometry that no longer exists.\n   VERIFY: genhash becomes a REBASELINE (the user waived stability)\
     \ - record the old anchor before the\n   change and state the new one deliberately; save accept/reject\
-    \ both exercised; light gate set.\n"
+    \ both exercised; light gate set.\n\n\nROUND 23 TRIAGE — PLAN-INSUFFICIENT was the right outcome,\
+    \ and it was my error.\n\nThe builder refused to apply the plan and returned precise findings instead\
+    \ of a half-migration. Both halves of my measured blast radius were wrong:\n- I claimed `_key` was\
+    \ \"the one producer\". It is not: main.gd 1704/1827/1873/1908 build chunk keys by hand (`world.chunks.get(\"\
+    %d,%d\")`), plus ~40 more in harness.gd across ~19 arms. `_await_sim_band` (1908) sits in the game-start\
+    \ flow that the save and load arms go through, and `_await_spawn_floor` (1827) is awaited by ~25 arms,\
+    \ so a format flip would have produced 3000-frame waits and \"SIMBAND not fully built\" noise rather\
+    \ than obvious breakage — the worst failure shape: slow, quiet and ambiguous.\n- Three of my five\
+    \ \"parsers\" were not chunk-key parsers at all: world.gd:13685 and main.gd:1732/1805 parse 3-part\
+    \ GLOBAL CELL keys (\"gx,gy,gz\") for banana fruits and the fluidfall scan, and main.gd:635 validates\
+    \ the 5-part edit key. Editing them per my plan would have broken banana plucking.\n\nDECISION (decomposition\
+    \ rather than a bigger single ticket): filed **AC-0465** at the head of the queue — introduce a single\
+    \ `world.chunk_key(cx, cz)` producer and route every by-hand lookup through it, with the FORMAT UNCHANGED\
+    \ and every standing value expected byte-identical. That converts \"how many producers exist?\" from\
+    \ my guess into a grep-able fact, and makes AC-0459's format flip a one-line change with nothing left\
+    \ to miss. AC-0459 stays open and in-progress, waiting on AC-0465.\nWHAT I GOT RIGHT, checked by the\
+    \ builder: `_key`'s cache structure, the main.gd:628 clean-rejection path, `_key_f` already canonical,\
+    \ and the world's own 56 chunks-dict sites all going through _key/_key_f.\nLESSON worth keeping: a\
+    \ blast radius measured by grepping ONE function name (`_key(`) counts its CALLERS, not its ALTERNATIVES.\
+    \ Counting the alternatives (`\"%d,%d\"` literals) is the measurement that actually decides the risk."
   comments: []
 - id: AC-0460
   title: migrate-single-streaming-lane
@@ -29873,4 +29893,50 @@ intake:
     \ chunk lattice, the AC-0440/AC-0443\n   method) rather than by guessing at the shader.\n   VERIFY:\
     \ after a fix, the same recipe must show the block lit and continuous with its neighbours,\n   and\
     \ the flag on/off pair must still agree.\n"
+  comments: []
+- id: AC-0465
+  title: single chunk-key producer (no format change)
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-20T20:23
+  updated_at: 2026-10-20T20:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    No visible change. This is the preparatory step that makes the chunk-key format change safe: right
+    now several places build the dictionary key for a chunk by hand ("%d,%d") instead of asking the world
+    for it, so a format change would silently miss them and every streaming wait would time out. This
+    ticket routes them all through one helper WITHOUT changing the format, so nothing can be missed later.
+
+
+    2) Technical Details
+
+    Split out of AC-0459 after a builder returned PLAN-INSUFFICIENT: the coordinator''s measured blast
+    radius was wrong. Real by-hand chunk-key producers bypassing world._key(): main.gd 1704 (_fluidfall_scan),
+    1827 (_await_spawn_floor), 1873 (_await_core_3x3), 1908 (_await_sim_band) -- all world.chunks.get("%d,%d")
+    -- plus ~40 in harness.gd across ~19 arms (editfront, editmat, editslab, banana3d, continue_probe,
+    perf, chunkio, flysave, tick, bandmap, aheadtarget, candflag, edgeretain, boundary, atlas, tint, crossface,
+    fly helper) counting world.chunks / world.edits / world.chunk_origin lookups. _await_sim_band and
+    _await_spawn_floor are awaited by the game-start flow and ~25 arms, so a missed site shows up as a
+    3000-frame wait cap and a "SIMBAND not fully built" log line, not a crash.
+
+    Scope: add world.chunk_key(cx, cz) (home) as the single producer delegating to today''s _key semantics,
+    and convert every by-hand "%d,%d" chunk lookup to it, in main.gd and harness.gd. FORMAT UNCHANGED
+    -- this is a pure refactor and every standing gate value must stay identical. Verified no-ops in the
+    old plan: world.gd:13685 and main.gd:1732/1805 parse GLOBAL CELL keys "gx,gy,gz" (banana fruits, fluidfall
+    scan), main.gd:635 validates the 5-part edit key, and 14597 already parses canonical keys -- do not
+    touch them. The real edit-key builder for the home branch is main.gd:598.
+
+    Verify: g0 + genhash 25/25 byte-identical + the full light set + save/load arms byte-comparable to
+    their pre-change values; grep that no "%d,%d" chunk lookup remains outside the helper; and report
+    the final producer count so AC-0459''s format flip is a one-line change with nothing missed.
+
+    '
   comments: []

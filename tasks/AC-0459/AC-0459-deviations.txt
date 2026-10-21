@@ -1,0 +1,27 @@
+PLAN-INSUFFICIENT: the plan's measured blast radius ("120 _key() call sites but only ~5 key parsers; edit the ONE producer") is contradicted by the code — there are unlisted hardcoded chunk-key PRODUCERS that bypass _key, and 3 of the 5 listed "parsers" are not chunk-key parsers at all. No code was changed; no gates were run.
+
+Verified findings (all re-checked against the code, 2026-10-20):
+
+1. Listed sites that are NOT chunk-key parsers (plan §2, §3.3):
+   - godot/world/world.gd:13685 — `_banana_tick` parses `_banana_fruits` keys, which are GLOBAL CELL keys "gx,gy,gz" (3 parts, produced at world.gd:13721). Parsing these as face:ccx:ccz per §3.3 would break bouncy-banana plucking.
+   - godot/scenes/main.gd:1732 and :1805 — `_fluidfall_clear`/`_fluidfall_case` parse `_fluidfall_scan` CELL keys "gx,gy,gz" (produced at main.gd:1722). Not chunk keys.
+   - godot/scenes/main.gd:635 — `_continue_slot` validates the 5-part EDIT key "planet:face:ccx:ccz:local"; that format is unchanged by this ticket, so no edit is needed (anchor real, no-op).
+   - godot/scenes/main.gd:593 — `_conv_edits_v2` parses the 5-part edit key; the line that actually BUILDS the runtime chunk key is main.gd:598 (home branch `"%d,%d"`, face branch already canonical). 598 is the real edit point for the plan's "593" anchor.
+   - godot/world/world.gd:14597 — genuine chunk-key parser (star_owed carries _key home keys from 6273 and _key_f face keys from 15377/15442). It already splits ":" and 3-part-filters, so it PARSES the canonical form as-is; a home key "0:cx:cz" can only match when face==0, and faces 0,1 (home pair) never enter _star_faces (per-face engines are for chart faces only). Likely no code edit, at most a defensive comment.
+
+2. Unlisted chunk-key PRODUCERS (hardcoded "cx,cz" bypassing _key — the plan says _key is "the one producer"):
+   - godot/scenes/main.gd:1704 (`_fluidfall_scan`), :1827 (`_await_spawn_floor`), :1873 (`_await_core_3x3`), :1908 (`_await_sim_band`) — all `world.chunks.get("%d,%d" % [cx, cz])`.
+     After the relabel these silently return null:
+     - `_await_sim_band` (1908) is in the game-start flow (main.gd:682, :732) that the `load` and `save` arms and ~30 harness call sites go through — every such wait would spin to its 3000-frame cap (~50 s), print "SIMBAND not fully built after 3000 frames", and the load arm's simband/wall metrics would break.
+     - `_await_spawn_floor` (1827) is awaited by ~25 harness arms; `_await_core_3x3` (1873) by 4; `_fluidfall_scan` (1704) would mis-report the fluid-fall cells.
+   - godot/scenes/harness.gd — ~40 more hardcoded `world.chunks.get("%d,%d")` (plus world.edits / world.chunk_origin "cx,cz" lookups) across ~19 arms: editfront, editmat, editslab, banana3d, continue_probe, perf, chunkio, flysave, tick, bandmap, aheadtarget, candflag, edgeretain, boundary, atlas, tint, crossface, fly helper. harness.gd is fence-protected for this ticket (the plan names no arm there), so the revised plan must decide explicitly: rule them in (harness waiver) or out (those arms break until a follow-up ticket).
+
+3. What this means for the plan's gates as written: even if the four in-plan files were edited exactly as written, `load` (simband wall), `save` (continue path waits), `ac0423probe` (~50 s preamble wait per run) and the §4 log grep ("SIMBAND not fully built" lines) would deviate, and `_fluidfall_scan` would be silently wrong — the gates would not hold without touching main.gd:1704/1827/1873/1908, which the plan does not list.
+
+4. Unaffected and clean (verified): `_key_f` format (world.gd:15283, already "face:ccx:ccz"), the main.gd:628 version-rejection path, the warp/placement/streaming/SphereMath paths, and world.gd's own chunks-dict accesses (all via _key/_key_f or a key variable set from them — the 56 `chunks[...]` sites checked).
+
+What the revised plan needs (coordinator decisions, not builder choices):
+   a. Add main.gd:1704, 1827, 1873, 1908 to §2 (home lookups -> "0:%d:%d", or route through a world helper).
+   b. Correct the parser list: drop 13685/1732/1805/635 as no-ops (with the reason above), point 593 at 598, and state explicitly whether 14597 gets a defensive comment only.
+   c. Rule the ~40 harness.gd lookups in or out of this ticket (fence + arm-re-baselining decision).
+   d. Confirm the save/load RESULT expectations still hold once (a) lands (simband wall should return to ~2.1 s if the main.gd wait is fixed).
