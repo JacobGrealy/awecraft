@@ -1,0 +1,84 @@
+AC-0434 stage 1 — deviations / stated conventions (seam_band_probe.gd)
+
+1. Corner convention for the per-cell table. The plan asks for "per seam
+   cell" figures but does not say which corner of the cell's edge quad to
+   use (the quad's two edge corners sit at different heights when the
+   seam has a step, so E = K0 + K1*t + margin differs per corner). The
+   RESULT cells (pair, k = 0..15) use the shared corner at along-index k;
+   corner 16 is folded into the per-pair aggregate only (17 corners per
+   pair, reported under pairs.<name>). The per-pair worst/mean/spread
+   therefore cover the full seam, and the per-cell table is the same
+   seam minus its far corner.
+
+2. Per-corner surface vertex (full-surface pick). The arm's band (top-
+   faces, local seam-axis coord past the nominal edge into the extension
+   band — thresholds in the probe source) contains
+   edge-row top-face vertices at EVERY height — cave and other sub-
+   surface tops included — so per corner the probe takes the TOPMOST
+   band vertex within [data top + 1 - 1.1, data top + 1 + 0.6] (the
+   visible surface row; a fluid top sits at top + hgt ~ top + 0.9, a top
+   face below a cross-block top sits at top). Two mesh-structure facts
+   discovered during the run shape the pick:
+   a. The seam extension is applied in the C++ (mesh.cpp) to ALL three
+      per-slab instances — opaque s_ao, fluid tops, and cutout (leaves)
+      — so the pick spans all three (classes "op"/"fl"/"cu"); the
+      arm's ext_edge reads the opaque surface 0 only. Corners whose
+      surface row lives on the cutout/fluid instance are tagged
+      left_class/right_class and counted per pair (non_opaque_corners).
+   b. Merged top-face quads (qwrite_merged) are single quads: the C++
+      extends only their 4 corner vertices (the seam_ext_corner call in
+      qwrite_merged), and the seam-END corners are also extended ALONG
+      the seam (s -> -E / 16+E). Interior block corners of a merged quad
+      carry no vertex at all, so per-corner picks there lerp the two
+      adjacent
+      surface-layer corners' WORLD positions (the rendered edge IS the
+      straight line between the moved quad corners); such corners are
+      counted per pair (interpolated_corners). Corner indices are
+      clamped to 0..16 so the along-seam-extended end corners land in
+      corner 0 / 16.
+
+3. no_surface_cells grain. "How many sampled cells have a neighbour with
+   NO surface on that edge" is counted at the (pair, k) row grain: a row
+   counts when at least one side's neighbour edge column is air at k
+   (the K0 term is 0 there). Finer counts are reported alongside:
+   no_surface_cells_left_neighbour / _right_neighbour (per side) and
+   unarmed_edge_cells (rows whose side's WHOLE edge is un-armed, i.e.
+   the neighbour has no surface on that edge at all — E == 0 exactly
+   there by construction, the class tuning E cannot reach). For all 9
+   pairs of this world every edge is fully armed on both sides: the
+   answer is 0 of 144 cells (and 0 per side, 0 un-armed rows).
+
+4. Boot path. -s mode loads no game autoloads and no game tree, so the
+   probe adds the project autoloads in project order (project.godot
+   [autoload] section) and then boots the real entry scene the game's
+   own way: AWECRAFT_TIME set (a HARNESS_ENVS member) with AWECRAFT_LOGIC
+   unset routes main._ready into _run_game(seed 44, logic "") — world
+   build with render radius 4 (the harness-env value), game keeps
+   running, NO arm dispatched. The GDExtension loads from project.godot
+   exactly as in the game (verified: all five AweMesh/AweGen/... classes
+   present under -s). Two engine-API notes discovered: -s resolves the
+   script path relative to the project (absolute path required for a
+   script outside godot/), and ProjectSettings.get_autoload_list() does
+   not exist in 4.7.1 (hence the [autoload] parse).
+
+5. S1 cross-check definition. The per-pair extreme that reproduces the
+   standing values is computed OPAQUE-ONLY (min/max world seam-axis coord
+   over the opaque band — the arm's own ext_edge min/max, which reads
+   mesh_instance surface 0 only), so it is the arm's ext_overlap_mm
+   arithmetic, not a re-derivation. Tolerance 2.5 mm (float32 rounding of
+   the arm's mm-rounded values). The per-corner table, by contrast, uses
+   the FULL surface (convention 2) — that is the measurement the arm
+   cannot see.
+
+6. Crack transform. The crack column of the table is the cross-seam
+   gap between the two chunks' NOMINAL edges (A local 16 / B local 0,
+   each at the corner's own surface height) with no extension applied;
+   both world positions come from the in-tree per-column LSQ tangent
+   transform the C++ seam extension itself uses — chunk `transform`
+   (built by build_seam_ext / SEAM_FILL, AweChunk::get/set transform),
+   i.e. the same c.transform the extension math runs under, not a
+   re-fitted frame and not the world identity.
+
+7. No game or native code was touched; no fix chosen (plan §6). The only
+   new file is tasks/AC-0434/seam_band_probe.gd; run scripts and logs
+   live under .scratch/AC-0434-gates/.

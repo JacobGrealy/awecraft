@@ -1,0 +1,42 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0434 measure the seam band</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0434 (stage 1) — what IS the per-cell seam band, to the millimetre?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measurement ticket: no game code changes.</b> The ticket's own notes say MEASURE FIRST, and that two prior measurements disagree — 654–1290 mm (AC-0423) against 634–678 mm (AC-0427) — so the per-cell figure is unknown and the choice of fix depends on it.</p>
+<h2>1. Goal</h2><p>For every seam cell of a measured seam: the extension <code>E</code>, the crack width the cell would have had without it, and the resulting overlap — per cell, so the range and its per-cell wobble are on the record.</p>
+<h2>2. What the ticket already establishes (do not re-derive)</h2>
+<ul>
+<li>The two chunks OVERLAP by design: top-face edge rows extend past the nominal footprint by <code>E = K0[k][i] + K1[k]*t + SEAM_V_MARGIN</code>, clamped to [0, 2.5] m (<code>gdext/src/mesh.cpp:426-454</code>, margins at :435/:436).</li>
+<li><code>seam_ext_corner</code> rewrites only px/pz (<code>mesh.cpp:459-476</code>) and the UVs pass through unchanged (<code>:498-518, 533-562</code>) — that is the smeared texture the user photographed.</li>
+<li>The band is the SUM of both sides' extensions; AC-0423 measured 654–1290 mm across 9 pairs where the crack had been 552–558 mm; the AC-0427 round re-measured 12 seams at −634…−678 mm.</li>
+<li>Armed only where the build ctx carries <code>sphere_r</code> (world.gd:3860/5607/6092, chunk.gd:1626) and only toward a neighbour with any surface on that edge (<code>build_seam_ext</code>, mesh.cpp:982-1055). <b>The face-chunk lane sets no sphere_r and has no extension at all.</b></li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>tasks/AC-0434/seam_band_probe.gd (NEW)</td><td>standalone SceneTree; load the extension the way the game does</td><td>Write the probe in §4.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>ac0423probe</code> arm — its <code>ext_edge</code> / <code>ext_overlap_mm</code> / <code>across_gap</code> fields are the existing instrument</td><td>READ ONLY. Run it; do not edit it.</td></tr>
+<tr><td>gdext/src/mesh.cpp</td><td><code>:426-454</code> (E and the clamp), <code>:459-476</code> (corner rewrite), <code>:982-1055</code> (build_seam_ext)</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0434/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> any game or native code. This stage produces numbers.</p>
+<h2>4. The measurement</h2>
+<ul>
+<li><b>4.1 Per-cell E.</b> For the seam pairs <code>ac0423probe</code> already measures (its 9 pairs), extract the per-cell <code>ext_edge</code> values it reports and tabulate them. That arm already exposes them — use it rather than recomputing.</li>
+<li><b>4.2 Per-cell crack width.</b> For the same cells, the geometric gap the extension is closing: the horizontal distance between the two chunks' nominal edge positions at that cell's own height. Derive it from the same <code>face_chunk_transform</code>/placement the mesh uses (the LSQ chunk transform is what places these meshes), and <b>state which transform defines it</b>.</li>
+<li><b>4.3 The comparison the ticket asks for</b>, per cell: E, crack, and overlap = E_left + E_right − crack. Report worst, mean and the per-cell spread. Say explicitly whether the 654–1290 mm and 634–678 mm readings are both explainable as different CELLS of the same distribution, or whether they genuinely disagree.</li>
+<li><b>4.4 The unbounded case.</b> Also measure or state what happens to a cell whose neighbour has NO surface on that edge (§2's gating) — the extension is <code>0</code> there, so the crack is untouched. Report how many of the sampled cells fall in that class, because those cells cannot be fixed by tuning E.</li>
+<li>RESULT keys: ok, pairs, cells [{pair, k, E_left_mm, E_right_mm, crack_mm, overlap_mm}], worst_overlap_mm, mean_overlap_mm, no_surface_cells, transform_used, fails.</li>
+</ul>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>No change</td><td><code>python3 tasks/scripts/gate_run.py AC-0434 --arms g0,genhash,ac0423probe --timeout 600</code></td><td>rc=0, SCRIPT=0/SHADER=0; <b>genhash 25/25</b> (nothing may change); ac0423probe reproduces its standing nine overlaps (654/752/660/662/758/848/800/1290/1290) — if it does NOT, that is a finding to report before anything else.</td></tr>
+<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, ok true, the per-cell table produced.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b>: gate_run's slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Two coordinator runs deadlocked on this.</p>
+<h2>6. Acceptance</h2><p>A per-cell table that settles the per-cell band figure, explains or refutes the disagreement between the two prior measurements, and says how many seam cells the extension cannot reach at all. <b>No fix is chosen in this stage</b>; the ticket's three candidate fixes are decided by these numbers.</p>
+<h2>7. Risks</h2><p>The two chunks' surfaces sit within millimetres on flat ground, so the WINNER of the overlap flips at the crease — that is the visual doubling. If the probe shows the overlaps are already small per cell while the render clearly shows a wide band, the band is NOT the sum of extensions and the ticket's premise needs restating: <b>report that</b> instead of fitting the numbers to the story.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. This stage adds ONE probe file.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>The one-world migration's placement is shipped (AC-0460), keys unified (AC-0459/0465), editing exact (AC-0462), and a traversal arm exists (AC-0466). This measures the seam band so the AC-0434 fix is chosen from data, the way AC-0460's cost and AC-0462's conversion were.</p>
+</body></html>

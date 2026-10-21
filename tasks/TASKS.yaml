@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-21T02:20
+  updated_at: 2026-10-21T05:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -27842,10 +27842,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-15T09:54
+  updated_at: 2026-10-21T05:00
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -27898,7 +27898,38 @@ intake:
     \ the user's own vantage\n(surface-flush block on the seam, standing on the line, camera above), before\
     \ and after.\n\nKNOWN HARD CASE. At a step across a seam the crease of the two PLANES is not where\
     \ the two staircases\nmeet, which is where AC-0427's side-face extension does its real work. A half-rule\
-    \ has to state what\nhappens there rather than leaving it as an unmeasured edge case.\n"
+    \ has to state what\nhappens there rather than leaving it as an unmeasured edge case.\n\n\nSTAGE 1\
+    \ MEASURED (round 28). The per-corner band is 602-730 mm (mean 656, worst 730.4, spread 128) over\
+    \ 144 cells, and the crack it is closing is 506-634 mm (mean 560). So the visible band IS the sum\
+    \ of the two sides' extensions, as the ticket assumed, and every one of the 144 cells is on a fully\
+    \ armed edge (0 un-armed), which means no cell falls in the class that tuning E cannot reach.\n\n\
+    THE TWO PRIOR MEASUREMENTS ARE RECONCILED, NOT CONTRADICTORY, and the way they reconcile matters for\
+    \ the fix: 634-678 (AC-0427) sits inside the per-corner distribution, while AC-0423's 654-1290 is\
+    \ a per-PAIR extreme that mixes corners and heights - on the 752/800/848/1290 pairs the extreme vertex\
+    \ is a deep cave top (t=8-32) at a different corner from the one carrying the worst flat overlap.\
+    \ The per-corner worst on those same pairs is only 654.5-730.4. Practical consequence: quoting a single\
+    \ \"band width\" across all pairs mixes two different quantities, and any future gate must state whether\
+    \ it is gating a per-corner figure or a per-pair extreme.\n\nONE THING THE ARM DOES NOT SEE, recorded\
+    \ so nobody gates on a half-truth: the standing ac0423probe fields are OPAQUE-only, while the C++\
+    \ extension applies to all three instances, so 20 of 153 corners have leaves/fluid in the rendered\
+    \ band that the arm never counts. The user's photograph is of a crafting table on sand, so the opaque\
+    \ figure is the right one for this report - but a render-based verification later must not assume\
+    \ the arm's number and the picture describe the same pixels.\n\nDECISION ON THE FIX, from these numbers:\
+    \ the ticket's option (a) halves the band (~656 -> ~330 mm) at low risk, keeps the unilateral guarantee\
+    \ toward an unarmed neighbour, and is a contained change to the E expression. Option (b) - each column\
+    \ extruded along its own radial - does not merely shrink the band, it makes the two sides agree BY\
+    \ CONSTRUCTION at every height, which deletes the K tables, the ring reads, sphere_r, the margins\
+    \ and the clamp, and with them the UV stretch the user actually sees. (b) is therefore the correct\
+    \ fix and (a) is at best a stopgap.\nAND (b) IS NOT A SEPARATE PIECE OF WORK: it is the remaining\
+    \ half of the one-world migration, because the warp already does exactly this for the face lane (AC-0458/AC-0460)\
+    \ while the home pair still rides the per-column LSQ transforms. Doing (b) means extending the one-world\
+    \ placement to the home lane, which is the same change AC-0463's merge needs. That is why this ticket\
+    \ should NOT implement (a) as if it were the answer: a 330 mm band is still a visible band, and spending\
+    \ a gate cycle on it buys a number rather than a fix.\nRECOMMENDATION: park AC-0434 behind the home-pair\
+    \ placement work and land it as the deletion that (b) enables, then verify with the render the ticket\
+    \ asks for (surface-flush block on the seam, standing on the line, camera above, before/after) plus\
+    \ a gate that asserts BOTH directions per seam cell - gap <= grout AND overlap <= grout - so the crack\
+    \ cannot be reopened in the name of closing the overlap."
   comments: []
 - id: AC-0435
   title: audit-switch-defaults-for-shipped-off-fixes
