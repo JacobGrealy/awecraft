@@ -368,6 +368,23 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _faceedit_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "planetwalk":
+			# AC-0466 (plan.html): the planet-traversal arm — the
+			# falsifier the AC-0463 lane merge is measured against.
+			# Stand PAST a chart edge (the faceedit positioning, the
+			# anchor's face asserted > 1), walk 8 m steps along the
+			# edge until the anchor's face CHANGES (adjacency
+			# SphereMath-derived, two edge seams), and report per
+			# crossing the face pair, steps, frame ms and the
+			# chunk-under-player mesh/body state (the existing
+			# predicates only — the arm observes, it changes nothing).
+			# AWECRAFT_PWN_SKIP_WAIT=1 is the negative control: skip
+			# every mesh/collision wait and the arm MUST then report
+			# an unbuilt boundary. STANDALONE (it quits) — BATTSKIP,
+			# no main.gd entry.
+			await _planetwalk_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -37133,3 +37150,404 @@ func _ac0433probe_test() -> void:
 	out["ok"] = true
 	out["ms"] = Time.get_ticks_msec() - t0
 	Debug.result({"ac0433probe": out})
+
+
+# ============================================================================
+# AC-0466 (plan.html): the planet-traversal arm — the falsifier the
+# AC-0463 lane merge must be measured against.
+#
+# The arm stands the player PAST a chart edge using the faceedit
+# positioning (flat x/z = hw +/- 8, the anchor's face ASSERTED > 1 — a
+# green test of the home pair is worthless, the arm fails loudly), walks
+# 8 m steps along the edge until world.player_anchor's face CHANGES, and
+# reports per crossing: the face pair (from/to), the step count, the
+# crossing frame ms, and for the chunk under the player whether it has a
+# mesh instance (first_opaque_mesh — the existing predicate) and a
+# collision body (has_all_slab_bodies — the AC-0145 slab predicate, not a
+# new one). The expected to_face is DERIVED FROM SPHEREMATH before the
+# walk (player_anchor at the walk's end point — never a guess). TWO edge
+# seams in one run (a documented subset of the twelve-chart lap): the +x
+# seam (the 4/5 pair) and the -z seam (the 10/11 pair).
+#
+# The normal mode waits (bounded, with the crossface r23 recenter nudge)
+# for the chunk under the player to be built before the walk and after
+# the crossing. The NEGATIVE CONTROL (AWECRAFT_PWN_SKIP_WAIT=1) skips
+# every such wait and the arm MUST then report an unbuilt boundary
+# (negctrl.saw_unbuilt true) — an instrument that cannot fail is the
+# defect this ticket exists to avoid (AC-0145: an unchecked wait let the
+# player free-fall 148 m through unbuilt ground). MEASURED (this tree):
+# the 64 m pre-stream window beats the 8 m/step walk, so the
+# crossing-frame snapshot is already built even with the waits skipped —
+# the teeth therefore sit in the STAND-INSTANT snapshot (stand_dest_
+# built, taken before the stand recenter, when the face lane cannot have
+# streamed the destination at all): the same read path that reports the
+# crossing boundary built reports it unbuilt twelve frames earlier.
+#
+# BODY SEMANTICS (AC-0466 deviation — see the results page): the plan's
+# named predicate has_all_slab_bodies() is structurally false on this
+# tree for every fully built chunk (empty slabs never get bodies), so
+# body_present is the AC-0145 HAZARD condition composed in the arm from
+# existing slab state (_planetwalk_body_ok: mesh_built, no dirty slab,
+# every meshed slab holds its body) and the literal predicate is still
+# reported as body_all / cross_body_all — the evidence.
+#
+# RESULT: ok, crossings [{edge, from_face, to_face, exp_to_face, steps,
+# frame_ms, src_mesh_built, src_body_present, src_wait_ms,
+# cross_resident, cross_mesh_built, cross_body_present, cross_body_all,
+# mesh_built, body_present, body_all, aabb_delta_m, dest_chunk,
+# recentered, settle_ms}], waivers, negctrl {ran, saw_unbuilt}, frames,
+# ms, fails.
+# ============================================================================
+func _planetwalk_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		Debug.result({"planetwalk": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var skip_wait := OS.get_environment("AWECRAFT_PWN_SKIP_WAIT") == "1"
+	var hw: float = SphereMath.face_width(R) * 0.5
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	Debug.fly(true)  # no footing needed: the instrument reads the chunk under the player, not the gait
+	for i in 8:
+		await get_tree().physics_frame
+	var pf0: Vector3 = world.flat_of_world_pos(p.position)
+	# THE TWO edge seams (a documented subset of the twelve-chart lap —
+	# the 600 s budget is a full-lap follow-up, not a pass/fail): stand
+	# 8 m past the edge, 20 m along it from the seam midline, and walk
+	# toward the midline (one cube edge, 8 m steps).
+	var edges: Array = [
+		[hw + 8.0, 20.0, Vector3(0.0, 0.0, -1.0), "x_seam"],
+		[20.0, -(hw + 8.0), Vector3(-1.0, 0.0, 0.0), "z_seam"],
+	]
+	var crossings: Array = []
+	var fails: Array = []
+	var frames := 0
+	for e in edges:
+		var rep: Dictionary = await _planetwalk_crossing(p, float(pf0.y), float(e[0]), float(e[1]), e[2] as Vector3, str(e[3]), skip_wait, R)
+		crossings.append(rep)
+		frames += int(rep.get("wait_frames", 0))
+		if not bool(rep.get("ok", false)):
+			fails.append("%s: %s" % [str(e[3]), str(rep.get("fail", "unknown"))])
+	# saw_unbuilt scans EVERY chunk-state field the arm recorded (walk
+	# start, the crossing frame, the post-settle destination) — plus, in
+	# the negative-control mode, the stand-instant destination snapshot
+	# (the one instant the 64 m pre-stream window cannot have reached):
+	# the arm must be able to SEE an unbuilt boundary.
+	var saw_unbuilt := false
+	for cr in crossings:
+		for fkey in ["src_mesh_built", "src_body_present", "cross_mesh_built", "cross_body_present", "mesh_built", "body_present"]:
+			if not bool(cr.get(fkey, true)):
+				saw_unbuilt = true
+		if skip_wait and not bool(cr.get("stand_dest_built", true)):
+			saw_unbuilt = true
+	var face_change_ok := false
+	for cr in crossings:
+		if int(cr.get("from_face", 0)) > 1 and int(cr.get("to_face", 0)) > 1 and int(cr.get("from_face", 0)) != int(cr.get("to_face", 0)):
+			face_change_ok = true
+	var ok: bool
+	if skip_wait:
+		# THE negative control's teeth: the face must still change (the
+		# walk ran) AND the arm must have seen an unbuilt boundary — an
+		# always-green instrument is the defect (AC-0145).
+		ok = face_change_ok and saw_unbuilt
+		if not saw_unbuilt:
+			fails.append("negctrl_saw_no_unbuilt (skipping the waits changed nothing — the instrument cannot fail)")
+	else:
+		ok = face_change_ok and fails.is_empty()
+	Debug.result({"planetwalk": {
+		"ok": ok,
+		"crossings": crossings,
+		"waivers": ["subset: 2 of the 12 chart boundaries (the +x and -z edge seams; the twelve-chart lap is the follow-up the merge slices will demand)"],
+		"negctrl": {"ran": skip_wait, "saw_unbuilt": saw_unbuilt},
+		"frames": frames,
+		"ms": Time.get_ticks_msec() - t0,
+		"fails": fails,
+	}})
+
+
+func _planetwalk_crossing(p, stand_y: float, sx: float, sz: float, edir: Vector3, label: String, skip_wait: bool, R: float) -> Dictionary:
+	var t0c := Time.get_ticks_msec()
+	var wf := 0
+	# THE stand: the faceedit positioning PAST the edge (8 m into the
+	# face chart), at the spawn's flat altitude; recenter takes flat
+	# coordinates (the _face_player_flat contract) so the face lane
+	# streams this chart.
+	p.position = world.world_pos_of_flat(sx, stand_y, sz)
+	var end_w: Vector3 = world.world_pos_of_flat(sx + float(edir.x) * 36.0, stand_y, sz + float(edir.z) * 36.0)
+	# THE NEGCTRL TEETH (AC-0466, taken every mode — cheap): the
+	# destination chart's chunk at the walk's end, snapshotted BEFORE
+	# the stand recenter — at this instant the face lane cannot have
+	# streamed it (the spawn is kilometres from every edge; _face_stream
+	# is inert until the recenter below), so the arm's own read path
+	# MUST report it unbuilt. This is the proof the mesh/body checks
+	# have teeth (AC-0145) at the one instant the walk cannot outrun
+	# the 64 m pre-stream window.
+	var aend: Dictionary = world.player_anchor(end_w)
+	var fnd: int = int(aend.get("face", 0))
+	var dc: Node3D = world.chunks.get(world.chunk_key_face(fnd, int(aend.get("ccx", 0)), int(aend.get("ccz", 0))))
+	var stand_dest_built: bool = dc != null and dc.first_opaque_mesh() != null and _planetwalk_body_ok(dc)
+	world.recenter(sx, sz, true)
+	# THE expected pair, SphereMath-derived BEFORE the walk (never a
+	# guess): the anchor faces at the stand and at the walk's end point
+	# (36 m along the walk direction = 8 m past the seam midline into
+	# the neighbour chart). Either assertion failing is a mis-aimed
+	# boundary, reported loudly.
+	var anch0: Dictionary = world.player_anchor(p.position)
+	var from_face: int = int(anch0.get("face", 0))
+	var exp_to: int = int(world.player_anchor(end_w).get("face", 0))
+	if from_face <= 1:
+		return _planetwalk_fail(label, "anchor_on_home_pair", wf, t0c, {"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built})
+	if exp_to <= 1 or exp_to == from_face:
+		return _planetwalk_fail(label, "expected_no_boundary", wf, t0c, {"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built})
+	# the faceedit lift: stand ABOVE the local surface (fly mode, no
+	# footing needed), 3.5 m above the anchor column's surface top —
+	# the game's own data, not a guess.
+	_planetwalk_lift(p, 3.5)
+	for i in 8:
+		await get_tree().physics_frame
+		wf += 8
+	# SOURCE STATE: recorded either way. The normal mode WAITS for the
+	# chunk under the player to be resident + meshed + all slab bodies
+	# before the walk (the AC-0145 lesson: an unchecked wait is a hole,
+	# so the wait IS the check); the negative control skips it on
+	# purpose and records the possibly-unbuilt state at walk start.
+	var src_chunk: Node3D = _planetwalk_chunk_under(p)
+	var src_mesh: bool = src_chunk != null and (src_chunk as Node3D).first_opaque_mesh() != null
+	var src_body: bool = _planetwalk_body_ok(src_chunk)
+	var src_wait_ms := -1
+	if not skip_wait and not (src_mesh and src_body):
+		var s0 := Time.get_ticks_msec()
+		for f in 1200:
+			var c: Node3D = _planetwalk_chunk_under(p)
+			if c != null and c.first_opaque_mesh() != null and _planetwalk_body_ok(c):
+				break
+			await get_tree().physics_frame
+			wf += 1
+			# keep-alive (the crossface shape): absorb the wait's fall
+			# damage without masking a void death.
+			if not p.dead and world.sim_height(p.position) > -12.0:
+				p.hp = 40.0
+				p.hunger = 20.0
+			# r23 (crossface): a cap-dropped build entry retries on a
+			# RECENTER — a stationary player never recenters, so the
+			# arm nudges the world one every 200 frames.
+			if f > 0 and f % 200 == 0:
+				var fpw: Vector3 = world.flat_of_world_pos(p.position)
+				world.recenter(fpw.x, fpw.z, true)
+		src_wait_ms = Time.get_ticks_msec() - s0
+		var c2: Node3D = _planetwalk_chunk_under(p)
+		src_mesh = c2 != null and (c2 as Node3D).first_opaque_mesh() != null
+		src_body = _planetwalk_body_ok(c2)
+		if not (src_mesh and src_body):
+			return _planetwalk_fail(label, "src_settle_timeout", wf, t0c, {
+				"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built,
+				"src_mesh_built": src_mesh, "src_body_present": src_body, "src_wait_ms": src_wait_ms,
+			})
+	# THE WALK: 8 m steps along the edge direction; the step is a
+	# position set (the crossface teleport discipline — the instrument
+	# measures the chunk state at the crossing, not the gait), recenter
+	# each step so the face lane follows, until the anchor's face
+	# CHANGES. A walk that never leaves the chart is a failed arm, not
+	# a pass.
+	var steps := 0
+	var t_walk := Time.get_ticks_msec()
+	var crossed := false
+	var to_face := from_face
+	var cross_resident := false
+	var cross_mesh := false
+	var cross_body := false
+	var cross_body_all := false
+	for s in 48:
+		var fpw2: Vector3 = world.flat_of_world_pos(p.position)
+		var nx: float = fpw2.x + float(edir.x) * 8.0
+		var nz: float = fpw2.z + float(edir.z) * 8.0
+		p.position = world.world_pos_of_flat(nx, fpw2.y, nz)
+		world.recenter(nx, nz, true)
+		steps += 1
+		for i in 3:
+			await get_tree().physics_frame
+			wf += 1
+		var a: Dictionary = world.player_anchor(p.position)
+		var fa: int = int(a.get("face", 0))
+		if fa != from_face:
+			# THE crossing-frame snapshot, BEFORE any ensure: the chunk
+			# under the player, read via chunks.get only (no
+			# surface_top_key / _ensure_face_chunk) — the honest "did the
+			# destination stream in time" reading. The burial-guard lift
+			# (which ensures the anchor column) runs after the crossing
+			# check on purpose.
+			crossed = true
+			to_face = fa
+			var cc: Node3D = _planetwalk_chunk_under(p)
+			cross_resident = cc != null
+			cross_mesh = cc != null and (cc as Node3D).first_opaque_mesh() != null
+			cross_body = _planetwalk_body_ok(cc)
+			cross_body_all = cc != null and (cc as Node3D).has_all_slab_bodies()
+			break
+		_planetwalk_lift(p, 1.0)  # burial guard (source chart only): stay >= 1 m above the local top
+	if not crossed:
+		return _planetwalk_fail(label, "walk_never_crossed", wf, t0c, {
+			"from_face": from_face, "exp_to_face": exp_to, "steps": steps, "stand_dest_built": stand_dest_built,
+			"src_mesh_built": src_mesh, "src_body_present": src_body, "src_wait_ms": src_wait_ms,
+		})
+	var frame_ms := Time.get_ticks_msec() - t_walk
+	# DESTINATION STATE: the crossing-frame snapshot is the honest "the
+	# walk crossed faster than the destination streamed" reading; the
+	# normal mode then runs the bounded settle wait (with the r23
+	# recenter nudge) and records the post-settle state — that is what
+	# the gate rides on. The negative control records the crossing-frame
+	# state as the final (the AC-0145 unchecked-wait condition, on
+	# purpose).
+	var mesh_built := cross_mesh
+	var body_present := cross_body
+	var body_all := cross_body_all
+	var aabb_delta := -1.0
+	var dest_key := ""
+	var recentered := false
+	var settle_ms := 0
+	if not skip_wait:
+		var s1 := Time.get_ticks_msec()
+		for f2 in 1200:
+			var c3: Node3D = _planetwalk_chunk_under(p)
+			if c3 != null and c3.first_opaque_mesh() != null and _planetwalk_body_ok(c3):
+				break
+			await get_tree().physics_frame
+			wf += 1
+			if not p.dead and world.sim_height(p.position) > -12.0:
+				p.hp = 40.0
+				p.hunger = 20.0
+			if f2 > 0 and f2 % 200 == 0:
+				recentered = true
+				var fpw3: Vector3 = world.flat_of_world_pos(p.position)
+				world.recenter(fpw3.x, fpw3.z, true)
+		settle_ms = Time.get_ticks_msec() - s1
+		var c4: Node3D = _planetwalk_chunk_under(p)
+		mesh_built = c4 != null and (c4 as Node3D).first_opaque_mesh() != null
+		body_present = _planetwalk_body_ok(c4)
+		body_all = c4 != null and (c4 as Node3D).has_all_slab_bodies()
+		if c4 != null and c4.first_opaque_mesh() != null:
+			dest_key = world.chunk_key_face(int(c4.face), int(c4.cx), int(c4.cz))
+			var msh: ArrayMesh = c4.first_opaque_mesh()
+			var ac: Vector3 = msh.get_aabb().get_center()
+			var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+			var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+			var ec: Vector3 = SphereMath.uv_to_world(int(c4.face), uu, vv, R) - Vector3(0.0, R, 0.0)
+			aabb_delta = roundf((ec - ac).length() * 100.0) / 100.0
+	# THE assertions: the face changed to the SphereMath-derived
+	# neighbour, and the destination chunk under the player has BOTH a
+	# mesh and a collision body (the lane-merge invariant).
+	var okc := to_face == exp_to and mesh_built and body_present
+	var rep: Dictionary = {
+		"ok": okc,
+		"edge": label,
+		"from_face": from_face,
+		"to_face": to_face,
+		"exp_to_face": exp_to,
+		"steps": steps,
+		"frame_ms": frame_ms,
+		"stand_dest_built": stand_dest_built,
+		"src_mesh_built": src_mesh,
+		"src_body_present": src_body,
+		"src_wait_ms": src_wait_ms,
+		"cross_resident": cross_resident,
+		"cross_mesh_built": cross_mesh,
+		"cross_body_present": cross_body,
+		"cross_body_all": cross_body_all,
+		"mesh_built": mesh_built,
+		"body_present": body_present,
+		"body_all": body_all,
+		"aabb_delta_m": aabb_delta,
+		"dest_chunk": dest_key,
+		"recentered": recentered,
+		"settle_ms": settle_ms,
+		"wait_frames": wf,
+		"ms": Time.get_ticks_msec() - t0c,
+	}
+	if not okc:
+		if to_face != exp_to:
+			rep["fail"] = "wrong_to_face"
+		elif not mesh_built:
+			rep["fail"] = "dest_no_mesh"
+		else:
+			rep["fail"] = "dest_no_body"
+	return rep
+
+
+func _planetwalk_chunk_under(p) -> Node3D:
+	var a: Dictionary = world.player_anchor(p.position)
+	var f: int = int(a.get("face", 0))
+	if f <= 1:
+		var fp: Vector3 = world.flat_of_world_pos(p.position)
+		return world.chunks.get(world.chunk_key(int(floorf(fp.x / 16.0)), int(floorf(fp.z / 16.0))))
+	return world.chunks.get(world.chunk_key_face(f, int(a.get("ccx", 0)), int(a.get("ccz", 0))))
+
+
+func _planetwalk_lift(p, min_clear: float) -> void:
+	# the faceedit lift shape: local cell via the anchor's OWN affine
+	# inverse (x/z in cell units, y metres), ABSOLUTE columns with the
+	# mirror form, the game's own surface_top_key, lift along the
+	# anchor's radial up.
+	var a: Dictionary = world.player_anchor(p.position)
+	var f: int = int(a.get("face", 0))
+	if f <= 1:
+		return
+	var mirror: bool = bool(SphereMath.face_mirror_x(f))
+	var loc: Vector3 = (a["inv"] as Transform3D) * p.position
+	var ccx: int = int(a.get("ccx", 0))
+	var ccz: int = int(a.get("ccz", 0))
+	var kx: int = int(floorf(loc.x))
+	var colx: int = ccx * 16 + (15 - kx if mirror else kx)
+	var colz: int = ccz * 16 + int(floorf(loc.z))
+	var top: int = world.surface_top_key(f, colx, colz)
+	if top < 0:
+		return
+	var need: float = float(top) + min_clear
+	if loc.y < need:
+		p.position = p.position + (a["basis"] as Basis).y * (need - loc.y)
+
+
+func _planetwalk_body_ok(c: Node3D) -> bool:
+	# AC-0466 deviation (evidence in the results page): the plan's named
+	# predicate has_all_slab_bodies() is STRUCTURALLY FALSE on this tree
+	# for every fully built chunk (home AND face): an empty slab (air
+	# above the surface) never gets a mesh instance and therefore never
+	# gets a body (_build_slab_collision early-returns, col_dirty is
+	# cleared), so "all 24 slabs hold bodies" cannot hold for a surface
+	# below HEIGHT — probed: home 194,-2 bodies 8 / meshed 8; face
+	# 4:63:0 bodies 13 / meshed 11; face 10:0:63 bodies 12 / meshed 12.
+	# The AC-0145 hazard is the other class: a slab that OWES a body —
+	# meshed or dirty without one. This reads that, composed in the arm
+	# from existing slab state (no new game predicate): mesh_built, no
+	# slab col_dirty, and every slab that carries a mesh holds its
+	# collision body. The literal predicate is still reported (the
+	# body_all / cross_body_all fields) as the evidence.
+	if c == null or not c.mesh_built:
+		return false
+	for s in c.slabs:
+		if s.col_dirty:
+			return false
+		if s.mesh_instance != null and s.mesh_instance.mesh != null and s.collision_body == null:
+			return false
+	return true
+
+
+func _planetwalk_fail(label: String, why: String, wf: int, t0c: int, extra: Dictionary) -> Dictionary:
+	var rep: Dictionary = {
+		"ok": false, "fail": why, "edge": label,
+		"from_face": -1, "to_face": -1, "exp_to_face": -1,
+		"steps": 0, "frame_ms": -1,
+		"stand_dest_built": false,
+		"src_mesh_built": false, "src_body_present": false, "src_wait_ms": -1,
+		"cross_resident": false,
+		"cross_mesh_built": false, "cross_body_present": false, "cross_body_all": false,
+		"mesh_built": false, "body_present": false, "body_all": false,
+		"aabb_delta_m": -1.0, "dest_chunk": "",
+		"recentered": false, "settle_ms": 0, "wait_frames": wf,
+		"ms": Time.get_ticks_msec() - t0c,
+	}
+	for k in extra:
+		rep[k] = extra[k]
+	return rep
