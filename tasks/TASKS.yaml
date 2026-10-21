@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-21T05:00
+  updated_at: 2026-10-21T05:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0467
 - AC-0463
 - AC-0434
 - AC-0451
@@ -27842,10 +27843,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: blocked
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-21T05:00
+  updated_at: 2026-10-21T05:01
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -27929,7 +27930,13 @@ intake:
     \ placement work and land it as the deletion that (b) enables, then verify with the render the ticket\
     \ asks for (surface-flush block on the seam, standing on the line, camera above, before/after) plus\
     \ a gate that asserts BOTH directions per seam cell - gap <= grout AND overlap <= grout - so the crack\
-    \ cannot be reopened in the name of closing the overlap."
+    \ cannot be reopened in the name of closing the overlap.\n\nPARKED (round 28) behind AC-0467. Stage\
+    \ 1's measurement is complete and recorded; the fix decision is made: option (b) - each column on\
+    \ its own radial - is the correct fix and it is the same work as extending the one-world placement\
+    \ to the home pair, which AC-0467 owns. Implementing option (a) here would halve the band to ~330\
+    \ mm, which is still a visible band, so it would spend a gate cycle buying a number instead of a fix.\
+    \ When AC-0467 lands, this ticket becomes the DELETION of the extension apparatus plus the before/after\
+    \ render and the two-direction seam gate that its notes demand."
   comments: []
 - id: AC-0435
   title: audit-switch-defaults-for-shipped-off-fixes
@@ -30046,6 +30053,64 @@ intake:
     is measured against; genhash 25/25 unchanged (no world change); g0 clean; and the arm must FAIL if
     a boundary chunk has no mesh or no collision, proved by a deliberate negative control (e.g. skip the
     wait) so it cannot be a green test of nothing.
+
+    '
+  comments: []
+- id: AC-0467
+  title: home-pair canonical placement (kills the seam band, half 2 of the merge)
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-21T05:01
+  updated_at: 2026-10-21T05:01
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    Two visible defects have the same root and the same cure. Blocks sitting on a chunk seam still render
+    smeared over each other - the band is 602-730 mm wide even though the crack it hides is only 506-634
+    mm - and the world is still built by two different systems depending on which part of the planet you
+    stand on. Putting the HOME pair onto the same sphere placement the outer faces already use makes neighbouring
+    columns agree at every height by construction, which removes the overlap band (and its texture smear)
+    instead of narrowing it, and it is the remaining half of the one-world migration.
+
+
+    2) Technical Details
+
+    WHY THIS IS THE CURE FOR AC-0434, measured in its stage 1 (round 28): the seam band exists because
+    each side extends its edge rows past its nominal footprint by E = K0[k][i] + K1[k]*t + SEAM_V_MARGIN,
+    clamped to [0,2.5] m (gdext/src/mesh.cpp:426-454), to close a lean-induced crack. Per-corner overlap
+    is 602-730 mm (mean 656) over 144 cells, closing a crack of 506-634 mm. A half-rule only halves that
+    band (~330 mm, still visible). If each column is placed on its own radial, neighbouring surfaces COINCIDE
+    at every height, so nothing needs extending - the K tables, the ring reads, sphere_r, the margins
+    and the clamp all delete, and with them the UV stretch the user photographed.
+
+    WHY IT IS ALSO THE MERGE''S OTHER HALF: the warp placement already does exactly this on the face lane
+    (AC-0458 flag, AC-0460 default on, occluder parity 335/335, cost 0.423 ms/chunk in native code). The
+    HOME pair still rides the per-column LSQ transforms (SphereMath.column_transform, world.gd _col_sphere_transform
+    11412). This ticket extends the same canonical placement to the home lane.
+
+    SCOPE: the home pair''s per-column transform path, its 1 m flat grid and the consumers that assume
+    it. Reuse the validated machinery rather than inventing: SphereMath.uv_to_world / world_to_face as
+    the chart, the native warp (gdext warp_face_verts) for the vertex pass, and the AC-0462 exact-inverse
+    lesson for world->cell conversion (a non-orthogonal basis needs the full 3x3 inverse, never per-axis
+    dots - measured: per-axis reads 44% exact at best, affine_inverse 100%).
+
+    VERIFY: genhash 25/25 (generation must not move); the light set; the seam band re-measured with AC-0434''s
+    seam_band_probe.gd - the target is that the band COLLAPSES rather than narrows, and the per-cell table
+    must show it; planetwalk (AC-0466) still green across its two boundaries; faceedit still green on
+    both chart classes; and the render the AC-0434 ticket demands (surface-flush block on the seam, standing
+    on the line, camera above, before/after) plus a seam gate asserting BOTH directions per cell - gap
+    <= grout AND overlap <= grout - so closing the overlap cannot reopen the crack.
+
+    HARD CASE, from AC-0434''s notes: at a step across a seam the crease of the two planes is not where
+    the two staircases meet. The new placement must state what happens there and measure it, not leave
+    it as an unexamined edge case.
 
     '
   comments: []
