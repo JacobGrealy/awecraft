@@ -113,7 +113,7 @@ func _run() -> void:
 	if not built:
 		_finish({"ok": false, "fail": "not_built", "fails": _fails, "ms": Time.get_ticks_msec() - t0})
 		return
-	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") != "0"  # AC-0467 stage B: default ON (boot label only — the measurement reads the live tree transforms + identity detection)
 	var out: Dictionary = {
 		"boot": {
 			"world_seed": int(root.get_node("Game").world_seed), "planet_R": float(root.get_node("Game").planet_R),

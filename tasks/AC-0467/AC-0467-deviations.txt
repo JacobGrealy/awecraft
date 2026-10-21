@@ -91,3 +91,102 @@ AC-0467 stage A — deviations from plan.html (builder: MEDIUM, single builder)
    defined by the fixed camera node at (0, top+16, z) — the comparison is
    camera-exact (identical cam in both twins, same seam cell, same block
    placement was_id 1 -> 2).
+
+=====================================================================
+AC-0467 stage B — deviations (builder: HIGH effort, single builder)
+=====================================================================
+
+10. SCOPE DECISIONS ON THE DELETION (reported, per the plan's fence).
+    (a) build_seam_ext's FACE-LANE branch + its face-edge Ctx inputs
+    (face_edge_class/nb/home, seam_v_max, the ctx "face" key) were
+    removed WITH the rest of the function — one function; "the
+    extension is gone" is universal (home AND face lanes). The face
+    lane has no other seam extension.
+    (b) The GDScript side's face_edge_* + seam_v_max ctx writes
+    (chunk.gd build_mesh_face) and world._face_edge_meta were removed
+    as DEAD FEEDERS — their only consumer was the deleted C++
+    machinery. The LIVE ring metadata (_face_edge_kind /
+    _face_edge_cells / _face_rings / _home_face_ring /
+    _patch_edge_ring) stays untouched, as does nv/parse_nbs.
+    (c) The AWECRAFT_WARP_HOME=0 path is untouched — the legacy
+    per-column placement is byte-identical (flag-off gate set: genhash
+    25/25, homecensus EXACT baseline 558.123/1625.269/8020.576 n=153).
+    (d) The flagon probe (tasks/AC-0467/seam_band_flagon.gd, stage A
+    item 3) is the faithful both-directions instrument: the original
+    AC-0434 probe degenerates under the identity placement (proven,
+    stage A). gate_bothdirs.py asserts gap <= 100 mm AND overlap <=
+    100 mm per cell (grout = 100 mm, the AC-0042 grout class — stated
+    in the script + the logs; n_cells = 144).
+
+11. WORLD.GD'S FLAG TWIN WAS MISSED ON THE FIRST PASS (caught this
+    session, fixed; rev 21 invalidated). The stage B flip landed on
+    chunk.gd (_warp_home -> != "0") but world.gd's _warp_home_on
+    (read in _ready) stayed on the legacy == "1" read. In the default
+    state (env unset) that hybrid = chunk-side warps the mesh while
+    world.gd gives the node the legacy sphere transform (double
+    transform) and skips the view-frame / far-tier home-warp branches.
+    Rev 21 (the default gate set measured in that state) does not stand
+    as evidence of the shipped state — its homecensus 0.0 floor is the
+    arm's re-derived canonical formula, not the mesh; faceedit /
+    planetwalk aim at face>=2 charts the home warp never touches.
+    Fixed: world.gd:3866 -> != "0" (same off-switch semantics). The
+    tree now has exactly two live flag reads (chunk.gd:1755,
+    world.gd:3866), agreeing in all four env states. Rev 22 is the
+    official default set.
+
+12. INTERACT place_ok=false IS A PRE-EXISTING HARNESS KNIFE-EDGE, NOT A
+    STAGE B REGRESSION (root-caused; see continuity). Stage A's OWN
+    flag-off history shows the knife: r1 place_ok=true (frames 72) vs
+    r2/r3/r4 false (frames 70/71/69) — same code, same data. The arm's
+    aim sits on the target-cell boundary (the traced mine-clear wrote
+    the NEIGHBOUR cell (8,140,9) while the arm tracked (8,140,8); r2's
+    last_hit was [7,140,8]), and the ~72-frame mine of id=2 runs
+    exactly at the arm's 3.0 s wall-clock mine cap at the headless
+    frame rate (69-72 frames fit in 3 s per run) — completion is
+    per-run frame jitter. The place rejection is the direct
+    consequence of the unbroken target (the player's body sits inside
+    the would-be placement cell). World data is bit-identical
+    (genhash 25/25, flag-off homecensus exact). The arm never
+    verifies the player's live mine target; the 3 s cap vs the ~3 s
+    mine is a harness fragility pre-dating this ticket. Flagged here
+    so the shifted standing field (place_ok / after_mine_cell /
+    place_cell / after_place_cell / drop_spawned / inv_grew on the
+    smoke interact arm) is reported, not silently rebased.
+
+13. AC0423PROBE'S FLAG-OFF READOUT CHANGED SHAPE (intended effect of
+    the deletion, reported per "report every shifted standing field").
+    Stage A flag-off: top_edge EMPTY on all nine seams (n=0 — the
+    extension grew the top face past local 16, so no boundary edge sat
+    at the seam). Stage B flag-off: top_edge populated (n=20-46) and
+    the across-gap pairing now reports the RAW CRACK: x16_z0
+    552.0..558.0 mm (mean 554.7) — exactly the "552-558 mm the
+    extension had hidden" the plan cites; the other eight seams report
+    mixed crack/overlap ranges (legacy per-column offsets + terrain
+    steps; see continuity for the full nine). The standing
+    654/752/660/662/758/848/800/1290/1290 were the flag-off seam-band
+    overlaps WITH the extension — the extension is the thing deleted,
+    so those values are retired, not broken. Default state: n=0 all
+    nine — the probe degenerates under the warp (the local-16
+    boundary is warped off its nominal coord, ext max 16.56) — the
+    same instrument degeneracy as stage A item 3; the faithful
+    instrument is the flagon copy (item 10d).
+
+14. AWECRAFT_EDITTRACE INSTRUMENTATION (in and out in this task).
+    Temporary traces (world.gd get_block/set_block, chunk.gd
+    slabs_landed, chunk_io.cpp slab_cell) drove the place_ok
+    root-cause (13 runs, .scratch/AC-0467-gates/interact-etrace*.log).
+    All removed before the final gates: the trace includes
+    (<chrono>/<cstdio>/<cstdlib>) dropped, the .so rebuilt clean.
+    Zero production code change.
+
+15. SLAB_CELL FOLLOW-THROUGH (end of task). The trace-instrumentation
+    restore had left a COSMETIC if/else restructure in slab_cell
+    (gdext/src/chunk_io.cpp — same branches, same returns, different
+    brace shape), and chunk_io.cpp is NOT on the plan's file list.
+    Restored byte-for-byte to the original form (git diff empty),
+    then BOTH binaries rebuilt clean from the final tree (13:00:
+    .so 1,714,832 B, .dll 4,083,984 B), staged to godot/bin +
+    exports/windows, the four export zips re-zipped (13:01), and G0
+    re-verified on the fresh .so (rev 23: script=0 shader=0). Every
+    gate in this report ran on the pristine tree; the final binaries
+    embody it exactly.

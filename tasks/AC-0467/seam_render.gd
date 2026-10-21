@@ -142,7 +142,7 @@ func _run() -> void:
 		cam.position = Vector3(0.0, float(top + 1) + 15.0, float(z))
 		cam.rotation.x = -PI / 2.0
 		await physics_frame
-	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") != "0"  # AC-0467 stage B: DEFAULT ON (the off-switch is =0)
 	r["flag_on"] = flag_on
 	var ident_a: bool = cA.transform.is_equal_approx(Transform3D(Basis.IDENTITY, Vector3.ZERO))
 	var ident_b: bool = cB.transform.is_equal_approx(Transform3D(Basis.IDENTITY, Vector3.ZERO))

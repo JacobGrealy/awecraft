@@ -1693,15 +1693,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	ctx_w["blk_strips"] = st["blk"]
 	ctx_w["blk_strips_b"] = st["blk_b"]
 	ctx_w["top"] = int(top)
-	# AC-0423: the seam-V extension radius — the C++ emitter extends the
-	# top-face edge rows past the nominal footprint by the V-crack width at
-	# the surface height (the per-column tangent sheets diverge with height,
-	# AC-0307's documented "known physical consequence"; nothing ever closed
-	# the V — the user's see-through seam). AC-0433: the face-chunk path
-	# (build_mesh_face) arms it too, through the C++ face lane (C.face >= 2
-	# — the unified dot-product K tables; the placement is the LSQ affine,
-	# not the home column math the home lane hardcodes).
-	ctx_w["sphere_r"] = float(Game.planet_R)
+	# AC-0467 stage B: the AC-0423/AC-0433 seam-V extension (the ctx
+	# "sphere_r" key + the C++ K tables) is DELETED — the canonical
+	# placement makes the shared seam corners coincide by construction, so
+	# nothing extends. The key no longer exists on the C++ side.
 	# AC-0231: the band-2 coarse ctx (coarse/uv_scale) is gone — every meshed
 	# band is full-fidelity (the far LOD is the separate low placeholder).
 	var ms_full: Dictionary
@@ -1745,12 +1740,19 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") != "0"
 
 # AC-0467 stage A (plan.html §3): the HOME-pair warp switch — an env var
-# like the face lane's, but DEFAULT OFF (AWECRAFT_WARP_HOME=1 opts in;
-# anything else = off). With it off the home build path below is EXACTLY
-# the shipped one (no changed arithmetic, no reordering), so the shipped
-# game stays byte-identical until a later stage flips it. Independent of
-# _warp_on (the face lane): home is flipped on its own schedule.
-static var _warp_home: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+# like the face lane's, DEFAULT OFF.
+# AC-0467 stage B: DEFAULT ON — the canonical home placement is the shipped
+# placement from here; AWECRAFT_WARP_HOME=0 restores the legacy per-column
+# LSQ fit exactly (that path is unchanged). Independent of _warp_on (the
+# face lane): home is flipped on its own schedule. The placement is proven:
+# the shared home-seam corners measure a 558 mm floor on the legacy
+# placement (one whole seam at 566.4 mm on all 17 corners, homecensus) and
+# exactly 0.000 mm on the canonical one (same 17 corners, stage A). The
+# seam-V extension that lived on this crack is DELETED in the same landing
+# (AC-0467 stage B / AC-0434): it exists only to cover a crack the
+# canonical placement does not have — with the crack gone it was a visible
+# band (stage A: 602-730 mm flag-off, 1212-1349 mm flag-on).
+static var _warp_home: bool = OS.get_environment("AWECRAFT_WARP_HOME") != "0"
 
 # AC-0460 stage 1 (plan.html §3.1): the census counter — incremented once
 # per build at the point the warp actually runs (inside _warp_face_slabs,
@@ -1995,25 +1997,14 @@ func build_mesh_face(light: Dictionary = {}) -> void:
 	ctx_w["blk_strips"] = ze2
 	ctx_w["blk_strips_b"] = ze2
 	ctx_w["top"] = int(top)
-	# AC-0433: the face-lane seam-V extension — the AC-0423 mechanism was
-	# silently absent on all ten non-home faces (the worker ctx template's
-	# key comment says so in writing: "the face-chunk sync path keeps no
-	# key"; the face lane is sync-only, so every face chunk built without
-	# it — the live 2-4 m see-through slits at the face/face seams, the
-	# ac0433probe section-B proof). The C++ face path (C.face >= 2) arms
-	# only the REAL edges from _face_edge_meta (same-face neighbours + the
-	# live home edge, per-cell home columns); the synthetic-solid
-	# window/sector edges stay off. The face clamp is the measured worst
-	# chasm at terrain height (5.63 m at h=168 — tasks/AC-0433/plan.html §1);
-	# in local cell units that is at most one cell of extra stretch, milder
-	# than the home lane's 2.5 m on a 1 m cell.
-	ctx_w["sphere_r"] = float(Game.planet_R)
-	ctx_w["face"] = int(face)
-	ctx_w["seam_v_max"] = 6.0
-	var fem: Dictionary = Game.world._face_edge_meta(self)
-	ctx_w["face_edge_class"] = fem["class"]
-	ctx_w["face_edge_nb"] = fem["nb"]
-	ctx_w["face_edge_home"] = fem["home"]
+	# AC-0467 stage B: the AC-0433 face-lane seam-V extension is DELETED
+	# with its home-lane twin (the C++ K tables / build_seam_ext are gone —
+	# the canonical placement, default ON on both lanes, makes the shared
+	# seam corners coincide by construction). The ctx keys "sphere_r",
+	# "face", "seam_v_max" and "face_edge_*" no longer exist on the C++
+	# side; world._face_edge_meta is gone too (its only consumer was this
+	# block — _face_edge_kind / _face_edge_cells stay, they feed the ring
+	# lanes _face_rings / _home_face_ring / _patch_edge_ring).
 	var ms_full: Dictionary
 	if OS.get_environment("AWECRAFT_MERGE") == "0":
 		ms_full = {"tex": null, "rects": {}}

@@ -36676,8 +36676,9 @@ func _ac0423probe_side(c: Node3D, axis: String, edge: float) -> Dictionary:
 #     B side; the surface height is the edge-column top + 1 read from
 #     the chunk data, the seam_band_probe edge-row tops);
 #   A's version of that point = the placement A ACTUALLY USES:
-#     - flag off (AWECRAFT_WARP_HOME unset): the chunk node's transform
-#       in the tree — the shipped rigid per-column placement (the
+#     - flag off (AWECRAFT_WARP_HOME=0 — AC-0467 stage B: the default is
+#       ON, the off-switch restores this state): the chunk node's
+#       transform in the tree — the legacy rigid per-column placement (the
 #       measurement is the tree's own transform, not a re-derivation);
 #     - flag on: the canonical home warp (R + ly) *
 #       normalize(SphereMath.home_point(fx, fz, R)) - (0, R, 0),
@@ -36730,7 +36731,7 @@ func _homecensus_test() -> void:
 	if not built:
 		Debug.result({"homecensus": {"ok": false, "fail": "not_built", "ms": Time.get_ticks_msec() - t0}})
 		return
-	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") != "0"  # AC-0467 stage B: DEFAULT ON (the off-switch is =0)
 	var out: Dictionary = {}
 	var gmin := 1e18
 	var gmax := -1e18

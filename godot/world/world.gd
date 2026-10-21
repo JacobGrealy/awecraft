@@ -1840,6 +1840,20 @@ func _ring_rebuild_sector(i: int) -> void:
 		# T and Mn depend only on (cx, cz) — computed once per column.
 		var T: Transform3D = SphereMath.column_transform(int(c.cx), int(c.cz), Game.planet_R)
 		var Mn: Basis = T.basis.inverse().transposed()
+		# AC-0467 stage B: the far-tier fix. Under the home warp the node
+		# is identity and the high tier is warped per vertex in local
+		# space, so the legacy T above is NOT this column's placement —
+		# mapping the flat slab-local low LOD through it stands the
+		# placeholder off the curved surface (the stage-A misplaced far
+		# tier, deviation 5). The branch below maps through the SAME
+		# canonical construction the warp post-pass runs on the high tier
+		# (chunk _warp_home_cell_point), so the placeholder sits where its
+		# high replacement lands. Normals: the warp leaves them untouched
+		# (the face-lane's deliberate choice), so the ring does the same.
+		# Flag off: exactly the shipped T/Mn path.
+		var home_warp: bool = _warp_home_on
+		var hwccx: float = float(int(c.cx)) * 16.0
+		var hwccz: float = float(int(c.cz)) * 16.0
 		for j in range(c.low_slabs.size()):
 			var si: int = int(c.low_slabs[j])
 			# classified by the STORED tier stamp (the AC-0257
@@ -1867,14 +1881,17 @@ func _ring_rebuild_sector(i: int) -> void:
 			var idx: PackedInt32Array = arrs[Mesh.ARRAY_INDEX] as PackedInt32Array
 			var base := bv.size()
 			for k in range(v.size()):
-				bv.append(T * Vector3(v[k].x, yb + v[k].y, v[k].z))
+				if home_warp:
+					bv.append(c._warp_home_cell_point(Game.planet_R, hwccx, hwccz, v[k].x, yb + v[k].y, v[k].z))
+				else:
+					bv.append(T * Vector3(v[k].x, yb + v[k].y, v[k].z))
 			if idx != null:
 				for k in range(idx.size()):
 					bi.append(idx[k] + base)
 			var nrm: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
 			if nrm != null and not nrm.is_empty():
 				for k in range(nrm.size()):
-					bn.append((Mn * nrm[k]).normalized())
+					bn.append(nrm[k].normalized() if home_warp else (Mn * nrm[k]).normalized())
 			var col: PackedColorArray = arrs[Mesh.ARRAY_COLOR] as PackedColorArray
 			if col != null and not col.is_empty():
 				bc.append_array(col)
@@ -1887,7 +1904,10 @@ func _ring_rebuild_sector(i: int) -> void:
 				if w2 != null and not w2.is_empty():
 					var wbase := wv.size()
 					for k in range(w2.size()):
-						wv.append(T * Vector3(w2[k].x, yb + w2[k].y, w2[k].z))
+						if home_warp:
+							wv.append(c._warp_home_cell_point(Game.planet_R, hwccx, hwccz, w2[k].x, yb + w2[k].y, w2[k].z))
+						else:
+							wv.append(T * Vector3(w2[k].x, yb + w2[k].y, w2[k].z))
 					var widx: PackedInt32Array = warrs[Mesh.ARRAY_INDEX] as PackedInt32Array
 					if widx != null:
 						for k in range(widx.size()):
@@ -1895,7 +1915,7 @@ func _ring_rebuild_sector(i: int) -> void:
 					var wnm: PackedVector3Array = warrs[Mesh.ARRAY_NORMAL] as PackedVector3Array
 					if wnm != null and not wnm.is_empty():
 						for k in range(wnm.size()):
-							wn.append((Mn * wnm[k]).normalized())
+							wn.append(wnm[k].normalized() if home_warp else (Mn * wnm[k]).normalized())
 					var wcm: PackedColorArray = warrs[Mesh.ARRAY_COLOR] as PackedColorArray
 					if wcm != null and not wcm.is_empty():
 						wc.append_array(wcm)
@@ -3834,13 +3854,16 @@ func _bd_log(cx: int, cz: int) -> void:
 		build_dispatch_log.pop_front()
 
 # AC-0467 stage A: the home-pair warp flag (the chunk-side twin is
-# Chunk._warp_home, default OFF) — read once in _ready so _make_chunk_node
-# and _view_sample branch on it without per-frame env reads.
+# Chunk._warp_home) — read once in _ready so _make_chunk_node and
+# _view_sample branch on it without per-frame env reads.
+# AC-0467 stage B: DEFAULT ON (the shipped placement is the canonical
+# home warp); AWECRAFT_WARP_HOME=0 restores the legacy per-column
+# placement — the same off-switch semantics as the chunk-side twin.
 var _warp_home_on: bool = false
 
 func _ready() -> void:
 	_ac0383_init()  # AC-0383: read the env once (zero per-frame cost when off)
-	_warp_home_on = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+	_warp_home_on = OS.get_environment("AWECRAFT_WARP_HOME") != "0"
 	# AC-0270: the harness shortens the decay window deterministically.
 	var _ldms := OS.get_environment("AWECRAFT_LEAFDECAY_MS")
 	if _ldms != "":
@@ -3909,7 +3932,9 @@ func _ready() -> void:
 	# MAIN-THREAD only (the 20 Hz tick); no worker dereferences it.
 	_random_tick = AweRandomTick.new()
 	_tm_ctx = ChunkScript.make_ctx()
-	_tm_ctx["sphere_r"] = float(Game.planet_R)  # AC-0423: the seam-V extension radius (the home worker ctx template; the face-chunk sync path keeps no key)
+	# AC-0467 stage B: the ctx "sphere_r" key (the AC-0423 seam-V extension
+	# radius) is deleted — the C++ side no longer reads it (the extension is
+	# gone; the canonical placement is the default on both lanes).
 	_tm_ms_full = ChunkScript._merge_atlas()
 	_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 	_tm_ctx_atlas = Data.atlas_tex  # AC-0160: stamp for the _process staleness guard
@@ -6419,7 +6444,6 @@ func refresh_textures() -> void:
 	# deduped keys so every chunk is rebuilt once with the new tables.
 	if threadmesh:
 		_tm_ctx = ChunkScript.make_ctx()
-		_tm_ctx["sphere_r"] = float(Game.planet_R)  # AC-0423 (see the boot template above)
 		_tm_ms_full = ChunkScript._merge_atlas()
 		_low_ms_snap_dirty = true  # AC-0236 part 2: the low emit snapshot is stale (new atlas)
 		_tm_ctx_atlas = Data.atlas_tex  # AC-0160: re-stamp (the _process guard would catch it, but stamp now)
@@ -14838,9 +14862,10 @@ func _face_home_ring(face: int, ccx: int, ccz: int, dx: int, dz: int) -> PackedB
 				ring[(si * 16 + y_in) * 16 + t] = v
 	return ring
 
-# AC-0433: the per-edge kind of a face chunk — the single source of truth
-# shared by _face_rings (which ring to build) and _face_edge_meta (which
-# seam edges the C++ seam-V extension may arm). Returns [kind, a, b]:
+# AC-0433: the per-edge kind of a face chunk. (AC-0467 stage B: the
+# former second consumer — _face_edge_meta, the C++ seam-V extension
+# metadata — is deleted with the extension; _face_rings is the only
+# caller now.) Returns [kind, a, b]:
 # kind 0 = synthetic solid (window/sector/out-of-charts/absent neighbour —
 # _solid_ring), 1 = home edge (the resampled LIVE home ring), 2 = real
 # same-face neighbour (snap_rings; a/b = the chart neighbour (nccx, nccz)).
@@ -14895,57 +14920,6 @@ func _face_rings(c: Node3D) -> Dictionary:
 		else:
 			nbs[key_s] = _solid_ring()
 	return nbs
-
-# AC-0433: the face-lane seam-V extension metadata for the build ctx
-# (consumed by the C++ build_seam_ext face path). The SAME edge
-# classification as _face_rings (one source of truth — _face_edge_kind):
-# only real edges arm the extension (class 1 home / class 2 same-face);
-# the synthetic-solid window/sector edges stay off (the terrain across
-# them is owned by another face — extending into it would z-fight).
-# For a class-1 edge the per-along-cell home seam cell [hcx, hcz, lx, lz]
-# is carried (one entry per the 16 along cells; mirrors _face_home_ring's
-# resampling — the ring's per-cell top IS that seam cell's home top, so
-# the C++ K tables and the ring agree on the surface). C++ edge order:
-# k = [dx-1, dx+1, dz-1, dz+1] (parse_nbs).
-func _face_edge_meta(c: Node3D) -> Dictionary:
-	var face: int = int(c.face)
-	var ccx: int = int(c.cx)
-	var ccz: int = int(c.cz)
-	var cls: Array = [0, 0, 0, 0]
-	var nb: Array = [0, 0, 0, 0, 0, 0, 0, 0]
-	var home: Array = []
-	home.resize(64)
-	for i in range(64):
-		home[i] = 0
-	var dirs: Array = [[-1, 0], [1, 0], [0, -1], [0, 1]]
-	var R: float = Game.planet_R
-	var hw: float = SphereMath.face_width(R) * 0.5
-	for k in range(4):
-		var dx: int = int(dirs[k][0])
-		var dz: int = int(dirs[k][1])
-		var ek: Array = _face_edge_kind(face, ccx, ccz, dx, dz)
-		cls[k] = int(ek[0])
-		if int(ek[0]) == 2:
-			nb[2 * k] = int(ek[1])
-			nb[2 * k + 1] = int(ek[2])
-		elif int(ek[0]) == 1:
-			var is_x: bool = dx != 0
-			for t in range(16):
-				var iu: int = (SphereMath.CELLS_PER_FACE - 1) if is_x else ccx * 16 + t
-				var iv: int = (ccz * 16 + t) if is_x else (SphereMath.CELLS_PER_FACE - 1)
-				var b: Vector3 = SphereMath.face_cell_band(face, iu, iv, R)
-				# the home edge of faces 4/5 is the patch's +x edge, of
-				# 6/7 the -x edge (the same face-based rule _face_home_ring
-				# applies — keep the two in step)
-				var fx: float = (hw - 0.5) if (is_x and (face == 4 or face == 5)) else (-hw + 0.5) if is_x else b.x
-				var fz: float = b.y if is_x else ((hw - 0.5) if dz > 0 else (-hw + 0.5))
-				var hcx: int = int(floorf(fx / 16.0))
-				var hcz: int = int(floorf(fz / 16.0))
-				home[4 * t] = hcx
-				home[4 * t + 1] = hcz
-				home[4 * t + 2] = int(floorf(fx)) - hcx * 16
-				home[4 * t + 3] = int(floorf(fz)) - hcz * 16
-	return {"class": cls, "nb": nb, "home": home}
 
 # D2: the home dispatch clause — a neighbour position fully past a
 # home-patch edge is the far side of the seam: its ring is the LIVE face
