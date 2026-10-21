@@ -322,6 +322,13 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			# (tasks/AC-0423/captures/ac0423-before-ground-north.png) shows
 			# see-through slits at these seams; this measures the place the
 			# frame points at (not the AC-0420 seam re-measurement).
+			# AC-0468: RETIRED under the canonical (default) home warp — the
+			# arm reports status "retired_warp_on" (the local-16 edge model is
+			# degenerate there) and points at the default-placement instrument
+			# (tasks/AC-0467/seam_band_flagon.gd + gate_bothdirs.py, AC-0434's
+			# both-directions seam gate). Flag OFF (AWECRAFT_WARP_HOME=0) runs
+			# the legacy path byte-identically — the standing nine values stay
+			# reproducible on the flag-off tree.
 			world.recenter(spawn.x, spawn.z, true)
 			await _ac0423probe_test()
 			get_tree().quit()
@@ -31823,23 +31830,83 @@ func _seamc_low_at(c: Node3D, si: int):
 
 # AC-0353: the VISIBLE slab mesh for slab si — the high instance when it
 # is visible, else the low slot (one visible tier per slab, the double-
-# LOD contract). [mi, yoff], or an EMPTY array when the slab shows
-# nothing (counted by the caller).
-func _seamc_visible_mesh(c: Node3D, si: int) -> Array:
+# LOD contract). [mi, yoff, ws], or an EMPTY array when the slab shows
+# nothing (counted by the caller). AC-0468: ws = the visible tier's
+# landed vertices are WORLD space — true only for the high tier under
+# the canonical (default) home warp (the node is identity; the warp
+# post-pass moved the vertices). The LOW slot stays slab-local in BOTH
+# states (the ring warps it at draw time — the slot's arrays are never
+# warped), so ws is false for it and the flag-off local read applies.
+func _seamc_visible_mesh(c: Node3D, si: int, warp_home: bool) -> Array:
 	var s = c.slabs[si]
 	var mi = s.mesh_instance
 	if mi != null and bool(mi.visible) and mi.mesh != null:
-		return [mi, 0]
+		return [mi, 0, warp_home]
 	var li: MeshInstance3D = _seamc_low_at(c, si)
 	if li != null and li.mesh != null and int(li.mesh.get_surface_count()) >= 1:
-		return [li, si * 16]
+		return [li, si * 16, false]
 	return []
+
+# AC-0468: the placement-aware vertex map for the canonical (default)
+# home placement — the EXACT inverse of the warp post-pass (chunk.gd
+# _warp_home_cell_point / AweMesh.warp_home_verts): world = (R + ly) *
+# normalize(SphereMath.home_point(fx, fz, R)) - (0, R, 0), fx = cx*16 + lx,
+# fz = cz*16 + lz. Inverted per vertex: ly = |p| - R (p = w + (0, R, 0))
+# and (fx, fz) through the CHART map — SphereMath.world_to_face, the
+# game's own home world->cell mapping (AC-0460: "the CHART mapping —
+# the exact inverse of what this warp evaluates"; the AC-0462 lesson
+# holds — the recovery is the exact inverse of the placement, never a
+# per-axis projection of a non-orthogonal frame). Returns the
+# CHUNK-LOCAL point (lx, y, lz) the flag-off mesh carries at the same
+# vertex — x,z in 0..16, Y ABSOLUTE — so the existing planar reverse map
+# runs on it unchanged. A vertex whose direction is not on the home
+# pair (face > 1 — an out-of-place vertex on a home column) returns
+# null; the caller counts its quad as a map anomaly (the same class a
+# null reverse map is under the flag-off model — the instrument keeps
+# its teeth: a wrong map fails the fixture validation, both states).
+func _seamc_world_to_local(w: Vector3, c: Node3D, R: float, hw: float):
+	var p: Vector3 = w + Vector3(0.0, R, 0.0)
+	var r: Dictionary = SphereMath.world_to_face(p, R)
+	var f: int = int(r["face"])
+	if f > 1:
+		return null
+	var fx: float = hw * float(r["u"]) if f == 0 else hw * (float(r["u"]) - 1.0)
+	var fz: float = hw * (2.0 * float(r["v"]) - 1.0)
+	return Vector3(fx - float(int(c.cx)) * 16.0, p.length() - R, fz - float(int(c.cz)) * 16.0)
+
+# AC-0468: map ONE slab's vertex array to the flat local frame the
+# flag-off mesh carries — used only when the visible tier is the
+# world-space high mesh (ws; the canonical placement). The warp is an
+# orientation-preserving bijection on the flat frame, so the planar
+# test, the winding cross-check and the untouched flat normals all
+# behave exactly as in the local model. [local_verts, bad]: bad is a
+# vertex-aligned PackedByteArray (1 = out-of-chart vertex) when ws,
+# empty otherwise (flag off / low tier — local_verts IS verts).
+func _seamc_slab_local(verts: PackedVector3Array, ws: bool, c: Node3D, R: float, hw: float) -> Array:
+	if not ws:
+		return [verts, []]
+	var lv := PackedVector3Array()
+	lv.resize(verts.size())
+	var bad := PackedByteArray()
+	bad.resize(verts.size())
+	for i in verts.size():
+		var lp = _seamc_world_to_local(verts[i], c, R, hw)
+		if lp == null:
+			bad[i] = 1
+		else:
+			lv[i] = lp
+	return [lv, bad]
 
 # AC-0353: collect the EMITTED faces on the column's four seam planes from
 # the live landed meshes. Returns {east/west/south/north: PackedByteArray
 # (384×16, row = y, t = the along-plane local cell), unshown, quads,
 # anomalies, winding, winding_bad}.
-func _seamc_emit_planes(c: Node3D) -> Dictionary:
+# AC-0468: warp_home/R/hw thread the placement state in — under the
+# canonical (default) placement the visible high tier's vertices are
+# world-space and are mapped back to the flat local frame first
+# (_seamc_slab_local); the low tier and the flag-off mesh run the SAME
+# local read as before (ws false — byte-identical path).
+func _seamc_emit_planes(c: Node3D, warp_home: bool, R: float, hw: float) -> Dictionary:
 	var east := PackedByteArray(); east.resize(Data.HEIGHT * 16)
 	var west := PackedByteArray(); west.resize(Data.HEIGHT * 16)
 	var south := PackedByteArray(); south.resize(Data.HEIGHT * 16)
@@ -31847,7 +31914,7 @@ func _seamc_emit_planes(c: Node3D) -> Dictionary:
 	var out := {"east": east, "west": west, "south": south, "north": north,
 		"unshown": 0, "quads": 0, "anomalies": 0, "winding": 0, "winding_bad": 0}
 	for si in range(c.slabs.size()):
-		var vm: Array = _seamc_visible_mesh(c, si)
+		var vm: Array = _seamc_visible_mesh(c, si, warp_home)
 		if vm.is_empty():
 			out["unshown"] = int(out["unshown"]) + 1
 			continue
@@ -31857,9 +31924,21 @@ func _seamc_emit_planes(c: Node3D) -> Dictionary:
 		var arrs: Array = mesh.surface_get_arrays(0)
 		var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
 		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
-		var nq := int(verts.size()) / 4
+		var sl: Array = _seamc_slab_local(verts, bool(vm[2]), c, R, hw)
+		var lvv: PackedVector3Array = sl[0]
+		var lbad: Array = sl[1]
+		var nq := int(lvv.size()) / 4
 		for k in range(nq):
-			var q = _seamc_quad(verts, normals, k, yoff)
+			if not lbad.is_empty():
+				var qbad := false
+				for di2 in 4:
+					if int(lbad[k * 4 + di2]) == 1:
+						qbad = true
+						break
+				if qbad:
+					out["anomalies"] = int(out["anomalies"]) + 1
+					continue
+			var q = _seamc_quad(lvv, normals, k, yoff)
 			if q == null:
 				out["anomalies"] = int(out["anomalies"]) + 1
 				continue
@@ -31964,12 +32043,15 @@ func _seamc_solid_planes(c: Node3D, stab: PackedByteArray, veg_cache: Dictionary
 
 # AC-0353: recover the (owner world cell, face direction) of EVERY quad of
 # a column's visible slab meshes — the validation's full reverse map.
-func _seamc_recover_faces(c: Node3D) -> Array:
+# AC-0468: same placement-aware threading as _seamc_emit_planes (the
+# validation's fixture quads are warped into world space too, under the
+# canonical placement).
+func _seamc_recover_faces(c: Node3D, warp_home: bool, R: float, hw: float) -> Array:
 	var out: Array = []
 	var cxw := int(c.cx) * 16
 	var czw := int(c.cz) * 16
 	for si in range(c.slabs.size()):
-		var vm: Array = _seamc_visible_mesh(c, si)
+		var vm: Array = _seamc_visible_mesh(c, si, warp_home)
 		if vm.is_empty():
 			continue
 		var mi: MeshInstance3D = vm[0]
@@ -31978,9 +32060,20 @@ func _seamc_recover_faces(c: Node3D) -> Array:
 		var arrs: Array = mesh.surface_get_arrays(0)
 		var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
 		var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
-		var nq := int(verts.size()) / 4
+		var sl: Array = _seamc_slab_local(verts, bool(vm[2]), c, R, hw)
+		var lvv: PackedVector3Array = sl[0]
+		var lbad: Array = sl[1]
+		var nq := int(lvv.size()) / 4
 		for k in range(nq):
-			var q = _seamc_quad(verts, normals, k, yoff)
+			if not lbad.is_empty():
+				var qbad := false
+				for di2 in 4:
+					if int(lbad[k * 4 + di2]) == 1:
+						qbad = true
+						break
+				if qbad:
+					continue
+			var q = _seamc_quad(lvv, normals, k, yoff)
 			if q == null:
 				continue
 			var axis := int(q[0])
@@ -32048,7 +32141,7 @@ func _seamc_wait_settle(cap_frames: int) -> Dictionary:
 # (22 per pillar; 12 on the seam plane, 6 × +X owners (S−1,y,z) and
 # 6 × −X owners (S+1,y,z)) with the winding consistent. The fixture is
 # reverted and the clear re-checked before the census runs.
-func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
+func _seamc_validate(cx0: int, cz0: int, warp_home: bool, R: float, hw: float) -> Dictionary:
 	var val := {"ok": false, "why": "ok"}
 	var cA = world.chunks.get(world._key(cx0, cz0))
 	var cB = world.chunks.get(world._key(cx0 + 1, cz0))
@@ -32143,7 +32236,7 @@ func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
 	var recovered: Dictionary = {}
 	var rec_seam := 0
 	for col in [cA, cB]:
-		for rf in _seamc_recover_faces(col):
+		for rf in _seamc_recover_faces(col, warp_home, R, hw):
 			var cell: Vector3i = rf[0]
 			var dir: Vector3i = rf[1]
 			if not pillar.has("%d,%d,%d" % [cell.x, cell.y, cell.z]):
@@ -32170,15 +32263,31 @@ func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
 	var wbad := 0
 	for col in [cA, cB]:
 		for si in range(col.slabs.size()):
-			var vm: Array = _seamc_visible_mesh(col, si)
+			var vm: Array = _seamc_visible_mesh(col, si, warp_home)
 			if vm.is_empty():
 				continue
 			var mesh: ArrayMesh = vm[0].mesh
 			var arrs: Array = mesh.surface_get_arrays(0)
 			var verts: PackedVector3Array = arrs[Mesh.ARRAY_VERTEX]
 			var normals: PackedVector3Array = arrs[Mesh.ARRAY_NORMAL]
-			for k in range(int(verts.size()) / 4):
-				var q = _seamc_quad(verts, normals, k, int(vm[1]))
+			# AC-0468: placement-aware, same as the census loops (the
+			# winding cross-check is placement-invariant — the warp is an
+			# orientation-preserving bijection and leaves the flat normals
+			# untouched).
+			var sl: Array = _seamc_slab_local(verts, bool(vm[2]), col, R, hw)
+			var lvv: PackedVector3Array = sl[0]
+			var lbad: Array = sl[1]
+			for k in range(int(lvv.size()) / 4):
+				if not lbad.is_empty():
+					var qbad := false
+					for di2 in 4:
+						if int(lbad[k * 4 + di2]) == 1:
+							qbad = true
+							break
+					if qbad:
+						wbad += 1
+						continue
+				var q = _seamc_quad(lvv, normals, k, int(vm[1]))
 				if q == null:
 					wbad += 1
 					continue
@@ -32197,7 +32306,7 @@ func _seamc_validate(cx0: int, cz0: int) -> Dictionary:
 	if bool(ws2.complete):
 		rec2 = 0
 		for col in [cA, cB]:
-			for rf in _seamc_recover_faces(col):
+			for rf in _seamc_recover_faces(col, warp_home, R, hw):
 				var cell: Vector3i = rf[0]
 				if pillar.has("%d,%d,%d" % [cell.x, cell.y, cell.z]):
 					rec2 += 1
@@ -32219,7 +32328,14 @@ func _seamcensus_test(spawn: Vector3) -> void:
 	var settle: Dictionary = await _seamc_wait_settle(wait_cap)
 	var cx0 := int(floorf(spawn.x / 16.0))
 	var cz0 := int(floorf(spawn.z / 16.0))
-	var val: Dictionary = await _seamc_validate(cx0, cz0)
+	# AC-0468: the placement state the reverse map must be aware of —
+	# canonical (default, AWECRAFT_WARP_HOME unset/!= 0): the high tier's
+	# landed vertices are WORLD space on identity nodes; legacy (=0): the
+	# mesh is chunk-local and the reverse map runs exactly as before.
+	var warp_home: bool = OS.get_environment("AWECRAFT_WARP_HOME") != "0"
+	var R: float = float(Game.planet_R)
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var val: Dictionary = await _seamc_validate(cx0, cz0, warp_home, R, hw)
 	# --- the census over every built resident column ---
 	var veg_cache: Dictionary = {}
 	var info: Dictionary = {}  # key -> {class, solid, emit, no_caves}
@@ -32242,7 +32358,7 @@ func _seamcensus_test(spawn: Vector3) -> void:
 		cols[cls] = int(cols[cls]) + 1
 		if bool(c.no_caves):
 			cols["no_caves"] = int(cols["no_caves"]) + 1
-		var ep: Dictionary = _seamc_emit_planes(c)
+		var ep: Dictionary = _seamc_emit_planes(c, warp_home, R, hw)
 		var sp: Dictionary = _seamc_solid_planes(c, stab, veg_cache)
 		info[key] = {"cls": cls, "solid": sp, "emit": ep, "no_caves": bool(c.no_caves)}
 		cols["unshown_slabs"] = int(cols["unshown_slabs"]) + int(ep.unshown)
@@ -32250,7 +32366,7 @@ func _seamcensus_test(spawn: Vector3) -> void:
 		# geometry owed) but no visible mesh at all — the real red flag
 		# (plain unshown_slabs are mostly air slabs above the surface)
 		for si in range(c.slabs.size()):
-			var vms: Array = _seamc_visible_mesh(c, si)
+			var vms: Array = _seamc_visible_mesh(c, si, warp_home)
 			if not vms.is_empty():
 				continue
 			var ytop := mini(si * 16 + 16, Data.HEIGHT)
@@ -32392,6 +32508,10 @@ func _seamcensus_test(spawn: Vector3) -> void:
 		"ok": bool(val.ok) and bool(settle.complete) and int(cols.map_anomalies) == 0,
 		"seed": int(Game.world_seed),
 		"radius": int(world.render_radius),
+		# AC-0468: which placement the reverse map ran under (canonical =
+		# world-space vertices, the exact chart inverse; legacy = the
+		# chunk-local read, the pre-AC-0468 path).
+		"placement": "canonical_warp" if warp_home else "legacy_local",
 		"floor_y": floor_y,
 		"settle": {"complete": bool(settle.complete), "waited": int(settle.waited),
 			"pending": settle.pending.slice(0, 30)},
@@ -36442,6 +36562,25 @@ func _faceedit_scan_aim(p, tc: Vector3i, place: bool) -> Dictionary:
 # ============================================================================
 func _ac0423probe_test() -> void:
 	var w: Node3D = world
+	# AC-0468 (plan.html §4.3): the warp-on path is RETIRED. The probe's
+	# premise — edge vertices at LOCAL 16/0 paired by along-seam world
+	# metre on a straight seam axis — is the old chunk-local model. Under
+	# the canonical (default) home warp the vertices are world-space on
+	# identity nodes and the seam is curved, so the bands read n=0 / raw
+	# cracks: a degenerate number, not a measurement (AC-0467 stage B).
+	# The quantity it measures (per-corner crack / overlap of the placed
+	# top-face edge rows) is carried by tasks/AC-0467/seam_band_flagon.gd
+	# + gate_bothdirs.py — AC-0434's both-directions gate, the instrument
+	# on the default placement (worst gap/overlap 64.0 mm against 100 mm
+	# grout). Fixing this path here would invent a third seam measure.
+	# Flag OFF: the full legacy path below, unchanged — the standing nine
+	# values stay reproducible on the flag-off tree.
+	var tr := Time.get_ticks_msec()
+	if OS.get_environment("AWECRAFT_WARP_HOME") != "0":
+		Debug.result({"ac0423": {"ok": true, "status": "retired_warp_on", "flag_on": true,
+			"instrument": "tasks/AC-0467/seam_band_flagon.gd + gate_bothdirs.py (AC-0434 both-directions seam gate — the default-placement instrument)",
+			"ms": Time.get_ticks_msec() - tr}})
+		return
 	# side A = the first column of each pair (west for x seams, south for z
 	# seams — its seam edge is at LOCAL 16); side B = the second (east /
 	# north — seam edge at LOCAL 0).

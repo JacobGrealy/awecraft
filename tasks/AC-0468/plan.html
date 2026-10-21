@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0468 seam instruments</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0468 — make the seam instruments able to see the new world</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Test-tooling only: no game or native behaviour change.</b> AC-0467 stage B made the canonical placement the default and deleted the seam extension; two instruments still assume the old model and one of them now fails itself rather than the world.</p>
+<h2>1. Goal</h2><p>`seamcensus` measures the default tree correctly, and `ac0423probe`'s warp-mode degeneracy is either fixed or retired with a reason — so the seam checks are evidence again before the lane merge (AC-0463) starts.</p>
+<h2>2. The two problems, as measured</h2>
+<ul>
+<li><b>seamcensus self-fails on the default tree.</b> Its reverse map assumes CHUNK-LOCAL vertices — the old model, where a chunk's mesh sat in local space under a per-column transform. On the canonical placement vertices are already world-space, so the map no longer describes the meshes it measures. Flag-off is still clean (0/64 seams, 393,216 rows), which is how we know the instrument is sound but the assumption is not.</li>
+<li><b>ac0423probe's warp-on mode degenerates</b>: its nine overlaps read as raw cracks / n=0 under the warp, while its <code>flagon</code> counterpart is faithful on the new placement.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>seamcensus</code> arm (find by name) — its reverse map from mesh vertices back to cells; the <code>ac0423probe</code> arm including its <code>flagon</code> variant</td><td>Edit those two arms only.</td></tr>
+<tr><td>tasks/AC-0434/seam_band_probe.gd</td><td>the both-directions measurement (worst gap 64.0 mm, worst overlap 64.0 mm against 100 mm grout)</td><td>READ ONLY — align with it; do not invent a third seam measure.</td></tr>
+<tr><td>godot/HARNESS.md</td><td>the arm rows</td><td>Regenerate via <code>harness_doc.py --render</code> after editing <code>tasks/harness_data.yaml</code>.</td></tr>
+<tr><td>tasks/AC-0468/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> any game or native code, the placement, the mesher, keys, saves, SphereMath.</p>
+<h2>4. Edit shape</h2>
+<ul>
+<li><b>4.1 seamcensus.</b> Make the reverse map placement-aware: on the canonical (default) placement the vertices are world-space, so the instrument must derive cells from world positions the way the game does (the AC-0462 lesson applies — a non-orthogonal basis needs the full 3×3 inverse, never per-axis dots; per-axis measured 44% exact, <code>affine_inverse</code> 100%). Keep the flag-off path working exactly as today.</li>
+<li><b>4.2 The assertion must still be able to fail.</b> After the fix, seamcensus must be green on the default tree <b>without having been taught to accept whatever it sees</b>. State in the deviations what it asserts now and why that is correct for world-space vertices. If you cannot state that, the fix is a re-recording and must be reported as such, not as a repair.</li>
+<li><b>4.3 ac0423probe.</b> Either fix the warp-on path or retire it in favour of <code>flagon</code>. Say which and why. If retired, keep its flag-off behaviour byte-identical so the standing nine values stay reproducible on the flag-off tree, and note in the arm's documentation that <code>flagon</code> is the instrument on the default placement.</li>
+<li><b>4.4 Alignment.</b> Where seamcensus and <code>seam_band_probe</code> measure overlapping quantities, make them agree or state why they measure different things. Two seam numbers that disagree without an explanation is the situation that produced AC-0423/AC-0427's irreconcilable ranges in the first place.</li>
+</ul>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Instrument green on the default tree</td><td><code>python3 tasks/scripts/gate_run.py AC-0468 --arms g0,genhash,seamcensus,ac0423probe --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b> (tooling must not move the world); seamcensus green; ac0423probe in the state §4.3 decided.</td></tr>
+<tr><td>Flag-off still reproducible</td><td>Same with <code>--env 'AWECRAFT_WARP_HOME=0'</code></td><td>ac0423probe still reproduces its flag-off crack values, seamcensus clean — the old world must remain measurable.</td></tr>
+<tr><td>Cross-check</td><td><code>tasks/AC-0434/seam_band_probe.gd</code></td><td>Unchanged: worst gap ≤ 100 mm AND worst overlap ≤ 100 mm. If the arm edits moved any game-path behaviour this would show it.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>Both instruments are evidence on the default tree, the flag-off world is still measurable, and nothing about the game moved.</p>
+<h2>7. Risks</h2><p>The tempting shortcut is to re-record the current output as the expectation. That blesses whatever is there, including any genuine defect, and it is the same failure this project keeps finding — a check that agrees with itself. §4.2 exists to make that visible.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. No refactor the plan did not ask for.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>The canonical placement is the default and the seam band is gone (AC-0467/AC-0434). This restores the instruments. AC-0463's lane merge is next and needs them.</p>
+</body></html>

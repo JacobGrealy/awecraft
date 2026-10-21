@@ -1,0 +1,91 @@
+AC-0468 deviations
+
+1) seamcensus — REPAIR, not a re-recording. What the arm asserts now, and why it is correct
+   for world-space vertices.
+The per-seam per-row ASSERTION is unchanged from AC-0353: for each pair of built neighbour
+home columns, the faces EMITTED on the shared flat plane must equal the complement of the
+neighbour's CURRENT solid set at that row (solid next to solid emits nothing; exactly-one-solid
+emits exactly one face from its side), with the four mismatch directions reported separately
+(missing = see-through, spurious = double draw, shifted, spurious_single). `ok` is still the
+instrument's self-check (fixture validation + settle complete + zero map anomalies), NOT the
+seam state. The meshing decision (which faces are emitted) is placement-independent — the C++
+emitter reads cell data + neighbour rings, and the warp post-pass moves vertices only AFTER
+emission — so the same assertion is valid on the canonical placement: a wrong emitted face
+there (see-through / double draw / shifted) fails the census exactly as it did under the legacy
+placement.
+What changed is ONLY the vertex->cell mapping. On the default tree the high tier's landed
+vertices are WORLD space on identity nodes (the canonical home warp), and the old map read
+them as chunk-local (x,z 0..16, flat axes within 1 mm) — so it no longer described the meshes
+it measured and self-failed (map_anomalies 48343 of 48402 quads; the world-space quads are
+not flat in any world axis past mm — the sphere curves them by up to ~32 mm across a 16 m
+merged quad). Now each world-space vertex is mapped back to the flat local frame with the EXACT
+inverse of the warp post-pass (chunk.gd _warp_home_cell_point): ly = |p| - R with
+p = w + (0, R, 0), and (fx, fz) through SphereMath.world_to_face — the game's own home
+world->cell chart map, the algebraic inverse of the forward chart that home_point evaluates.
+The AC-0462 lesson holds: the recovery is the exact inverse of the placement — there is no
+per-axis projection of a non-orthogonal frame anywhere (per-axis dots measured 44% exact at
+the AC-0462 stands; the exact inverse is 100% by construction, bounded in practice only by the
+float32 vertex storage, ~0.5 mm at |p| ~ 4000 — under the 1 mm planar tolerance and 800x
+inside the 0.5 m cell rounding). The warp is an orientation-preserving bijection on the flat
+frame and leaves the stored (flat-space) normals untouched, so the planar test, the winding
+cross-check and the dir cross-check behave exactly as in the local model — measured, not
+assumed: the arm counts the SAME 48402 quads with 0 winding_bad as the flag-off local model
+does, i.e. the two placements describe the same mesh. The low tier stays slab-local in BOTH
+states (the ring warps it at draw time; the slot arrays are never warped), so it is read as
+before. Flag off (AWECRAFT_WARP_HOME=0) runs byte-identical pre-AC-0468 code (ws=false): the
+standing values reproduced (0/64 seams, 393,216 rows, fixture 44/44).
+The instrument's teeth are intact (the negative path): the in-arm fixture validation now runs
+THROUGH the new inverse — the 1x3x2 stone pillars are warped into world space on identity
+nodes, and the same reverse map must recover EXACTLY 44 faces (12 on the seam plane) with 0
+winding_bad; a wrong map fails the fixture instead of silently re-recording. Measured (r4,
+seed 44): default tree ok=true, placement "canonical_warp", 0/64 seams on 393,216 rows, all
+four mismatch directions 0, map_anomalies 0.
+
+2) ac0423probe — DECISION: retire the warp-on path in favour of flagon (not fixed in place).
+Why fix-in-place is wrong: the probe's entire measurement premise is the local-16 edge model —
+edge vertices at LOCAL 16/0, paired by rounding their along-seam world coordinate to the
+metre, gap read on the seam's single world axis. Under the canonical warp the vertices are
+world-space on identity nodes and the seam is CURVED (spherical) — no single world axis is the
+across-seam direction, and the two sides' edge vertices share no along-seam world coordinate,
+so its nine reads degenerate to n=0 / raw cracks: a degenerate number, not a measurement.
+Fixing the path in place would mean re-deriving the seam-axis pairing in world space inside the
+arm — a third seam measure duplicating what flagon already does. The quantity it measures
+(per-corner crack / overlap of the placed top-face edge rows) is carried by
+tasks/AC-0467/seam_band_flagon.gd + gate_bothdirs.py — AC-0434's both-directions gate, the
+faithful instrument on the default placement (this run: worst gap 64.0 mm, worst overlap 64.0
+mm against 100 mm grout — reproducing AC-0467 stage B to 0.1 mm). Retired state: the arm
+reports ok=true, status "retired_warp_on" and the instrument pointer — an explicit
+non-measurement, not a false green and not a silent pass. Flag OFF is untouched: the full
+ac0423 RESULT JSON is byte-identical to AC-0467's flag-off run (ac0423probe-r20.log)
+excluding ms — the standing nine values remain reproducible on the flag-off tree.
+
+3) seamcensus vs seam_band_probe (plan §4.4) — they measure DIFFERENT things; there is no
+shared number to reconcile, stated here so the next reader does not treat them as two
+estimates of one quantity.
+- seamcensus: a per-seam per-ROW face census — for every row of the shared flat plane, do the
+  two built neighbours AGREE about which faces to emit (compared against each other's solid
+  set)? Binary face decisions, per cell; placement-independent (meshing reads data, not
+  placement). Reports counts (missing/spurious/shifted/spurious_single) — no mm at all.
+- seam_band_probe / flagon: per-seam-corner GEOMETRY — where the placed top-face edge rows
+  actually sit relative to each other: crack (across-seam distance between the two nominal
+  edge points, mm) and overlap (E_left + E_R - crack, mm). Continuous placement residual, per
+  corner; placement-dependent by design.
+Both sit on the nine home seams, but one checks the meshing DECISION (which faces exist) and
+the other measures the placement RESIDUAL (where they sit). Default tree, this run:
+seamcensus 0/64 seams (decisions agree) + flagon worst gap 64.0 / worst overlap 64.0 mm
+(placed surfaces within the 100 mm grout) — together: consistent faces AND closed seams.
+(For future readers: homecensus, AC-0467, measures the SAME placement by FORMULA at 17 shared
+corners — 0.000 mm on the default by construction, its max 8000 mm being per-corner height
+differences; flagon's 64 mm is the mesh-vertex-level reading of the placed edge rows. Formula
+vs landed mesh — different precision claims, not a disagreement.)
+
+4) Row / doc notes.
+- The seamcensus row in tasks/harness_data.yaml is updated (entry/tests/result_fields/notes)
+  and godot/HARNESS.md regenerated via harness_doc.py --render (--check: in sync).
+- ac0423probe has NO row in harness_data.yaml (deliberately rowless ticket probe — the
+  gate_run docstring's precedent, same as ac0433probe), so the retirement note lives in the
+  arm's own dispatch comment (harness.gd) and a new bullet in HARNESS.md's hand-written
+  "Not in table" section (naming flagon as the default-placement instrument).
+- No game or native code, placement, mesher, keys, saves or SphereMath touched; genhash 25/25
+  byte-identical in BOTH flag states against the AC-0467 default-state reference set
+  (the tooling did not move the world).
