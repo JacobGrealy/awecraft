@@ -407,6 +407,22 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _planetwalk_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "residency":
+			# AC-0463 slice 2a (plan.html §4): the RESIDENCY baseline the
+			# slice-2b policy merge must reproduce — a home-only traverse
+			# (away from the boundary, never crossing), the planetwalk
+			# crossing route (same two edge seams) with face counts
+			# sampled before/at/after each crossing, a steady-state sample
+			# series with an explicit STABLE/GROWING verdict, and the
+			# policy parameters each lane actually used on the run.
+			# OBSERVATION ONLY: reads chunks / the pools / the perf
+			# counters, walks and recenters like planetwalk — it changes
+			# no policy, band, budget, eviction, generation, key, light
+			# or the warp. STANDALONE (it quits) — BATTSKIP, no main.gd
+			# entry (the planetwalk shape).
+			await _residency_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -37865,3 +37881,435 @@ func _planetwalk_fail(label: String, why: String, wf: int, t0c: int, extra: Dict
 	for k in extra:
 		rep[k] = extra[k]
 	return rep
+
+
+# ============================================================================
+# AC-0463 slice 2a (plan.html §4) — the RESIDENCY baseline arm
+# (AWECRAFT_LOGIC=residency).
+#
+# WHAT IT MEASURES (observation only — no policy, band, budget, eviction,
+# generation, key, light or warp change):
+#   (a) a HOME-ONLY traverse — 16 x 8 m steps in +x from the spawn (128 m,
+#       far from every chart edge: the boundary sits at hw, kilometres
+#       away), never crossing: the home resident count over time, the
+#       evictions (the sample-diff of the resident key sets — an honest
+#       observed count at the sampling cadence, the lanes have no own
+#       eviction counter), and the pooled-column accounting (created =
+#       the perf_pool_col_grows_n delta, checkouts = the sum-of-col_gen
+#       delta across resident + pooled nodes — every checkout bumps
+#       exactly one node's col_gen, so the sum is the checkout census —
+#       reused = checkouts - created);
+#   (b) the PLANETWALK crossing route (the same two edge seams, the same
+#       stand / 8 m walk / recenter discipline, the same waits): the same
+#       counts PLUS the face resident count and face evictions, sampled
+#       before (the stand, PRE-recenter — the face lane is still at the
+#       pre-stand state), at (the crossing frame) and after (the bounded
+#       settle) each crossing;
+#   (c) the STEADY STATE: after the final settle the player is stationary
+#       (no recenters — face eviction needs >16 m of travel, and a
+#       recenter is the home lane's only window move) — an extra 180-frame
+#       settle, a BOUNDED plateau wait (the face stream keeps filling its
+#       window after the settle; the fill series is recorded), then six
+#       samples at 30-frame spacing with the plan's explicit verdict:
+#       GROWING (a count still rising at the END of the window — a LEAK
+#       finding, reported plainly, never normalised away) or STABLE
+#       (flat; the key-set identity is reported as evidence);
+#   (d) the POLICY PARAMETERS each lane actually used on the run (the
+#       home bands + stream set, the face window/budget), read live.
+#
+# RESIDENT = present in world.chunks (the home pair face <= 1, the chart
+# faces > 1 — the world's own split, world.gd:11934): the dict IS the
+# residency; mesh-built is NOT required (the drain fills data behind it).
+#
+# RESULT: ok, home {resident, evictions, pooled_new, pooled_reused, peak},
+# face {resident, evictions, window_cells, budget_ms},
+# samples [{t, home_resident, face_resident}],
+# steady {home_resident, face_resident, stable, verdict, series, keys_same,
+# converged, converge_ms, converge_series},
+# policy {home {...}, face {...}}, home_traverse {pooled_new, pooled_reused},
+# crossings [...], pools {...}, leak, leak_note, frames, ms, fails.
+# ============================================================================
+func _residency_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		Debug.result({"residency": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var fails: Array = []
+	var hw: float = SphereMath.face_width(R) * 0.5
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	Debug.fly(true)
+	for i in 8:
+		await get_tree().physics_frame
+	var pf0: Vector3 = world.flat_of_world_pos(p.position)
+	# (d) THE POLICY PARAMETERS, read live — the settings the lanes used
+	# on this run (slice 2b wants the current values, not a guess).
+	var sd: int = int(Settings.values.get("sim_dist", 4))
+	var S: float = SphereMath.face_cell_size(R)
+	var pol: Dictionary = {
+		"home": {
+			"sim_dist": sd,
+			"band0_r": int(world.band0_r),
+			"band1_r": int(world.band1_r),
+			"medium_start_r": int(world.medium_start_r),
+			"render_radius": int(world.render_radius),
+			"b1_eff": int(world.b1_eff()),
+			"stream_set": "taxisquare(render_radius) U diamond(b1_eff+1) U circle-ring (in_stream_set, world.gd:6834); the recenter stream-out bound R_outer = max(render_radius, b1_eff) + 2 (world.gd:11926); the r+1 candidate / r+2+ free hysteresis (world.gd:11889)",
+		},
+		"face": {
+			"budget_ms": float(world.FACE_STREAM_BUDGET_MS),
+			"evict_margin_m": float(world.FACE_STREAM_EVICT_MARGIN),
+			"win_m": sd * 16,
+			"cell_m": roundf(S * 100.0) / 100.0,
+			"edge_rows_x": mini(64, int(ceili(float(sd * 16) / S)) + 1),
+			"edge_rows_z": mini(64, int(ceili(float(sd * 16) / (S * 0.5))) + 1),
+			"hw_m": roundf(hw * 10.0) / 10.0,
+			"window_rule": "win = sim_dist * 16 flat m (world.gd:15019); edge-band rows = min(64, ceil(win/cell)+1), the z faces halve the cell (world.gd:15025); the edge-normal gate skips a face farther than win from its edge (world.gd:15069); eviction past win + evict_margin_m, re-checked only after >16 m of travel (world.gd:15108-15123)",
+		},
+	}
+	# THE BASELINE sample (before any traverse).
+	var s0: Dictionary = _residency_sample()
+	var ev_home := 0
+	var ev_face := 0
+	var frames := 0
+	var peak_home := int(s0["home_resident"])
+	var peak_face := int(s0["face_resident"])
+	var peak_col_pool := int(s0["col_pool"])
+	var peak_mi_pool := int(s0["mi_pool"])
+	var created_base: int = int(s0["col_grows"])
+	var cg_base: int = int(s0["colgen_total"])
+	var samples: Array = []
+	samples.append(_residency_point(0, s0))
+	# (a) THE HOME-ONLY TRAVERSE: 16 x 8 m in +x (128 m), never near a
+	# chart edge. Sample every step; evictions = the key-set diff.
+	for s in 16:
+		var fpw: Vector3 = world.flat_of_world_pos(p.position)
+		var nx: float = fpw.x + 8.0
+		var nw: Vector3 = world.world_pos_of_flat(nx, fpw.y, fpw.z)
+		if world.sim_height(nw) > nw.y:
+			nw.y = world.sim_height(nw) + 1.5
+		p.position = nw
+		world.recenter(nx, fpw.z, true)
+		for i in 3:
+			await get_tree().physics_frame
+			frames += 1
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+		var smp: Dictionary = _residency_sample()
+		var evd: Array = _residency_evicted(s0, smp)
+		ev_home += int(evd[0])
+		ev_face += int(evd[1])
+		s0 = smp
+		samples.append(_residency_point(samples.size() - 1, smp))
+	var home_traverse: Dictionary = {
+		"pooled_new": int(s0["col_grows"]) - created_base,
+		"pooled_reused": (int(s0["colgen_total"]) - cg_base) - (int(s0["col_grows"]) - created_base),
+	}
+	# (b) THE CROSSING TRAVERSE: the planetwalk route — the same two edge
+	# seams, the same stand/walk/recenter discipline and waits.
+	var edges: Array = [
+		[hw + 8.0, 20.0, Vector3(0.0, 0.0, -1.0), "x_seam"],
+		[20.0, -(hw + 8.0), Vector3(-1.0, 0.0, 0.0), "z_seam"],
+	]
+	var crossings: Array = []
+	for e in edges:
+		var rep: Dictionary = await _residency_crossing(p, float(pf0.y), float(e[0]), float(e[1]), e[2] as Vector3, str(e[3]), samples)
+		crossings.append(rep)
+		ev_home += int(rep["ev_home"])
+		ev_face += int(rep["ev_face"])
+		peak_home = maxi(peak_home, int(rep["peak_home"]))
+		peak_face = maxi(peak_face, int(rep["peak_face"]))
+		s0 = _residency_sample()
+		peak_home = maxi(peak_home, int(s0["home_resident"]))
+		peak_face = maxi(peak_face, int(s0["face_resident"]))
+		peak_col_pool = maxi(peak_col_pool, int(s0["col_pool"]))
+		peak_mi_pool = maxi(peak_mi_pool, int(s0["mi_pool"]))
+		if not bool(rep["ok"]):
+			fails.append("%s: %s" % [str(rep["label"]), str(rep.get("fail", "unknown"))])
+	# (c) THE STEADY STATE: stationary, no recenters (face eviction needs
+	# >16 m of travel; a recenter is the home lane's only window move).
+	# The face stream keeps FILLING its window after the settle (the
+	# 12 ms budget paces the fill to many frames; the settle wait only
+	# requires the chunk under the player), so first wait for the resident
+	# counts to PLATEAU (flat over two consecutive 30-frame samples,
+	# bounded to 20 of them = 600 frames) and record the fill series,
+	# THEN take the six samples at 30-frame spacing. The verdict is the
+	# plan's dichotomy on the six samples: GROWING = a count still rising
+	# at the END of the window (the plan's leak, §7: "grow without bound"
+	# — reported plainly, never normalised away); STABLE = flat. The
+	# bounded fill that plateaus before the window is convergence — its
+	# series is reported as evidence, not misreported as a leak.
+	for i in 180:
+		await get_tree().physics_frame
+		frames += 1
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+	var csamples: Array = []
+	var cprev: Dictionary = _residency_sample()
+	csamples.append(cprev)
+	var converged := false
+	var t_cv := Time.get_ticks_msec()
+	for f in 20:
+		for j in 30:
+			await get_tree().physics_frame
+			frames += 1
+			if not p.dead and world.sim_height(p.position) > -12.0:
+				p.hp = 40.0
+				p.hunger = 20.0
+		var cc: Dictionary = _residency_sample()
+		csamples.append(cc)
+		if int(cc["home_resident"]) == int(cprev["home_resident"]) and int(cc["face_resident"]) == int(cprev["face_resident"]):
+			converged = true
+			break
+		cprev = cc
+	var converge_ms: int = Time.get_ticks_msec() - t_cv
+	var cseries: Array = []
+	for cs in csamples:
+		cseries.append({"home_resident": int(cs["home_resident"]), "face_resident": int(cs["face_resident"])})
+	var ssamples: Array = []
+	ssamples.append(_residency_sample())
+	for i in 5:
+		for j in 30:
+			await get_tree().physics_frame
+			frames += 1
+		ssamples.append(_residency_sample())
+	var sh_first: int = int(ssamples[0]["home_resident"])
+	var sf_first: int = int(ssamples[0]["face_resident"])
+	var sh_prev: int = int(ssamples[4]["home_resident"])
+	var sf_prev: int = int(ssamples[4]["face_resident"])
+	var sh_last: int = int(ssamples[5]["home_resident"])
+	var sf_last: int = int(ssamples[5]["face_resident"])
+	var keys_same := true
+	for i in 5:
+		if ssamples[i]["home_keys"] != ssamples[i + 1]["home_keys"] or ssamples[i]["face_keys"] != ssamples[i + 1]["face_keys"]:
+			keys_same = false
+	var verdict: String
+	if sh_last > sh_prev or sf_last > sf_prev:
+		verdict = "GROWING"
+	else:
+		verdict = "STABLE"
+	peak_home = maxi(peak_home, sh_last)
+	peak_face = maxi(peak_face, sf_last)
+	var sseries: Array = []
+	for ss in ssamples:
+		sseries.append({"home_resident": int(ss["home_resident"]), "face_resident": int(ss["face_resident"])})
+	# THE pooled-column accounting over the whole run (created = the
+	# on-demand growth counter delta; checkouts = the col_gen census;
+	# reused = the pool pops).
+	var sfin: Dictionary = _residency_sample()
+	var checkouts: int = int(sfin["colgen_total"]) - cg_base
+	var created: int = int(sfin["col_grows"]) - created_base
+	var leak: bool = verdict == "GROWING"
+	var leak_note := ""
+	if leak:
+		leak_note = "LEAK: a lane's resident count is still rising at the end of the steady-state window (home %d -> %d, face %d -> %d over the six 30-frame-spaced samples, stationary player, after the bounded plateau wait) — growth without a bound outranks the merge (plan.html §7)." % [sh_first, sh_last, sf_first, sf_last]
+	elif not converged:
+		leak_note = "NOT CONVERGED within the bounded wait (600 frames): the fill series kept moving and the six-sample verdict above is the call — inspect converge_series."
+	Debug.result({"residency": {
+		"ok": fails.is_empty() and samples.size() > 1,
+		"home": {
+			"resident": int(sfin["home_resident"]),
+			"evictions": ev_home,
+			"pooled_new": created,
+			"pooled_reused": checkouts - created,
+			"peak": peak_home,
+		},
+		"face": {
+			"resident": int(sfin["face_resident"]),
+			"evictions": ev_face,
+			"window_cells": int(pol["face"]["edge_rows_x"]),
+			"budget_ms": float(pol["face"]["budget_ms"]),
+		},
+		"samples": samples,
+		"steady": {
+			"home_resident": sh_last,
+			"face_resident": sf_last,
+			"stable": verdict == "STABLE",
+			"verdict": verdict,
+			"series": sseries,
+			"keys_same": keys_same,
+			"converged": converged,
+			"converge_ms": converge_ms,
+			"converge_series": cseries,
+		},
+		"policy": pol,
+		"home_traverse": home_traverse,
+		"crossings": crossings,
+		"pools": {
+			"col_pool_final": int(sfin["col_pool"]),
+			"mi_pool_final": int(sfin["mi_pool"]),
+			"col_pool_peak": peak_col_pool,
+			"mi_pool_peak": peak_mi_pool,
+			"checkouts_total": checkouts,
+		},
+		"leak": leak,
+		"leak_note": leak_note,
+		"frames": frames,
+		"ms": Time.get_ticks_msec() - t0,
+		"fails": fails,
+	}})
+
+
+# ONE residency sample: the resident key sets per lane (presence in
+# world.chunks; the home pair is face <= 1, the chart faces > 1 — the
+# world's own split), the pooled-column census, and the perf counter.
+func _residency_sample() -> Dictionary:
+	var hk := {}
+	var fk := {}
+	var cg := 0
+	for k in world.chunks:
+		var c = world.chunks[k]
+		cg += int(c.col_gen)
+		if int(c.face) <= 1:
+			hk[k] = true
+		else:
+			fk[k] = true
+	for pn in world._col_pool:
+		cg += int(pn.col_gen)
+	return {
+		"home_resident": hk.size(),
+		"face_resident": fk.size(),
+		"home_keys": hk,
+		"face_keys": fk,
+		"colgen_total": cg,
+		"col_pool": world._col_pool.size(),
+		"mi_pool": world._mi_pool.size(),
+		"col_grows": int(world.perf_pool_col_grows_n),
+	}
+
+
+# THE sample-diff eviction count (the lanes have no own eviction counter;
+# a key present in the previous sample and absent in the current one was
+# evicted in between — at the sampling cadence, the honest observed count).
+func _residency_evicted(prev: Dictionary, cur: Dictionary) -> Array:
+	var he := 0
+	var fe := 0
+	for k in prev["home_keys"]:
+		if not cur["home_keys"].has(k):
+			he += 1
+	for k in prev["face_keys"]:
+		if not cur["face_keys"].has(k):
+			fe += 1
+	return [he, fe]
+
+
+func _residency_point(idx: int, smp: Dictionary) -> Dictionary:
+	return {"t": idx, "home_resident": int(smp["home_resident"]), "face_resident": int(smp["face_resident"])}
+
+
+# ONE crossing of the planetwalk route (the same stand / walk / recenter
+# discipline and bounded waits as _planetwalk_crossing), with a residency
+# sample BEFORE (the stand, pre-recenter), AT (the crossing frame) and
+# AFTER (the bounded settle). Appends its points to `samples` and returns
+# the scalar deltas (the evictions, the peaks, the sample points).
+func _residency_crossing(p, stand_y: float, sx: float, sz: float, edir: Vector3, label: String, samples: Array) -> Dictionary:
+	var t0c := Time.get_ticks_msec()
+	var rep: Dictionary = {
+		"ok": false, "label": label, "from_face": -1, "to_face": -1, "steps": 0,
+		"before": null, "at": null, "after": null,
+		"ev_home": 0, "ev_face": 0, "peak_home": 0, "peak_face": 0, "ms": 0,
+	}
+	# THE stand (the planetwalk positioning past the edge) — the BEFORE
+	# sample is taken PRE-recenter: the face lane is still in the state
+	# the arm left it in (the 64 m pre-stream window has not reached this
+	# chart — the spawn-side kilometres guarantee it).
+	p.position = world.world_pos_of_flat(sx, stand_y, sz)
+	var before: Dictionary = _residency_sample()
+	rep["before"] = _residency_point(samples.size(), before)
+	samples.append(rep["before"])
+	_residency_peak_fold(rep, before)
+	world.recenter(sx, sz, true)
+	var anch0: Dictionary = world.player_anchor(p.position)
+	var from_face: int = int(anch0.get("face", 0))
+	rep["from_face"] = from_face
+	if from_face <= 1:
+		rep["fail"] = "anchor_on_home_pair"
+		rep["ms"] = Time.get_ticks_msec() - t0c
+		return rep
+	# the faceedit lift (the planetwalk shape: above the local surface).
+	_planetwalk_lift(p, 3.5)
+	for i in 8:
+		await get_tree().physics_frame
+	# SOURCE settle (the planetwalk bounded wait + the r23 recenter nudge).
+	for f in 1200:
+		var c: Node3D = _planetwalk_chunk_under(p)
+		if c != null and c.first_opaque_mesh() != null and _planetwalk_body_ok(c):
+			break
+		await get_tree().physics_frame
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+		if f > 0 and f % 200 == 0:
+			var fpw: Vector3 = world.flat_of_world_pos(p.position)
+			world.recenter(fpw.x, fpw.z, true)
+	# THE WALK: 8 m steps along the edge, recenter each, until the anchor's
+	# face CHANGES; sample every step (the evictions diff against the
+	# previous step's sample).
+	var steps := 0
+	var crossed := false
+	var prev_s: Dictionary = _residency_sample()
+	_residency_peak_fold(rep, prev_s)
+	for s in 48:
+		var fpw2: Vector3 = world.flat_of_world_pos(p.position)
+		var nx: float = fpw2.x + float(edir.x) * 8.0
+		var nz: float = fpw2.z + float(edir.z) * 8.0
+		p.position = world.world_pos_of_flat(nx, fpw2.y, nz)
+		world.recenter(nx, nz, true)
+		steps += 1
+		for i in 3:
+			await get_tree().physics_frame
+		var a: Dictionary = world.player_anchor(p.position)
+		var fa: int = int(a.get("face", 0))
+		var smp: Dictionary = _residency_sample()
+		var evd: Array = _residency_evicted(prev_s, smp)
+		rep["ev_home"] = int(rep["ev_home"]) + int(evd[0])
+		rep["ev_face"] = int(rep["ev_face"]) + int(evd[1])
+		_residency_peak_fold(rep, smp)
+		if fa != from_face:
+			crossed = true
+			rep["to_face"] = fa
+			rep["at"] = _residency_point(samples.size(), smp)
+			samples.append(rep["at"])
+			prev_s = smp
+			break
+		prev_s = smp
+		_planetwalk_lift(p, 1.0)
+	if not crossed:
+		rep["fail"] = "walk_never_crossed"
+		rep["ms"] = Time.get_ticks_msec() - t0c
+		return rep
+	# THE bounded settle (the planetwalk shape) — then the AFTER sample.
+	for f2 in 1200:
+		var c3: Node3D = _planetwalk_chunk_under(p)
+		if c3 != null and c3.first_opaque_mesh() != null and _planetwalk_body_ok(c3):
+			break
+		await get_tree().physics_frame
+		if not p.dead and world.sim_height(p.position) > -12.0:
+			p.hp = 40.0
+			p.hunger = 20.0
+		if f2 > 0 and f2 % 200 == 0:
+			var fpw3: Vector3 = world.flat_of_world_pos(p.position)
+			world.recenter(fpw3.x, fpw3.z, true)
+	var after_s: Dictionary = _residency_sample()
+	var evd2: Array = _residency_evicted(prev_s, after_s)
+	rep["ev_home"] = int(rep["ev_home"]) + int(evd2[0])
+	rep["ev_face"] = int(rep["ev_face"]) + int(evd2[1])
+	_residency_peak_fold(rep, after_s)
+	rep["after"] = _residency_point(samples.size(), after_s)
+	samples.append(rep["after"])
+	rep["ok"] = true
+	rep["steps"] = steps
+	rep["ms"] = Time.get_ticks_msec() - t0c
+	return rep
+
+
+func _residency_peak_fold(rep: Dictionary, smp: Dictionary) -> void:
+	if int(smp["home_resident"]) > int(rep["peak_home"]):
+		rep["peak_home"] = int(smp["home_resident"])
+	if int(smp["face_resident"]) > int(rep["peak_face"]):
+		rep["peak_face"] = int(smp["face_resident"])

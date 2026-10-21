@@ -34,3 +34,78 @@ AC-0463 slice 1 — deviations
    No other order moved.
 
 4. NO BEHAVIOURAL CHANGE INTENDED — pure refactor. All standing gate values must match.
+
+AC-0463 slice 2a — deviations (residency baseline, MEASUREMENT ONLY)
+
+1. THE SHAPE
+   godot/scenes/harness.gd: ONE dispatch branch (logic == "residency", the
+   planetwalk shape: standalone, it quits, BATTSKIP, no main.gd entry) + the
+   arm _residency_test + its helpers (_residency_sample / _residency_evicted /
+   _residency_point / _residency_crossing / _residency_peak_fold).
+   godot/world/world.gd: READ ONLY, as the plan permits (the lanes, the pools,
+   the counters were read at the plan's anchors only).
+   tasks/harness_data.yaml: one row (residency) + harness_doc.py --render.
+   No behaviour change anywhere: the arm walks (position sets), recenters (the
+   product's own API, the arm's own trigger — the planetwalk discipline) and
+   reads existing state (the chunks dict, the _col_pool/_mi_pool pools, the
+   col_gen identity, perf_pool_col_grows_n, the live band/budget parameters).
+
+2. DESIGN DECISIONS THE PLAN LEAVES TO THE INSTRUMENT (all observation-only)
+   a. EVICTION COUNTS = sample-diffs. Neither lane owns an eviction counter
+      (the home r+2 free is deferred by the two-stage r+1/r+2 hysteresis,
+      world.gd:11889; the face _face_free_chunk, world.gd:15125, counts
+      nothing), so the arm counts, between consecutive samples, the keys
+      present before and absent after — the honest observed count at the
+      sampling cadence (every walk step / every 30-frame steady sample).
+   b. POOLED-COLUMN ACCOUNTING = the col_gen census. Every checkout bumps
+      exactly one node's col_gen (world.gd:11463) and _column_checkout bumps
+      perf_pool_col_grows_n ONLY when it creates a node on demand
+      (world.gd:1413 — the prewarm, 1342, is excluded), so: created = the
+      col_grows delta; checkouts = the sum-of-col_gen delta across resident
+      AND pooled nodes; reused = checkouts - created. No game counter added.
+   c. RESIDENT = presence in world.chunks (the home pair face <= 1, the chart
+      faces > 1 — the world's own split, world.gd:11934). mesh-built is NOT
+      required: the drain fills data behind the resident set, and the resident
+      dict is the quantity the slice-2b policy merge inherits.
+   d. STEADY-STATE VERDICT — the one decision this slice makes on its own,
+      and the one that cost a re-run: the first run measured the face lane
+      still FILLING its window after the settle (58 -> 94 over ~90 frames,
+      then flat 3/3). That is a bounded fill (the 12 ms budget paces the
+      idempotent _ensure_face_chunk fill), NOT the plan's "grow without bound"
+      leak — but a first<last rule would have reported it GROWING/LEAK and
+      "outranked the merge" on a false positive. The instrument now does the
+      plan's dichotomy honestly: a BOUNDED plateau wait first (flat over two
+      consecutive 30-frame samples, cap 600 frames; the fill series recorded),
+      then six samples at 30-frame spacing; GROWING = a count still rising at
+      the END of the window (a real leak, reported via leak/leak_note),
+      STABLE = flat (keys_same reported as evidence).
+   e. HOME TRAVERSE LENGTH: 16 x 8 m in +x (128 m) from the spawn. The chart
+      edge sits at hw = 3141.6 m (R default), so the traverse never comes near
+      a boundary and the whole arm stays far inside the 900 s gate budget
+      (measured ~2.5 min incl. boot — no shortening needed, stated per §7).
+   f. window_cells reports the x-face edge-band depth rows (the +x/-x seam
+      crossing's faces); the z-face rows (22) sit in policy.face — both are
+      the same sim_dist*16 window, the z faces halve the cell
+      (world.gd:15025).
+
+3. MEASURED FACTS THAT SURPRISED THE PLANNER (baseline input to slice 2b)
+   - HOME EVICTION IS HYSTERESIS-DEFERRED: a teleport recenter does NOT free
+     the old window at once (r+1 = candidate, r+2+ for 2 recenter events =
+     free). The resident count transiently holds the NEW window plus the
+     hidden old set — r1 peak 125 vs ~93 (home traverse) / 115-118 (crossing
+     steady) resident. Any unified model must reproduce this two-stage
+     release, or it will measure phantom churn.
+   - THE FACE WINDOW FILL RUNS AHEAD OF THE SETTLE: at the 12 ms budget the
+     seam-side window (4 faces, 12/22 rows deep) takes ~1-2 s to fill after a
+     recenter; it lands exactly at the window capacity and then holds
+     (idempotent dict lookups) — so the "face steady state" is a well-defined
+     number per position, once the fill is allowed to finish.
+   - FACE EVICTION IS TRAVEL-GATED: evicted only after >16 m of travel, in one
+     pass (2 face evictions across the whole run, both at the z_seam stand
+     where the x_seam faces left the win+64 m band) — a stationary player
+     NEVER sheds face chunks.
+   - THE POOL IS COLD AT THE END: col_pool/mi_pool final 0, peaks 33/437 —
+     every checkin is immediately consumed again on this tree (gate run: 448
+     checkouts vs 68 created columns over the whole run; the direct r1 run
+     measured 449/69 - stable to one checkout of frame-timing jitter). The
+     pool amortises, it does not sit.

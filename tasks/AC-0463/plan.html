@@ -1,42 +1,40 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 slice 1 one node path</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 slice 1 — one node-creation path (pure refactor)</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Pure refactor: behaviour must not change.</b> The lane merge is too large to attempt whole (inventory on the ticket); this is its first, safest slice — the duplication that makes every later slice harder.</p>
-<h2>1. Goal</h2><p>The skeleton that creates and registers a chunk node exists once, used by both lanes, so a later merge has one place to reason about identity, residency and pooling.</p>
-<h2>2. What is actually duplicated today (re-measured after the canonical placement landed)</h2>
-<p><code>_ensure_face_chunk</code> (world.gd:15339) and the home path's chunk creation (via <code>_make_chunk_node</code> and the column handoff) both do the same NODE-LEVEL steps:</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 slice 2a residency baseline</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 slice 2a — measure both lanes' residency before merging them</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measurement only: add one census arm, change no game behaviour.</b></p>
+<h2>1. Goal</h2><p>A baseline of what each lane holds, evicts and pools over a real traverse — the numbers a unified residency model must reproduce. Without them, slice 2b is unfalsifiable.</p>
+<h2>2. What is already known (from the code, round 33)</h2>
 <ul>
-<li><code>_column_checkout()</code> (1384) — the AC-0247 pooled column or a fresh node;</li>
-<li><code>col_gen += 1</code> — the AC-0247 logical identity bump (instance_id is fixed per object);</li>
-<li>set <code>face</code>, <code>cx</code>, <code>cz</code>;</li>
-<li><code>init_slabs()</code>;</li>
-<li><code>add_child()</code>.</li>
+<li>Both lanes have windows and eviction; they differ in policy, not in existence. Home: banded residency + drain queue, async worker generation. Face: <code>_face_stream</code> (world.gd:15008) with a window from <code>sim_dist</code> ×16 face cells, <code>FACE_STREAM_BUDGET_MS = 12.0</code> (14995), eviction past the expanded window via <code>_face_free_chunk</code> (15125, called at 15123), star evict + pooled-column checkin, sync <code>WorldGen.generate_face</code>.</li>
+<li>So the slice is NOT "give faces residency" — it is "make the two policies one", which is why the baseline matters.</li>
 </ul>
-<p>Everything AFTER that differs genuinely and must not be unified here: the home lane hands generation to the worker and the face lane calls <code>WorldGen.generate_face</code> synchronously. <b>Generation, scheduling and the drain stay exactly as they are.</b></p>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_make_chunk_node</code> (11409 area — find the exact def by name), the home creation path that calls it, <code>_ensure_face_chunk</code> (15339), <code>_column_checkout</code> (1384)</td><td>Edit: extract the shared skeleton into ONE helper and call it from both paths.</td></tr>
-<tr><td>tasks/AC-0463/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>homecensus</code> and <code>planetwalk</code> arms (templates for counts and traverse)</td><td>Add ONE arm <code>residency</code>.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>chunks</code> (234), <code>_face_stream</code> (15008), <code>_face_free_chunk</code> (15125), <code>_col_checkin</code> (11621), <code>perf_*</code> counters, the band/resident bookkeeping</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td><code>homecensus</code> row as the template</td><td>Add the row; <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> generation (<code>WorldGen.*</code>, <code>gen.cpp</code>), the worker handoff, the drain, the residency bands, <code>_face_stream</code>, keys, saves, light, the warp, SphereMath. <b>No behavioural change of any kind.</b></p>
-<h2>4. Edit shape</h2>
+<p><b>Do not touch:</b> streaming policy, bands, budgets, eviction, generation, keys, saves, light, the warp.</p>
+<h2>4. What to report</h2>
 <ul>
-<li><b>4.1 Find the real duplication first.</b> Read the home creation path and <code>_ensure_face_chunk</code> and write down, in the deviations, exactly which statements are genuinely shared. <b>If the shared set turns out to be trivial (say two lines), STOP and report that</b> — a helper that wraps two statements is churn, and this slice would then be better spent elsewhere.</li>
-<li><b>4.2 Extract.</b> One helper taking (face, cx, cz, key) that performs the shared skeleton and returns the node. Both paths call it. Keep the identity bump semantics EXACTLY as they are (AC-0247 — the instance_id is fixed per object, <code>col_gen</code> is the logical identity).</li>
-<li><b>4.3 Order preserved.</b> <code>add_child</code> position, <code>init_slabs</code> ordering and the point at which <code>face/cx/cz</code> are set must not move relative to each other or to any generation call: prompt/perf code reads these during the build.</li>
+<li><b>A home-only traverse</b> (walk away from the boundary, never crossing): home resident chunk count over time, evictions, pooled columns reused vs created, peak memory if a counter exists.</li>
+<li><b>A crossing traverse</b> (the <code>planetwalk</code> route): the same counts PLUS face resident chunks and face evictions, sampled before, at and after the crossing.</li>
+<li><b>The steady state</b>: after the traverse settles, how many home and face chunks are resident, and whether that number is stable across repeated samples (a growing count is a leak finding, not a number to record quietly).</li>
+<li>Report the <b>policy parameters</b> each lane actually used on the run (bands, <code>sim_dist</code>, the expanded window, the budget) so slice 2b has the current settings, not a guess.</li>
+<li>RESULT keys: ok, home {resident, evictions, pooled_new, pooled_reused, peak}, face {resident, evictions, window_cells, budget_ms}, samples [{t, home_resident, face_resident}], steady {home_resident, face_resident, stable}, fails.</li>
 </ul>
-<h2>5. Gates — all must MATCH, because this is a pure refactor</h2>
+<h2>5. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>World and lanes unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,smoke,genhash,homecensus,planetwalk,faceedit,seamcensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; homecensus 0.000 mm floor; planetwalk green on both boundaries; faceedit 0.578/0.397; seamcensus 393,216 rows clean.</td></tr>
-<tr><td>Both placement modes</td><td>the same set with <code>--env 'AWECRAFT_WARP_HOME=0'</code></td><td>All rc=0, genhash 25/25 — the refactor must be invisible in both modes, not just the default.</td></tr>
-<tr><td>Save/load</td><td><code>save</code> and <code>load</code> arms</td><td><code>ok</code> true; <b>simband_ms near 6.7 s</b> (this tree's measured normal). A jump toward 50 s means a node stopped being registered.</td></tr>
+<tr><td>No change</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,residency --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; residency produces the table and <code>ok</code> with a stated verdict on stability.</td></tr>
+<tr><td>Docs</td><td><code>harness_doc.py --check</code></td><td>exit 0.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>One node-creation skeleton, both lanes on it, and every standing value identical in both placement modes.</p>
-<h2>7. Risks</h2><p>The identity bump is the subtle one: AC-0247 made <code>instance_id</code> fixed per pooled object with <code>col_gen</code> as the logical identity, and code elsewhere compares those. Moving the bump to a helper must not change WHEN it happens relative to <code>init_slabs</code> or <code>add_child</code>. If you cannot preserve the exact order, STOP and report.</p>
+<h2>6. Acceptance</h2><p>A logged baseline of both lanes' residency behaviour and policy parameters over two traverses, plus an explicit leak verdict.</p>
+<h2>7. Risks</h2><p>If the counts grow without bound the finding is a LEAK, and it outranks the merge: report it plainly and do not normalise it away. If the traverse is too slow for the budget, shorten it and say so rather than sampling once.</p>
 <h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No behavioural change, no "while I'm here" cleanup.</li>
+<li>No edits outside §3. This stage adds ONE arm.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>Everything the merge needs now exists: canonical placement (AC-0467, default), one key shape (AC-0459/0465), exact conversion (AC-0462), a traversal arm (AC-0466) and repaired seam instruments (AC-0468). Slices 2-4 (residency model, light ownership, deletion) follow this one.</p>
+<h2>9. Resume point</h2><p>Slice 1 unified node creation (5a54aea). This measures residency, then 2b unifies the policies against these numbers. Light ownership and the twelve-chart lap follow.</p>
 </body></html>
