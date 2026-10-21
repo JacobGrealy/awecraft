@@ -1,0 +1,36 @@
+AC-0463 slice 1 — deviations
+
+1. SHARED STATEMENTS (plan §4.1 — the genuinely-shared set, verified in source)
+   Both lanes contain these, in this order:
+     a. c = _column_checkout()            (home world.gd:11457, face world.gd:15346 — pre-edit)
+     b. c.col_gen += 1                    (AC-0247 logical identity bump; instance_id fixed per object)
+     c. face/cx/cz set                    (home set cx,cz only — face defaults to 0 and _pool_reset
+                                           already reset it; face lane sets face,ccx,ccz)
+     d. c.init_slabs()
+     e. add_child(c)
+   Five statements — NOT trivial, so extraction proceeded (plan §4.1 stop condition not met).
+
+2. EXTRACTED
+   One helper: _chunk_checkout_registered(face, cx, cz) -> Node3D (world.gd, just above
+   _make_chunk_node) performs exactly a→e and returns the node. Both lanes call it:
+   - _make_chunk_node now: helper(0, cx, cz), then the home-only lines (transform per
+     _warp_home_on, band/collision_enabled) and chunks[_key(cx,cz)] = c.
+   - _ensure_face_chunk now: ccx/ccz/key + cache check, helper(face, ccx, ccz), then
+     everything after (generate_face, banana, data_landed, transform, chunks[key],
+     _face_order, star, mesh, FIFO) is byte-untouched.
+
+3. ORDER — one documented shift (plan §4.3)
+   The protected triple (face/cx/cz set -> init_slabs -> add_child) keeps its relative order in
+   BOTH lanes, and the face lane's generation call stays after add_child exactly as before.
+   SHIFT: in the home lane, the home-only transform/band/collision_enabled lines moved from
+   between (cx/cz set) and init_slabs to AFTER add_child. Rationale verified before editing:
+   - ChunkScript (world/chunk.gd) has no _ready/_enter_tree handler and the world has no
+     child_entered_tree signal, so entering the tree reads nothing;
+   - init_slabs only allocates slab bookkeeping (no scene nodes, no field reads);
+   - nothing between the old and new positions reads c.transform/c.band/c.collision_enabled;
+   - the face lane already entered the tree with pooled defaults (transform set post-add_child
+     at old line 15376), so the home lane now matches a pattern the face lane proves works.
+   The col_gen bump still happens at exactly the same point relative to init_slabs/add_child.
+   No other order moved.
+
+4. NO BEHAVIOURAL CHANGE INTENDED — pure refactor. All standing gate values must match.

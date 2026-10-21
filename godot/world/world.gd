@@ -11453,11 +11453,25 @@ func _key(cx: int, cz: int) -> String:
 func chunk_key(cx: int, cz: int) -> String:
 	return _key(cx, cz)
 
-func _make_chunk_node(cx: int, cz: int) -> Node3D:
-	var c: Node3D = _column_checkout()  # AC-0247: pooled column (fresh state) or a fresh node
-	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
+# AC-0463 slice 1: the ONE node-creation skeleton (both lanes).
+# AC-0247: the pooled column arrives fresh (_pool_reset); the instance_id is
+# fixed per object, so the col_gen bump is the logical identity. The order
+# (checkout -> bump -> face/cx/cz -> init_slabs -> add_child) is load-bearing
+# — the prompt/perf code reads these during the build; do not reorder.
+func _chunk_checkout_registered(face: int, cx: int, cz: int) -> Node3D:
+	var c: Node3D = _column_checkout()
+	c.col_gen += 1
+	c.face = face
 	c.cx = cx
 	c.cz = cz
+	c.init_slabs()
+	add_child(c)
+	return c
+
+func _make_chunk_node(cx: int, cz: int) -> Node3D:
+	# AC-0463 slice 1: the shared skeleton (face 0 — _pool_reset already
+	# left it there, so the home lane sets nothing new).
+	var c: Node3D = _chunk_checkout_registered(0, cx, cz)
 	# AC-0307: the rigid sphere placement (P2 of AC-0144) — local +Y is the
 	# radial at the column's own centre, neighbours share their edge line
 	# (the folded-net property); flat local geometry is untouched.
@@ -11474,8 +11488,6 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	var nb := band_of(int(cx) - last_pcx, int(cz) - last_pcz)
 	c.band = nb if nb >= 0 else 3
 	c.collision_enabled = collision_enabled and c.band == 0
-	c.init_slabs()
-	add_child(c)
 	chunks[_key(cx, cz)] = c
 	# AC-0373: NO stamp here — a spawn's data is always empty (the pool
 	# reset + no data write between checkout and the insert), so the new
@@ -15343,13 +15355,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	var c: Node3D = chunks.get(key)
 	if c != null:
 		return c
-	c = _column_checkout()  # AC-0247: pooled column (fresh state) or a fresh node
-	c.col_gen += 1  # AC-0247: the logical identity bump (instance_id is fixed per object)
-	c.face = face
-	c.cx = ccx
-	c.cz = ccz
-	c.init_slabs()
-	add_child(c)
+	# AC-0463 slice 1: the shared skeleton (same order as before).
+	c = _chunk_checkout_registered(face, ccx, ccz)
 	# AC-0040: face-planet columns get the banana trees too (same shore
 	# rule in face space — the generate_face coordinate/seed transform).
 	# AC-0311 piece 3: R > 0 threads the (face, R) sphere-domain chart
