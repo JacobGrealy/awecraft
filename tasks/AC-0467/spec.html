@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0467 — spec (generated scaffold)</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}h3{font-size:15px;margin-top:18px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.auto{background:#eef4ff;border-left:4px solid #3b6fe0;padding:8px 12px;margin:8px 0;border-radius:0 6px 6px 0}.fill{background:#fff8e6;border-left:4px solid #e0a800;padding:8px 12px;margin:10px 0;border-radius:0 6px 6px 0}.meta{color:#555;font-size:14px}.note{font-size:13px;color:#555}</style></head><body>
+<h1>AC-0467 — home-pair canonical placement (kills the seam band, half 2 of the merge)</h1>
+<div class="auto"><b>AUTO (from TASKS.yaml — do not hand-edit)</b></div>
+<p class="meta"><b>id:</b> <code>AC-0467</code> · <b>status:</b> <code>in-progress</code> · <b>priority:</b> 1 · <b>source:</b> agent · <b>created:</b> 2026-10-21T05:01 · <b>parent:</b> —</p>
+<p class="note">Registry <code>notes</code> (verbatim, quoted):</p>
+<blockquote><pre>1) User Story
+Two visible defects have the same root and the same cure. Blocks sitting on a chunk seam still render smeared over each other - the band is 602-730 mm wide even though the crack it hides is only 506-634 mm - and the world is still built by two different systems depending on which part of the planet you stand on. Putting the HOME pair onto the same sphere placement the outer faces already use makes neighbouring columns agree at every height by construction, which removes the overlap band (and its texture smear) instead of narrowing it, and it is the remaining half of the one-world migration.
+
+2) Technical Details
+WHY THIS IS THE CURE FOR AC-0434, measured in its stage 1 (round 28): the seam band exists because each side extends its edge rows past its nominal footprint by E = K0[k][i] + K1[k]*t + SEAM_V_MARGIN, clamped to [0,2.5] m (gdext/src/mesh.cpp:426-454), to close a lean-induced crack. Per-corner overlap is 602-730 mm (mean 656) over 144 cells, closing a crack of 506-634 mm. A half-rule only halves that band (~330 mm, still visible). If each column is placed on its own radial, neighbouring surfaces COINCIDE at every height, so nothing needs extending - the K tables, the ring reads, sphere_r, the margins and the clamp all delete, and with them the UV stretch the user photographed.
+WHY IT IS ALSO THE MERGE&#x27;S OTHER HALF: the warp placement already does exactly this on the face lane (AC-0458 flag, AC-0460 default on, occluder parity 335/335, cost 0.423 ms/chunk in native code). The HOME pair still rides the per-column LSQ transforms (SphereMath.column_transform, world.gd _col_sphere_transform 11412). This ticket extends the same canonical placement to the home lane.
+SCOPE: the home pair&#x27;s per-column transform path, its 1 m flat grid and the consumers that assume it. Reuse the validated machinery rather than inventing: SphereMath.uv_to_world / world_to_face as the chart, the native warp (gdext warp_face_verts) for the vertex pass, and the AC-0462 exact-inverse lesson for world-&gt;cell conversion (a non-orthogonal basis needs the full 3x3 inverse, never per-axis dots - measured: per-axis reads 44% exact at best, affine_inverse 100%).
+VERIFY: genhash 25/25 (generation must not move); the light set; the seam band re-measured with AC-0434&#x27;s seam_band_probe.gd - the target is that the band COLLAPSES rather than narrows, and the per-cell table must show it; planetwalk (AC-0466) still green across its two boundaries; faceedit still green on both chart classes; and the render the AC-0434 ticket demands (surface-flush block on the seam, standing on the line, camera above, before/after) plus a seam gate asserting BOTH directions per cell - gap &lt;= grout AND overlap &lt;= grout - so closing the overlap cannot reopen the crack.
+HARD CASE, from AC-0434&#x27;s notes: at a step across a seam the crease of the two planes is not where the two staircases meet. The new placement must state what happens there and measure it, not leave it as an unexamined edge case.
+</pre></blockquote>
+<h2>Goal</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — one line, from the registry notes (marked REVIEW until confirmed). <b>REVIEW</b></div>
+<!-- FILL: Goal — one sentence. Example: "Add a torch-light-bake pass to the chunk mesher so caves are readable at night." -->
+<p><em>REVIEW — draft from notes: 1) User Story
+Two visible defects have the same root and the same cure.</em></p>
+<h2>Frozen spec references</h2>
+<div class="auto"><b>AUTO (fixed boilerplate — do not hand-edit)</b></div>
+<ul>
+<li><code>index.html</code> — build <code>20260816-r12</code> (Three.js single-file) is a FROZEN historical artifact — do NOT modify. <b>User 2026-08-29: the web spec is no longer referenced</b> — never cite it as the justification for behavior or values. Source of truth = the in-repo Godot code + user directives.</li>
+<li>Minecraft wiki = canonical reference for tools/crafting/blocks, match exactly unless the user specifies otherwise: <a href="https://minecraft.wiki/w/Tool">Tool</a>, <a href="https://minecraft.wiki/w/Block">Block</a>, <a href="https://minecraft.wiki/w/Mining">Mining</a>, <a href="https://minecraft.wiki/w/Crafting_table">Crafting_table</a>, <a href="https://minecraft.wiki/w/Item">Item</a>.</li>
+</ul>
+<h2>Data.* world constants</h2>
+<div class="auto"><b>AUTO (paths only — regenerate with <code>python3 tasks/scripts/spec_template.py AC-NNNN --full</code> to inline the tables; values are parsed fresh at run time)</b></div>
+<ul>
+<li><code>godot/autoload/data.gd</code> — all <code>Data.B_*</code> block ids, items, tools, SEA/HEIGHT/CHUNK constants (grep <code>^const </code>).</li>
+<li><code>godot/world/generator.gd</code> — biome constants + <code>T_G_*</code> tool ids; biome thresholds are computed in <code>biome_at()</code> (t &lt; -0.25 snow; t &gt; 0.35 &amp; m &lt; 0.1 desert; m &gt; 0.25 forest; else plains).</li>
+</ul>
+<h2>Builder gates (Run-2, in-session)</h2>
+<div class="auto"><b>AUTO (tiered per godot/HARNESS.md §3 — do not hand-edit)</b></div>
+<div class="auto"><b>G0</b> — <code>env HOME=/tmp/dsh_home godot --headless --path godot --quit</code> exits 0 with <b>zero</b> <code>SCRIPT ERROR</code> lines.</div>
+<div class="auto"><b>SMOKE</b> — one battery launch with the 2–4 dependency-mapped modes for this change area (HARNESS.md §3 table, e.g. world/* → <code>player;interact;light;fluids</code>) + the <code>genhash</code> arm (25/25) whenever <code>world/*</code> or <code>data.gd</code> is touched; ~30 s total. The task-specific probe mode (if this spec defines one, env-gated, headless ≤ 60 s) runs here too.</div>
+<div class="auto"><b>RENDER</b> — ≤ 1 render at <code>AWECRAFT_RADIUS=1</code> (xvfb, gl_compatibility — a PROXY renderer that cannot show Forward+-only features such as DOF; see <code>godot/HARNESS.md</code> §2), PNG under <code>tasks/AC-NNNN/</code>.</div>
+<div class="auto"><b>EXIT</b> — after G0+SMOKE(+probe)+≤1 render the builder writes results + continuity and EXITS. The heavy gates below are the coordinator&#39;s background job — the builder never runs them.</div>
+<div class="auto"><b>Sandbox env</b> — every godot call is ONE bash command that sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the <code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>
+<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; cd /home/angrygiant/github_projects/AweCraft</pre>
+<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>
+<div class="auto"><b>AUTO (the coordinator's heavy stage — the <code>awecraft-heavy-gates</code> skill owns the protocol; the coordinator runs these as a background job (no LLM slot) after the builder exits; the builder NEVER runs them; commit/push only after they pass — do not hand-edit)</b></div>
+<ul>
+<li><b>boundary r4 ×1</b> + <b>perf r4</b> — ONLY when scope touches <code>godot/world/*</code> | <code>lighting.gd</code> (HARNESS.md §3 tier); UI/tool tasks: SMOKE only, no boundary/perf. (Was ×2, sliced 2026-08-27.)</li>
+<li><b>genhash</b> — independent re-run (25/25) whenever <code>world/*</code>/<code>data.gd</code> touched.</li>
+<li><b>flake ×1</b> — perf tier only (was ×4, sliced 2026-08-27).</li>
+<li><b>boundary r50 / perf r50 (RECSLICE)</b> — nightly batch only (NOT per task; was per-task).</li>
+<li><b>task-specific probe mode</b> — when this spec&#39;s Task-specific gates define one (the builder&#39;s SMOKE runs it; the gate job re-runs it fresh).</li>
+<li><b>windows build</b> — <code>./build_windows.sh</code> (XDG pattern) + 8080/5180 curls — every task.</li>
+</ul>
+<p class='note'>Log → <code>.scratch/AC-NNNN-gates/gates.log</code>; marker <code>.scratch/AC-NNNN-gates/HEAVY_GATES_DONE</code>. Full protocol: the <code>awecraft-heavy-gates</code> skill. The builder's prompt is <code>tasks/templates/implement.md</code>; the plan it applies is <code>tasks/AC-NNNN/plan.html</code>, written by the coordinator.</p>
+<h2>Expected RESULT shapes (default battery + genhash)</h2>
+<div class="auto"><b>AUTO (paths only — the RESULT shapes live in <code>godot/HARNESS.md</code> §1; inline them with <code>--full</code>)</b></div>
+<ul>
+<li>Battery arms: <code>player</code> / <code>interact</code> / <code>light</code> / <code>fluids</code> / <code>buckets</code> / <code>genhash</code> / <code>settings</code> / <code>controls</code> — key fields + ok-conditions per mode in <code>godot/HARNESS.md</code> §1.</li>
+<li>Heavy modes: <code>boundary</code>, <code>recprobe</code>, <code>perf</code>, <code>minfo</code>, <code>pickorder</code> — §2.</li>
+</ul>
+<h2>Known-stable gate values</h2>
+<div class="auto"><b>AUTO (paths only — the anchor table lives in <code>godot/HARNESS.md</code> §3, generated from <code>tasks/harness_data.yaml</code>; verify fresh on any fluids/world-touching change; inline with <code>--full</code>)</b></div>
+<h2>Task-specific requirements</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the concrete behavior/data changes this task makes.</div>
+<!-- FILL: Task-specific requirements. Example: e.g. &quot;fluids: source water over a hole writes 0 cells (zero-write invariant)&quot; -->
+<h2>Task-specific gates</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the specific mode(s)/values that must be green beyond the defaults.</div>
+<!-- FILL: Task-specific gates. Example: e.g. &quot;G1: AWECRAFT_LOGIC=fluids → sea_stable true, sea_surface 2730&quot; -->
+<h2>Scope (files expected to change)</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — the exact files this task will edit (helps G5 stay clean).</div>
+<!-- FILL: Scope (files expected to change). Example: e.g. &quot;godot/world/chunk.gd, godot/scenes/main.gd (fluids branch only)&quot; -->
+<h2>Fences</h2>
+<div class="fill"><b>FILL BY COORDINATOR</b> — what this task must NOT touch.</div>
+<!-- FILL: Fences. Example: e.g. &quot;no .gd outside the listed scope; no TASKS.yaml edits; no git&quot; -->
+<p class="note">Scaffold generated by <code>tasks/scripts/spec_template.py</code> (no wall-clock timestamps; the only date is the registry created_at). Auto sections are reproducible byte-for-byte; fill sections are for the coordinator.</p>
+</body></html>

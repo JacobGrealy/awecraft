@@ -326,6 +326,21 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _ac0423probe_test()
 			get_tree().quit()
 			return
+		if logic == "homecensus":
+			# AC-0467 stage A (plan.html §3): the home-pair shared-corner
+			# census — for the nine home seam pairs ac0423probe measures,
+			# the world-space distance between each side's version of the
+			# SAME shared corner (each side places its own local corner:
+			# its node transform with the flag off — the shipped rigid
+			# placement; the canonical home warp with the flag on). Must
+			# read a NON-ZERO baseline with the flag off (the seam crack)
+			# and COLLAPSE with AWECRAFT_WARP_HOME=1 (both sides evaluate
+			# the same flat point). STANDALONE (it quits) — BATTSKIP, no
+			# main.gd entry (the warpcensus shape).
+			world.recenter(spawn.x, spawn.z, true)
+			await _homecensus_test()
+			get_tree().quit()
+			return
 		if logic == "ac0433probe":
 			# AC-0433 probe (kept like ac0423probe: the standing instrument
 			# for the unification rounds): SECTION A: the home/face
@@ -36647,6 +36662,165 @@ func _ac0423probe_side(c: Node3D, axis: String, edge: float) -> Dictionary:
 				tv.append(1 if s2.mesh_instance.visible else 0)
 	out["visible_top_slabs"] = tv
 	return out
+
+
+# ---------------------------------------------------------------------------
+# AC-0467 stage A: the home-pair shared-corner census (plan.html §3).
+#
+# For the nine home seam pairs ac0423probe measures (all home-column
+# pairs), and for each seam corner k = 0..16 (corner 16 belongs to cell
+# 15, the seam_band_probe convention), the world-space distance between
+# each side's version of the SAME shared corner:
+#   A's corner = the world position of A's local edge corner at the
+#     corner's surface height (local 16 on the A side, local 0 on the
+#     B side; the surface height is the edge-column top + 1 read from
+#     the chunk data, the seam_band_probe edge-row tops);
+#   A's version of that point = the placement A ACTUALLY USES:
+#     - flag off (AWECRAFT_WARP_HOME unset): the chunk node's transform
+#       in the tree — the shipped rigid per-column placement (the
+#       measurement is the tree's own transform, not a re-derivation);
+#     - flag on: the canonical home warp (R + ly) *
+#       normalize(SphereMath.home_point(fx, fz, R)) - (0, R, 0),
+#       fx = cx*16 + lx, fz = cz*16 + lz — the SAME construction the
+#       warp post-pass runs on the mesh (chunk.gd _warp_home_slabs);
+#       the node is asserted identity when the flag is on (node_id_fail),
+#       so the formula IS what the game places.
+# Both sides' flat corner (fx, fz) are IDENTICAL at a shared corner, so
+# the flag-on distance is 0 by construction (the seam crack is zero);
+# the flag-off distance is the seam crack the seam-V extension exists to
+# cover (the AC-0434 per-corner crack, 506-634 mm). The arm reports the
+# per-pair and overall min/mean/max in mm.
+# ---------------------------------------------------------------------------
+
+func _homecensus_test() -> void:
+	var w: Node3D = world
+	# side A = the first column of each pair (west for x seams, south for
+	# z seams — its seam edge is at LOCAL 16); side B = the second (local 0).
+	# The SAME nine pairs ac0423probe measures (all home-column).
+	var seams: Array = [
+		["x16_z16", [0, 1], [1, 1], "x"],
+		["x16_z0", [0, 0], [1, 0], "x"],
+		["xm16_z16", [-1, 1], [0, 1], "x"],
+		["xm16_z0", [-1, 0], [0, 0], "x"],
+		["z16_x0", [0, 0], [0, 1], "z"],
+		["z16_x16", [1, 0], [1, 1], "z"],
+		["z16_xm16", [-1, 0], [-1, 1], "z"],
+		["z32_x0", [0, 1], [0, 2], "z"],
+		["z32_x16", [1, 1], [1, 2], "z"],
+	]
+	var need: Array = []
+	for s in seams:
+		if not need.has(s[1]):
+			need.append(s[1])
+		if not need.has(s[2]):
+			need.append(s[2])
+	var t0 := Time.get_ticks_msec()
+	var built := false
+	for i in 3000:
+		var ok := true
+		for cc in need:
+			var c = w.chunks.get(w._key(int(cc[0]), int(cc[1])))
+			if c == null or c.data.is_empty() or not c.mesh_built:
+				ok = false
+				break
+		if ok:
+			built = true
+			break
+		await get_tree().process_frame
+	if not built:
+		Debug.result({"homecensus": {"ok": false, "fail": "not_built", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var flag_on: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
+	var out: Dictionary = {}
+	var gmin := 1e18
+	var gmax := -1e18
+	var gsum := 0.0
+	var gn := 0
+	var node_id_fail: Array = []
+	for s in seams:
+		var name: String = s[0]
+		var ca: Node3D = w.chunks.get(w._key(int(s[1][0]), int(s[1][1])))
+		var cb: Node3D = w.chunks.get(w._key(int(s[2][0]), int(s[2][1])))
+		var axis: String = s[3]
+		if flag_on:
+			if not ca.transform.is_equal_approx(Transform3D(Basis.IDENTITY, Vector3.ZERO)):
+				node_id_fail.append(name + ":a")
+			if not cb.transform.is_equal_approx(Transform3D(Basis.IDENTITY, Vector3.ZERO)):
+				node_id_fail.append(name + ":b")
+		var pmin := 1e18
+		var pmax := -1e18
+		var psum := 0.0
+		var pn := 0
+		for k in 17:
+			# the corner's edge-column top on each side (corner 16 belongs
+			# to cell 15 — the seam_band_probe convention)
+			var topa: int = _homecensus_edge_top(ca, axis, 15, k)
+			var topb: int = _homecensus_edge_top(cb, axis, 0, k)
+			if topa < 0 or topb < 0:
+				continue  # air on one side: no surface corner there
+			var la: Vector3 = Vector3(16.0, float(topa + 1), float(k)) if axis == "x" else Vector3(float(k), float(topa + 1), 16.0)
+			var lb: Vector3 = Vector3(0.0, float(topb + 1), float(k)) if axis == "x" else Vector3(float(k), float(topb + 1), 0.0)
+			var wa: Vector3 = _homecensus_place(ca, la, flag_on)
+			var wb: Vector3 = _homecensus_place(cb, lb, flag_on)
+			var d: float = wa.distance_to(wb) * 1000.0
+			pmin = minf(pmin, d)
+			pmax = maxf(pmax, d)
+			psum += d
+			pn += 1
+			gmin = minf(gmin, d)
+			gmax = maxf(gmax, d)
+			gsum += d
+			gn += 1
+		out[name] = {
+			"corners": pn,
+			"min_mm": roundf(pmin * 1000.0) / 1000.0 if pn > 0 else null,
+			"mean_mm": roundf((psum / float(pn)) * 1000.0) / 1000.0 if pn > 0 else null,
+			"max_mm": roundf(pmax * 1000.0) / 1000.0 if pn > 0 else null,
+		}
+	var ok: bool = node_id_fail.is_empty() and gn > 0
+	var r: Dictionary = {
+		"ok": ok,
+		"flag_on": flag_on,
+		"n_corners": gn,
+		"min_mm": roundf(gmin * 1000.0) / 1000.0 if gn > 0 else null,
+		"mean_mm": roundf((gsum / float(gn)) * 1000.0) / 1000.0 if gn > 0 else null,
+		"max_mm": roundf(gmax * 1000.0) / 1000.0 if gn > 0 else null,
+		"ms": Time.get_ticks_msec() - t0,
+		"seams": out,
+	}
+	if node_id_fail.size() > 0:
+		r["fail"] = "node_not_identity"
+		r["node_id_fail"] = node_id_fail
+	Debug.result({"homecensus": r})
+
+
+# The home-corner placement the side ACTUALLY USES (the census's whole
+# subject): flag off = the chunk node's transform in the tree (the
+# shipped rigid placement — read, not re-derived); flag on = the
+# canonical home warp (plan.html §2) — the same construction the warp
+# post-pass runs on the mesh vertices (chunk.gd _warp_home_cell_point /
+# AweMesh.warp_home_verts), in the same float/Vector3 arithmetic.
+func _homecensus_place(c: Node3D, local: Vector3, flag_on: bool) -> Vector3:
+	var R: float = float(Game.planet_R)
+	if flag_on:
+		var fx: float = float(int(c.cx)) * 16.0 + local.x
+		var fz: float = float(int(c.cz)) * 16.0 + local.z
+		var dir: Vector3 = SphereMath.home_point(fx, fz, R)
+		return (R + local.y) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+	return c.transform * local
+
+
+# The edge-column top for a seam corner (the seam_band_probe
+# _edge_row_tops convention): A's edge column is local 15, B's is local
+# 0; corner k (0..16) belongs to cell k (16 -> cell 15). -1 = air.
+func _homecensus_edge_top(c: Node3D, axis: String, brow: int, k: int) -> int:
+	var cell: int = k if k < 16 else 15
+	var bx: int = cell if axis == "z" else brow
+	var bz: int = cell if axis == "x" else brow
+	for y in range(mini(int(c.top) + 1, Data.HEIGHT - 1), -1, -1):
+		if int(c.get_local(bx, y, bz)) != 0:
+			return y
+	return -1
 
 
 # ---------------------------------------------------------------------------

@@ -1499,15 +1499,19 @@ func _assemble_slab(s: Slab, ao: Acc, ac: Acc, af_w: Acc, af_l: Acc, ak: Acc, ax
 		# slab's OWN cell footprint instead of dropping it: the 16x16 corner lattice
 		# at h = y0 and h = y0 + 16, warped by the SAME construction the mesh
 		# vertices use (_warp_cell_point, extracted from _warp_face_slabs). Face-lane
-		# chunks only: they are identity, so the warped points ARE the world
-		# placement. The home pair is never warped (AC-0458 guard) - a mesh-less
-		# home slab keeps stage-2a behaviour (null) until the home-pair ticket.
+		# chunks: they are identity, so the warped points ARE the world placement.
+		# AC-0467 stage A: the home pair under the home warp (flag on) gets the
+		# SAME fallback through _warp_home_slab_footprint_aabb (the node is
+		# identity then too). Flag off, a mesh-less home slab keeps stage-2a
+		# behaviour (null) - the shipped path is untouched.
 		var aabb := AABB()
 		if s.mesh_instance != null and s.mesh_instance.mesh != null:
 			aabb = s.mesh_instance.mesh.get_aabb()
 		var degen: bool = aabb.size.x <= 0.01 or aabb.size.y <= 0.01 or aabb.size.z <= 0.01
 		if degen and int(face) >= 2:
 			aabb = _warp_slab_footprint_aabb(float(s.y0))
+		elif degen and int(face) < 2 and _warp_home:
+			aabb = _warp_home_slab_footprint_aabb(float(s.y0))
 		if aabb.size.x > 0.01 and aabb.size.y > 0.01 and aabb.size.z > 0.01:
 			var oc := OccluderInstance3D.new()
 			var box := BoxOccluder3D.new()
@@ -1711,6 +1715,10 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 	else:
 		ms_w = {"rects": {}}
 	var res: Dictionary = mc.build_accs(data, fl, cx, cz, nbs, ctx_w, ms_w, light, 0, -1, 0, Lighting._att, Lighting._glow, mask)
+	# AC-0467 stage A: the home warp does NOT run here — every home build
+	# (the C++ worker handoff AND this sync fallback) lands through
+	# apply_accs/apply_edit_accs, where the post-pass lives (see
+	# _warp_home_apply). This line is exactly the shipped one.
 	apply_accs(res, ms_full)
 
 
@@ -1735,6 +1743,14 @@ func build_mesh(get_world_block: Callable, eff: Dictionary = {}, mask: PackedByt
 # consumers now AGREE with the geometry instead of disagreeing with the old
 # LSQ fit. Tracked as AC-0462.
 static var _warp_on: bool = OS.get_environment("AWECRAFT_WARP") != "0"
+
+# AC-0467 stage A (plan.html §3): the HOME-pair warp switch — an env var
+# like the face lane's, but DEFAULT OFF (AWECRAFT_WARP_HOME=1 opts in;
+# anything else = off). With it off the home build path below is EXACTLY
+# the shipped one (no changed arithmetic, no reordering), so the shipped
+# game stays byte-identical until a later stage flips it. Independent of
+# _warp_on (the face lane): home is flipped on its own schedule.
+static var _warp_home: bool = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
 
 # AC-0460 stage 1 (plan.html §3.1): the census counter — incremented once
 # per build at the point the warp actually runs (inside _warp_face_slabs,
@@ -1854,6 +1870,101 @@ func _warp_slab_footprint_aabb(y0: float) -> AABB:
 	return AABB(mn, mx - mn)
 
 
+# AC-0467 stage A (plan.html §4.2): the HOME-lane warp post-pass — the
+# same pipeline point as the face lane (build_mesh calls it after the
+# mesher, before apply_accs assembles the surfaces) and the same shape
+# as _warp_face_slabs, with the home-point mapping: world = (R + ly) *
+# normalize(SphereMath.home_point(fx, fz, R)) - (0, R, 0), fx = cx*16 +
+# lx, fz = cz*16 + lz (home cells are 1 m — no 1024 chart, no mirror).
+# The native drop-in is AweMesh.warp_home_verts (the doubles port of the
+# same construction); a stale .so WITHOUT the method degrades to the
+# GDScript loop below instead of crashing (plan §4.1).
+# AC-0467 stage A (plan.html §4.2): the single home-warp point. EVERY home
+# build lands through apply_accs / apply_edit_accs — the C++ worker handoff
+# (full-column, per-slab high, edit, band-A mat) and the sync fallbacks via
+# build_mesh — so the post-pass runs at the top of BOTH, not in build_mesh
+# (which the live worker lane never calls — that was the stage-A first-pass
+# miss, caught by the world-bounds dump). The face lane is excluded by
+# face < 2 (it warps in build_mesh_face — no double warp). Flag off: the
+# condition is false and the shipped apply path runs exactly as-is (no
+# changed arithmetic, no reordering). The warped vertices are world-space:
+# the node placement is identity (world.gd _make_chunk_node keeps it so
+# while the flag is on) and the collision built below in _post_build_collision
+# comes from this same mesh — world-space too (the AC-0460 face-lane
+# contract).
+func _warp_home_apply(res: Dictionary) -> void:
+	if not _warp_home or int(face) >= 2:
+		return
+	_warp_home_slabs(res)
+	position = Vector3.ZERO
+	basis = Basis.IDENTITY
+
+
+func _warp_home_slabs(res: Dictionary) -> void:
+	warped_chunks += 1  # the warp actually runs here (same counter contract as the face lane)
+	var R: float = float(Game.planet_R)
+	var ccx: float = float(int(cx)) * 16.0
+	var ccz: float = float(int(cz)) * 16.0
+	var mc: Variant = mesh_cpp()
+	var native_warp: bool = mc != null and mc.has_method("warp_home_verts")
+	for row in res.slabs:
+		for di in range(6):
+			var v: PackedVector3Array = row[di].v
+			var w0: int = Time.get_ticks_usec()
+			if native_warp:
+				# fresh same-size array; written back before apply_accs
+				# assembles this surface (build_mesh calls the warp
+				# post-pass first, then the assembly).
+				row[di]["v"] = mc.warp_home_verts(v, int(cx), int(cz), R)
+			else:
+				for i in range(v.size()):
+					var p: Vector3 = v[i]
+					v[i] = _warp_home_cell_point(R, ccx, ccz, p.x, p.z, p.y)
+			warp_us += Time.get_ticks_usec() - w0
+			warp_verts += v.size()
+			warp_surfaces += 1
+
+
+# AC-0467 stage A (plan.html §4.2): the home warp construction in ONE
+# place (the same extraction discipline as _warp_cell_point): the local
+# point (lx, ly, lz) maps to the flat home metres (fx, fz) = (ccx + lx,
+# ccz + lz) and to world by (R + ly) * normalize(home_point(fx, fz, R))
+# - (0, R, 0). Callers: _warp_home_slabs (the mesh vertices) and
+# _warp_home_slab_footprint_aabb (the occluder fallback lattice).
+func _warp_home_cell_point(R: float, ccx: float, ccz: float, lx: float, lz: float, ly: float) -> Vector3:
+	var dir: Vector3 = SphereMath.home_point(ccx + lx, ccz + lz, R)
+	return (R + ly) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+
+
+# AC-0467 stage A (plan.html §4.4): the occluder fallback box for a
+# HOME-lane full-solid slab whose mesh is missing or degenerate, under
+# the home warp — the AC-0460 stage-2b fallback applied to home: the
+# 16x16 corner lattice at the slab's two heights h = y0 and h = y0 + 16,
+# boundary-sampled (the 4 edges at 1-cell steps at both heights) and
+# warped through _warp_home_cell_point, the SAME construction the mesh
+# vertices use. The node is identity under the warp, so the warped
+# points ARE the world placement.
+func _warp_home_slab_footprint_aabb(y0: float) -> AABB:
+	var R: float = float(Game.planet_R)
+	var ccx: float = float(int(cx)) * 16.0
+	var ccz: float = float(int(cz)) * 16.0
+	var mn := Vector3(INF, INF, INF)
+	var mx := Vector3(-INF, -INF, -INF)
+	for h in [y0, y0 + 16.0]:
+		for e in range(17):
+			var t: float = float(e)
+			var ps: Array = [
+				_warp_home_cell_point(R, ccx, ccz, 0.0, t, h),
+				_warp_home_cell_point(R, ccx, ccz, 16.0, t, h),
+				_warp_home_cell_point(R, ccx, ccz, t, 0.0, h),
+				_warp_home_cell_point(R, ccx, ccz, t, 16.0, h),
+			]
+			for p in ps:
+				mn = Vector3(minf(mn.x, p.x), minf(mn.y, p.y), minf(mn.z, p.z))
+				mx = Vector3(maxf(mx.x, p.x), maxf(mx.y, p.y), maxf(mx.z, p.z))
+	return AABB(mn, mx - mn)
+
+
 func build_mesh_face(light: Dictionary = {}) -> void:
 	# AC-0309: the face-chunk sync build — the face grid's build lane (the
 	# home drain dispatch is home-grid-keyed and stays untouched). The
@@ -1951,6 +2062,7 @@ func apply_accs(res: Dictionary, ms: Dictionary) -> void:
 	# until the new refs are assembled, then free the old atomically.
 	# (The old order freed before the assembly; a deferred/failed assembly
 	# then left a frame with no mesh - the trunk blink / see-through.)
+	_warp_home_apply(res)  # AC-0467 stage A: no-op unless the home warp flag is on (face < 2)
 	var fsi0 := int(res.get("si0", 0))
 	var fsi1 := int(res.get("si1", slab_n() - 1))
 	var old_insts: Array = []
@@ -1994,6 +2106,7 @@ func apply_edit_accs(res: Dictionary, ms: Dictionary, mark_complete := true) -> 
 	# AC-0263: mark_complete=false for the per-slab high lane (a scoped
 	# landing does NOT complete the column — the completion check runs in
 	# the world handoff against the high_stamps probe).
+	_warp_home_apply(res)  # AC-0467 stage A: no-op unless the home warp flag is on (face < 2)
 	var pms := {"tex": null, "rects": {}, "h": 0.0}
 	var si0 := int(res.get("si0", 0))
 	var si1 := int(res.get("si1", slab_n() - 1))

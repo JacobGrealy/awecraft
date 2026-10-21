@@ -3580,6 +3580,9 @@ public:
 		// AC-0460 stage 4 (plan.html §4): the face-lane warp post-pass —
 		// the drop-in native of chunk.gd _warp_face_slabs' vertex loop.
 		ClassDB::bind_method(D_METHOD("warp_face_verts", "verts", "face", "ccx", "ccz", "R"), &AweMesh::warp_face_verts);
+		// AC-0467 stage A (plan.html §4.1): the home-lane warp post-pass
+		// (the same construction as warp_face_verts with sm_home_point).
+		ClassDB::bind_method(D_METHOD("warp_home_verts", "verts", "ccx", "ccz", "R"), &AweMesh::warp_home_verts);
 		// AC-0236 part 2: the low placeholder emit (the worker-side
 		// 4x4x4 grid + greedy mesh; the node attach stays main-thread).
 		// AC-0252: the med/low AVERAGE-COLOR emit (grid 8 = MED / 4 = LOW,
@@ -4486,6 +4489,31 @@ public:
 			const double u1024 = bx + (mirrored ? 16.0 - (double)p.x : (double)p.x);
 			const double v1024 = bz + (double)p.z;
 			const awesm::SmV3 dir = awesm::sm_uv_to_world(face, u1024 / 1024.0, v1024 / 1024.0, R);
+			const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+			const double s = (R + (double)p.y) / len;
+			out[i] = Vector3(dir.x * s, dir.y * s - R, dir.z * s);
+		}
+		return out;
+	}
+	// AC-0467 stage A (plan.html §4.1): the HOME-lane warp post-pass —
+	// the same shape as warp_face_verts, with sm_home_point(fx, fz, R)
+	// instead of sm_uv_to_world: world = (R + ly) *
+	// normalize(home_point(fx, fz, R)) - (0, R, 0), fx = ccx*16 + lx,
+	// fz = ccz*16 + lz (home cells are 1 m — no 1024 chart, no mirror).
+	// Adjacent columns share the seam's flat point, so both sides land
+	// on the SAME world point (the seam crack is zero by construction).
+	// Stateless, same signature/call shape as warp_face_verts.
+	PackedVector3Array warp_home_verts(const PackedVector3Array &verts, int ccx, int ccz, double R) {
+		const double bx = (double)ccx * 16.0;
+		const double bz = (double)ccz * 16.0;
+		const int n = (int)verts.size();
+		PackedVector3Array out;
+		out.resize(n);
+		for (int i = 0; i < n; i++) {
+			const Vector3 p = verts[i];
+			const double fx = bx + (double)p.x;
+			const double fz = bz + (double)p.z;
+			const awesm::SmV3 dir = awesm::sm_home_point(fx, fz, R);
 			const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
 			const double s = (R + (double)p.y) / len;
 			out[i] = Vector3(dir.x * s, dir.y * s - R, dir.z * s);

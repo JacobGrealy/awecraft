@@ -1,0 +1,43 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0467 home canonical placement</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0467 stage A — the home pair onto the canonical sphere placement (flag-gated)</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The face lane already ships this (AC-0458 flag → AC-0460 default, occluder parity 335/335, 0.423 ms/chunk native). This extends the SAME placement to the home pair, <b>behind a flag, default OFF</b>, so the shipped game is untouched until it is proven. Stage B flips it and deletes the seam-extension apparatus.</p>
+<h2>1. Goal</h2><p>With the flag ON, a home chunk's vertices land on the canonical sphere placement — each corner evaluated at its own (x,z) — instead of a rigid per-column transform. Consequence: two adjacent columns evaluate the SAME shared edge point, so the seam crack is zero by construction rather than covered by an extension.</p>
+<h2>2. The mapping (this is the whole maths)</h2>
+<pre>world = (R + ly) * normalize(SphereMath.home_point(fx, fz, R)) - Vector3(0, R, 0)
+fx = cx*16 + lx        fz = cz*16 + lz          (flat metres; home cells are 1 m)</pre>
+<p><code>home_point</code> already exists (sphere_math.gd:324) and is documented as valid past the patch edge. This is the same shape as the face warp: the only difference is <code>home_point(fx,fz,R)</code> instead of <code>uv_to_world(face,u,v,R)</code>.</p>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/chunk.gd</td><td><code>_warp_face_slabs</code> (~1710) and <code>_warp_cell_point</code>; the <code>_warp_on</code> flag (~1730, default ON since AC-0460, off-switch <code>AWECRAFT_WARP=0</code>)</td><td>Edit: add a HOME branch that uses <code>home_point</code>. Add a separate flag <code>_warp_home</code> reading <code>AWECRAFT_WARP_HOME</code> (<b>default OFF</b>) so home is flipped independently of the face lane.</td></tr>
+<tr><td>gdext/src/mesh.cpp</td><td><code>warp_face_verts</code> (added at AC-0460 stage 4) and its binding</td><td>Edit: add <code>warp_home_verts(verts, ccx, ccz, R)</code> mirroring it with <code>sm_home_point</code>; bind it. Rebuild both binaries.</td></tr>
+<tr><td>gdext/src/sphere_math_cpp.h</td><td><code>sm_home_point</code> (~84)</td><td>READ ONLY — reuse.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>c.transform = _col_sphere_transform(cx, cz)</code> (<b>11417</b>); <code>_view_basis</code> (<b>858</b>, the camera/up frame from a column transform)</td><td>Edit: when the home warp is on, give the chunk node an IDENTITY transform (its mesh is already in world space) and make <code>_view_basis</code> use the canonical frame at the player's position instead of a column transform.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td><code>planetwalk</code> (AC-0466), <code>faceedit</code>, <code>ac0423probe</code>; add a small <code>homecensus</code> arm</td><td>Add ONE arm reporting, for a set of adjacent home column pairs: the world-space distance between each side's version of the SAME shared corner (must → 0 when the flag is on).</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>as templates</td><td>Add the <code>homecensus</code> row; <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>tasks/AC-0467/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation (<code>gen.cpp</code>), the face lane's warp, keys, saves, SphereMath's formulas, the seam-extension code (that is stage B's deletion, not this).</p>
+<h2>4. Edit shape</h2>
+<ul>
+<li><b>4.1 Native pass first.</b> Add <code>warp_home_verts</code> in C++ (fast path, mirroring <code>warp_face_verts</code>) and use it when available; keep a GDScript fallback so a stale <code>.so</code> degrades instead of crashing. Rebuild <code>libchunkio.so</code>; report the build time.</li>
+<li><b>4.2 Chunk build.</b> When <code>_warp_home</code> is on, warp a home chunk's slabs exactly as the face path does (same point in the pipeline, after the mesher, before <code>apply_accs</code>), and give the node identity. <b>Flag off must be byte-identical to today</b> — no changed arithmetic, no reordering.</li>
+<li><b>4.3 The camera/up frame.</b> <code>_view_basis</code> at 858 currently derives from a column transform; with identity node transforms it must come from the canonical frame at the player's position (the local up is <code>normalize(pos + (0,R,0))</code>). Keep the flag-off path untouched.</li>
+<li><b>4.4 Occluders.</b> The face lane needed a footprint fallback to keep occluder parity (AC-0460 s2b). Apply the same fallback to home so warp-on does not silently lose occlusion.</li>
+</ul>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Flag OFF is untouched</td><td><code>python3 tasks/scripts/gate_run.py AC-0467 --arms g0,smoke,ac0423probe,faceedit,planetwalk,homecensus --timeout 900</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25; ac0423probe reproduces its nine overlaps exactly; faceedit green both charts; planetwalk green; <b>homecensus reports the CURRENT (non-zero) shared-corner error — that is the baseline, report its magnitude</b>.</td></tr>
+<tr><td>Flag ON</td><td>Same with <code>--env 'AWECRAFT_WARP_HOME=1'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; genhash 25/25 (generation must not move); <b>homecensus shared-corner error must COLLAPSE</b> — report the before/after in mm and state the tolerance achieved; faceedit and planetwalk still green.</td></tr>
+<tr><td>Seam band</td><td><code>tasks/AC-0434/seam_band_probe.gd</code> with the flag ON</td><td>Report the per-corner overlap. <b>Target: it collapses, not narrows.</b> If it only narrows, say so — that means the extension still fires and stage B is not yet safe.</td></tr>
+<tr><td>Render (the AC-0434 vantage)</td><td>one <code>xvfb-run</code> snapshot: a surface-flush block on a home seam, player standing on the line, camera above — flag ON, and the flag-OFF twin</td><td>Both PNGs produced and inspected by the builder, which must describe what changed. A render without a baseline proves nothing: report both.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>Flag OFF provably untouched; flag ON makes adjacent home columns agree on shared corners (measured, in mm) with the seam band collapsing and no standing value moving. <b>The default is NOT flipped in this stage.</b></p>
+<h2>7. Risks</h2><p>(1) The home lane is the shipped game — any flag-off drift is a failure, which is why <code>ac0423probe</code>'s exact nine overlaps are gated. (2) <code>_view_basis</code> drives camera up and the walking frame; getting it wrong makes the player feel tilted, so verify the <code>player</code> and <code>planetwalk</code> arms, not just geometry. (3) The home grid is 1 m cells over the same chart, so the sagitta inside one 16 m column is 16²/(8·4000) ≈ 8 mm — expect small displacements, and if you see centimetres, the mapping is wrong.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not delete the seam-extension apparatus here.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>Face lane canonical placement is shipped and default. This brings the home pair onto the same model behind a flag. Stage B then flips it and deletes the K tables / ring reads / sphere_r / margins / clamp that AC-0434 measured at 602-730 mm per corner.</p>
+</body></html>

@@ -855,7 +855,24 @@ func _view_sample() -> void:
 	var ck := _key(last_pcx, last_pcz)
 	if ck != _view_basis_col:
 		_view_basis_col = ck
-		_view_basis = _col_sphere_transform(last_pcx, last_pcz).basis
+		if _warp_home_on:
+			# AC-0467 stage A (plan.html §4.3): with the home warp the chunk
+			# nodes are identity, so a column transform is NOT the placement
+			# — the view frame is the canonical frame at the player's
+			# position: local up = the radial normalize(pos + (0, R, 0))
+			# (the world frame is the planet frame shifted down by R, so
+			# pos + (0, R, 0) is the planet-frame point and its normalise is
+			# the surface normal), the tangent axes completed right-handed.
+			# Flag off: the shipped line below, untouched.
+			var upv: Vector3 = (p.global_position + Vector3(0.0, float(Game.planet_R), 0.0)).normalized()
+			var xv: Vector3 = upv.cross(Vector3(0.0, 0.0, 1.0))
+			if xv.length() < 0.05:
+				xv = upv.cross(Vector3(1.0, 0.0, 0.0))
+			xv = xv.normalized()
+			var zv: Vector3 = xv.cross(upv)
+			_view_basis = Basis(xv, upv, zv)
+		else:
+			_view_basis = _col_sphere_transform(last_pcx, last_pcz).basis
 	var d: Vector3 = _view_basis.transposed() * p.aim_dir()
 	d.y = 0.0
 	var l := d.length()
@@ -3816,8 +3833,14 @@ func _bd_log(cx: int, cz: int) -> void:
 	if build_dispatch_log.size() > BUILD_DISPATCH_LOG_CAP:
 		build_dispatch_log.pop_front()
 
+# AC-0467 stage A: the home-pair warp flag (the chunk-side twin is
+# Chunk._warp_home, default OFF) — read once in _ready so _make_chunk_node
+# and _view_sample branch on it without per-frame env reads.
+var _warp_home_on: bool = false
+
 func _ready() -> void:
 	_ac0383_init()  # AC-0383: read the env once (zero per-frame cost when off)
+	_warp_home_on = OS.get_environment("AWECRAFT_WARP_HOME") == "1"
 	# AC-0270: the harness shortens the decay window deterministically.
 	var _ldms := OS.get_environment("AWECRAFT_LEAFDECAY_MS")
 	if _ldms != "":
@@ -11414,7 +11437,14 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	# AC-0307: the rigid sphere placement (P2 of AC-0144) — local +Y is the
 	# radial at the column's own centre, neighbours share their edge line
 	# (the folded-net property); flat local geometry is untouched.
-	c.transform = _col_sphere_transform(cx, cz)
+	# AC-0467 stage A (plan.html §3): under the home warp the mesh is
+	# already in world space (each corner warped at its own flat metres),
+	# so the node wears identity — the face lane does the same in
+	# build_mesh_face. Flag off: exactly the shipped line.
+	if _warp_home_on:
+		c.transform = Transform3D(Basis.IDENTITY, Vector3.ZERO)
+	else:
+		c.transform = _col_sphere_transform(cx, cz)
 	# AC-0152: band 0 gets collision; 1/2/3 do not. Out-of-set (stale
 	# caller) clamps to collar so it can never mesh by accident.
 	var nb := band_of(int(cx) - last_pcx, int(cz) - last_pcz)
