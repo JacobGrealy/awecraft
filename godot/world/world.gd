@@ -11397,12 +11397,12 @@ func _key(cx: int, cz: int) -> String:
 	var k := cx * 65536 + cz
 	var s = chunk_keys.get(k)
 	if s == null:
-		s = "%d,%d" % [cx, cz]
+		s = "0:%d:%d" % [cx, cz]  # AC-0459: the home key is the 3-part "face:ccx:ccz" spelling (face 0), one key shape with the chart faces
 		chunk_keys[k] = s
 	return s
 
-# AC-0465: public chunk-key producer (delegates to _key; the single spot
-# AC-0459 flips — format unchanged by this ticket).
+# AC-0465: public chunk-key producer (delegates to _key). AC-0459: the
+# home key format is flipped HERE (the single producer) to "0:cx:cz".
 func chunk_key(cx: int, cz: int) -> String:
 	return _key(cx, cz)
 
@@ -14597,10 +14597,10 @@ func _face_star_pass() -> void:
 		if int(st.pending_cells()) > 0:
 			st.step(int(STAR_STEP_BUDGET_MS) * 1000)
 		for key in star_owed.keys():
-			# the face keys are 3-part (face:ccx:ccz); the home keys are
-			# 2-part (cx:cz) and must NOT match (a home cx of 4 is "4:-3")
+			# all keys are 3-part (face:ccx:ccz); the home keys carry face 0
+			# (AC-0459) and must NOT match a per-face engine (faces 2-11 only)
 			var parts: PackedStringArray = String(key).split(":")
-			if parts.size() != 3 or int(parts[0]) != int(face):
+			if parts.size() != 3 or int(parts[0]) < 2 or int(parts[0]) != int(face):
 				continue
 			var c = chunks.get(key)
 			if c == null:

@@ -976,6 +976,11 @@ Build and loading:
   the re-derived world would place its edits on different ground and its player pose in mid-air; the
   clean reject (a log line + a fresh world, no migration) is the owed protection. The bump is enforced
   in `_continue_slot`'s `version_ok` gate (a SAVE SOFT-FAIL print; edits/pose/leaf-decay gated).
+  **AC-0459 bumped `SAVE_VERSION` 4 → 5** (`autoload/save.gd`): the home chunk key was re-spelled
+  `"cx,cz"` → `"0:cx:cz"` (the 3-part form, one key shape with the chart faces), so a version-4
+  save's edit diff re-keys onto the OLD home spelling and would half-load into the flipped world —
+  the same clean reject, no migration. The 5-part edit-key form itself is unchanged (the re-keyer's
+  3-part branch now absorbs the face-0 home keys).
 
 ## 6. Stable design decisions
 
@@ -1036,8 +1041,10 @@ p2b3_probe.gd, p2c1_probe.gd.
   a sphere is not developable, so the grid scales with the radius). At the shipped
   `Game.planet_R = 4000` (unchanged by AC-0306 — save record `planets:[{id,R,orbit}]`
   keeps R only, W is derived, no migration): W = 6283 and the home pair (faces 0,1 —
-  the flat world, 1 m integer columns keyed `"%d,%d"`) is a 6283×6283 m patch (3141
-  per half). The position→cell map for the home pair is `World.key_for_sphere_pos`
+  the flat world, 1 m integer columns keyed `0:%d:%d` (AC-0459: the home key
+  carries the 3-part `face:ccx:ccz` spelling, face 0 — one key shape with the
+  chart faces; pre-AC-0459 it was the 2-part `"%d,%d"`)) is a 6283×6283 m patch
+  (3141 per half). The position→cell map for the home pair is `World.key_for_sphere_pos`
   (half-face width πR/4; pre-AC-0306 it was R — the 0.72 m-per-block "shrunken
   Minecraft" defect). The cube-sphere mapping pre-warps each cube coordinate
   `c → tan(c·π/4)` (per-coordinate on purpose: both faces of a shared edge evaluate
@@ -1162,7 +1169,10 @@ p2b3_probe.gd, p2c1_probe.gd.
   (faces 2–11) stream around the net. The face grid is 1024×1024 cells per
   face — ANISOTROPIC: the u axis spans the full face width (S ≈ 6.14 m per
   cell), the v axis the half-face (S/2 per cell on the z faces). Face chunks
-  hold 16×16 cells, keyed `face:ccx:ccz`, placed by `face_chunk_transform`
+  hold 16×16 cells, keyed `face:ccx:ccz` (AC-0459: the home pair now shares this
+  spelling with face 0 — `0:ccx:ccz` — so the chunk dict has one key shape; the
+  face ≥ 2 guard in `_face_star_pass` keeps home keys out of the per-face
+  engines), placed by `face_chunk_transform`
   (the pre-warp + per-chunk LSQ — the chart placement; the net-vs-chart
   placement residual it leaves at the seam is the AC-0307/AC-0308 property
   and STANDS — AC-0311 piece 3 removed the C1 blend band, which masked the

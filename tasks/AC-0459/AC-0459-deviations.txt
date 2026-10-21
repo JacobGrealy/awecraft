@@ -25,3 +25,184 @@ What the revised plan needs (coordinator decisions, not builder choices):
    b. Correct the parser list: drop 13685/1732/1805/635 as no-ops (with the reason above), point 593 at 598, and state explicitly whether 14597 gets a defensive comment only.
    c. Rule the ~40 harness.gd lookups in or out of this ticket (fence + arm-re-baselining decision).
    d. Confirm the save/load RESULT expectations still hold once (a) lands (simband wall should return to ~2.1 s if the main.gd wait is fixed).
+
+================================================================================
+RESUME RUN — 2026-10-20 23:08 — reader audit (plan §4.1) + NEW PLAN-INSUFFICIENT
+================================================================================
+
+PLAN-INSUFFICIENT: plan §2/§3 require world.chunk_key / world.chunk_key_face (plan
+anchor: world.gd:11406) but those symbols DO NOT EXIST in the current tree. AC-0465's
+refactor landed in commit fa50122 (wrappers + 71 routed sites) and was REVERTED by
+commit 3b44f90 (godot/ fully restored to pre-AC-0465: world.gd -9 lines = both
+wrappers gone; `git diff fa50122~1 HEAD -- godot/` is EMPTY; working tree == HEAD).
+The "AC-0465 closed" commit 041cced carried the revert; TASKS.yaml still says done.
+The 4 by-hand lookups this finding's item 2 flagged in main.gd (1704/1827/1873/1908)
+and the ~40 in harness.gd are ALL still literals. Flipping _key alone would leave
+49 chunk-key sites dead (null lookups read as "chunk not built" — the quiet
+simband-stall failure this ticket series exists to prevent). Re-land AC-0465
+(`git checkout fa50122 -- godot/`, re-verify g0 + genhash 25/25) and re-run AC-0459.
+No code was changed by this run; no gates run (nothing to prove).
+
+Full reader audit (the §4.1 deliverable — every parse/lookup site in world.gd,
+main.gd, save.gd, harness.gd; run on the current pre-AC-0465 tree, valid either way):
+
+Classifications: CHUNK = chunk-dict key read/built; CELL = 3-part global cell key
+"gx,gy,gz"; EDIT = 5-part save edit key (or the re-keyer's legacy forms);
+LOCAL = arm-internal key (delta/fixture/cache), never a chunk key; NA = not a key.
+
+world.gd
+  11400  _key cache fill "%d,%d"                                     CHUNK — THE producer, the one-line flip site
+  14597  _face_star_pass: star_owed.keys() split(":")                 CHUNK reader — home 2-part AND face 3-part keys share the dict; post-flip home keys are 3-part with face 0, so the filter must require face >= 2 (plan §3 names this edit)
+  1016, 1044, 1066, 6392  tex_refresh = chunks.keys().duplicate()     CHUNK — opaque token, no parse (safe)
+  12572  edits.get(_key(cx,cz))                                       CHUNK — producer-routed (follows the flip)
+  12744  _record_edit: key := _key(...)                               CHUNK — producer-routed
+  12753  _apply_edits_to_chunk: _key / _key_f by c.face               CHUNK — producer-routed
+  12969  save filter: key := _key(...)                                CHUNK — producer-routed
+  15430  set_block_key: _key_f(face,cx,cz)                            CHUNK — face form (unchanged by this ticket)
+  8691, 8815, 9050, 9177  nbs["%d,%d" % [dx,dz]] ring caches          LOCAL (direction offsets)
+  13721  _banana_register "%d,%d,%d" global cell                      CELL — NOT a chunk key (previous trap #1)
+  14854, 14932  face nbs ring cache "%d,%d" [dx,dz]                   LOCAL
+
+main.gd
+   115  size_env.split(",")                                           NA (env)
+   593  _conv_edits_v2: 5-part edit-key split(":")                     EDIT (unchanged)
+   598  _conv_edits_v2: builds runtime home key "%d,%d"                CHUNK reader-side BUILDER — must emit the face-0 3-part form post-flip; AC-0465 routes it through world.chunk_key
+   635  _continue_slot: 5-part edit-key gate                            EDIT (the version path — do NOT touch)
+   764, 770  aw= CLI spec splits                                       NA
+   911  aimenv.split(",")                                              NA (env)
+  1704  _fluidfall_scan: chunks.get("%d,%d")                           CHUNK by-hand lookup (still literal in this tree)
+  1732  fluidfall result str(k).split(",") [gy]                        CELL (trap #2)
+  1805  banana str(k).split(",")                                       CELL (trap #3)
+  1827  _await_spawn_floor: chunks.get("%d,%d")                        CHUNK by-hand (still literal)
+  1873  _await_core_3x3: chunks.get("%d,%d")                           CHUNK by-hand (still literal)
+  1908  _await_sim_band: chunks.get("%d,%d")                           CHUNK by-hand (still literal; on the save/load start-flow path)
+
+save.gd
+   142  _edits_v2: 2-part "ccx,ccz" branch (split(",") size==2)        EDIT re-keyer — legacy home edit-key shape; DEAD for new saves post-flip (home keys become 3-part)
+   145  _edits_v2: 3-part "face:ccx:ccz" branch (split(":") size==3)   EDIT re-keyer — post-flip home keys "0:ccx:ccz" take THIS branch -> save key "0:0:ccx:ccz:local" (face 0 even for ccx<0); load gate main.gd:636 accepts face 0-11 and main._conv_edits_v2 maps face<=1 back to the home key, so the round-trip HOLDS — no edit needed here (verified by reasoning; the save arm re-proves it once the flip lands)
+
+harness.gd — the 37 by-hand home-key lookups (ALL still literals; AC-0465 routed them, the revert brought them back):
+  8944, 8958, 9105, 9258, 10097, 16463 ("0,0"), 20746, 22345 ("0,0"),
+  23899, 23945, 23970, 23986, 24780, 24925, 24937, 25056, 25295, 25304,
+  26836, 26864, 26931, 27092, 27139 (% sc array), 27419, 27513, 27690,
+  27856, 28030, 28193, 28542, 28605, 28631, 29368 ("0,0"), 29374 ("0,0"),
+  34133, 34144, 34151                                                  => CHUNK by-hand lookups (break on the flip)
+  34665, 34708, 34747, 34817, 35046, 35057  chunks.get("196,%d" % ...)  CHUNK by-hand (hardcoded cx=196; break)
+  34344  chunks.get("%d:%d:%d" % [af, ...])                            CHUNK, FACE form — 3-part already, unchanged by this flip (safe)
+  32253  _seamcensus: info dict keyed by world.chunks keys (32195/32213), key.split(",") at 32253-32255, neighbour via world._key (32257)
+                                                                    CHUNK reader — the ONLY harness site that PARSES a real chunk-key string (post-flip "0:cx:cz".split(",") = 1 part -> index error; must parse face:ccx:ccz)
+
+harness.gd — CELL keys (leave alone):
+  1754  fluidfall scells split(",")[1]                                 CELL
+  23287  fluidfall scells split(",")[1]                                CELL
+  10782  banana fruit_key.split(",") (10786 fck = local label)          CELL
+
+harness.gd — LOCAL delta/fixture keys (parsed locally; world lookups go through
+world._key — safe under the flip; listed so the next audit does not re-litigate):
+  9970 (sec_cache), 10020 (df_cols), 11597 (keys_d), 12029 (rk), 12237 (pe["k"]),
+  12465 (keyset), 12528 (a_by_taxis), 12986 (oe), 16293, 16331 (keys),
+  25361 (e["col"], built at 25316), 29286, 29307 (ref_trees/ref_flowers
+  reference-gen cell coords), 32069, 32088, 32098 (pillar/expected fixtures)
+
+harness.gd — chunks.keys() OPAQUE iterations (keys as tokens; c.cx/c.cz from
+the node — all safe): 2600, 23161, 23176, 23179, 23386, 25808, 25813, 26068,
+26073, 28833, 32195 (+ fluid helpers 28758-28830 consuming those arrays)
+
+harness.gd — NA: 275, 276, 1212, 1321, 1470, 1653, 2139, 4956 (env),
+2760, 3122 (ramp "slab/y"), 16662 ("\n"), 29335 (GENHASH log line " "),
+33486, 33500 (color "r_g" samples)
+
+Summary (current tree):
+  flip breaks 49 CHUNK sites without AC-0465 re-landed:
+    world.gd:14597 (reader) + main.gd 598/1704/1827/1873/1908 (5)
+    + harness.gd 37 literals + 6 "196,%d" + 32253 parse (44)
+  flip target: world.gd:11400 (1 line)
+  CELL parsers (do NOT touch): world.gd:13721, main.gd:1732, main.gd:1805,
+    harness.gd:1754, 23287, 10782 (6)
+  EDIT-key sites (do NOT touch): main.gd:593, 635, save.gd:142, 145 (4)
+  version-rejection path main.gd:628: confirmed present and structurally correct
+    (version_ok gates _conv_edits_v2 at 650, leaf_decay at 658, pose at 663;
+    soft-fail log at 640) — unmodified, untested by this run (nothing changed)
+
+===============================================================================
+RUN 3 — 2026-10-20 23:53 — reader audit REDONE on the d0874f4 tree (post re-land)
+===============================================================================
+
+Prerequisite verified first: `func chunk_key` at godot/world/world.gd:11406 and
+`func chunk_key_face` at world.gd:15292 exist; HEAD is d0874f4 ("AC-0465: re-land
+the refactor"); inline `world.chunks.get("%d,%d"...)` builders are 0 in both
+main.gd (5 lookups, all via world.chunk_key: 598/1704/1827/1873/1908) and
+harness.gd (66 world.chunk_key sites; 0 literal-string chunk-dict accesses in
+world.gd/main.gd/harness.gd/save.gd — grepped `chunks.get("`, `chunks["`,
+`chunks.has("`, `chunks.erase("`).
+
+Reader audit (plan §4.1) — every key parse/lookup site in world.gd, main.gd,
+save.gd, harness.gd on THIS tree. Supersedes the stale audit above (that one was
+run on the pre-AC-0465 tree). Classes: CHUNK = chunk-dict key; CELL = 3-part
+global cell key "gx,gy,gz"; EDIT = 5-part save edit key; LOCAL = arm-internal;
+OPAQUE = key used as an unsplit token; NA = not a key.
+
+CHUNK — affected by the flip (action in parens):
+  world.gd:11398  _key cache fill `s = "%d,%d" % [cx, cz]`      THE ONE producer — flip to "0:%d:%d"
+  world.gd:14602  _face_star_pass: star_owed key split(":") + 3-part/face filter
+                                                          CHUNK reader — add `int(parts[0]) < 2` guard (home keys are now 3-part with face 0)
+  world.gd:6242,6273,15386,15451  star_owed[key] writes          producer-routed (_key/_key_f) — follows the flip, no edit
+  world.gd:1016,1044,1066,6392  chunks.keys().duplicate() (tex_refresh)
+                                                          OPAQUE token; drain reads c.cx/c.cz (world.gd:6415-6426) — no edit
+  world.gd:11470,11530  tex_refresh.erase(key)                    OPAQUE — no edit
+  world.gd:6967,7341,12839,13387  chunk_origin writes             producer-routed keys — no edit
+  world.gd:12572,12744,12753,12969  world.edits lookups           producer-routed (_key/_key_f by c.face) — no edit
+  world.gd:15430  set_block_key _key_f                            face form — unchanged
+  main.gd:598     _conv_edits_v2 home branch -> world.chunk_key   producer-routed — follows the flip, no edit
+  main.gd:1704,1827,1873,1908  fluidfall/spawn/core/simband lookups
+                                                          producer-routed (world.chunk_key) — no edit
+  harness.gd:32253  _seamcensus: key.split(",") -> ax/az          CHUNK reader — MUST parse "0:ccx:ccz"; chart (face>=2) keys skip the flat pair check (pre-flip a 3-part key could not parse here either, so behaviour for chart keys is unchanged)
+  harness.gd:25361  flysave: e["col"].split(",") (e["col"] = world.chunk_key, built at 25322)
+                                                          CHUNK reader — MUST parse the colon form (parts[1]/parts[2])
+  harness.gd:25110,25131  chunk_origin.get(key / world.chunk_key(...))  OPAQUE token (same producer string) — no edit
+  harness.gd:25380  chunk_origin.get(String(e["col"]))             OPAQUE — no edit
+  harness.gd:2600,23161,23176,23179,23386,25808,25813,26068,26073,28833
+                                                          chunks.keys() OPAQUE iterations (nodes read via c.cx/c.cz, data via the node) — no edit
+  harness.gd:17084,17094,17101  str(key) in a log/RESULT field     OPAQUE — no edit
+
+CELL — 3-part global cell keys "gx,gy,gz" (do NOT touch):
+  world.gd:13690   _banana_tick: _banana_fruits key split(",")
+  main.gd:1732     fluidfall result str(k).split(",") [gy]
+  main.gd:1805     banana str(k).split(",")
+  harness.gd:1754  fluidfall scells split(",")[1]
+  harness.gd:23287 fluidfall scells split(",")[1]
+  harness.gd:10782 banana fruit_key.split(",") (10786 local label)
+
+EDIT — 5-part save edit key (do NOT touch):
+  main.gd:593      _conv_edits_v2: split(":") size==5 gate
+  main.gd:635      _continue_slot: split(":") size==5 + planet/face range gate
+  save.gd:141-150  _edits_v2 re-keyer: 2-part "," branch (legacy home; DEAD for new
+                   saves post-flip, kept for old files) + 3-part ":" branch
+                   (post-flip home key "0:ccx:ccz" takes THIS branch -> "0:0:ccx:ccz:local";
+                   load gate main.gd:635 accepts face 0-11 and _conv_edits_v2 maps
+                   face <= 1 back through world.chunk_key — round-trip holds)
+
+LOCAL / NA (arm-internal fixtures, env strings, hotbar pairs — no edit):
+  world.gd:8691,8815,9050,9177,14854,14932  nbs ring caches "%d,%d" [dx,dz]
+  main.gd:115,911  env splits; main.gd:766,770  hotbar "slot:count" pairs
+  harness.gd:276,1321,1470,1653,4956  spec/env splits
+  harness.gd:10020,11597,12029 (splits a LOCAL delta list, then BUILDS via world._key),
+  12237,12465,12528,12986,16293,16331  local delta/fixture keys
+  harness.gd:25316-25322  e["col"] built from world.chunk_key (the 25361 parse's input)
+  harness.gd:29286,29307  reference-gen cell-coordinate fixtures
+  harness.gd:32069,32088,32098  pillar/expected fixtures
+
+Summary (d0874f4 tree): the flip breaks exactly 2 readers (harness.gd:32253,
+harness.gd:25361) + requires the defensive face>=2 guard at world.gd:14602; the
+producer flip is 1 line at world.gd:11398. CELL (6) and EDIT (4) sites untouched.
+No reader's intent was ambiguous (no STOP owed).
+
+Decisions (this run):
+  - harness.gd:32253 + 25361 are chunk-key READERS the plan §4.1 audit identifies;
+    plan §4.3 ("fix only the chunk-key readers the audit identified") covers them
+    even though the §3 file table lists only world.gd/save.gd — fixing them is the
+    plan's own edit shape, not a widening. Recorded here so the coordinator can
+    see the §3-vs-§4.3 tension resolved in favour of §4.3.
+  - world.gd:14602 guard is `int(parts[0]) < 2` (skip face 0/1 keys): per-face star
+    engines only exist for chart faces 2-11, and post-flip the home key "0:ccx:ccz"
+    is 3-part; without the guard a face-0 engine would silently match home keys.

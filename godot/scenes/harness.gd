@@ -25358,8 +25358,10 @@ func _flysave_test(spawn: Vector3) -> void:
 	var bytes_end: int = _flysave_dir_bytes(SLOT)
 	var edited_saved := 0
 	for e in edits:
-		var parts: PackedStringArray = String(e["col"]).split(",")
-		if ChunkIO.saved_column_exists(SLOT, int(parts[0]), int(parts[1])):
+		# AC-0459: e["col"] is the runtime home key "0:ccx:ccz" (built via
+		# world.chunk_key above) — ccx/ccz are the 2nd/3rd parts.
+		var parts: PackedStringArray = String(e["col"]).split(":")
+		if parts.size() == 3 and ChunkIO.saved_column_exists(SLOT, int(parts[1]), int(parts[2])):
 			edited_saved += 1
 	# --- fly back and verify the edits (one teleport per column — the
 	# ring-picked columns need not share a single sim band). Each column
@@ -32250,9 +32252,16 @@ func _seamcensus_test(spawn: Vector3) -> void:
 	keys.sort()
 	for key in keys:
 		var A: Dictionary = info[key]
-		var ksplit: PackedStringArray = key.split(",")
-		var ax := int(ksplit[0])
-		var az := int(ksplit[1])
+		# AC-0459: the home chunk key is now the 3-part "face:ccx:ccz"
+		# (face 0). The flat pair check below resolves neighbours via
+		# world._key (home form only), so it runs for home keys (face <= 1);
+		# a chart-face key (face >= 2) skips it — pre-flip a 3-part key
+		# could not parse here at all, so chart-key behaviour is unchanged.
+		var ksplit: PackedStringArray = key.split(":")
+		if ksplit.size() != 3 or int(ksplit[0]) > 1:
+			continue
+		var ax := int(ksplit[1])
+		var az := int(ksplit[2])
 		for pair in [[1, 0, "+X", "east", "west"], [0, 1, "+Z", "south", "north"]]:
 			var bkey: String = world._key(ax + int(pair[0]), az + int(pair[1]))
 			if not info.has(bkey):

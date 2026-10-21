@@ -1,47 +1,63 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0459 results — STOP (PLAN-INSUFFICIENT)</title>
-<style>body{font:15px/1.5 ui-sans-serif,system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}h1{font-size:22px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}.note{font-size:13px;color:#555}.stop{border-left:4px solid #b33;padding:.5rem 1rem;background:#fdf0f0}</style></head><body>
-<h1>AC-0459 — canonical chunk keys + save bump</h1>
-<div class="stop"><b>Outcome: STOP — PLAN-INSUFFICIENT.</b> The plan's measured blast radius ("120 <code>_key()</code> call sites but only ~5 key parsers; edit the ONE producer") is contradicted by the code. <b>No code was changed and no gates were run.</b> Full findings: <code>tasks/AC-0459/AC-0459-deviations.txt</code> (verbatim below).</div>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0459 results</title>
+<style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}li{margin:.25rem 0}</style></head><body>
+<h1>AC-0459 — flip the chunk-key format — results</h1>
+<p>Run 3 (2026-10-20), after the d0874f4 re-land. The one-line producer flip
+(<code>world._key</code>: <code>"%d,%d"</code> → <code>"0:%d:%d"</code>), the two reader fixes the
+redone audit identified, the face ≥ 2 star-pass guard, and the save bump 4 → 5.
+All gate logs under <code>.scratch/AC-0459-gates/</code> (rev 1 = post-edit, rev 0 = pre-edit baselines).</p>
 
-<h2>1. Gates</h2>
-<table><tr><th>arm</th><th>rc</th><th>script/shader</th><th>result</th></tr>
-<tr><td>g0, genhash, light, ac0423probe, save, load, version-rejection</td><td colspan="3">NOT RUN — the builder stops before any edit because the plan cannot be applied as written (template §3: anchors do not match the code). No gate value is claimed; the version-rejection negative control was NOT exercised.</td></tr></table>
-<p class="note">The §4 log/save grep for legacy "cx,cz" keys is likewise not run — there is no new build to grep, and the pre-existing tree is of course full of the old shape (that is what this ticket changes).</p>
+<h2>Gates</h2>
+<table>
+<tr><th>Arm</th><th>rc</th><th>SCRIPT/SHADER</th><th>ok</th><th>Wall</th><th>Headline value</th><th>Log</th></tr>
+<tr><td>g0</td><td>0</td><td>0/0</td><td>true</td><td>3 s</td><td>clean headless boot after the flip</td><td>g0-r1.log</td></tr>
+<tr><td>genhash</td><td>0</td><td>0/0</td><td>true</td><td>3 s</td><td><b>25/25 byte-identical</b> vs the pre-edit baseline (diff of the sorted <code>GENHASH</code> lines, <code>.scratch/AC-0459/gh-r0.txt</code> vs <code>gh-r1.txt</code> = empty)</td><td>genhash-r0/r1.log</td></tr>
+<tr><td>light</td><td>0</td><td>0/0</td><td>true</td><td>9 s</td><td>surface_eff 15, cave_eff 0, torch 14, pocket [8,120,-50], cands 590 — identical to baseline except <code>cave_census_ms</code> 461→460 (a timer, not a world field)</td><td>light-r0/r1.log</td></tr>
+<tr><td>ac0423probe</td><td>0</td><td>0/0</td><td>true</td><td>8 s</td><td><b>equal excl ms</b> vs baseline (ms 5557→5545); mechanical JSON compare</td><td>ac0423probe-r0/r1.log</td></tr>
+<tr><td>faceedit</td><td>0</td><td>0/0</td><td>true</td><td>33 s</td><td>green on both charts: face 5 (mirror) surface_error_m 0.578, face 11 (non-mirror) 0.397; break_ok/place_ok true, fails []</td><td>faceedit-r1.log</td></tr>
+<tr><td>save</td><td>0</td><td>0/0</td><td>true</td><td>43 s</td><td>ok true: blocks_match 6/6, unedited 4/4, player_match, v1_softfail true, r_saved/r_loaded 4000, clamps 8000/2000 — the continue round-trip re-keys home edits through the 3-part branch and back</td><td>save-r1.log</td></tr>
+<tr><td>load</td><td>0</td><td>0/0</td><td>true</td><td>559 s</td><td>ok true; <b>simband_ms 6740</b> ≈ 6.7 s — this tree's measured normal (AC-0465 A/B: 6747/6718); no jump toward 50 s, so keys are resolving; cols 41, gen 5509, wall_ms 555949</td><td>load-r1.log</td></tr>
+<tr><td>negctrl ver4 (probe)</td><td>0</td><td>0/0</td><td>true</td><td>~2 min</td><td>version-rejection <b>exercised</b>: a genuine v5 save (1 real edit) tampered to <code>version:4</code>, continued through the real <code>_continue_slot</code> — log line <code>SAVE SOFT-FAIL (old save format: version_ok=0 planets_ok=1 edits_v2_ok=1) - edits discarded, fresh world</code>, then <code>seed=44</code>, <code>edits_empty=1</code> (the edit was dropped), clean exit. The player pose WAS restored — that path is height-gated (<code>main.gd:684</code>), pre-existing and untouched by this ticket; with genhash 25/25 the v4/v5 terrain is the same, so the restored pose is safe.</td><td>negctrl-ver4-r1.log</td></tr>
+</table>
 
-<h2>2. Deviations (verbatim from AC-0459-deviations.txt)</h2>
-<pre>PLAN-INSUFFICIENT: the plan's measured blast radius ("120 _key() call sites but only ~5 key parsers; edit the ONE producer") is contradicted by the code — there are unlisted hardcoded chunk-key PRODUCERS that bypass _key, and 3 of the 5 listed "parsers" are not chunk-key parsers at all. No code was changed; no gates were run.
+<h2>Legacy-key grep (plan §5, no-legacy gate)</h2>
+<ul>
+<li>Pattern: quoted 2-part int pairs, <code>"-?[0-9]+,-?[0-9]+"</code> — the legacy chunk-key shape (cell keys are 3-part, so a 2-part quoted match is a legacy chunk key).</li>
+<li>Where: all seven r1 gate logs, the negctrl probe log, and both save-file snapshots (<code>.scratch/AC-0459/save_v5.json</code>, <code>save_v4_tampered.json</code> — the genuine v5 save and its tampered copy, captured in-probe).</li>
+<li>Result: <b>zero matches everywhere</b>. The v5 save's edit key is the 5-part <code>0:0:0:0:136</code> (face-0 home, local cell 136); every chunk dict key in the world is the 3-part form.</li>
+<li>Out of scope, noted: <code>ChunkIO</code> disk files are a separate on-disk format (<code>&lt;slot&gt;/&lt;face&gt;_&lt;cx&gt;_&lt;cz&gt;_0.bin</code>, chunk_io.gd:73) — unchanged by this ticket.</li>
+</ul>
 
-Verified findings (all re-checked against the code, 2026-10-20):
+<h2>Reader audit</h2>
+<p>Redone on the d0874f4 tree (the previous audit was run on the reverted tree and is stale).
+Full file:line table with the CHUNK/CELL/EDIT/LOCAL/OPAQUE classification:
+<code>tasks/AC-0459/AC-0459-deviations.txt</code>, RUN 3 section. Summary: the flip breaks exactly
+two readers — <code>harness.gd:32253</code> (_seamcensus) and <code>harness.gd:25361</code> (flysave) — plus the
+defensive face ≥ 2 guard at <code>world.gd:14602</code>; all lookups in main.gd/harness.gd already route
+through <code>world.chunk_key</code>/<code>chunk_key_face</code> (AC-0465); 6 CELL-key and 4 EDIT-key parsers
+confirmed untouched; no reader's intent was ambiguous.</p>
 
-1. Listed sites that are NOT chunk-key parsers (plan §2, §3.3):
-   - godot/world/world.gd:13685 — `_banana_tick` parses `_banana_fruits` keys, which are GLOBAL CELL keys "gx,gy,gz" (3 parts, produced at world.gd:13721). Parsing these as face:ccx:ccz per §3.3 would break bouncy-banana plucking.
-   - godot/scenes/main.gd:1732 and :1805 — `_fluidfall_clear`/`_fluidfall_case` parse `_fluidfall_scan` CELL keys "gx,gy,gz" (produced at main.gd:1722). Not chunk keys.
-   - godot/scenes/main.gd:635 — `_continue_slot` validates the 5-part EDIT key "planet:face:ccx:ccz:local"; that format is unchanged by this ticket, so no edit is needed (anchor real, no-op).
-   - godot/scenes/main.gd:593 — `_conv_edits_v2` parses the 5-part edit key; the line that actually BUILDS the runtime chunk key is main.gd:598 (home branch "%d,%d", face branch already canonical). 598 is the real edit point for the plan's "593" anchor.
-   - godot/world/world.gd:14597 — genuine chunk-key parser (star_owed carries _key home keys from 6273 and _key_f face keys from 15377/15442). It already splits ":" and 3-part-filters, so it PARSES the canonical form as-is; a home key "0:cx:cz" can only match when face==0, and faces 0,1 (home pair) never enter _star_faces (per-face engines are for chart faces only). Likely no code edit, at most a defensive comment.
+<h2>Deviations</h2>
+<ul>
+<li><b>harness.gd edits</b> (32253, 25361): plan §3's file table lists only world.gd/save.gd, but §4.3
+mandates fixing the chunk-key readers the audit identifies — resolved in favour of §4.3 (see deviations file).</li>
+<li><b>face ≥ 2 guard shape</b>: the star-pass filter now skips <code>int(parts[0]) &lt; 2</code> — home keys are
+3-part with face 0 after the flip; per-face star engines only exist for chart faces 2–11.</li>
+<li><b>Negative control via a temporary probe scene</b> (<code>godot/probe_ac0459_ver4.{gd,tscn}</code> — removed
+in this task, per the scenes/AGENTS.md "temporary probe goes in and comes out" rule; source kept at
+<code>.scratch/AC-0459/probe_ver4.gd</code> for the record): the gate is menu-triggered, so the probe drives
+the real <code>_continue_slot</code> against the tampered save.</li>
+<li><b>light</b> <code>cave_census_ms</code> 461→460: timing field, not a world field (all semantic fields identical).</li>
+<li>The <code>save</code> arm's own v1 soft-fail check (a version-less synthetic save) also printed
+<code>SAVE SOFT-FAIL … version_ok=0</code> — the gate firing is independently corroborated by an in-battery arm.</li>
+</ul>
 
-2. Unlisted chunk-key PRODUCERS (hardcoded "cx,cz" bypassing _key — the plan says _key is "the one producer"):
-   - godot/scenes/main.gd:1704 (`_fluidfall_scan`), :1827 (`_await_spawn_floor`), :1873 (`_await_core_3x3`), :1908 (`_await_sim_band`) — all `world.chunks.get("%d,%d" % [cx, cz])`.
-     After the relabel these silently return null:
-     - `_await_sim_band` (1908) is in the game-start flow (main.gd:682, :732) that the `load` and `save` arms and ~30 harness call sites go through — every such wait would spin to its 3000-frame cap (~50 s), print "SIMBAND not fully built after 3000 frames", and the load arm's simband/wall metrics would break.
-     - `_await_spawn_floor` (1827) is awaited by ~25 harness arms; `_await_core_3x3` (1873) by 4; `_fluidfall_scan` (1704) would mis-report the fluid-fall cells.
-   - godot/scenes/harness.gd — ~40 more hardcoded `world.chunks.get("%d,%d")` (plus world.edits / world.chunk_origin "cx,cz" lookups) across ~19 arms: editfront, editmat, editslab, banana3d, continue_probe, perf, chunkio, flysave, tick, bandmap, aheadtarget, candflag, edgeretain, boundary, atlas, tint, crossface, fly helper. harness.gd is fence-protected for this ticket (the plan names no arm there), so the revised plan must decide explicitly: rule them in (harness waiver) or out (those arms break until a follow-up ticket).
-
-3. What this means for the plan's gates as written: even if the four in-plan files were edited exactly as written, `load` (simband wall), `save` (continue path waits), `ac0423probe` (~50 s preamble wait per run) and the §4 log grep ("SIMBAND not fully built" lines) would deviate, and `_fluidfall_scan` would be silently wrong — the gates would not hold without touching main.gd:1704/1827/1873/1908, which the plan does not list.
-
-4. Unaffected and clean (verified): `_key_f` format (world.gd:15283, already "face:ccx:ccz"), the main.gd:628 version-rejection path, the warp/placement/streaming/SphereMath paths, and world.gd's own chunks-dict accesses (all via _key/_key_f or a key variable set from them — the 56 `chunks[...]` sites checked).
-
-What the revised plan needs (coordinator decisions, not builder choices):
-   a. Add main.gd:1704, 1827, 1873, 1908 to §2 (home lookups -&gt; "0:%d:%d", or route through a world helper).
-   b. Correct the parser list: drop 13685/1732/1805/635 as no-ops (with the reason above), point 593 at 598, and state explicitly whether 14597 gets a defensive comment only.
-   c. Rule the ~40 harness.gd lookups in or out of this ticket (fence + arm re-baselining decision).
-   d. Confirm the save/load RESULT expectations still hold once (a) lands (simband wall should return to ~2.1 s if the main.gd wait is fixed).</pre>
-
-<h2>3. Files</h2>
-<p><b>No game code changed.</b> <code>git status --porcelain</code> (filtered to godot/ gdext/ tasks/) shows zero modifications under <code>godot/</code> and <code>gdext/</code>. This run created only ticket artifacts:</p>
-<table><tr><th>file</th><th>what</th></tr>
-<tr><td>tasks/AC-0459/continuity.md</td><td>RUN header + STOP entry with the PLAN-INSUFFICIENT line</td></tr>
-<tr><td>tasks/AC-0459/AC-0459-deviations.txt</td><td>the full findings, verbatim above</td></tr>
-<tr><td>tasks/AC-0459/AC-0459-results.html</td><td>this page</td></tr></table>
-<p class="note">Every file:line cited in §2 was read or grepped directly from the tree during this run (world.gd 11360-11419 / 13665-13780 / 14540-14624 / 15278-15307, main.gd 580-669 / 755-779 / 1680-1919, save.gd 1-30, plus targeted greps over godot/ for key producers and harness.gd function mapping for the ~40 harness sites).</p>
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — <code>_key</code> cache fill flipped to <code>"0:%d:%d"</code> (the one producer, 11400); <code>_face_star_pass</code> face ≥ 2 guard (14602-14604)</li>
+<li><code>godot/autoload/save.gd</code> — <code>SAVE_VERSION</code> 4 → 5 with the AC-0459 reason (line 5)</li>
+<li><code>godot/scenes/harness.gd</code> — _seamcensus key parse (32253), flysave <code>e["col"]</code> parse (25361)</li>
+<li><code>godot/ARCHITECTURE.md</code> — §5 (the 4→5 bump), §6 grid-lock bullet (home key <code>0:%d:%d</code>), §6 face-chart bullet (shared spelling + guard)</li>
+<li><code>tasks/AC-0459/AC-0459-deviations.txt</code> — redone audit table + decisions</li>
+<li><code>tasks/AC-0459/continuity.md</code>, <code>tasks/AC-0459/AC-0459-results.html</code> (this page)</li>
+</ul>
 </body></html>
