@@ -1,12 +1,11 @@
 meta:
-  updated_at: 2026-10-21T05:03
+  updated_at: 2026-10-21T13:05
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0467
+- AC-0468
 - AC-0463
-- AC-0434
 - AC-0451
 - AC-0399
 - AC-0094
@@ -27843,11 +27842,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: blocked
+  status: done
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-21T05:01
-  completed_at: null
+  updated_at: 2026-10-21T13:05
+  completed_at: 2026-10-21T13:05
   waiting_on: null
   parent_id: null
   notes: "1) User Story: Standing on a chunk line, a block and the block across the seam render stretched\
@@ -30063,11 +30062,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-21T05:01
-  updated_at: 2026-10-21T05:03
-  completed_at: null
+  updated_at: 2026-10-21T13:05
+  completed_at: 2026-10-21T13:05
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -30111,6 +30110,51 @@ intake:
     HARD CASE, from AC-0434''s notes: at a step across a seam the crease of the two planes is not where
     the two staircases meet. The new placement must state what happens there and measure it, not leave
     it as an unexamined edge case.
+
+    '
+  comments: []
+- id: AC-0468
+  title: seam instruments assume the old chunk-local vertex model
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-21T13:05
+  updated_at: 2026-10-21T13:05
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    No visible change. This keeps the seam checks honest after the seam fix: one census still assumes
+    the old per-chunk vertex layout, so on the new placement it fails itself rather than the world, and
+    a probe''s warp mode has degenerated. A check that can no longer see the world is worse than no check,
+    because a green one would be believed.
+
+
+    2) Technical Details
+
+    SURFACED BY AC-0467 stage B (commit 51ae6ef), which made the canonical sphere placement the default
+    for the home pair and deleted the seam-extension apparatus.
+
+    1. seamcensus self-fails on the default tree: its reverse map assumes CHUNK-LOCAL vertices (the old
+    model, where a chunk''s mesh sat in local space under a per-column transform). On the canonical placement
+    the vertices are already world-space, so the map no longer describes the meshes it is measuring. Flag-off
+    is still clean (0/64 seams, 393,216 rows).
+
+    2. ac0423probe''s warp-on mode degenerates (its nine overlaps read as raw cracks / n=0 under the warp).
+    Its `flagon` counterpart is the faithful instrument on the new placement. Decide whether to fix the
+    warp-on path or retire it in favour of flagon, and say which and why.
+
+    Verify: seamcensus green on the DEFAULT tree against the new placement (not by re-recording whatever
+    it currently prints - state what it asserts and why that is correct for world-space vertices), the
+    probe question resolved, genhash 25/25 unchanged (this is test tooling), and g0 clean. Note AC-0434''s
+    seam_band_probe is the instrument that already measures BOTH directions per cell (worst gap 64.0 mm,
+    worst overlap 64.0 mm against 100 mm grout) - reuse or align with it rather than inventing a third
+    seam measure.
 
     '
   comments: []
