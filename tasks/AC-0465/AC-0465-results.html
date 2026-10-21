@@ -1,0 +1,50 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0465 results — single chunk-key producer</title>
+<style>body{font:15px/1.5 system-ui;max-width:70rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.35rem .5rem}table{border-collapse:collapse}code{background:#eee}.ok{color:#060}.note{color:#555}</style></head><body>
+<h1>AC-0465 — single producer for chunk keys (pure refactor, format unchanged)</h1>
+<p>Two thin public wrappers added beside <code>_key</code>/<code>_key_f</code> in <code>godot/world/world.gd</code>
+(<code>chunk_key(cx,cz)</code> @11406, <code>chunk_key_face(face,ccx,ccz)</code> @15292); every by-hand
+chunk-dict key builder routed through them. 73 edits: 2 wrappers + 5 production (main.gd) + 66 harness.
+Full converted-site list + every non-converted skip: <code>tasks/AC-0465/AC-0465-deviations.txt</code>.</p>
+
+<h2>Gate table — all values from the post-fix tree; logs under <code>.scratch/AC-0465-gates/</code></h2>
+<table>
+<tr><th>arm</th><th>rc</th><th>SCRIPT/SHADER</th><th>headline</th><th>pre-change comparison</th></tr>
+<tr><td>g0</td><td>0</td><td>0 / 0</td><td>ok=true, 3 s</td><td>zero errors (g0-r2.log)</td></tr>
+<tr><td>genhash</td><td>0</td><td>0 / 0</td><td>25 GENHASH lines</td><td><b>25/25 byte-identical</b> to the current reference set (AC-0462 genhash-r9); GENMS 132 vs 129 (genhash-r2.log)</td></tr>
+<tr><td>light</td><td>0</td><td>0 / 0</td><td>ok=true</td><td>equal excl ms: cands 590, cave_eff 0, pocket [8,120,-50], recenter [0,-2], surface_eff 15, torch 0/9/14 (cave_census_ms 453 vs 447) (light-r1.log vs AC-0462 light-r9)</td></tr>
+<tr><td>ac0423probe</td><td>0</td><td>0 / 0</td><td>ok=true</td><td><b>equal excl all ms fields</b> (JSON diff vs AC-0462 ac0423probe-r10; ms 5532) (ac0423probe-r1.log)</td></tr>
+<tr><td>save</td><td>0</td><td>0 / 0</td><td>ok=true, 44 s</td><td>standing values: r_saved 4000 / r_loaded 4000, r_clamp_hi 8000 / r_clamp_lo 2000, v1_softfail true, blocks 6/6, unedited 4/4, pos/slot0/time/iso/clear/hp/hunger/inv/sel all ok (save-r2.log)</td></tr>
+<tr><td>load</td><td>0</td><td>0 / 0</td><td>ok=true, wall_ms 612342 (10.2 min)</td><td><b>simband_ms 6918</b>, screen_hidden_ms 6959, cols 41 / meshed 41, gen 5509, queue_final 5468, inflight 0 (load-r2.log). Idle-box baseline ~1.2 s (AC-0293 R4) / ~2.1 s (R24) — this run executed under local-LLM decode CPU contention (~5x); the regression signature of a missed site (3000-frame cap ≈ 50 s wait + <i>“SIMBAND not fully built”</i> log line) is ABSENT: 0 such lines, cap never armed (load-r2.log)</td></tr>
+</table>
+
+<h2>No-missed-producers grep gate</h2>
+<table>
+<tr><th>measure</th><th>before</th><th>after</th></tr>
+<tr><td>direct inline <code>world.chunks/edits/chunk_origin.(get|has)(&quot;%d…&quot;…)</code> lookups</td><td>41 (main 4 + harness 37)</td><td><b>0 (0 + 0)</b></td></tr>
+<tr><td>hardcoded literal chunk lookups (<code>&quot;0,0&quot;</code>/<code>&quot;0,1&quot;</code>/<code>&quot;196,%d&quot;</code>)</td><td>12</td><td><b>0</b></td></tr>
+<tr><td><code>&quot;%d,%d&quot;</code> literal total</td><td>main 5 / harness 145</td><td>main <b>0</b> / harness 93 — all 93 traced and listed as non-chunk-dict keys (RESULT labels, local ref/neighbor caches, v1 save fixture, dead vars)</td></tr>
+<tr><td><code>&quot;%d:%d:%d&quot;</code> literal total</td><td>main 1 / harness 4</td><td>main <b>0</b> / harness 2 (36315/36344 = <code>player_key</code>/<code>aim_cell_key</code> RESULT labels, different &quot;face,cx,cz&quot; shape)</td></tr>
+</table>
+<p class="note">The 93 residual harness literals were individually traced: none feeds <code>world.chunks</code> /
+<code>world.edits</code> / <code>world.chunk_origin</code>. 8 chunk-key-shaped strings feed other receivers
+(<code>_tm_inflight_keys</code>, <code>_editprobe_key</code>, <code>star_remesh</code>, <code>queued_keys</code>) and are
+listed in the deviations as flagged-for-AC-0459, not converted (plan §3 receiver rule).</p>
+
+<h2>Deviations</h2>
+<ul>
+<li>Plan anchored <code>_key_f</code> at ~11380; actual location 15283 — same symbol, wrapper placed beside it.</li>
+<li>9 converted sites used <code>:=</code>; untyped <code>world</code> breaks inference — changed to explicit
+<code>: String</code> (same type the old <code>:=</code> inferred). First gate run caught it; all recorded values are
+post-fix.</li>
+<li>12 hardcoded-literal lookups (&quot;0,0&quot;/&quot;0,1&quot;/&quot;196,%d&quot;) are outside the plan's <code>&quot;%d,%d&quot;</code>
+grep pattern but ARE by-hand chunk-dict key construction — converted per plan §1 goal, byte-identical today, listed.</li>
+</ul>
+
+<h2>Files changed</h2>
+<ul>
+<li><code>godot/world/world.gd</code> — +<code>chunk_key</code>, +<code>chunk_key_face</code> (thin delegates; nothing else touched)</li>
+<li><code>godot/scenes/main.gd</code> — 5 sites (598 both branches, 1704, 1827, 1873, 1908)</li>
+<li><code>godot/scenes/harness.gd</code> — 66 sites (37 inline + 17 variable/list-mediated + 12 hardcoded literals)</li>
+<li><code>tasks/AC-0465/</code> — continuity.md, AC-0465-deviations.txt, AC-0465-results.html</li>
+</ul>
+</body></html>

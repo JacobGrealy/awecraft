@@ -595,7 +595,7 @@ func _conv_edits_v2(edits_raw) -> Dictionary:
 			continue
 		# AC-0309 C6: the non-home faces map to the 3-part runtime key
 		# ("face:ccx:ccz"); the home pair keeps "ccx,ccz".
-		var ck: String = "%d,%d" % [int(ep[2]), int(ep[3])] if int(ep[1]) <= 1 else "%d:%d:%d" % [int(ep[1]), int(ep[2]), int(ep[3])]
+		var ck: String = world.chunk_key(int(ep[2]), int(ep[3])) if int(ep[1]) <= 1 else world.chunk_key_face(int(ep[1]), int(ep[2]), int(ep[3]))
 		if not conv.has(ck):
 			conv[ck] = {}
 		conv[ck][int(ep[4])] = edits_raw[ek]
@@ -1701,7 +1701,7 @@ func _fluidfall_scan(fx: int, fz: int, sy: int) -> Array:
 	var cz1 := int(floorf(float(fz + 8) / 16.0))
 	for cx in range(cx0, cx1 + 1):
 		for cz in range(cz0, cz1 + 1):
-			var c: Node3D = world.chunks.get("%d,%d" % [cx, cz])
+			var c: Node3D = world.chunks.get(world.chunk_key(cx, cz))
 			if c == null or c.data.is_empty():
 				continue
 			var d: PackedByteArray = c.flat_data()
@@ -1824,7 +1824,7 @@ func _await_spawn_floor(spawn: Vector3, max_frames: int) -> void:
 	var pcz := int(floorf(spawn.z / 16.0))
 	var waited := 0
 	while waited < max_frames:
-		var c = world.chunks.get("%d,%d" % [pcx, pcz])
+		var c = world.chunks.get(world.chunk_key(pcx, pcz))
 		if c != null and c.mesh_built:
 			return
 		await get_tree().physics_frame
@@ -1870,7 +1870,7 @@ func _await_core_3x3(where: Vector3, max_frames: int) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or c.data.is_empty() or not c.mesh_built:
 					allb = false
 					break
@@ -1905,7 +1905,7 @@ func _await_sim_band(where: Vector3, max_frames: int) -> void:
 			for dz in range(-r, r + 1):
 				if absi(dx) + absi(dz) > r:
 					continue
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or c.data.is_empty() or not c.mesh_built:
 					allb = false
 					break

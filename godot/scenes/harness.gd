@@ -1222,7 +1222,7 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 	if OS.get_environment("AWECRAFT_DBG") != "":
 		for dx in range(-2, 3):
 			for dz in range(-2, 3):
-				var k = "%d,%d" % [dx, dz]
+				var k = world.chunk_key(dx, dz)
 				var c = world.chunks.get(k)
 				if c == null:
 					print("DBGCHUNK ", k, " MISSING")
@@ -7336,7 +7336,7 @@ func _lightstate_test(spawn: Vector3) -> void:
 			worst_key = key
 	# A/B: ALWAYS compare first-build eff vs edit-rebuild eff on a fixed
 	# chunk - the delta (if any) reveals what the rebuild corrects.
-	var ab_key := "0,1"
+	var ab_key: String = world.chunk_key(0, 1)
 	var ab = world.chunks.get(ab_key)
 	var ab_report: Dictionary = {}
 	if ab != null and not ab.data.is_empty() and not ab.last_eff.is_empty():
@@ -8941,7 +8941,7 @@ func _editfront_test(spawn: Vector3) -> void:
 		var allm := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or not c.mesh_built:
 					allm = false
 					break
@@ -8955,7 +8955,7 @@ func _editfront_test(spawn: Vector3) -> void:
 	while world._rec_pending and rw < 3600:
 		await get_tree().process_frame
 		rw += 1
-	var T = world.chunks.get("%d,%d" % [pcx, pcz])
+	var T = world.chunks.get(world.chunk_key(pcx, pcz))
 	if T == null or not T.mesh_built:
 		Debug.result({"ok": false, "error": "player chunk never built"})
 		get_tree().quit()
@@ -9095,14 +9095,14 @@ func _editmat_test(spawn: Vector3) -> void:
 	world.recenter(spawn.x, spawn.z, true)
 	var pcx := int(world.last_pcx)
 	var pcz := int(world.last_pcz)
-	var pkey := "%d,%d" % [pcx, pcz]
+	var pkey: String = world.chunk_key(pcx, pcz)
 	var wb := 0
 	var quiet := 0
 	while wb < 3600:
 		var allm := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or not c.mesh_built:
 					allm = false
 					break
@@ -9255,7 +9255,7 @@ func _editmat_shot(spawn: Vector3) -> void:
 		var allm := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or not c.mesh_built:
 					allm = false
 					break
@@ -9355,7 +9355,7 @@ func _breakspike_test(spawn: Vector3) -> void:
 	var edit_keys: Array = []
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
-			edit_keys.append("%d,%d" % [ecx + dx, ecz + dz])
+			edit_keys.append(world.chunk_key(ecx + dx, ecz + dz))
 	var rr: int = world.render_radius
 	var rr1: int = rr + 1
 	world.recenter(spawn.x, spawn.z, true)
@@ -9463,7 +9463,7 @@ func _breakspike_test(spawn: Vector3) -> void:
 	for e in world.mesh_info():
 		var kx: int = int(int(e["pos"][0]) / 16)
 		var kz: int = int(int(e["pos"][1]) / 16)
-		var k := "%d,%d" % [kx, kz]
+		var k: String = world.chunk_key(kx, kz)
 		if edit_keys.has(k):
 			minfo[k] = {"v": e.get("verts", []), "f": e.get("fverts", [])}
 	var cell_after: Array = []
@@ -10094,7 +10094,7 @@ func _editslab_test(spawn: Vector3) -> void:
 			break
 		await get_tree().physics_frame
 		awaited += 1
-	var ec = world.chunks.get("%d,%d" % [pcx, pcz])
+	var ec = world.chunks.get(world.chunk_key(pcx, pcz))
 	for i in 5:
 		ec.perf_slab_body_builds[i] = 0
 		ec.perf_slab_body_ms[i] = 0.0
@@ -10783,7 +10783,7 @@ func _banana3d_test() -> void:
 	var fx := int(parts[0])
 	var fy := int(parts[1])
 	var fz := int(parts[2])
-	var fck := "%d,%d" % [fx / 16, fz / 16]
+	var fck: String = world.chunk_key(fx / 16, fz / 16)
 	# (1) wait for the chunk DATA to land (the roll's get_block==28 guard
 	# requires it; get_block returns 0 before the slabs land).
 	var w := 0
@@ -16460,7 +16460,7 @@ func _occl111_test(spawn: Vector3) -> void:
 	var waited := 0
 	var c0: Node3D = null
 	while c0 == null and waited < 3600:
-		c0 = world.chunks.get("0,0")
+		c0 = world.chunks.get(world.chunk_key(0, 0))
 		if c0 != null and c0.data.is_empty():
 			c0 = null
 		elif c0 != null and not c0.mesh_built:
@@ -20743,7 +20743,7 @@ func _fly_phase(mult: float, seconds: float, dir: Vector3) -> Dictionary:
 		# checked per frame (one dict get + a bool read).
 		var upx := int(floorf(player.position.x / 16.0))
 		var upz := int(floorf(player.position.z / 16.0))
-		var uc = world.chunks.get("%d,%d" % [upx, upz])
+		var uc = world.chunks.get(world.chunk_key(upx, upz))
 		if uc == null or not uc.mesh_built:
 			if under_gap_start < 0:
 				under_gap_start = i
@@ -22342,7 +22342,7 @@ func _nightlot_test(spawn: Vector3) -> void:
 	await _nl_settle_around(int(floorf(px_away / 16.0)), int(floorf(pz_away / 16.0)), 60000)
 	world.recenter(spawn.x + 384.0, spawn.z + 384.0, true)
 	await _nl_settle_around(24, 24, 60000)
-	print("NLDBG hop2 origin_freed=%d chunks=%d" % [int(world.chunks.get("0,0") == null), world.chunks.size()])
+	print("NLDBG hop2 origin_freed=%d chunks=%d" % [int(world.chunks.get(world.chunk_key(0, 0)) == null), world.chunks.size()])
 	world.recenter(spawn.x, spawn.z, true)
 	# v3 (defect a): the return recenter alone dead-ends. _remove_entry
 	# (world.gd:910) never erases queued_keys, so every build entry consumed at
@@ -23524,7 +23524,7 @@ func _water_test(spawn: Vector3) -> void:
 	var fix_chunks := {}
 	for fx in [wx - 1, wx + 4]:
 		for fz in [wz - 1, wz + 1]:
-			fix_chunks["%d,%d" % [int(floorf(float(fx) / 16.0)), int(floorf(float(fz) / 16.0))]] = true
+			fix_chunks[world.chunk_key(int(floorf(float(fx) / 16.0)), int(floorf(float(fz) / 16.0)))] = true
 	var waited := 0
 	while waited < 900:
 		var allc := true
@@ -23896,7 +23896,7 @@ func _continue_probe() -> void:
 	var ttz := int(floorf(float(tz) / 16.0))
 	var ttwait := 0
 	while ttwait < 600:
-		var tc = world.chunks.get("%d,%d" % [ttx, ttz])
+		var tc = world.chunks.get(world.chunk_key(ttx, ttz))
 		if tc != null and not tc.data.is_empty() and tc.mesh_built and tc.has_any_slab_body():
 			break
 		await get_tree().physics_frame
@@ -23942,7 +23942,7 @@ func _continue_probe() -> void:
 			var core := true
 			for dx in range(-1, 2):
 				for dz in range(-1, 2):
-					var c = world.chunks.get("%d,%d" % [tpcx + dx, tpcz + dz])
+					var c = world.chunks.get(world.chunk_key(tpcx + dx, tpcz + dz))
 					if c == null or c.data.is_empty() or not c.mesh_built:
 						core = false
 						break
@@ -23967,7 +23967,7 @@ func _continue_probe() -> void:
 		await get_tree().physics_frame
 		waited += 1
 	player = main._spawn_player()
-	var sc = world.chunks.get("%d,%d" % [tpcx, tpcz])
+	var sc = world.chunks.get(world.chunk_key(tpcx, tpcz))
 	var saved_chunk_built_at_spawn: bool = sc != null and not sc.data.is_empty() and sc.mesh_built
 	var col_body_at_spawn: bool = sc != null and sc.has_any_slab_body()
 	main._restore_player(ps)
@@ -23983,7 +23983,7 @@ func _continue_probe() -> void:
 		await get_tree().physics_frame
 		ytrace.append(roundf(Game.player.position.y * 10.0) / 10.0)
 		if i == 24:
-			var sc30 = world.chunks.get("%d,%d" % [tpcx, tpcz])
+			var sc30 = world.chunks.get(world.chunk_key(tpcx, tpcz))
 			body30 = sc30 != null and sc30.has_any_slab_body()
 	var fell: bool = (Game.player.position.y < y0 - 2.0)
 	var pl2 = Game.player
@@ -24777,7 +24777,7 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 					all = false
 					break
 		if first_draw_ms < 0:
-			var sc = world.chunks.get("%d,%d" % [pcx, pcz])
+			var sc = world.chunks.get(world.chunk_key(pcx, pcz))
 			if sc != null and sc.mesh_built:
 				first_draw_ms = fe - t0
 		if all:
@@ -24922,7 +24922,7 @@ func _chunkio_wait(diamond: Array, limit: int) -> int:
 	while w < limit:
 		var ready := 0
 		for dc in diamond:
-			var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			var c = world.chunks.get(world.chunk_key(dc[0], dc[1]))
 			if c != null and not c.data.is_empty():
 				ready += 1
 		if ready == diamond.size():
@@ -24934,7 +24934,7 @@ func _chunkio_wait(diamond: Array, limit: int) -> int:
 func _chunkio_hash(diamond: Array) -> Dictionary:
 	var out := {}
 	for dc in diamond:
-		var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+		var c = world.chunks.get(world.chunk_key(dc[0], dc[1]))
 		if c == null or c.data.is_empty():
 			continue
 		var h := HashingContext.new()
@@ -25053,7 +25053,7 @@ func _chunkio_test(spawn: Vector3) -> void:
 	while full_waited < 1800:
 		var full := true
 		for dc in diamond:
-			var cf = world.chunks.get("%d,%d" % [int(dc[0]), int(dc[1])])
+			var cf = world.chunks.get(world.chunk_key(int(dc[0]), int(dc[1])))
 			if cf == null or bool(cf.far):
 				full = false
 				break
@@ -25080,15 +25080,15 @@ func _chunkio_test(spawn: Vector3) -> void:
 	var region_files_b := _chunkio_region_files(SLOT)
 	var still_in := 0
 	for dc in diamond:
-		if world.chunks.has("%d,%d" % [int(dc[0]), int(dc[1])]):
+		if world.chunks.has(world.chunk_key(int(dc[0]), int(dc[1]))):
 			still_in += 1
 	var edits_missing := 0
 	for dc in diamond:
-		if not world.edits.has("%d,%d" % [int(dc[0]), int(dc[1])]):
+		if not world.edits.has(world.chunk_key(int(dc[0]), int(dc[1]))):
 			edits_missing += 1
 	if files_exist < diamond_n:
 		for dc in diamond:
-			var k2 := "%d,%d" % [int(dc[0]), int(dc[1])]
+			var k2: String = world.chunk_key(int(dc[0]), int(dc[1]))
 			if not ChunkIO.saved_column_exists(SLOT, int(dc[0]), int(dc[1])):
 				var c2 = world.chunks.get(k2)
 				print("AC0287MISS col=%s in_chunks=%s far=%s data_empty=%s cand=%s" % [
@@ -25104,7 +25104,7 @@ func _chunkio_test(spawn: Vector3) -> void:
 	var origin_gen := 0
 	var hashes_c := _chunkio_hash(diamond)
 	for dc in diamond:
-		var key := "%d,%d" % [dc[0], dc[1]]
+		var key: String = world.chunk_key(dc[0], dc[1])
 		if hashes_c.get(key) == hashes.get(key):
 			byte_identical += 1
 		var o = world.chunk_origin.get(key)
@@ -25128,7 +25128,7 @@ func _chunkio_test(spawn: Vector3) -> void:
 	var d50_disk := 0
 	var d50_gen := 0
 	for dc in diamond:
-		var o = world.chunk_origin.get("%d,%d" % [dc[0], dc[1]])
+		var o = world.chunk_origin.get(world.chunk_key(dc[0], dc[1]))
 		if o == "disk":
 			d50_disk += 1
 		elif o == "gen":
@@ -25292,7 +25292,7 @@ func _flysave_test(spawn: Vector3) -> void:
 		for rc in ring:
 			if edit_cols.size() >= 3:
 				break
-			var c = world.chunks.get("%d,%d" % [rc[0], rc[1]])
+			var c = world.chunks.get(world.chunk_key(rc[0], rc[1]))
 			if c != null and bool(c.far) and c.far_h.size() == 512:
 				edit_cols.append(rc)
 		if edit_cols.size() < 3:
@@ -25301,7 +25301,7 @@ func _flysave_test(spawn: Vector3) -> void:
 	var edits: Array = []
 	var far_at_edit := true
 	for ec in edit_cols:
-		var c = world.chunks.get("%d,%d" % [ec[0], ec[1]])
+		var c = world.chunks.get(world.chunk_key(ec[0], ec[1]))
 		far_at_edit = far_at_edit and bool(c.far)
 		var wx := int(ec[0]) * 16 + 8
 		var wz := int(ec[1]) * 16 + 8
@@ -25313,7 +25313,7 @@ func _flysave_test(spawn: Vector3) -> void:
 		var h := int(c.far_h[2 * fi]) | (int(c.far_h[2 * fi + 1]) << 8)
 		var ty := clampi(h, 1, Data.HEIGHT - 2)
 		world.set_block(wx, ty, wz, 8)  # id 8 planks — never generated naturally
-		edits.append({"col": "%d,%d" % [ec[0], ec[1]], "cell": [wx, ty, wz]})
+		edits.append({"col": world.chunk_key(ec[0], ec[1]), "cell": [wx, ty, wz]})
 	for i in 30:
 		await get_tree().physics_frame
 	# --- the flight: manual position stepping (the boundary arm's pattern;
@@ -26671,7 +26671,7 @@ func _lightcache_test(spawn: Vector3) -> void:
 			disk_light_ok = PackedByteArray(dl.get("arr", PackedByteArray())) == saved_arr and bool(dl.get("blk_src", false)) == blk_src0
 			disk_mask_ok = PackedByteArray(dl.get("mask", PackedByteArray())) == saved_mask
 	var n1 = await _lightcache_revisit(key)
-	var n1_origin: String = str(world.chunk_origin.get("0,0", "none"))
+	var n1_origin: String = str(world.chunk_origin.get(world.chunk_key(0, 0), "none"))
 	await _lightcache_cache_fresh(key, 900)
 	var built1 := n1 != null and bool(n1.mesh_built)
 	var recompute_count := int(n1.light_recomputes) if built1 else -1
@@ -26833,7 +26833,7 @@ func _tick_test(spawn: Vector3) -> void:
 	while ready_waited < 1800:
 		n_ready = 0
 		for dc in diamond:
-			var c = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			var c = world.chunks.get(world.chunk_key(dc[0], dc[1]))
 			if c != null and not c.data.is_empty():
 				n_ready += 1
 		if n_ready == diamond.size():
@@ -26861,7 +26861,7 @@ func _tick_test(spawn: Vector3) -> void:
 			q_prev = qn
 		all_b0_meshed = true
 		for dc in diamond:
-			var c2 = world.chunks.get("%d,%d" % [dc[0], dc[1]])
+			var c2 = world.chunks.get(world.chunk_key(dc[0], dc[1]))
 			if c2 == null or not c2.mesh_built:
 				all_b0_meshed = false
 				break
@@ -26928,7 +26928,7 @@ func _tick_test(spawn: Vector3) -> void:
 		var cz := int(col_base) % 16384 - 4096
 		var cx := (int(col_base) - (cz + 4096)) / 16384 - 4096
 		cols_seen["%d,%d" % [cx, cz]] = true
-		var c = world.chunks.get("%d,%d" % [cx, cz])
+		var c = world.chunks.get(world.chunk_key(cx, cz))
 		var b := int(c.band) if c != null else -1
 		if b != 0 or (absi(cx - world.last_pcx) + absi(cz - world.last_pcz)) > 4:
 			scope_bad += 1
@@ -27089,7 +27089,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or not c.mesh_built:
 					allb = false
 					break
@@ -27136,7 +27136,7 @@ func _bandmap_test(spawn: Vector3) -> void:
 	var max_wait := 1500
 	while sample_waited < max_wait:
 		for sc in samples:
-			var c = world.chunks.get("%d,%d" % sc)
+			var c = world.chunks.get(world.chunk_key(sc[0], sc[1]))
 			if c != null and not c.data.is_empty():
 				have["%d,%d" % sc] = true
 		for c in world.chunks.values():
@@ -27416,7 +27416,7 @@ func _aheadtarget_test(spawn: Vector3) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				var c = world.chunks.get(world.chunk_key(pcx0 + dx, pcz0 + dz))
 				if c == null or not c.mesh_built:
 					allb = false
 					break
@@ -27510,7 +27510,7 @@ func _candflag_test(spawn: Vector3) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				var c = world.chunks.get(world.chunk_key(pcx0 + dx, pcz0 + dz))
 				if c == null or not c.mesh_built:
 					allb = false
 					break
@@ -27531,7 +27531,7 @@ func _candflag_test(spawn: Vector3) -> void:
 	var wT := 0
 	while wT < 120000 and tk == "":
 		for dx in range(7, 4, -1):
-			var key := "%d,%d" % [pcx0 + dx, pcz0]
+			var key: String = world.chunk_key(pcx0 + dx, pcz0)
 			var c = world.chunks.get(key)
 			if c == null or c.data.is_empty() or c.mesh_built:
 				continue
@@ -27556,7 +27556,7 @@ func _candflag_test(spawn: Vector3) -> void:
 		# (mesh freed by design, not a retain).
 		var udx := 4
 		if pcx0 + udx < tcx:
-			var key := "%d,%d" % [pcx0 + udx, pcz0]
+			var key: String = world.chunk_key(pcx0 + udx, pcz0)
 			var c = world.chunks.get(key)
 			if c != null and c.mesh_built:
 				uk = key
@@ -27687,7 +27687,7 @@ func _edgeretain_test(spawn: Vector3) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx0 + dx, pcz0 + dz])
+				var c = world.chunks.get(world.chunk_key(pcx0 + dx, pcz0 + dz))
 				if c == null or not c.mesh_built:
 					allb = false
 					break
@@ -27705,9 +27705,9 @@ func _edgeretain_test(spawn: Vector3) -> void:
 		get_tree().quit()
 		return
 	var track: Array = [
-		{"k": "%d,%d" % [pcx0 - 8, pcz0]},
-		{"k": "%d,%d" % [pcx0 - 6, pcz0 + 5]},
-		{"k": "%d,%d" % [pcx0 - 5, pcz0 - 6]},
+		{"k": world.chunk_key(pcx0 - 8, pcz0)},
+		{"k": world.chunk_key(pcx0 - 6, pcz0 + 5)},
+		{"k": world.chunk_key(pcx0 - 5, pcz0 - 6)},
 	]
 	var edge_ok := true
 	var edge_diag: Array = []
@@ -27853,7 +27853,7 @@ func _await_boundary_core(spawn: Vector3, max_frames: int) -> void:
 		var allb := true
 		for dx in range(-1, 2):
 			for dz in range(-1, 2):
-				var c = world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])
+				var c = world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))
 				if c == null or not c.mesh_built:
 					allb = false
 					break
@@ -28027,7 +28027,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 				var ccz: int = int(cross_cz[ci])
 				var allb := true
 				for zc in range(ccz - r, ccz + r + 1):
-					var ch = world.chunks.get("%d,%d" % [ccx, zc])
+					var ch = world.chunks.get(world.chunk_key(ccx, zc))
 					if ch == null or not ch.mesh_built:
 						allb = false
 						break
@@ -28190,7 +28190,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 			var ccx: int = int(cross_cx[ci])
 			var allb := true
 			for zc in range(int(cross_cz[ci]) - r, int(cross_cz[ci]) + r + 1):
-				var ch = world.chunks.get("%d,%d" % [ccx, zc])
+				var ch = world.chunks.get(world.chunk_key(ccx, zc))
 				if ch == null or not ch.mesh_built:
 					allb = false
 					break
@@ -28256,7 +28256,7 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	# AC-0080 re-entry rebuild gate: retreat toward the start so the marker
 	# chunk (freed for small r during the walk) re-enters in-radius, let the
 	# drain re-mesh it, then verify mesh + collision + preserved edit.
-	var mkey := "%d,%d" % [int(floorf(float(mx) / 16.0)), int(floorf(float(mz) / 16.0))]
+	var mkey: String = world.chunk_key(int(floorf(float(mx) / 16.0)), int(floorf(float(mz) / 16.0)))
 	var rx := mini(float(p.position.x) - 8.0 * 16.0, 16.0 * float(r) + 8.0)
 	p.position.x = rx
 	p.velocity = Vector3.ZERO
@@ -28539,7 +28539,7 @@ func _ac0079_wall_built(ci: int, dir: int, r: int, pcx_arr: Array, pcz_arr: Arra
 func _atlas_test(spawn: Vector3) -> void:
 	var pcx := int(floorf(spawn.x / 16.0))
 	var pcz := int(floorf(spawn.z / 16.0))
-	var c = world.chunks.get("%d,%d" % [pcx, pcz])
+	var c = world.chunks.get(world.chunk_key(pcx, pcz))
 	for i in 900:
 		if c != null and c.mesh_built and c.first_opaque_mesh() != null:
 			break
@@ -28602,7 +28602,7 @@ func _tint_test() -> void:
 			out[tag] = {"error": "not_built", "at": [cell["x"], cell["z"]]}
 			ok = false
 			continue
-		var c = world.chunks.get("%d,%d" % [tcx, tcz])
+		var c = world.chunks.get(world.chunk_key(tcx, tcz))
 		var got = _tint_vertex(c, cell, false)
 		if got == null:
 			out[tag] = {"error": "no_vertex", "at": [cell["x"], cell["z"], cell["y"]]}
@@ -28628,7 +28628,7 @@ func _tint_test() -> void:
 			out["water"] = {"error": "not_built", "at": [wf["x"], wf["z"]]}
 			ok = false
 		else:
-			var c = world.chunks.get("%d,%d" % [wcx, wcz])
+			var c = world.chunks.get(world.chunk_key(wcx, wcz))
 			var got = _tint_vertex(c, wf, true)
 			if got == null:
 				out["water"] = {"error": "no_vertex", "at": [wf["x"], wf["z"]]}
@@ -29365,13 +29365,13 @@ func _trees_test() -> void:
 	world.recenter(8.0, 8.0, true)
 	var waited := 0
 	while waited < 900:
-		var cc = world.chunks.get("0,0")
+		var cc = world.chunks.get(world.chunk_key(0, 0))
 		if cc != null and cc.mesh_built:
 			break
 		await get_tree().physics_frame
 		waited += 1
 	var mesh_info := {}
-	var cc0 = world.chunks.get("0,0")
+	var cc0 = world.chunks.get(world.chunk_key(0, 0))
 	if cc0 != null and cc0.mesh_built:
 		var d0: PackedByteArray = cc0.flat_data()
 		var nleaf := 0
@@ -29796,7 +29796,7 @@ func _sphere_test(spawn: Vector3) -> void:
 				if f5 == 0 or f5 == 1:
 					var ccx5: int = int(floorf(float(ax5) / 16.0))
 					var ccz5: int = int(floorf(float(az5) / 16.0))
-					var kkey5: String = "%d,%d" % [ccx5, ccz5]
+					var kkey5: String = world.chunk_key(ccx5, ccz5)
 					if not world.chunks.has(kkey5):
 						world.create_chunk(ccx5, ccz5, false)
 				var pre5: int = world.get_block_key(f5, ax5, az5, 10)
@@ -34130,7 +34130,7 @@ func _crossface_test(spawn: Vector3) -> void:
 		# early and its slab builds under the cap within seconds of the
 		# corridor; the 6000-frame timeout is honest (a stall stays a red).
 		for cxx in range(tcx, 197):
-			var c = world.chunks.get("%d,%d" % [cxx, zc])
+			var c = world.chunks.get(world.chunk_key(cxx, zc))
 			if c == null or (c as Node3D).data.is_empty() or not (c as Node3D).mesh_built:
 				wcor_ok = false
 				break
@@ -34141,14 +34141,14 @@ func _crossface_test(spawn: Vector3) -> void:
 		# AC-0145 continuous basis; the old one merely survived by
 		# tunneling luck). Wait for the PLACEMENT column's bodies, not just
 		# its mesh.
-		var pcol = world.chunks.get("%d,%d" % [tcx, zc])
+		var pcol = world.chunks.get(world.chunk_key(tcx, zc))
 		if pcol == null or not (pcol as Node3D).has_all_slab_bodies():
 			wcor_ok = false
 		# the cube-map round-trip can place the capsule's world position on
 		# the NEIGHBOUR row's facet (measured: flat z -68 in, -63.9 out —
 		# the support facet is the round-trip row's). Check it too.
 		var pf2: Vector3 = world.flat_of_world_pos(p.position)
-		var pcol2 = world.chunks.get("%d,%d" % [int(floorf(pf2.x / 16.0)), int(floorf(pf2.z / 16.0))])
+		var pcol2 = world.chunks.get(world.chunk_key(int(floorf(pf2.x / 16.0)), int(floorf(pf2.z / 16.0))))
 		if pcol2 == null or not (pcol2 as Node3D).has_all_slab_bodies():
 			wcor_ok = false
 		if wcor_ok:
@@ -34210,7 +34210,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	var fs_keys: Array[String] = []
 	for ccx2b in [63, 62]:
 		for dzzb in [-1, 0, 1]:
-			fs_keys.append("%d:%d:%d" % [xface, ccx2b, clampi(fccz0 + dzzb, 0, 63)])
+			fs_keys.append(world.chunk_key_face(xface, ccx2b, clampi(fccz0 + dzzb, 0, 63)))
 	# AC-0311 p3: the wait now also requires each corridor face chunk
 	# FULL and not far — the walk lands on these chunks' collision; a far
 	# payload underfoot is a coarse, foreign surface (star_owed is false
@@ -34341,7 +34341,7 @@ func _crossface_test(spawn: Vector3) -> void:
 				var rfc: Dictionary = SphereMath.world_to_face(p.position + Vector3(0.0, R, 0.0), R)
 				var riu: int = clampi(int(floorf(float(rfc["u"]) * 1024.0)), 0, 1023)
 				var riv: int = clampi(int(floorf(float(rfc["v"]) * 1024.0)), 0, 1023)
-				var rc2: Node3D = world.chunks.get("%d:%d:%d" % [af, riu >> 4, riv >> 4])
+				var rc2: Node3D = world.chunks.get(world.chunk_key_face(af, riu >> 4, riv >> 4))
 				var rtop2: int = world.surface_top_key(af, riu, riv)
 				if rc2 != null and rtop2 > 0:
 					var rpos: Vector3 = rc2.to_global(Vector3(float(riu - (riu >> 4) * 16), float(rtop2 + 1.5), float(riv - (riv >> 4) * 16)))
@@ -34662,7 +34662,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	while rc_wait < 6000:
 		await get_tree().physics_frame
 		rc_wait += 1
-		var cr: Node3D = world.chunks.get("196,%d" % zc)
+		var cr: Node3D = world.chunks.get(world.chunk_key(196, zc))
 		if cr != null and not (cr as Node3D).data.is_empty() and bool((cr as Node3D).mesh_built):
 			break
 		if not p.dead and world.sim_height(p.position) > -12.0:
@@ -34705,7 +34705,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	for d3w in 3600:
 		var d3w_ok := true
 		for gc3 in d3w_cols:
-			var c3: Node3D = world.chunks.get("196,%d" % gc3)
+			var c3: Node3D = world.chunks.get(world.chunk_key(196, gc3))
 			if c3 == null or c3.data.is_empty() or c3.far:
 				d3w_ok = false
 				break
@@ -34744,7 +34744,7 @@ func _crossface_test(spawn: Vector3) -> void:
 			var glz: int = gz - gcol * 16
 			var gxx: int = 196 * 16 + glx
 			var gtop: int = _crossface_col_top(sgen_cache[gcol], glx, glz)
-			var gch: Variant = world.chunks.get("196,%d" % gcol)
+			var gch: Variant = world.chunks.get(world.chunk_key(196, gcol))
 			var gst: String = "N" if gch == null else ("E" if (gch as Node3D).data.is_empty() else "B")
 			var glive: int = world.surface_top(gxx, gz)
 			if gst == "B":
@@ -34814,7 +34814,7 @@ func _crossface_test(spawn: Vector3) -> void:
 	# r25: the home reference follows the SITE (the site may sit in the
 	# adjacent straddler column when the nominal crossing row is
 	# unhealthy there).
-	var hc_live: Node3D = world.chunks.get("196,%d" % site_col)
+	var hc_live: Node3D = world.chunks.get(world.chunk_key(196, site_col))
 	var eff_home := -1
 	var eff_face := -1
 	if not site_anomalous and hc_live != null and bool(hc_live.mesh_built):
@@ -35043,7 +35043,7 @@ func _crossface_test(spawn: Vector3) -> void:
 		# last_eff (r28 light_home_eff -1).
 		var rt_wait := 0
 		while rt_wait < 2400:
-			var chk_rt: Node3D = Game.world.chunks.get("196,%d" % site_col) if Game.world != null else null
+			var chk_rt: Node3D = Game.world.chunks.get(Game.world.chunk_key(196, site_col)) if Game.world != null else null
 			# the light (last_eff) is the star's output — it does not
 			# depend on the mesh, so gate on the light array only.
 			if chk_rt != null and (chk_rt as Node3D).last_eff.get("arr", PackedByteArray()).size() > 0 and not bool(Game.world.star_owed.get("196,%d" % site_col, false)):
@@ -35054,7 +35054,7 @@ func _crossface_test(spawn: Vector3) -> void:
 		# yH + 2 — the unedited cell's top would index the tower's own
 		# solid slot, which is 0 by construction)
 		var rt_site_top: int = Game.world.surface_top(site_bx, site_z) if Game.world != null else -1
-		var hc_rt: Node3D = Game.world.chunks.get("196,%d" % site_col) if Game.world != null else null
+		var hc_rt: Node3D = Game.world.chunks.get(Game.world.chunk_key(196, site_col)) if Game.world != null else null
 		if hc_rt != null and rt_site_top > 0:
 			var arr_rt: PackedByteArray = hc_rt.last_eff.get("arr", PackedByteArray())
 			if arr_rt.size() > 0:

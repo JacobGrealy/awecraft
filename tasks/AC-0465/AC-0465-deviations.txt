@@ -1,0 +1,141 @@
+AC-0465 — deviations & full converted-site list
+Pure refactor: two public wrappers, every by-hand chunk-dict key routed through them, format unchanged.
+
+## Grep gate (machine-checkable)
+Pattern: world.chunks.(get|has)("%d  |  world.edits.(get|has)("%d  |  world.chunk_origin.(get|has)("%d
+  BEFORE  main.gd:4   harness.gd:37   (41 direct inline literal chunk-dict lookups)
+  AFTER   main.gd:0   harness.gd:0
+"%d,%d" totals:  main.gd 5 -> 0 ;  harness.gd 145 -> 93 (all 93 traced: NOT chunk-dict keys, see skips)
+"%d:%d:%d" totals: main.gd 1 -> 0 ; harness.gd 4 -> 2 (36315/36344 = RESULT labels, different "face,cx,cz" shape)
+Class B/C below (variable-mediated + hardcoded literals) were traced by hand; the grep gate only
+sees direct inline lookups.
+
+## CONVERTED — godot/world/world.gd (2 wrappers added)
+  W1  after _key (11402):  func chunk_key(cx, cz) -> String: return _key(cx, cz)
+  W2  after _key_f (15284): func chunk_key_face(face, ccx, ccz) -> String: return _key_f(face, ccx, ccz)
+  (plan anchored _key_f at ~11380; actual location 15283 — anchor drift, same symbol, applied there)
+
+## CONVERTED — godot/scenes/main.gd (5 production sites)
+  598   ck = "%d,%d"/"%d:%d:%d" branch -> world.chunk_key(int(ep[2]),int(ep[3])) / world.chunk_key_face(int(ep[1]),int(ep[2]),int(ep[3]));
+        receiver: world.edits (via _conv_edits_v2 -> `world.edits = ...` at 651)
+  1704  world.chunks.get("%d,%d" % [cx, cz])            -> world.chunks.get(world.chunk_key(cx, cz))            (_fluidfall_scan)
+  1827  world.chunks.get("%d,%d" % [pcx, pcz])          -> world.chunks.get(world.chunk_key(pcx, pcz))          (_await_spawn_floor)
+  1873  world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])-> world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))(_await_core_3x3)
+  1908  world.chunks.get("%d,%d" % [pcx + dx, pcz + dz])-> world.chunks.get(world.chunk_key(pcx + dx, pcz + dz))(_await_sim_band)
+
+## CONVERTED — godot/scenes/harness.gd (66 sites)
+Class A — inline literal in a world.chunks/edits/chunk_origin call (37; the grep-gate set):
+  8944  chunks.get [pcx+dx,pcz+dz]    (editfront wait loop)
+  8958  chunks.get [pcx,pcz]          (T = player chunk)
+  9105  chunks.get [pcx+dx,pcz+dz]    (editmat wait loop)
+  9258  chunks.get [pcx+dx,pcz+dz]    (editmat_shot wait loop)
+  10097 chunks.get [pcx,pcz]          (editslab ec)
+  20746 chunks.get [upx,upz]
+  23899 chunks.get [ttx,ttz]
+  23945 chunks.get [tpcx+dx,tpcz+dz]
+  23970 chunks.get [tpcx,tpcz]        (sc)
+  23986 chunks.get [tpcx,tpcz]        (sc30)
+  24780 chunks.get [pcx,pcz]          (sc)
+  24925 chunks.get [dc[0],dc[1]]
+  24937 chunks.get [dc[0],dc[1]]
+  25056 chunks.get [int(dc[0]),int(dc[1])] (cf)
+  25083 chunks.has [int(dc[0]),int(dc[1])]
+  25087 edits.has  [int(dc[0]),int(dc[1])]
+  25131 chunk_origin.get [dc[0],dc[1]]
+  25295 chunks.get [rc[0],rc[1]]
+  25304 chunks.get [ec[0],ec[1]]
+  26836 chunks.get [dc[0],dc[1]]
+  26864 chunks.get [dc[0],dc[1]]      (c2)
+  26931 chunks.get [cx,cz]
+  27092 chunks.get [pcx+dx,pcz+dz]
+  27139 chunks.get "%d,%d" % sc       (sc = [cx,cz] sample pair)
+  27419 chunks.get [pcx0+dx,pcz0+dz]
+  27513 chunks.get [pcx0+dx,pcz0+dz]
+  27690 chunks.get [pcx0+dx,pcz0+dz]
+  27856 chunks.get [pcx+dx,pcz+dz]
+  28030 chunks.get [ccx,zc]
+  28193 chunks.get [ccx,zc]
+  28542 chunks.get [pcx,pcz]          (atlas)
+  28605 chunks.get [tcx,tcz]
+  28631 chunks.get [wcx,wcz]
+  34133 chunks.get [cxx,zc]
+  34144 chunks.get [tcx,zc]
+  34151 chunks.get [int(floorf(pf2.x/16.0)), int(floorf(pf2.z/16.0))]
+  34344 chunks.get "%d:%d:%d" [af, riu>>4, riv>>4]  -> chunk_key_face (3-part face key)
+Class B — key built into a variable/list entry, later indexed into the four dicts (17):
+  1225  var k   -> chunks.get(k) at 1226            (AWECRAFT_DBG dump)
+  9098  var pkey-> chunks.get(pkey) at 9120         (editmat)
+  9358  edit_keys.append -> chunks.get(key) at 9459/9521 (breakspike; settled check)
+  9466  var k   -> edit_keys.has(k) at 9467         (same key space as 9358 — converted together)
+  10786 var fck -> chunks.get(fck) at 10802         (banana3d; fx/16 int division kept)
+  23527 fix_chunks[k] -> chunks.get(k) at 23532
+  25091 var k2  -> chunks.get(k2) at 25093
+  25107 var key -> chunk_origin.get(key) at 25110
+  25316 {"col": ...} entry -> chunk_origin.get(String(e["col"])) at 25380 (flysave)
+  27534 var key -> chunks.get(key) at 27535
+  27559 var key -> chunks.get(key) at 27560
+  27708 {"k": ...} -> chunks.get(e["k"]) at 27716/27721 (edgeretain track)
+  27709 {"k": ...} -> same
+  27710 {"k": ...} -> same
+  28259 var mkey-> chunks.get(mkey) at 28267
+  29799 var kkey5 -> chunks.has(kkey5) at 29800
+  34213 fs_keys.append "%d:%d:%d" -> chunks.get(fk2) at 34222 (crossface; -> chunk_key_face)
+Class C — hardcoded literal chunk keys the "%d,%d" grep cannot see (12; same trap class, converted):
+  7339  var ab_key := "0,1" -> chunks.get(ab_key) at 7340
+  16463 chunks.get("0,0")
+  22345 chunks.get("0,0")   (NLDBG print)
+  26674 chunk_origin.get("0,0", "none")
+  29368 chunks.get("0,0")
+  29374 chunks.get("0,0")
+  34665 chunks.get("196,%d" % zc)        (crossface straddler column cx=196)
+  34708 chunks.get("196,%d" % gc3)
+  34747 chunks.get("196,%d" % gcol)
+  34817 chunks.get("196,%d" % site_col)
+  35046 Game.world.chunks.get("196,%d" % site_col)
+  35057 Game.world.chunks.get("196,%d" % site_col)
+
+## NOT CONVERTED — chunk-key-shaped strings whose receiver is NOT one of the four dicts
+(leave-and-list per plan §7; flagged for AC-0459 — same key space, would silently no-op after a flip)
+  8982  pkey -> world._tm_inflight_keys.has(pkey) at 8983/8991   (editfront)
+  9012  key  -> world._editprobe_key = key at 9017              (editfront probe; world compares at 7898/7926/7952)
+  9162  key  -> world._editprobe_key = key at 9168              (editmat probe)
+  11960 pk   -> pb_keys -> world.star_remesh.has(pk) at 11987 + threadmesh_inflight key cmp at 11994 (breakspike probe)
+  11981 pk2  -> pb_keys.has(pk2) at 11982                       (same)
+  27084 k0   -> prev_b0 (local) + world.queued_keys.has(k0) in B0LOST diagnostic print at 27087
+  27116 k0   -> same (fswap loop)
+  27145 k0   -> same (sample loop)
+DEAD variables (hand-built key, never used — left, no receiver exists):
+  9251  pkey (_editmat_shot), 11940 rel_k
+## NOT CONVERTED — local dicts / RESULT labels / fixtures (not world chunk-dict keys)
+  v1 SAVE FIXTURE (must stay old format — soft-fail test): 23798 v1_data "edits" key "%d,%d" % [sx/16, sz/16]
+  local gen caches: 158/193 gen_cache, 28662 gen_cache, 31877 veg_cache, 35307 _cf_home_h_cache
+  local ref/neighbor light dicts (keyed by chunk coords or RELATIVE offsets, never world.*):
+    2523 nbs, 2564 flats, 2631/2642/2643/2675/2686/2726 flats+neighbors+skipfill, 7333 grid,
+    9725 k / 9809 nk / 9922 nk (fin_eng/pre_eff/fin_ref/df_cols/lane_slabs),
+    11573 k / 11604 nk / 11640 pre_ri effs, 12027 rk, 12048/12077 ck (ri effs),
+    12197 fk, 12415 k / 12472 nk / 12513 ck / 12521+12538 a_by_taxis / 12584 b_missing,
+    12922 k / 12957 ck / 12983 oe / 13002 ck (pslabs/ri), 13352/13400/13420 nk / 13434 lk (nbs/ri),
+    15927/15970/15972 topn, 16269 k / 16300 nk / 16355 ck (lc/rid), 13959/16486/16823/16859/19565 nbs/cnbs,
+    20472 first_ring_cols, 21297 pre_built, 26930 cols_seen, 27141 have, 28071 wall_keys,
+    28529 cur/ever_built, 29145 dicts (ref column data), 29176 ref_data, 29350 bl
+  3-part GLOBAL CELL keys (plan: do not touch): main.gd 1722 cells["%d,%d,%d"], 1732/1805 (parsing)
+  RESULT labels / report fields (string is a value, never an index):
+    1969 "col" label, 2275-2337 top/topid (banana arm locals), 24947 out[..]=hx,
+    2751/2754 wres sample_chunk, 13701/13702 halo_col/real_col, 15832 proud_col,
+    19871 band_a_fail col, 29101/29137 trees/flowers (locals),
+    36315/36344 player_key/aim_cell_key (3-part "face,cx,cz" label — different shape anyway)
+
+## Implementation note (one shape drift, forced by the type system)
+`world` is untyped in both harness.gd and main.gd, so `var x := world.chunk_key(...)` fails to
+parse ("Cannot infer the type"). The 9 converted sites that used `:=` (7339, 9098, 9466, 10786,
+25091, 25107, 27534, 27559, 28259) were changed to the explicit `var x: String = world.chunk_key(...)`
+— same String type the old `:=` inferred, byte-identical runtime values. First gate run (g0-r1/
+genhash-r1) caught this; fixed before any gate value was recorded (all recorded values are from
+the post-fix tree: g0-r2, genhash-r2, light-r1, ac0423probe-r1).
+
+## Scope note
+Plan §4 defines the sweep as the "%d,%d" grep. Class C (12 hardcoded "0,0"/"0,1"/"196,%d"
+lookups) is outside that literal pattern but IS by-hand chunk-dict key construction feeding
+world.chunks/world.chunk_origin — converted per plan §1 goal ("every place that builds the
+dictionary key for a chunk asks the world for it"), byte-identical today. Listed here so
+AC-0459 sees them either way.
