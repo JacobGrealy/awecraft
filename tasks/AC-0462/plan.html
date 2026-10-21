@@ -1,44 +1,38 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462c affine inverse fix</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0462c — convert face points with the inverse matrix, not per-axis dots</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Round 20 measured the answer: no per-axis projection is exact on a face chunk because the LSQ basis is non-orthogonal at corner chunks (cos ≈ 0.49), and the conversion needs the full 3×3 inverse. This applies it.</p>
-<h2>1. Goal</h2><p>A world point on a face chart converts to the cell whose geometry contains it — verified exact by the existing probe, then by the two-chart edit arm.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0462d arm uses the inverse</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0462d — put the faceedit arm on the same conversion as the game</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The game's face conversion is exact (AC-0462c, probe exact_frac 1.0). The arm still samples the aim with the OLD per-axis frame, so it can no longer find a target and its numbers are not evidence. This fixes the instrument.</p>
+<h2>1. Goal</h2><p>The arm's own eye, candidate and direction maths use the anchor's affine inverse — the same conversion <code>_flat_ray</code> now uses — so the arm measures the game instead of itself.</p>
 <h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> (15225) — it already builds <code>var B: Transform3D = SphereMath.face_chunk_transform(f, ccx, ccz, R)</code> and returns origin/basis/scale at ~15251</td><td>Edit: add ONE key to the face branch's return, <code>"inv": B.affine_inverse()</code>. Change nothing else.</td></tr>
-<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> (2810), face branch (2816-2830)</td><td>Edit the face branch only.</td></tr>
-<tr><td>tasks/AC-0462/scale_probe.gd</td><td>the candidate list added at d9c9bf9</td><td>Edit: add the affine-inverse candidate and re-run.</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the two-chart <code>faceedit</code> arm</td><td>No edit required; it is the acceptance instrument.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>faceedit</code> arm: eye cell at <b>36140-36142</b> (<code>ocell0</code>), <b>36165-36167</b> (<code>ocell</code>), the aim direction at <b>36226</b> (<code>dcell</code>), and the stand lift at <b>36156</b></td><td>Edit those expressions only.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>player_anchor</code> now returns <code>"inv": B.affine_inverse()</code></td><td>READ ONLY — this is the key to use.</td></tr>
+<tr><td>godot/player/player.gd</td><td><code>_flat_ray</code> face branch — the reference for exactly how the game does it</td><td>READ ONLY. The arm must MIRROR it, not approximate it.</td></tr>
 <tr><td>tasks/AC-0462/</td><td>journal, deviations, results</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the warp, placement, <code>get_block_key</code>/<code>set_block_key</code>, SphereMath, streaming, keys, saves. Keep everything the AC-0462 frame fix already landed (absolute columns + the mirror form).</p>
+<p><b>Do not touch:</b> the game's conversion, the warp, placement, keys, saves, SphereMath. This ticket edits the arm's sampling only.</p>
 <h2>3. Edit shape</h2>
-<p><b>3.1 <code>player_anchor</code></b>: in the face return, add <code>"inv": B.affine_inverse()</code> beside <code>origin</code>/<code>basis</code>/<code>scale</code>. Leave the existing keys untouched so every other consumer (sim_height, the anchor-frame block accessors) keeps working unchanged.</p>
-<p><b>3.2 <code>_flat_ray</code> face branch</b>: replace the per-axis projection with the inverse transform, then keep the ABSOLUTE-column + mirror conversion exactly as it is today (that part is proven):</p>
-<pre>var inv: Transform3D = _anchor["inv"]
-var lo: Vector3 = inv * camera.global_position      # cells in x/z, metres in y
-var dl: Vector3 = inv.basis * aim_dir()             # direction, same units
-# then, as today:
-mirror = SphereMath.face_mirror_x(face)
-abs_x  = ccx*16 + (16.0 - lo.x if mirror else lo.x)
-abs_z  = ccz*16 + lo.z
-d_x    = -dl.x if mirror else dl.x
-return {"o": Vector3(abs_x, lo.y, abs_z), "d": Vector3(d_x, dl.y, dl.z).normalized(),
-        "reach": REACH / dl.length()}</pre>
-<p>Keep the non-face branch and the home path byte-identical. If <code>inv</code> is absent (an anchor built before this change), fall back to the current per-axis code rather than crashing — one guard line.</p>
-<p><b>3.3 The probe</b>: add candidate <code>affine_inverse</code> (<code>inv * p</code>, then the absolute/mirror conversion) to <code>scale_probe.gd</code> and re-run. <b>Expected: exact_frac 1.0</b> on both faces. If it is not 1.0, STOP and report — that would mean the ground truth and the consumer disagree for a reason neither measurement has found yet.</p>
+<p>Replace each per-axis projection (<code>v.dot(basis.x)/scale.x</code>, <code>v.dot(basis.y)</code>, <code>v.dot(basis.z)/scale.y</code>) with the inverse transform, exactly as <code>_flat_ray</code> does it:</p>
+<pre>var inv: Transform3D = pa["inv"]
+var ocells: Vector3 = inv * p.camera.global_position       # x/z cells, y metres
+var dcells: Vector3 = inv.basis * p.aim_dir()              # direction in the same units</pre>
+<ul>
+<li><b>36142 / 36167</b>: use <code>inv * camera.global_position</code>. These are then LOCAL cell coordinates — if the surrounding code expects absolute columns (as <code>_flat_ray</code> now returns), add <code>ccx*16</code>/<code>ccz*16</code> with the mirror form, mirroring <code>_flat_ray</code> line for line. <b>Check which the arm's candidate/lift logic expects and say so in the deviations</b>; do not guess silently.</li>
+<li><b>36226</b>: use <code>inv.basis * aim_dir()</code> for the direction, with the same mirror sign flip the game applies.</li>
+<li><b>36156 (lift)</b>: the lift is along the anchor normal in world space; keep it in world space (<code>basis.y</code> is already the radial) and only re-derive the cell position AFTER moving — do not convert the lift itself.</li>
+<li>Keep every existing assertion and the two-chart (mirror + non-mirror) structure. Keep the anchor-face &gt; 1 guard.</li>
+</ul>
 <h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Probe</td><td>Standalone, paired rc + gate_census.</td><td>rc=0, census 0/0, affine_inverse exact_frac 1.0 (worst 0 cells).</td></tr>
-<tr><td>Warp ON (default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; both charts (mirror + non-mirror): face &gt; 1, break/place true, placed_cell == aim_cell, <b>surface_error_m ≤ 2.0 m</b>.</td></tr>
+<tr><td>Warp ON (default)</td><td><code>python3 tasks/scripts/gate_run.py AC-0462 --arms g0,smoke,ac0423probe,faceedit --timeout 600</code></td><td>All rc=0, SCRIPT=0/SHADER=0; both charts find a target (<b>no <code>no_target</code></b>), face &gt; 1, break/place true, placed_cell == aim_cell, <code>surface_error_m ≤ 2.0 m</code>.</td></tr>
 <tr><td>Warp OFF</td><td>Same with <code>--env 'AWECRAFT_WARP=0'</code></td><td>All rc=0, SCRIPT=0/SHADER=0; same assertions.</td></tr>
-<tr><td>Standing guards</td><td>genhash inside the smoke set; ac0423probe vs its capture.</td><td>genhash 25/25; ac0423probe equal excl ms — this changes player aim only, so the world must not move.</td></tr>
+<tr><td>No world movement</td><td>The same set's genhash and ac0423probe.</td><td>genhash 25/25; ac0423probe equal excl ms.</td></tr>
 </table>
-<h2>5. Acceptance</h2><p>The probe's affine candidate is exact, the two-chart edit arm's error falls from ~14 m to ≤ 2 m in both warp states, and no standing value moves.</p>
-<h2>6. Risks</h2><p><code>affine_inverse()</code> on a valid transform is safe, but a degenerate basis would return garbage — the anchor only ever builds from <code>face_chunk_transform</code>, so guard the fallback in §3.2 and report if it ever triggers. Do not change the reach maths beyond the unit conversion.</p>
+<h2>5. Acceptance</h2><p>The arm finds its target on both chart classes again and its error reading means something, because both sides of the comparison now use the exact conversion. If <code>surface_error_m</code> is still large with both sides exact, that is a REAL finding about the face frame — report it, do not tune the arm to hide it.</p>
+<h2>6. Risks</h2><p>The arm may internally mix local and absolute (the frame bug's original sin); the deviation must state which it chose at each site. Do not "fix" a mismatch by widening the candidate window.</p>
 <h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
 <li>No edits outside §2. No refactor the plan did not ask for.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>Frame bug fixed (e8d2fbc), scale question measured (d9c9bf9, affine inverse named). This applies it. After it: AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
+<h2>8. Resume point</h2><p>Game conversion exact (f81155b). This makes the instrument trustworthy. After it: close AC-0462 if the numbers hold, then AC-0459 keys/save bump, then AC-0463 removal and the planet walk.</p>
 </body></html>

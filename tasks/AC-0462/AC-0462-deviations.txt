@@ -141,3 +141,46 @@ AC-0462 deviations (builder, 2026-10-20):
     header's relative `-s tasks/AC-0462/scale_probe.gd` launch form does not resolve under
     `--path godot` (res://tasks/... file not found, rc=1 on first attempt — same shape as
     scaleprobe-r1.log); the successful run used the absolute filesystem path for -s.
+
+13. (AC-0462d, 2026-10-20) The arm frame was moved onto the anchor's affine inverse exactly
+    as plan §3 prescribes — three sampling sites in harness.gd _faceedit_chart, expressions
+    only, mirroring _flat_ray's face branch (player.gd 2819-2831) line for line:
+    a) ocell0 (site 1, the lift/top read): now `inv0 * p.camera.global_position`. The
+       surrounding arm code expects LOCAL cell coordinates (x/z in the anchor chunk's local
+       [0,16), y metres) and does the local->absolute shift ITSELF (floorf -> kx0 ->
+       `ccx*16 + (15-kx0 if mirror else kx0)` before surface_top_key) — the same
+       local->absolute form _flat_ray applies to its own inverse output. LOCAL was chosen
+       because converting to absolute here would double-shift; the shift already landed in
+       the AC-0462 fix run is unchanged.
+    b) ocell (site 2, re-read AFTER the lift because the anchor moved with the player;
+       feeds the candidate window and oabs): same inverse, LOCAL again — the block API
+       (get_block_key/surface_top_key) indexes ABSOLUTE columns, and the arm already builds
+       them from the local sample (floorf -> kx_a -> acolx/acolz `ccz*16 + kz_a`; oabs keeps
+       the `ccx*16 + (16.0 - ocell.x if mirror else ocell.x)` form for the absolute distance
+       ranking). No new conversion was invented; the existing absolute-column code is kept.
+    c) dcell (site 3, the aim step length): now `inv3.basis * p.aim_dir()` with the game's
+       mirror sign flip on x — ABSOLUTE-column units, which is the DDA's unit (hit["t"] is
+       measured there); the flip is mirrored from the game even though it cannot change the
+       length, so the arm's dcell and the DDA direction live in the same frame. s_aim =
+       t/dcell.length() unchanged.
+    The lift itself (plan §3 bullet 3) is untouched: world space along the anchor's basis.y,
+    the cell position re-derived after the move. No assertion, the two-chart (mirror face 5 /
+    non-mirror face 11) structure, the face > 1 guard, the +/-3 candidate window, the 4-scan
+    cap or the reach were changed or widened.
+    GATE OUTCOME: both flag states GREEN for the first time on the exact conversion.
+    WARP ON (faceedit-r13.log): faceedit RESULT ok=true, both charts FOUND a target (no
+    no_target) — chart 0 face 5 mirror=1 aim_cell [1021,181,1023] == placed_cell,
+    break_ok=true, place_ok=true, surface_error_m 0.578; chart 1 face 11 mirror=0 aim_cell
+    [1021,145,1022] == placed_cell, break/place true, surface_error_m 0.397. WARP OFF
+    (faceedit-r14.log): chart 0 face 5 mirror=1 aim [1022,180,1023] == placed, surface_error_m
+    0.752; chart 1 face 11 mirror=0 aim [1021,145,1022] == placed, surface_error_m 0.457.
+    Every reading is <= 2.0 m (down from 14.753/14.332 with the arm on the per-axis frame).
+    All arms rc=0 SCRIPT=0/SHADER=0 in both sets; genhash 25/25 lines byte-identical to the
+    pre-change tree (GENMS 130 warp ON / 129 warp OFF, genhash-r8/r9 logs); ac0423probe equal
+    excluding every ms field (r9/r10 vs pre-change r6-r8).
+    NOTE (pre-existing, not this change): the interact arm's headline is place_ok=false in
+    both sets — byte-identical to every prior run (interact-r1..r8 logs); the interact arm
+    is not touched by this ticket.
+    POSITIVE FINDING: with both sides of the comparison on the exact inverse, the faceedit
+    residual is 0.40-0.75 m on both chart classes in both flag states — the arm now measures
+    the game instead of itself, and its error reading means something.

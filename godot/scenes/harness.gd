@@ -36137,9 +36137,12 @@ func _faceedit_chart(p, edge: int, pf0: Vector3, R: float, warp: int) -> Diction
 	for i in 8:
 		await get_tree().physics_frame
 	var pa0: Dictionary = p._anchor
-	var oxw0: Vector3 = p.camera.global_position - pa0["origin"]
-	var sc0: Vector2 = pa0["scale"]
-	var ocell0: Vector3 = Vector3(oxw0.dot(pa0["basis"].x) / sc0.x, oxw0.dot(pa0["basis"].y), oxw0.dot(pa0["basis"].z) / sc0.y)
+	# AC-0462d: sample the eye with the anchor's OWN affine inverse — the
+	# exact world->cell conversion _flat_ray's face branch now uses (the
+	# per-axis dot frame diverged ~4 v-cells at corner chunks, outside the
+	# candidate window, which is why the arm lost its target).
+	var inv0: Transform3D = pa0["inv"]
+	var ocell0: Vector3 = inv0 * p.camera.global_position
 	# AC-0462 (fix): surface_top_key indexes ABSOLUTE columns — convert the
 	# player's anchor-local column (mirror class: local index k is
 	# absolute ccx*16 + 15 - k, the face_local_x data layout).
@@ -36162,9 +36165,10 @@ func _faceedit_chart(p, edge: int, pf0: Vector3, R: float, warp: int) -> Diction
 	# top-1). The aim/verify is the player's LIVE aim_hit (the AC-0309 C5
 	# face branch) — a real aim, verified, no teleport into a wall.
 	var pa: Dictionary = p._anchor
-	var oxw: Vector3 = p.camera.global_position - pa["origin"]
-	var sc: Vector2 = pa["scale"]
-	var ocell: Vector3 = Vector3(oxw.dot(pa["basis"].x) / sc.x, oxw.dot(pa["basis"].y), oxw.dot(pa["basis"].z) / sc.y)
+	# AC-0462d: the same exact inverse, re-read AFTER the lift (the anchor
+	# moved with the player) — LOCAL cells x/z, metres y, as in _flat_ray.
+	var inva: Transform3D = pa["inv"]
+	var ocell: Vector3 = inva * p.camera.global_position
 	# AC-0462 (fix): the candidates run in ABSOLUTE columns (the block
 	# API's frame — before the fix the arm itself mixed frames, aiming at
 	# the chart-corner chunk the broken ray read).
@@ -36223,7 +36227,12 @@ func _faceedit_chart(p, edge: int, pf0: Vector3, R: float, warp: int) -> Diction
 	# camera + ad * (t / |M(ad)|).
 	var a3: Dictionary = p._anchor
 	var ad: Vector3 = p.aim_dir()
-	var dcell: Vector3 = Vector3(ad.dot(a3["basis"].x) / float(a3["scale"].x), ad.dot(a3["basis"].y), ad.dot(a3["basis"].z) / float(a3["scale"].y))
+	# AC-0462d: direction via the same inverse, with the mirror sign flip
+	# _flat_ray applies — the DDA ran in absolute-column units, and the
+	# s_aim step-length below must live in those same units.
+	var inv3: Transform3D = a3["inv"]
+	var dl3: Vector3 = inv3.basis * ad
+	var dcell: Vector3 = Vector3(-dl3.x if mirror else dl3.x, dl3.y, dl3.z)
 	var s_aim: float = float(hit["t"]) / dcell.length()
 	var aim_point: Vector3 = p.camera.global_position + ad * s_aim
 	var aim_cell: Vector3i = hit["cell"]
