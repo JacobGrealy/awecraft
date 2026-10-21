@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-21T00:53
+  updated_at: 2026-10-21T02:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0466
 - AC-0463
 - AC-0434
 - AC-0451
@@ -29978,11 +29977,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-21T00:52
-  updated_at: 2026-10-21T00:53
-  completed_at: null
+  updated_at: 2026-10-21T02:20
+  completed_at: 2026-10-21T02:20
   waiting_on: null
   parent_id: null
   notes: '1) User Story
