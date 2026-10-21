@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-21T00:51
+  updated_at: 2026-10-21T00:53
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0466
 - AC-0463
 - AC-0434
 - AC-0451
@@ -29839,7 +29840,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-20T09:23
+  updated_at: 2026-10-21T00:52
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29853,7 +29854,39 @@ intake:
     \ void or light seam; streamed takeoff and descent; return to spawn; save/reload.\n   Numerical equal-height\
     \ seams are necessary but NOT sufficient.\n   DOCS: ARCHITECTURE.md grid/placement/streaming/consumer\
     \ sections rewritten to the one model, the\n   design essay labelled with what shipped, and the standing\
-    \ gate values re-established deliberately.\n   PRECONDITION: every earlier ticket in this series landed.\n"
+    \ gate values re-established deliberately.\n   PRECONDITION: every earlier ticket in this series landed.\n\
+    \n\nAC-0463 INVENTORY (coordinator recon, round 27). This ticket is the largest change in the tree\
+    \ and it is deliberately NOT being rushed. What follows is the measured surface so the work can be\
+    \ sliced rather than attempted whole.\n\nWHY IT IS BIG: godot/world/world.gd is 15,507 lines with\
+    \ 373 functions. The two lanes are not two functions that can be merged; they are two co-existing\
+    \ arrangements of the same responsibilities:\n- HOME lane: `_process` (world.gd:5854) drives banded\
+    \ streaming + drain; `recenter` (11733) rebuilds the resident set when the player moves; `_make_chunk_node`\
+    \ (11409) and `_column_checkout` (1384) create nodes; `chunks` (234) is the single dict, keyed `0:cx:cz`\
+    \ since AC-0459.\n- FACE lane: `_face_stream` (14996) is a budgeted pass (`FACE_STREAM_BUDGET_MS :=\
+    \ 12.0`, 14995) that lazily builds per-face chunks via `_ensure_face_chunk` (15335); per-face light\
+    \ engines live in `_star_faces` (14570).\n- THEY ALREADY AGREE on the things that used to differ:\
+    \ one placement (AC-0460 warp, default on), one key shape (AC-0459), world-space collision and light,\
+    \ and exact cell conversion (AC-0462). That is why the merge is now an ARCHITECTURE change rather\
+    \ than a correctness change — nothing is broken by the split today, which is exactly why it must not\
+    \ be attempted in a hurry.\n\nWHAT \"REMOVE THE SPLIT\" WOULD ACTUALLY REQUIRE (each is its own slice,\
+    \ and each needs its own gates):\n1. ONE RESIDENCY MODEL: the home lane owns banded residency and\
+    \ a drain queue; the face lane owns a lazy budgeted pass. Unifying means deciding which policy wins\
+    \ per chunk class and proving no chunk is starved — measurable with the boundary r4 arm plus a new\
+    \ face-residency census.\n2. ONE NODE CREATION PATH: `_make_chunk_node` vs `_ensure_face_chunk` must\
+    \ become one function with one identity assignment; the collidable/mesh/occluder contracts all hang\
+    \ off it (AC-0460 shipped occluder parity on the face path, so this path must keep it).\n3. ONE LIGHT\
+    \ OWNERSHIP: `_star_faces` per-face engines vs the home light path — the riskiest slice, because AC-0358's\
+    \ feed invariant and the lightstate arm encode the current behaviour.\n4. ONE SAVE/RESIDENCY KEY SPACE:\
+    \ already unified by AC-0459/AC-0465, so this slice is mostly deletion.\n5. THE PROOF: \"walk the\
+    \ planet end to end\" — a crossface traversal across all 12 charts with seam and residency censuses\
+    \ at every boundary. No such arm exists today; `crossface` walks the home pair only.\n\nRECOMMENDED\
+    \ SHAPE: do not open with a merge. Open with (5)'s instrument, because it is the thing that can prove\
+    \ or refute every later slice, and because a merge with no end-to-end traversal arm would be unfalsifiable.\
+    \ Then slice (4) deletion, then (1), then (2), then (3) last.\nWHY I AM NOT STARTING THE CODE THIS\
+    \ ROUND: the honest reason is that a partial lane merge is worse than none — two half-merged policies\
+    \ produce exactly the quiet starvation this project keeps having to hunt, and the instrument that\
+    \ would catch it (a planet-traversal census) does not exist yet. Building that first is the same order\
+    \ that worked for the keys (AC-0465 before AC-0459) and for the placement (measure, then flip)."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
@@ -29935,6 +29968,54 @@ intake:
     Verify: g0 + genhash 25/25 byte-identical + the full light set + save/load arms byte-comparable to
     their pre-change values; grep that no "%d,%d" chunk lookup remains outside the helper; and report
     the final producer count so AC-0459''s format flip is a one-line change with nothing missed.
+
+    '
+  comments: []
+- id: AC-0466
+  title: planet traversal arm (crossface census)
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: in-progress
+  labels: []
+  created_at: 2026-10-21T00:52
+  updated_at: 2026-10-21T00:53
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    Nothing visible changes yet, but this is the instrument that makes the rest of the one-world migration
+    safe. Today no test walks the player across a chart boundary and checks that the world stays continuous
+    — the existing crossface arm only walks the home pair. Without a test that crosses all twelve charts
+    and reports what happens at each seam, any later attempt to merge the two streaming lanes could break
+    the world quietly and nobody would know.
+
+
+    2) Technical Details
+
+    Filed from AC-0463''s inventory (round 27): the lane merge is the largest change in the tree (world.gd
+    is 15,507 lines / 373 functions; home lane = _process at 5854 + recenter 11733 + _make_chunk_node
+    11409; face lane = _face_stream 14996, FACE_STREAM_BUDGET_MS 14995, _ensure_face_chunk 15335, _star_faces
+    14570). The merge must NOT be attempted before an arm exists that can prove or refute it, which is
+    the same order that worked for the keys (AC-0465 before AC-0459) and the placement (measure, then
+    flip).
+
+    Scope: add ONE arm that puts the player on a chart, walks/flies it across at least one boundary into
+    a neighbouring chart, and reports at every boundary: the anchor face before/after, whether the chunk
+    under the player has a built mesh and collision body, the seam census fields, and the frame/latency
+    at the crossing. Extend to all twelve charts or a documented subset if a full lap is too slow — state
+    which and why.
+
+    Do NOT merge lanes here. Do NOT change placement, keys, streaming policy or light. The arm is the
+    deliverable.
+
+    Verify: the arm is green on the current (pre-merge) tree, which is the baseline every later slice
+    is measured against; genhash 25/25 unchanged (no world change); g0 clean; and the arm must FAIL if
+    a boundary chunk has no mesh or no collision, proved by a deliberate negative control (e.g. skip the
+    wait) so it cannot be a green test of nothing.
 
     '
   comments: []

@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0466 planet traversal arm</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0466 — an arm that walks the planet and says what happens at every seam</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measurement ticket: add one arm, change no game behaviour.</b> This exists because AC-0463 (remove the legacy lane split) is the largest change in the tree and would be unfalsifiable without it.</p>
+<h2>1. Goal</h2><p>An arm that puts the player on a chart, crosses into a neighbouring chart, and reports per boundary: the face before/after, whether the chunk under the player has a mesh AND a collision body, the seam census fields, and the crossing frame/latency — with a negative control proving the arm can fail.</p>
+<h2>2. Why now (the order that has worked)</h2>
+<p>AC-0465 preceded AC-0459 (make the producer count knowable, then flip the format). AC-0460 measured the placement before flipping the default. The lane merge follows the same rule: <b>build the instrument first</b>, because two half-merged streaming policies produce exactly the quiet starvation this project keeps having to hunt.</p>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>crossface</code> arm (walk pattern, boundary positioning, mesh/collision waits) — find it by name; and <code>faceedit</code>'s two-chart positioning for standing on a chart</td><td>Add ONE arm <code>planetwalk</code>. Reuse their shapes; invent no new helpers unless a name clash forces it.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>recenter</code> (11733), <code>_face_stream</code> (14996), <code>_ensure_face_chunk</code> (15335), <code>player_anchor</code> (15225), <code>key_for_sphere_pos</code> (15294), <code>has_all_slab_bodies</code> (search by name)</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>the <code>crossface</code>/<code>faceedit</code> rows as templates</td><td>Add the <code>planetwalk</code> row; then <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>tasks/AC-0466/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> placement, streaming policy, keys, light, SphereMath, the warp. The arm only observes.</p>
+<h2>4. Edit shape</h2>
+<ul>
+<li><b>Start</b> on a chart using the same boundary positioning <code>faceedit</code> uses, and assert the anchor face is &gt; 1 (fail loudly, never test the home pair by accident).</li>
+<li><b>Cross</b> by moving the player in steps along one direction until <code>player_anchor()["face"]</code> CHANGES. Record the face pair, the step count, and the crossing frame time. <b>Assert the face actually changed</b> — a walk that never leaves the chart is a failed arm, not a pass.</li>
+<li><b>At the crossing</b> (the first frame the face differs) and at the destination, record for the chunk under the player: <code>mesh_built</code> (it has a mesh instance), <code>body_present</code> (collision body, use the existing slab-body predicate, not a new one), and the seam census fields used at AC-0433/AC-0462 if they are cheap to read.</li>
+<li><b>Coverage</b>: cross at least TWO different boundaries (e.g. 5→4 and 11→10, or however the cube map actually adjoins them — derive adjacency from <code>SphereMath</code>, do not guess). If a full twelve-chart lap is too slow for the 600 s budget, do a documented subset and say so; <b>report the wall time</b>.</li>
+<li><b>Negative control</b>: the arm must be able to fail. Provide a mode (env flag) that skips the mesh/collision wait and assert the arm then reports <code>body_present false</code> or <code>mesh_built false</code> at a boundary — i.e. prove the check has teeth against the AC-0145 finding that an unchecked wait let the player free-fall 148 m through unbuilt ground.</li>
+<li><b>RESULT</b> keys: ok, crossings [{from_face, to_face, steps, frame_ms, mesh_built, body_present, recentered}], waivers, negctrl {ran, saw_unbuilt}, frames, ms, fails.</li>
+</ul>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Baseline green</td><td><code>python3 tasks/scripts/gate_run.py AC-0466 --arms g0,genhash,planetwalk --timeout 900</code></td><td>All rc=0, SCRIPT=0/SHADER=0; <b>genhash 25/25 byte-identical</b> (nothing about the world may change); planetwalk ok with at least two crossings whose faces genuinely differ and whose destination chunk has mesh AND body.</td></tr>
+<tr><td>Negative control</td><td>Same arm with the skip flag set</td><td><code>negctrl.ran</code> true and <code>negctrl.saw_unbuilt</code> true — the arm can see an unbuilt boundary. If it cannot be made to fail, say so plainly: an instrument that always passes is the defect this ticket exists to avoid.</td></tr>
+<tr><td>Docs</td><td><code>python3 tasks/scripts/harness_doc.py --check</code></td><td>exit 0.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b>: <code>gate_run.py</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word — including your own shell string when it mentions a <code>godot/…</code> path. Two coordinator runs deadlocked on this.</p>
+<h2>6. Acceptance</h2><p>A green, falsifiable traversal arm on the current tree, which becomes the baseline every later lane-merge slice is measured against.</p>
+<h2>7. Risks</h2><p>The walk may cross a boundary faster than the destination chunk streams, producing a genuine finding rather than an arm bug — <b>report which it is</b> by checking whether the chunk builds after a bounded wait. Do not widen the wait silently until it goes green.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. No refactor the plan did not ask for.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>The migration's correctness work is done (AC-0460 placement default, AC-0462 editing exact, AC-0459/AC-0465 keys). AC-0463 is the remaining architectural merge and is blocked on this instrument by design.</p>
+</body></html>
