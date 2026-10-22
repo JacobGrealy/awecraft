@@ -109,3 +109,75 @@ AC-0463 slice 2a — deviations (residency baseline, MEASUREMENT ONLY)
      checkouts vs 68 created columns over the whole run; the direct r1 run
      measured 449/69 - stable to one checkout of frame-timing jitter). The
      pool amortises, it does not sit.
+
+AC-0463 slice 2b — deviations (one travel gate + one window; behaviour-preserving extraction)
+
+1. THE SHAPE
+   godot/world/world.gd only (plan §3; harness.gd untouched — it is the instrument):
+   - _evict_sweep_due(last, p, min_move) -> bool (world.gd:11854): the INF sentinel (a
+     never-swept lane passes its first gate), Euclidean flat-metre distance, strictly
+     > min_move. Takes a position and a distance — NO face number (plan §4.3).
+   - _stream_window(sim_dist, evict_margin_m) -> Vector2 (world.gd:11865): win = sim_dist*16
+     flat metres; evict_r = win + margin. The margin is a UNIT parameter (a distance),
+     commented as such per §4.3: the face lane passes FACE_STREAM_EVICT_MARGIN (64 m),
+     the home lane its two_out hysteresis over the sim band, (b1_eff()+2 - band0_r)
+     chunks (32 m at the defaults — exact for every render-radius/sim combination).
+   - HOME call sites: the recenter to_free free loop is gated on the predicate at 16.0
+     against a NEW state var _home_evict_last (INF sentinel; updated to the recenter's
+     flat position when the sweep runs — plan §4.1's "its own last sweep position",
+     world.gd:12280); the home window/evict radius is precomputed once per recenter,
+     home_win = _stream_window(band0_r, (b1_eff()+2 - band0_r)*16.0), and the two_out
+     test compares (dx+dz taxi)*16.0 > home_win.y (world.gd:12202) — the same value the
+     chunk-taxi test used (int*16.0 is exact), the shared expression.
+   - FACE call sites: the windowed-eviction gate in _face_stream now calls the predicate
+     on _face_evict_last with its clamped p at 16.0 (world.gd:15201), and the window is
+     win_ev = _stream_window(sim_dist, FACE_STREAM_EVICT_MARGIN) — win = win_ev.x,
+     evict_r = win_ev.y (world.gd:15109/15208): numerically identical to the old
+     `moved > 16.0` + `win + FACE_STREAM_EVICT_MARGIN`.
+   Untouched: the AC-0257 deferred-free/identity-guard machinery (the sweep's cap-defer
+   and checkin are inside the gate, byte-identical), the band values, stream_ho_cap,
+   generation, the drain, keys, saves, light, the warp. No structural change ->
+   ARCHITECTURE.md not touched.
+
+2. FINDING — RESIDENCY: the face lane matches stage 2a BYTE-FOR-BYTE; the home lane DOES NOT
+   (plan §5: "residency must reproduce stage 2a's numbers" — partial, see mechanism below)
+   Face (2a -> 2b): resident 93 -> 93, evictions 2 -> 2, window_cells 12 -> 12, budget
+   12.0 -> 12.0, converged (1974 -> 1966 ms default / 1981 ms warp-off), verdict STABLE,
+   keys_same true, leak false. The face extraction is behaviour-preserving, as designed.
+   Home (2a -> 2b): resident 125 -> 127, peak 125 -> 197, evictions 151 -> 220; the
+   traverse held 93 flat (10 of 16 steps) -> oscillates 93/104/115 on a 3-step period;
+   seam ev_home 32/22 -> 72/72; steady home 125 -> 127. In both runs the verdict is
+   STABLE, leak false, keys_same true — no leak, no divergence, and the difference is
+   TIMING, not a lost or duplicated free.
+   MECHANISM (deterministic — residency r2 (default) and r3 (warp-off) are identical
+   number-for-number): the home sweep used to run on EVERY recenter call (a chunk
+   crossing, or any explicit recenter — the arm's 8 m steps included); plan §4.1's home
+   state var + the shared 16 m threshold makes it run only when travel since the last
+   sweep exceeds 16 m — on the arm's 8 m steps, every THIRD recenter. cand_since still
+   increments on every recenter (only the free loop is gated), so nothing is lost: each
+   free is delayed by at most one recenter and batched at the gated sweep. The numbers
+   show exactly that: accumulation between sweeps (104/115 vs flat 93), the old
+   pre-seam window lingering one sweep past the jump (peak 197 = the new 125-class
+   window + ~72 old-window columns not yet freed; 147/136 steady at the seams vs 115/118),
+   the batched sample-diff counts (72/72 vs 32/22), and steady home +2 (the last
+   boundary columns' two-out state lags one sweep).
+   THE PLAN PREMISE THAT FAILED: §4.1's "the home lane may need its own 'last sweep
+   position' to preserve behaviour exactly" — it does not. The home lane's effective
+   sweep cadence is PER-RECENTER, not per-16-m-of-travel, so no position-based 16 m
+   gate on the recenter reproduces it. The plan needs a line on the home cadence
+   (keep the home sweep ungated per-recenter, or express the home cadence inside the
+   shared rule). This is the "subtle behaviour drift in recenter" plan §7 warned about,
+   now measured rather than assumed. The slice's shared MECHANISM exists and works (one
+   predicate, one window, both lanes on them, no face number anywhere) — the home
+   THRESHOLD/CADENCE is the open design decision the numbers hand back to the
+   coordinator.
+
+3. GATES (logs under .scratch/AC-0463-gates/, merged in summary-2b-merged.json)
+   Default placement: g0 rc=0 script=0 shader=0; genhash 25 GENHASH lines, BYTE-IDENTICAL
+   to stage 2a's r4; light ok; residency ok=true (see §2); planetwalk ok (both boundary
+   crossings ok, the standing 2-of-12 waiver); homecensus ok (0.000 mm floor, as 2a).
+   AWECRAFT_WARP_HOME=0: the same six arms all ok; genhash 25/25 byte-identical to the
+   default-mode run; residency identical to default mode (the mechanism, not jitter).
+   Start flow: save ok=true (v1_softfail=true — the baseline's own value); load ok=true,
+   simband_ms 6872 (baseline 6633 — near the ~6.7 s normal, nowhere near the 50 s a lost
+   registration or a mis-moved eviction would produce).

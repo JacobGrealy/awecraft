@@ -1,40 +1,39 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 slice 2a residency baseline</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 slice 2a — measure both lanes' residency before merging them</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measurement only: add one census arm, change no game behaviour.</b></p>
-<h2>1. Goal</h2><p>A baseline of what each lane holds, evicts and pools over a real traverse — the numbers a unified residency model must reproduce. Without them, slice 2b is unfalsifiable.</p>
-<h2>2. What is already known (from the code, round 33)</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 slice 2b one travel gate</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 slice 2b — one travel gate and one window, shared by both lanes</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Behaviour-preserving extraction.</b> The user has decided the policy (round 35): eviction is travel-gated, a stationary player sheds nothing, no cap, and there must be no special-cased home. This slice makes the two lanes express that with ONE mechanism instead of two.</p>
+<h2>1. Goal</h2><p>A single travel-gate predicate and a single window computation, used by both lanes, with no face-number special-casing — the mechanism the later "delete the home branch" slice needs to exist.</p>
+<h2>2. What is actually true today (measured by the coordinator, round 36 — do not re-derive)</h2>
 <ul>
-<li>Both lanes have windows and eviction; they differ in policy, not in existence. Home: banded residency + drain queue, async worker generation. Face: <code>_face_stream</code> (world.gd:15008) with a window from <code>sim_dist</code> ×16 face cells, <code>FACE_STREAM_BUDGET_MS = 12.0</code> (14995), eviction past the expanded window via <code>_face_free_chunk</code> (15125, called at 15123), star evict + pooled-column checkin, sync <code>WorldGen.generate_face</code>.</li>
-<li>So the slice is NOT "give faces residency" — it is "make the two policies one", which is why the baseline matters.</li>
+<li><b>Home eviction is already movement-driven</b>: it happens inside <code>recenter</code> (world.gd:11841), in the <code>to_free</code> loop around 12238, deferring over-cap frees through <code>_deferred_free</code> (AC-0257) and releasing through <code>_free_chunk_key</code> (11612) / <code>_col_checkin</code>.</li>
+<li><b>Face eviction</b> is gated on <code>moved &gt; 16.0</code> against <code>_face_evict_last</code> (14679, used at 15151-15153), with the window <code>win = sim_dist * 16</code> and <code>evict_r = win + FACE_STREAM_EVICT_MARGIN</code>.</li>
+<li>So both lanes ALREADY satisfy the user's chosen behaviour (nothing sheds while stood still). The separation is in the MECHANISM, which is what this slice removes.</li>
 </ul>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the <code>homecensus</code> and <code>planetwalk</code> arms (templates for counts and traverse)</td><td>Add ONE arm <code>residency</code>.</td></tr>
-<tr><td>godot/world/world.gd</td><td><code>chunks</code> (234), <code>_face_stream</code> (15008), <code>_face_free_chunk</code> (15125), <code>_col_checkin</code> (11621), <code>perf_*</code> counters, the band/resident bookkeeping</td><td>READ ONLY.</td></tr>
-<tr><td>tasks/harness_data.yaml</td><td><code>homecensus</code> row as the template</td><td>Add the row; <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_evict_last</code> (14679) and its gate (15151-15153); <code>recenter</code>'s <code>to_free</code> loop (~12238); the window expressions in both (<code>win</code>, <code>evict_r</code>, and whatever <code>recenter</code> computes)</td><td>Edit: extract ONE predicate and ONE window helper; call them from both sites.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>residency</code> arm (AC-0463 s2a)</td><td>No edit; it is the acceptance instrument.</td></tr>
 <tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> streaming policy, bands, budgets, eviction, generation, keys, saves, light, the warp.</p>
-<h2>4. What to report</h2>
+<p><b>Do not touch:</b> the actual thresholds' VALUES, the bands, <code>stream_ho_cap</code>, the deferred-free mechanics, generation, the drain, keys, saves, light, the warp. <b>This slice changes no number and no behaviour.</b></p>
+<h2>4. Edit shape</h2>
 <ul>
-<li><b>A home-only traverse</b> (walk away from the boundary, never crossing): home resident chunk count over time, evictions, pooled columns reused vs created, peak memory if a counter exists.</li>
-<li><b>A crossing traverse</b> (the <code>planetwalk</code> route): the same counts PLUS face resident chunks and face evictions, sampled before, at and after the crossing.</li>
-<li><b>The steady state</b>: after the traverse settles, how many home and face chunks are resident, and whether that number is stable across repeated samples (a growing count is a leak finding, not a number to record quietly).</li>
-<li>Report the <b>policy parameters</b> each lane actually used on the run (bands, <code>sim_dist</code>, the expanded window, the budget) so slice 2b has the current settings, not a guess.</li>
-<li>RESULT keys: ok, home {resident, evictions, pooled_new, pooled_reused, peak}, face {resident, evictions, window_cells, budget_ms}, samples [{t, home_resident, face_resident}], steady {home_resident, face_resident, stable}, fails.</li>
+<li><b>4.1 One travel gate.</b> Extract the "has the player moved enough to justify an eviction sweep" test into one predicate (taking the current flat position and a threshold), and call it from BOTH lanes. Keep the existing 16 m value as the threshold <b>and keep the face lane's existing state variable semantics</b> — the home lane may need its own "last sweep position" to preserve behaviour exactly; that is allowed (two callers, one rule).</li>
+<li><b>4.2 One window.</b> Extract the resident-window computation (the <code>sim_dist</code>→metres window and the evict radius including its margin) into one helper used by both, <b>preserving each lane's current effective numbers</b>. If the two lanes' windows are genuinely different quantities (e.g. face cells vs 1 m home cells), the helper takes the cell size as a parameter and says so in a comment — a parameter for a UNIT is not the face-number special-casing this ticket is deleting.</li>
+<li><b>4.3 No face-number branch added.</b> The predicate and the window must not take a face number at all. If you find yourself needing one, STOP and report — that is the separation surviving under a new name.</li>
 </ul>
-<h2>5. Gates</h2>
+<h2>5. Gates — identical behaviour, because this is an extraction</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>No change</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,residency --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; residency produces the table and <code>ok</code> with a stated verdict on stability.</td></tr>
-<tr><td>Docs</td><td><code>harness_doc.py --check</code></td><td>exit 0.</td></tr>
+<tr><td>World and lanes unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,residency,planetwalk,homecensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; <b>residency must reproduce stage 2a's numbers</b> — home settles ~93 with peak ~125 and ~151 evictions over that traverse, face ~93 steady, verdict STABLE, leak false. <b>Report the numbers next to stage 2a's and say whether they match.</b></td></tr>
+<tr><td>Both placement modes</td><td>Same with <code>--env 'AWECRAFT_WARP_HOME=0'</code></td><td>All rc=0, genhash 25/25.</td></tr>
+<tr><td>Start flow</td><td><code>save</code> and <code>load</code></td><td><code>ok</code> true; <b>simband_ms near 6.7 s</b> (this tree's normal). A jump toward 50 s means a chunk stopped registering or eviction moved.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>A logged baseline of both lanes' residency behaviour and policy parameters over two traverses, plus an explicit leak verdict.</p>
-<h2>7. Risks</h2><p>If the counts grow without bound the finding is a LEAK, and it outranks the merge: report it plainly and do not normalise it away. If the traverse is too slow for the budget, shorten it and say so rather than sampling once.</p>
+<h2>6. Acceptance</h2><p>One travel gate and one window helper, both lanes on them, no face number anywhere in either, and the residency numbers unchanged.</p>
+<h2>7. Risks</h2><p>The danger is subtle behaviour drift in <code>recenter</code>: its frees are deferred and identity-guarded (AC-0257 — a pooled column keeps its <code>instance_id</code>, so <code>col_gen</code> is the discriminator). Do not touch that machinery; only the decision of WHEN the sweep runs moves. If preserving behaviour requires two separate state variables, that is acceptable and expected — what must be shared is the rule, not the bookkeeping.</p>
 <h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. This stage adds ONE arm.</li>
+<li>No edits outside §3. No threshold changes, no "while I'm here" cleanup.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>Slice 1 unified node creation (5a54aea). This measures residency, then 2b unifies the policies against these numbers. Light ownership and the twelve-chart lap follow.</p>
+<h2>9. Resume point</h2><p>User decisions (round 35): travel-gated eviction, no stationary shedding, no cap, and no home. Slice 1 unified node creation; 2a measured the baseline. This unifies the trigger and the window. Next: pull faces 0/1 through the one path and delete the home branch, then the spawn cell-size renders.</p>
 </body></html>

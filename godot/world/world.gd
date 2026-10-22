@@ -230,6 +230,13 @@ var band0_r := 4
 # at or below render) and re-stamps the queue.
 var medium_start_r := 8
 var band1_r := 96
+# AC-0463 slice 2b: the home lane's own last-sweep position for the ONE
+# travel gate (_evict_sweep_due) — the face lane's _face_evict_last is its
+# twin (plan §4.1: two callers, one rule). The INF sentinel = never swept,
+# so the first recenter's sweep always runs; a run sweep updates it to the
+# recenter's flat position. No face number anywhere — a position and a
+# distance only (plan §4.3).
+var _home_evict_last := Vector2(INF, INF)
 var collision_enabled := true
 var chunks := {}
 var chunk_keys := {}
@@ -5253,6 +5260,19 @@ func _wprof_recon_raw_pct() -> float:
 var _ac0401_fog_wall := -1.0
 var _ac0401_n_mats := -1  # AC-0420: late (lazily built) materials gate
 var _ac0401_deck := -1.0
+# AC-0451 P1: the coverage-predicate switch push state
+# (AWECRAFT_COVERAGE=0|1, env at boot — NO Settings row / no Options
+# row, the AC-0445 precedent: a correctness rule, not a toggleable
+# look). The value only moves between processes, so the per-frame cost
+# is the compare; the material-set size re-gates the lazily built chunk
+# materials (the AC-0420 pattern, the same gate as the (1) fog wall).
+var _ac0451_cov := -1.0
+var _ac0451_cov_n_mats := -1
+# AC-0451 P1: the same push on the LOD band material (lazy — the
+# AC-0443 latch-only-when-landed pattern). BOTH lod variants
+# (lod_avg / lod_avg_seam) declare u_coverage, so the AC-0446
+# material-shader swap keeps the stored parameter valid.
+var _ac0451_lod_cov := -1.0
 # AC-0428: the planetary weather-gate push state (Settings "cloud_gate",
 # default OFF; the shader's vgate short-circuits to 1.0 at u_gate < 0.5).
 var _ac0428_gate := -1.0
@@ -5400,6 +5420,35 @@ func _ac0401_push() -> void:
 			var am2 = Data.fluid_anim_bf_mats[bid]
 			if am2 is ShaderMaterial:
 				am2.set_shader_parameter("u_fog_far", ff)
+	# (1a) AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1,
+	# env at boot — NO Options row, the AC-0445 precedent: the handover is
+	# a correctness rule, not a toggleable look). Pushed to the same
+	# material set as (1) with the same gate shape (value + material-set
+	# size — the chunk materials are lazily built, AC-0420), so the push
+	# stays change-gated and the per-frame cost is the compare. P1 is
+	# INERT: the shader's ac0451_covered() stub answers false for every d
+	# regardless of this value (the byte-identical A/B renders are the
+	# acceptance proof); P2 turns the real coverage query on and the
+	# switch then governs it.
+	var cov_v := 1.0 if OS.get_environment("AWECRAFT_COVERAGE") == "1" else 0.0
+	if cov_v != _ac0451_cov or n_mats != _ac0451_cov_n_mats:
+		_ac0451_cov = cov_v
+		_ac0451_cov_n_mats = n_mats
+		for k in ChunkScript._mat_cache:
+			var m3 = ChunkScript._mat_cache[k]
+			if m3 is ShaderMaterial:
+				m3.set_shader_parameter("u_coverage", cov_v)
+		for bid in Data.fluid_anim_mats:
+			var am3 = Data.fluid_anim_mats[bid]
+			if am3 is ShaderMaterial:
+				am3.set_shader_parameter("u_coverage", cov_v)
+		for bid in Data.fluid_anim_bf_mats:
+			var am4 = Data.fluid_anim_bf_mats[bid]
+			if am4 is ShaderMaterial:
+				am4.set_shader_parameter("u_coverage", cov_v)
+	if _lod_avg_material != null and cov_v != _ac0451_lod_cov:
+		_lod_avg_material.set_shader_parameter("u_coverage", cov_v)
+		_ac0451_lod_cov = cov_v
 	# (1b) AC-0426: the zero-light sky-ambient switch (Settings
 	# "ambient_sky", default ON since AC-0432; AWECRAFT_AMBSKY=<0|1> env
 	# preload at boot). Same gate shape as (1): the value AND the material-set size,
@@ -11789,6 +11838,34 @@ func _reentry_flip_high(c: Node3D, key: String) -> void:
 		print("FLIPBACK %s flipped=%d mesh_built=%d" % [key, flipped, int(c.mesh_built)])
 
 
+# AC-0463 slice 2b — the ONE travel gate and the ONE stream window, shared
+# by both eviction lanes (the home recenter sweep and the face windowed
+# eviction). The user's policy (round 35): eviction is travel-gated — a
+# stationary player sheds nothing — with no home special case, so both
+# lanes express it with one rule (plan §4.1/§4.2).
+#
+# The travel gate: "has the player moved enough to justify an eviction
+# sweep?" It takes the lane's OWN last-sweep position (the INF sentinel =
+# never swept — the first sweep always runs), the current flat position
+# and the travel threshold in metres. It takes NO face number (plan §4.3):
+# a position and a distance only. The face lane keeps _face_evict_last
+# (updated when its sweep runs, on the patch-clamped position); the home
+# lane keeps _home_evict_last (the recenter's flat position).
+func _evict_sweep_due(last: Vector2, p: Vector2, min_move: float) -> bool:
+	var moved := INF if last == Vector2(INF, INF) else (last - p).length()
+	return moved > min_move
+
+# The stream window: the sim band in flat metres (sim_dist 16 m home
+# chunks — the home lane's window; the face lane's window is that same
+# band) plus the evict radius past the lane's margin. The margin is a
+# distance — a UNIT parameter, not a face number (plan §4.3): the face
+# lane passes FACE_STREAM_EVICT_MARGIN (64 m); the home lane passes its
+# two_out hysteresis over the sim band, (b1_eff()+2 - band0_r) chunks
+# (32 m at the defaults, exact for every render-radius/sim combination).
+func _stream_window(sim_dist: int, evict_margin_m: float) -> Vector2:
+	var win_m := float(sim_dist) * 16.0
+	return Vector2(win_m, win_m + evict_margin_m)
+
 # AC-0445: recenter is an X/Z-ONLY crossing event. The AC-0234 vertical
 # (Y) trigger in the player is deleted — a pure vertical flight no longer
 # recenters, no longer throttles the build queue, and no longer invalidates
@@ -11924,6 +12001,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# it with the SAME body the old walk's (iii) ran.
 	var K := absi(pcx - opcx) + absi(pcz - opcz)
 	var R_outer := maxi(rr, b1_eff()) + 2
+	# AC-0463 slice 2b: the home window + evict radius through the ONE
+	# shared stream window (the two_out threshold below, (b1_eff()+2)
+	# chunks, in flat metres — the same value the chunk-taxi test used,
+	# the shared expression).
+	var home_win: Vector2 = _stream_window(band0_r, (b1_eff() + 2 - band0_r) * 16.0)
 	# the outside set is only valid for the stream-set signature it was built
 	# under — a radius change ends in a recenter, so detect it here (the
 	# first recenter rebuilds from the empty default).
@@ -12117,7 +12199,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 			# is in_circle_ring itself — the old L2 (R+1)^2 threshold missed
 			# the diagonal ring corners ((R+1,1) at R^2+2R+2 > (R+1)^2),
 			# which would have been freed instead of kept as candidates.
-			var two_out := not in_circle_ring(dx, dz) and absi(dx) + absi(dz) > b1_eff() + 2
+			var two_out := not in_circle_ring(dx, dz) and (absi(dx) + absi(dz)) * 16.0 > home_win.y
 			if not two_out:
 				c.cand_since = 0
 			else:
@@ -12191,14 +12273,20 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# Free the first stream_ho_cap columns now, DEFER the rest — they are
 	# already hidden candidates (r+1), so a few frames of deferral are
 	# invisible; the drain runs from _process at the same cap.
-	var free_n := 0
-	for key in to_free:
-		if free_n >= stream_ho_cap:
-			var dc: Node3D = chunks[key]
-			_deferred_free.append({"key": key, "inst": dc.get_instance_id(), "colgen": dc.col_gen})
-			continue
-		_free_chunk_key(key)
-		free_n += 1
+	# AC-0463 slice 2b: the home eviction sweep is travel-gated by the ONE
+	# travel gate (the face lane's 16 m rule — plan §4.1). The recenter's
+	# crossing is the home lane's movement; the cap-defer and the
+	# identity-guarded checkin (AC-0257) are untouched.
+	if _evict_sweep_due(_home_evict_last, Vector2(wx, wz), 16.0):
+		_home_evict_last = Vector2(wx, wz)
+		var free_n := 0
+		for key in to_free:
+			if free_n >= stream_ho_cap:
+				var dc: Node3D = chunks[key]
+				_deferred_free.append({"key": key, "inst": dc.get_instance_id(), "colgen": dc.col_gen})
+				continue
+			_free_chunk_key(key)
+			free_n += 1
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
 	threadmesh_poll()
@@ -15016,7 +15104,10 @@ func _face_stream() -> void:
 	var hw: float = SphereMath.face_width(R) * 0.5
 	var S: float = SphereMath.face_cell_size(R)
 	var p: Vector2 = _face_player_flat()
-	var win: float = float(int(Settings.values.get("sim_dist", 4)) * 16)
+	# AC-0463 slice 2b: the ONE stream window (shared with the home lane) —
+	# the sim band in flat metres + the evict radius past its margin.
+	var win_ev: Vector2 = _stream_window(int(Settings.values.get("sim_dist", 4)), FACE_STREAM_EVICT_MARGIN)
+	var win: float = win_ev.x
 	var t0: int = Time.get_ticks_msec()
 	for face in range(4, 12):
 		var is_x_face: bool = face <= 7
@@ -15103,17 +15194,18 @@ func _face_stream() -> void:
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
 	# the windowed eviction (the FIFO cap in _ensure_face_chunk refines it)
-	# — every 16 m of travel (the per-chunk band query stays off the idle
-	# frame).
+	# — travel-gated by the ONE travel gate (the home recenter sweep is
+	# the twin caller, plan §4.1; the per-chunk band query stays off the
+	# idle frame).
 	if not _face_order.is_empty():
-		var moved: float = INF if _face_evict_last == Vector2(INF, INF) else (_face_evict_last - p).length()
-		if moved > 16.0:
+		if _evict_sweep_due(_face_evict_last, p, 16.0):
 			_face_evict_last = p
 			# AC-0311 piece 3: the +FACE_BLEND_BAND*S term (196 m at
 			# R = 4000) went with the band — it existed to keep the
 			# blended strip resident; nothing reads face chunks past
 			# the mesh window, so the plain win + margin stands.
-			var evict_r: float = win + FACE_STREAM_EVICT_MARGIN
+			# AC-0463 slice 2b: the evict radius from the ONE window helper.
+			var evict_r: float = win_ev.y
 			for k in _face_order.duplicate():
 				var c = chunks.get(k)
 				if c == null:
