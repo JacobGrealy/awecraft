@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-21T15:28
+  updated_at: 2026-10-22T09:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0463
 - AC-0451
 - AC-0399
 - AC-0094
@@ -27,7 +28,6 @@ queue:
 - AC-0438
 - AC-0453
 - AC-0464
-- AC-0463
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -29143,10 +29143,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-18T21:15
-  updated_at: 2026-10-18T21:15
+  updated_at: 2026-10-21T15:29
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29872,10 +29872,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: blocked
+  status: open
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-21T15:27
+  updated_at: 2026-10-22T09:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29943,7 +29943,51 @@ intake:
     \ one key shape, correct face editing, instruments repaired. The remaining slices are architecture\
     \ with no player-visible benefit and real regression risk, while the queue behind this ticket holds\
     \ defects the player can actually see. Continuing to spend rounds on internal tidiness while visible\
-    \ defects wait is the wrong trade, and saying so is better than quietly doing it."
+    \ defects wait is the wrong trade, and saying so is better than quietly doing it.\n\nUNBLOCKED — USER\
+    \ DECISIONS, round 35 (asked directly; no guessing).\n1) \"When you stand still, should distant chunks\
+    \ unload?\" -> **NO. Keep everything loaded while you stand still.** So the unified rule is the FACE\
+    \ lane's current behaviour extended planet-wide: eviction is travel-gated, a stationary player sheds\
+    \ nothing. That is a real choice with a real cost (a stationary player holds their window indefinitely)\
+    \ and it is now the specified behaviour rather than an accident of which lane you are in.\n2) \"Is\
+    \ the lane merge worth doing?\" -> **YES. One streaming lane, accept the regression risk.** The user\
+    \ accepts the risk explicitly, so the merge proceeds rather than being parked for its own safety.\n\
+    3) \"Hard cap on total loaded chunks?\" -> **NO CAP**, and the operative instruction: **\"there should\
+    \ be no 'home' after this.\"**\nWHAT (3) MEANS FOR THE DESIGN: no special-cased home lane, and no\
+    \ \"home pair\" concept surviving the merge. Home is not a region with its own streaming policy; it\
+    \ is faces 0 and 1 of the same planet handled by the same lane as every other chart. Every later slice\
+    \ must be judged by that: any remaining branch whose only justification is \"this is the home pair\"\
+    \ is debt this ticket exists to remove.\nCONSEQUENCE FOR THE SLICE ORDER, revised by these answers:\
+    \ (2b) unify residency planet-wide on travel-gated eviction, no cap; (3) unify node/residency identity\
+    \ for faces 0/1 with the rest, deleting the home branch rather than parameterising it; (4) light ownership;\
+    \ (5) deletion; and the twelve-chart lap that AC-0466 waived at 2 of 12 becomes mandatory evidence\
+    \ rather than optional, because \"no home\" cannot be proven on two seams.\nNOTE ON SCOPE RISK, recorded\
+    \ because it is the one thing that could make this enormous: unifying the LANE is not the same as\
+    \ unifying the GRID. The home patch uses 1 m cells where chart faces use ~6.14 m cells. Removing the\
+    \ home CODE PATH is this ticket; changing the home patch's terrain RESOLUTION to match the faces would\
+    \ change what the ground looks like near spawn and is a different (much larger) question. If the user\
+    \ means the latter, it needs its own ticket and its own decision.\n\n\"NO HOME\" CONFIRMED AS THE\
+    \ GOAL, not a scope question (round 35). User, verbatim: \"isn't that the whole point of what we've\
+    \ been doing the last several days is getting rid of the separation of home and the other faces?\"\
+    \ Correct — and my previous note fence-posted it. The thesis of the whole AC-0433 migration is that\
+    \ the spawn pair is not special: it is faces 0 and 1 of one planet, and every remaining branch, lane,\
+    \ key shape, placement rule, grid or naming convention that treats it as special is exactly the debt\
+    \ this work exists to delete.\nWHAT THIS SETTLES, in order of what it unblocks: (a) residency is ONE\
+    \ planet-wide rule (travel-gated eviction, no stationary shedding, no cap) applied to faces 0-11 alike;\
+    \ (b) the home streaming branch is DELETED, not parameterised — a parameter would keep the separation\
+    \ alive under a different name, which is the failure mode this whole series has been dismantling;\
+    \ (c) keys already agree (home is \"0:cx:cz\", one shape with the faces — AC-0459), placement already\
+    \ agrees (canonical, AC-0467), editing already agrees (AC-0462), so what is left is the streaming\
+    \ lane and the grid.\nTHE ONE REAL TRADE, and how it will be decided: the home patch is currently\
+    \ 1 m cells where chart faces are ~6.14 m. Deleting the separation means faces 0/1 are built by the\
+    \ same path as 2-11, and the honest question inside that is what CELL SIZE faces 0/1 use. That is\
+    \ not a question to answer by assertion in either direction: it will be implemented as a per-face\
+    \ property of the one lane (so nothing is special-cased by face number), and the spawn-area cell size\
+    \ will be measured and RENDERED both ways, with the player shown before/after at the spawn, before\
+    \ any default is chosen. If the ground near spawn changes resolution, that is a decision the user\
+    \ sees first, not a side effect of a refactor.\nORDER: (2b) one residency rule, travel-gated, no cap,\
+    \ planet-wide; (3) faces 0/1 through the one node/lane path with the home branch deleted; (4) the\
+    \ spawn cell-size measurement + renders; (5) light ownership; (6) deletion; with the twelve-chart\
+    \ lap mandatory evidence rather than a waived subset."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
