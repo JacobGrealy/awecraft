@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-22T17:00
+  updated_at: 2026-10-22T18:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -30309,7 +30309,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-22T15:24
-  updated_at: 2026-10-22T17:00
+  updated_at: 2026-10-22T18:07
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30474,5 +30474,43 @@ intake:
     (3) let the world regenerate and expect every standing value to move (declared rebase, waived); (4)
     measure fill time and per-chunk cost at the new resolution and attack the two bottlenecks the stage-0
     table identified; (5) delete the home grid, since at 1 m everywhere there is nothing for it to be
-    special about; (6) the twelve-chart lap as mandatory evidence.'
+    special about; (6) the twelve-chart lap as mandatory evidence.
+
+
+    THE 1 m GRID EXPOSED A LEAK IN THE FACE LANE, and it outranks every other remaining slice (round 41,
+    measured by the residency arm, verified by the coordinator).
+
+    THE NUMBERS: face resident chunks climb monotonically 79 -> 97 -> 112 -> 131 -> 150 -> 169 -> 181
+    -> 195 -> 212 -> 229 -> 243 -> 262 -> 277 -> 294 -> 309 -> 327 -> 344 -> 360 -> 374 -> 392 -> 409
+    across the bounded plateau wait, then continue 427 -> 442 -> 461 -> 480 -> 499 over the steady-state
+    samples, with a STATIONARY player. `converged: false`, `stable: false`, `verdict: GROWING`, `leak:
+    true`, `keys_same: false`. Home is flat at 117 the whole time, so this is specifically the face lane.
+
+    WHY THE GRID CHANGE CAUSED IT, in mechanism terms rather than blame: the face lane''s window and eviction
+    are expressed in a MIX of cells and metres that was self-consistent at 6.136 m cells and is not at
+    1 m. The window is `win = sim_dist * 16` flat metres (64 m) but the streamer reasons about CELLS (edge-band
+    rows, the edge-normal gate, the per-face cell window at world.gd:15019-15025), and the eviction radius
+    is `win + evict_margin_m` (64 + 64 = 128 m) compared against chunk positions. At 6.136 m cells those
+    quantities described ~10-20 cells of band; at 1 m cells the same 64-cell band covers 64 m of ground
+    but the chunk grid is now 16 m, so creation runs 6x denser in chunks than eviction expects. Net effect:
+    chunks are created faster than the eviction sweep removes them, and the sweep only re-runs after >16
+    m of travel — which a STATIONARY player never accrues. That is the exact interaction of two rules
+    that were individually reasonable: the travel-gated sweep (which the user chose) plus a window that
+    no longer matches the chunk size.
+
+    WHY IT IS A GOOD THING THIS ARRIVED NOW: it is a direct consequence of the resolution change the user
+    mandated, it was caught by an instrument built two rounds ago specifically because "a leak outranks
+    the merge", and it is provably NOT a pre-existing condition — the same arm measured STABLE, leak false
+    at 6.136 m cells at AC-0463 slice 2a.
+
+    THE FIX IS A UNIT RECONCILIATION, not a redesign: the face lane''s window, its edge-band row count
+    and its eviction radius must all be re-derived from ONE quantity (a radius in METRES converted once
+    into chunks by `ceil(radius / (16 * cell_m))`), so that changing the cell size cannot desynchronise
+    creation from eviction. The travel-gated sweep stays as the user chose it; what must change is that
+    the sweep''s radius and the creation window are the same number in the same units.
+
+    ALSO MEASURED IN THE SAME RUN, worth keeping: at 1 m the warp cost per chunk is 0.224 ms and 0.051
+    us/vert over 1,428,528 verts (still trivial), warpcensus builds 326 warped chunks with an AABB delta
+    of 0.01 m, and home residency is unchanged at 117 with a 177 peak. So the leak is a FACE-LANE unit
+    bug, not a general cost failure.'
   comments: []
