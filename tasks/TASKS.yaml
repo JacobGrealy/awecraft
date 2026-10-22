@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-22T15:24
+  updated_at: 2026-10-22T15:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0469
 - AC-0463
 - AC-0451
 - AC-0399
@@ -29875,7 +29876,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-22T15:24
+  updated_at: 2026-10-22T15:25
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30035,7 +30036,34 @@ intake:
     \ the reason; (5) the twelve-chart lap as mandatory evidence, since \"the same experience everywhere\"\
     \ cannot be proven on two seams.\nHONEST SIZE: this is not a slice, it is the rest of the migration.\
     \ It should be tracked as its own ticket rather than smuggled into AC-0463's remaining stages, because\
-    \ it changes the world rather than the code that streams it."
+    \ it changes the world rather than the code that streams it.\n\nBLOCKS MUST STAY ~1 m (user, round\
+    \ 37: \"but blocks should still be as close to 1m x 1m x 1m as possible\"). THAT INVERTS THE PREVIOUS\
+    \ CONCLUSION AND IT IS THE RIGHT INVERSION.\nWhat I recorded an hour ago was \"faces 0/1 adopt the\
+    \ face grid, so the spawn area gets coarser\". That was wrong for the goal, because the face grid's\
+    \ 6.136 m cells are not the thing to standardise ON — they are blocks six metres across, which is\
+    \ not the game anyone is describing. Combined with \"multiple planets, fly in anywhere, the experience\
+    \ has to be the same\", the requirement is the other way round: the WHOLE PLANET becomes ~1 m voxels,\
+    \ and it is the current 6.136 m faces that are the anomaly.\nTHE ARITHMETIC, so the decision is made\
+    \ on numbers rather than taste:\n- CELLS_PER_FACE = 1024 (today) -> 6.136 m cells -> 1,048,576 columns/face\
+    \ -> 12.6M planet-wide.\n- CELLS_PER_FACE = 3000        -> 2.094 m cells -> 9,000,000 columns/face\
+    \ -> 108M planet-wide.\n- CELLS_PER_FACE = 6283        -> 1.000 m cells -> 39,476,089 columns/face\
+    \ -> 473.7M planet-wide.\nCRITICAL DISTINCTION that decides feasibility: those are TOTAL column counts,\
+    \ not resident ones. Residency is radius-based and unchanged — a 4-chunk radius is 81 chunks of 16x16\
+    \ = 20,736 columns whatever the grid. So 1 m cells do NOT mean a bigger working set; they mean (a)\
+    \ a bigger ADDRESS SPACE (6,283 cells per face edge, 15,364 chunks per face instead of 4,096), (b)\
+    \ proportionally more generation work per unit of ground actually visited only if the window covers\
+    \ the same physical area — and it does not: 81 chunks of 16 m covers 1.3 km at 1 m cells versus 8\
+    \ km at 6 m cells, so the same window sees LESS world in metres, which is the real cost and it is\
+    \ a streaming-distance question, not a memory one.\nSO THE HONEST FRAMING: switching the planet to\
+    \ 1 m voxels is not blocked by memory. It is a question of (i) render/stream DISTANCE in metres, because\
+    \ a 16 m chunk is a 16 m chunk and you now need ~6x more chunks to cover the same horizon, and (ii)\
+    \ generation throughput, which must be measured rather than assumed. Both are measurable with arms\
+    \ that already exist (boundary r4 for crossing latency, r24 for a long walk and memory trajectory,\
+    \ the budgeted face lane for per-chunk cost).\nNOT TO BE DONE BLIND: this moves every standing gate\
+    \ value on the planet and regenerates terrain everywhere, so it is a declared rebase, and the user\
+    \ has already waived genhash stability for this migration. The first step is a MEASUREMENT, not a\
+    \ commit: cost per chunk and resident counts at 1 m cells, taken on a prototype flag rather than by\
+    \ changing the default."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
@@ -30270,4 +30298,98 @@ intake:
     seam measure.
 
     '
+  comments: []
+- id: AC-0469
+  title: 'one planet resolution: delete the home grid (no privileged spawn)'
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-22T15:24
+  updated_at: 2026-10-22T15:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    The game is heading for multiple planets where you fly in at whatever part of the planet you choose,
+    so there must be no privileged starting area. Today the patch around the old spawn is built 37.6 times
+    denser than the rest of the planet - the ground there is finer-grained than anywhere else, and that
+    difference is the last visible trace of the old "home" design. Removing it makes the ground identical
+    everywhere, so wherever you land you get the same experience.
+
+
+    2) Technical Details
+
+    DESIGN BASIS (user, round 37, verbatim): "there are going to be multiple planets, there is no home.
+    You fly in at whatever part of the planet you want. The experience has to be the same around the entire
+    planet." Under that design no arrival point exists, so no region may be treated differently - not
+    terrain resolution, not lane, not policy.
+
+    THE MEASURED SPLIT (round 37): the home patch spans 6,283.2 m = exactly one cube-face width (face_width
+    = pi*R/2 at R=4000), so home is not a different shape from a face - it is the SAME face at a finer
+    resolution. Face grid: 1,024 cells across -> 6.136 m cells -> 1,048,576 columns. Home grid: 6,283
+    cells across the same 6,283 m -> 1.0 m cells -> 39,476,089 columns. Ratio 37.6x for identical ground
+    area.
+
+    THE COST, stated once: the ground near the old spawn becomes 6.1x coarser than it looks today and
+    loses 37.6x of its columns. That is intended - uniformity rather than the old privilege under a new
+    name. This is NOT a re-tune of the planet''s absolute voxel scale (6.136 m is what every non-home
+    face already uses); whether that absolute size is right belongs with the multiple-planets work, because
+    doing both at once moves every standing gate value and makes neither measurable.
+
+    WORK ORDER: (1) faces 0/1 generated and streamed through the FACE path (WorldGen.generate_face / _ensure_face_chunk)
+    with the 1 m home grid deleted; (2) trace and move the home-grid consumers to cell units - player
+    movement/physics, ray and aim, block edits, drops, mobs - using the exact inverse for world->cell
+    (AC-0462: per-axis dots measured only 44% exact, affine_inverse 100%); (3) spawn/arrival picks a surface
+    point on the face grid rather than a home flat coordinate, since there is no canonical spawn under
+    the new design; (4) re-baseline every standing gate value that moves, declared as a deliberate rebase
+    with the reason (the user has already waived genhash stability for this migration); (5) the twelve-chart
+    lap as MANDATORY evidence - "the same experience everywhere" cannot be proven on two seams, which
+    is what AC-0466 waived at 2 of 12.
+
+    DEPENDENCIES ALREADY IN PLACE: one key shape (AC-0459/AC-0465), canonical placement (AC-0467), exact
+    cell conversion (AC-0462), one node-creation skeleton (AC-0463 slice 1), one travel gate and window
+    (AC-0463 slice 2b), repaired seam instruments (AC-0468), and a residency baseline (AC-0463 slice 2a).
+
+
+
+    BLOCKS MUST STAY ~1 m (user, round 37: "but blocks should still be as close to 1m x 1m x 1m as possible").
+    THAT INVERTS THE PREVIOUS CONCLUSION AND IT IS THE RIGHT INVERSION.
+
+    What I recorded an hour ago was "faces 0/1 adopt the face grid, so the spawn area gets coarser". That
+    was wrong for the goal, because the face grid''s 6.136 m cells are not the thing to standardise ON
+    — they are blocks six metres across, which is not the game anyone is describing. Combined with "multiple
+    planets, fly in anywhere, the experience has to be the same", the requirement is the other way round:
+    the WHOLE PLANET becomes ~1 m voxels, and it is the current 6.136 m faces that are the anomaly.
+
+    THE ARITHMETIC, so the decision is made on numbers rather than taste:
+
+    - CELLS_PER_FACE = 1024 (today) -> 6.136 m cells -> 1,048,576 columns/face -> 12.6M planet-wide.
+
+    - CELLS_PER_FACE = 3000        -> 2.094 m cells -> 9,000,000 columns/face -> 108M planet-wide.
+
+    - CELLS_PER_FACE = 6283        -> 1.000 m cells -> 39,476,089 columns/face -> 473.7M planet-wide.
+
+    CRITICAL DISTINCTION that decides feasibility: those are TOTAL column counts, not resident ones. Residency
+    is radius-based and unchanged — a 4-chunk radius is 81 chunks of 16x16 = 20,736 columns whatever the
+    grid. So 1 m cells do NOT mean a bigger working set; they mean (a) a bigger ADDRESS SPACE (6,283 cells
+    per face edge, 15,364 chunks per face instead of 4,096), (b) proportionally more generation work per
+    unit of ground actually visited only if the window covers the same physical area — and it does not:
+    81 chunks of 16 m covers 1.3 km at 1 m cells versus 8 km at 6 m cells, so the same window sees LESS
+    world in metres, which is the real cost and it is a streaming-distance question, not a memory one.
+
+    SO THE HONEST FRAMING: switching the planet to 1 m voxels is not blocked by memory. It is a question
+    of (i) render/stream DISTANCE in metres, because a 16 m chunk is a 16 m chunk and you now need ~6x
+    more chunks to cover the same horizon, and (ii) generation throughput, which must be measured rather
+    than assumed. Both are measurable with arms that already exist (boundary r4 for crossing latency,
+    r24 for a long walk and memory trajectory, the budgeted face lane for per-chunk cost).
+
+    NOT TO BE DONE BLIND: this moves every standing gate value on the planet and regenerates terrain everywhere,
+    so it is a declared rebase, and the user has already waived genhash stability for this migration.
+    The first step is a MEASUREMENT, not a commit: cost per chunk and resident counts at 1 m cells, taken
+    on a prototype flag rather than by changing the default.'
   comments: []
