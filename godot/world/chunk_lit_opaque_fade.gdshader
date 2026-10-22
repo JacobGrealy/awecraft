@@ -52,6 +52,14 @@ uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 // render state ALPHA is ignored entirely).
 uniform float u_fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 v_world_pos;
+// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
+// the contract comment lives in chunk_lit_opaque.gdshader). P1 is
+// INERT: the stub below answers false for every d, so the discard is
+// byte-identical to the pre-ticket build; P2 turns the real query on.
+uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
+bool ac0451_covered(float d) {  // AC-0451 P1 STUB: never covered (P2 turns the query on)
+	return u_coverage > 0.5 && false;
+}
 
 
 void vertex() {
@@ -66,7 +74,8 @@ void fragment() {
 	// body's terrain from orbit (the "patch of ground you just left");
 	// the engine fog already fades them to air up to the wall, so the
 	// dissolve as the camera climbs is the fog itself.
-	if (distance(CAMERA_POSITION_WORLD, v_world_pos) >= u_fog_far) {
+	float d = distance(CAMERA_POSITION_WORLD, v_world_pos);
+	if (d >= u_fog_far && !ac0451_covered(d)) {  // AC-0451 P1: the coverage rule (the stub is inert)
 		discard;
 	}
 	vec4 t = texture(tex, UV);

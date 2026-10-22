@@ -2837,8 +2837,10 @@ func _flat_ray() -> Dictionary:
 		var sc: Vector2 = _anchor["scale"]
 		var ad: Vector3 = aim_dir()
 		var dcells: Vector3 = Vector3(ad.dot(bx) / sc.x, ad.dot(bn), ad.dot(bz) / sc.y)
-		# AC-0462 (fix): get_block_key indexes ABSOLUTE face columns (0..1023),
-		# but the anchor frame is the anchor chunk's local cell frame [0,16) —
+		# AC-0462 (fix): get_block_key indexes ABSOLUTE face columns
+		# (0..SphereMath.CELLS_PER_FACE - 1 — 6282 at AC-0469's 6283-cell
+		# grid), but the anchor frame is the anchor chunk's local cell
+		# frame [0,16) —
 		# so convert the origin to absolute columns before the DDA, and flip
 		# the x direction on the mirror class (their local +X runs against u).
 		# y is unscaled metres above the anchor plane — untouched. The block

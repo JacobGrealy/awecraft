@@ -47,7 +47,20 @@
 
 class_name SphereMath
 
-const CELLS_PER_FACE := 1024
+# AC-0469 stage A: the planet grid's cells per face edge. ONE source of
+# truth per language — the C++ twin is awesm::SM_CELLS_PER_FACE
+# (gdext/src/sphere_math_cpp.h, keep in lockstep). Derivation: a face is
+# W = pi*R/2 wide (the grid lock, 4 face-widths = 2*pi*R); at the shipped
+# R = 4000, W = 6283.19 m, so 6283 cells span the face and one cell is
+# W/6283 = 1.000 m — the user-fixed ~1 m x 1 m x 1 m block. (The
+# pre-AC-0469 value was 1024 cells = 6.136 m cells; the face WIDTH was
+# always W — only the cell count moved.)
+const CELLS_PER_FACE := 6283
+# AC-0469: face chunks per axis (ceil(6283/16) — the last row/column of
+# chunks is partial: 392 full + 11 cells of the 393rd). The chunk-space
+# linearization face*CHUNKS_PER_FACE + ccx spans CHUNKS_PER_FACE*16 =
+# 6288 cells per face (5 padding cells past the 6283 chart cells).
+const CHUNKS_PER_FACE := (CELLS_PER_FACE + 15) / 16  # 393
 
 # AC-0362: the seam grout (see the column_transform section header) — the
 # centre-anchored in-plane overlap of the placed facet. 8*SEAM_FILL = 0.8 mm
@@ -418,16 +431,18 @@ static func world_to_flat(p: Vector3, R: float) -> Vector3:
 # The home pair (faces 0,1) keeps its exact AC-0306/AC-0307 geometry and
 # keying; the helpers below extend the net to faces 2-11 so a player can
 # cross a home edge onto the neighbouring face's grid. Faces 2-11 are
-# 1024-cell grids (one local unit of a face chunk = one cell = W/1024 m);
-# the height stays 1 m.
+# CELLS_PER_FACE-cell grids (one local unit of a face chunk = one cell =
+# W/CELLS_PER_FACE m — 1.000 m at R = 4000, AC-0469); the height stays 1 m.
 
-# AC-0309: one face cell in flat metres (W/1024 = 6.135 m at R = 4000).
+# AC-0309: one face cell in flat metres (W/CELLS_PER_FACE = 1.000 m at
+# R = 4000, AC-0469 — was 6.135 m at the pre-AC-0469 1024 cells).
 static func face_cell_size(R: float) -> float:
 	return face_width(R) / float(CELLS_PER_FACE)
 
 # AC-0309: the (u, v) cell widths in flat metres — ANISOTROPIC. The u
-# axis spans the full cube-face width W (1024 cells -> S per cell) and
-# the v axis spans the half-face W/2 (1024 cells -> S/2 per cell) on the
+# axis spans the full cube-face width W (CELLS_PER_FACE cells -> S per
+# cell) and the v axis spans the half-face W/2 (CELLS_PER_FACE cells ->
+# S/2 per cell) on the
 # x faces (4-7, v along a home edge); the z faces (8-11) swap the roles
 # (u = the half axis, v = the full axis). A face chunk's 16x16 local
 # grid is therefore S x S/2 metres in-plane on the x faces (S/2 x S on

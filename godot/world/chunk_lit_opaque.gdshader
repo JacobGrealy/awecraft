@@ -46,6 +46,25 @@ uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 // render state ALPHA is ignored entirely).
 uniform float u_fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 v_world_pos;
+// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
+// world.gd _ac0401_push; NO Options row, the AC-0445 precedent: the
+// handover is a correctness rule, not a toggleable look). The
+// near-field discard below is now a RULE — "stop drawing only where
+// something else is already drawing" — asked of the layer that would
+// take over. P1 is INERT: ac0451_covered() is a marked STUB answering
+// false for every d, so the discard fires exactly where it fired
+// before the ticket and the render is byte-identical to the pre-change
+// build — that inertness IS the acceptance proof (P1 changes nothing
+// the player can see). P2 (the AC-0451 P2 landing) turns the real
+// coverage query on; the switch is wired now so P2 is a one-line
+// change there.
+uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
+// AC-0451 P1 STUB — "never covered", unconditionally (u_coverage is
+// read so the gate is live). P2 replaces the `false` with the real
+// coverage query.
+bool ac0451_covered(float d) {
+	return u_coverage > 0.5 && false; // P1 STUB: never covered
+}
 
 
 void vertex() {
@@ -60,7 +79,8 @@ void fragment() {
 	// body's terrain from orbit (the "patch of ground you just left");
 	// the engine fog already fades them to air up to the wall, so the
 	// dissolve as the camera climbs is the fog itself.
-	if (distance(CAMERA_POSITION_WORLD, v_world_pos) >= u_fog_far) {
+	float d = distance(CAMERA_POSITION_WORLD, v_world_pos);
+	if (d >= u_fog_far && !ac0451_covered(d)) {  // AC-0451 P1: the coverage rule (the stub is inert)
 		discard;
 	}
 	vec4 t = texture(tex, UV);

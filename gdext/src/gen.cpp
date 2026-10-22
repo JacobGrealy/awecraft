@@ -707,8 +707,10 @@ static inline int floordiv(int a, int b);
 // one unit = one face cell; continuous past the face edges). δ at such a
 // position = the caller's height (the chart sits on the sphere).
 // AC-0311 piece 2 (finishing-run fix): for faces 2-11 the LINEARIZED flat
-// index is face*1024 + the face's OWN cell index, so the face offset must
-// come off before the /1024 chart divide; the mirror class additionally
+// index is face*SM_CHUNKS_PER_FACE*16 + the face's OWN cell index (the
+// chunk-space span — 6288 cells at AC-0469, 5 past the 6283 chart cells),
+// so the face offset must come off before the /SM_CELLS_PER_FACE chart
+// divide (cell i <-> uv i/6283); the mirror class additionally
 // un-runs the per-chunk x data layout (face_local_x: k -> 15-k) so the
 // sample charts at the cell's TRUE planet position. Charting the raw
 // linearized index is only accidentally right for faces 4 and 8 (the tan
@@ -724,13 +726,13 @@ static inline void sm_chart_dir(int face, double fx, double fz, double R,
 	if (face <= 1) {
 		p = sm_home_point(fx, fz, R);
 	} else {
-		double fx2 = fx - (double)face * 1024.0;
-		double fz2 = fz - (double)face * 1024.0;
+		double fx2 = fx - (double)face * (double)(SM_CHUNKS_PER_FACE * 16);
+		double fz2 = fz - (double)face * (double)(SM_CHUNKS_PER_FACE * 16);
 		if (sm_face_mirror_x(face)) {
 			double c0 = std::floor(fx2 / 16.0);
 			fx2 = c0 * 16.0 + (15.0 - (fx2 - c0 * 16.0));
 		}
-		p = sm_uv_to_world(face, fx2 / 1024.0, fz2 / 1024.0, R);
+		p = sm_uv_to_world(face, fx2 / (double)SM_CELLS_PER_FACE, fz2 / (double)SM_CELLS_PER_FACE, R);
 	}
 	SmV3 n = sm_norm(p);
 	*dx = n.x;
@@ -780,9 +782,10 @@ static inline void sp_table_build(int face, int ccx, int ccz, double R,
 
 // The C++ flat chunk index -> the placed column index (the home pair keeps
 // the real flat index, which may be negative; faces 2-11 carry
-// face*64 + ccx — the generate_face convention).
+// face*SM_CHUNKS_PER_FACE + ccx — the generate_face convention; the
+// per-face chunk count is AC-0469-derived, 393 at 6283 cells / 16).
 static inline int sp_col_index(int face, int c) {
-	return (face <= 1) ? c : c - face * 64;
+	return (face <= 1) ? c : c - face * (int)SM_CHUNKS_PER_FACE;
 }
 
 // The 2-D hash key (tree / flower / dripstone length rolls) — the global

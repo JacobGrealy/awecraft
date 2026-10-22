@@ -242,7 +242,10 @@ static func generate_face(face: int, cx: int, cz: int, seed: int, R: float = 0.0
 	# continuous across the seams on its own (the band's only reason to
 	# exist was the salt's seam).
 	var r: float = R if R > 0.0 else 4000.0
-	return generate_args(face * 64 + cx, face * 64 + cz, seed, Data.HEIGHT, Data.SEA, face, r)
+	# AC-0469: the chunk-space linearization uses the per-face CHUNK count
+	# (CELLS_PER_FACE/16, 393 at 6283 cells) — C++'s sp_col_index runs the
+	# same inverse, the two must stay in lockstep.
+	return generate_args(face * SphereMath.CHUNKS_PER_FACE + cx, face * SphereMath.CHUNKS_PER_FACE + cz, seed, Data.HEIGHT, Data.SEA, face, r)
 
 
 # ---------------------------------------------------------------------------

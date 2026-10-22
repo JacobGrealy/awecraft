@@ -4195,7 +4195,9 @@ public:
 			const Vector3 p = verts[i];
 			const double u1024 = bx + (mirrored ? 16.0 - (double)p.x : (double)p.x);
 			const double v1024 = bz + (double)p.z;
-			const awesm::SmV3 dir = awesm::sm_uv_to_world(face, u1024 / 1024.0, v1024 / 1024.0, R);
+			const awesm::SmV3 dir = awesm::sm_uv_to_world(face,
+					u1024 / (double)awesm::SM_CELLS_PER_FACE,
+					v1024 / (double)awesm::SM_CELLS_PER_FACE, R);
 			const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
 			const double s = (R + (double)p.y) / len;
 			out[i] = Vector3(dir.x * s, dir.y * s - R, dir.z * s);

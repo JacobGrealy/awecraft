@@ -49,6 +49,16 @@ uniform float u_fog_far = 332.0;  // env.fog_depth_end (main.gd) — the AC-0401
 uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_world_pos;
+// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
+// the contract comment lives in world/chunk_lit_opaque.gdshader). P1
+// is INERT: the stub below answers false for every d, so the discard
+// is byte-identical to the pre-ticket build; P2 turns the real query
+// on. Declared in BOTH lod variants so the AC-0446 material-shader
+// swap (world._ac0446_apply_shader) keeps the stored parameter valid.
+uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
+bool ac0451_covered(float d) {  // AC-0451 P1 STUB: never covered (P2 turns the query on)
+	return u_coverage > 0.5 && false;
+}
 
 void vertex() {
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -91,7 +101,7 @@ void fragment() {
 	// at the wall, the single-source seam with the body's haz_d rim.
 	vec3 V = CAMERA_POSITION_WORLD - v_world_pos;
 	float d = length(V);
-	if (d >= u_fog_far) {
+	if (d >= u_fog_far && !ac0451_covered(d)) {  // AC-0451 P1: the coverage rule (the stub is inert)
 		discard;
 	}
 	ALPHA = 1.0;

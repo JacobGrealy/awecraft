@@ -423,6 +423,23 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _residency_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "voxelcost":
+			# AC-0469 stage 0 (plan.html): the 1 m voxel cost measurement —
+			# the warpcensus boundary stand + the 240-frame settle, then a
+			# live-tree bytes census of the resident face chunks (the
+			# palettized slab payload + the mesh/collision overhead the tree
+			# really holds) and a timed measurement of the face lane's own
+			# per-chunk build (the fresh data-only ensure + the sync
+			# build_mesh_face, the warp split out of the chunk.gd
+			# accumulators), ending in the (cell x view) projection table
+			# with the 60 fps verdict. OBSERVATION ONLY: it streams a few
+			# extra face chunks at a fixed boundary stand and times the
+			# lane's own calls — it changes no policy, band, budget,
+			# eviction, generation, key, light or the warp. STANDALONE (it
+			# quits) — BATTSKIP, no main.gd entry (the warpcensus shape).
+			await _voxelcost_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -38313,3 +38330,306 @@ func _residency_peak_fold(rep: Dictionary, smp: Dictionary) -> void:
 		rep["peak_home"] = int(smp["home_resident"])
 	if int(smp["face_resident"]) > int(rep["peak_face"]):
 		rep["peak_face"] = int(smp["face_resident"])
+
+
+# ============================================================================
+# AC-0469 stage 0 (plan.html §4): what does 1 m everywhere actually cost?
+# MEASUREMENT ONLY — the arm changes nothing about the world: it stands the
+# player at the home/face boundary (the warpcensus stand, flat x = hw - 8,
+# z = 0), runs the warpcensus 240-frame settle so the face lane streams its
+# band, and then measures, on the LIVE tree:
+#   (4.1) BYTES PER RESIDENT CHUNK — the palettized slab payload the tree
+#         really holds (every non-null slab dict's p + i PackedByteArray
+#         sizes, c.data AND c.fl) + the mesh overhead (every slab's
+#         opaque/fluid/flora ArrayMesh, all arrays) + the collision shape
+#         bytes (ConcavePolygonShape3D faces x 12 B). The GDScript
+#         node/dict overhead is NOT byte-counted — a labeled gap, not a
+#         hidden zero.
+#   (4.2) MS PER CHUNK BUILD — the face lane's own calls, timed: the fresh
+#         DATA-ONLY _ensure_face_chunk (C++ generate_face + banana + the
+#         palettize land + the star seed; outside the 113 m mesh window so
+#         no mesh) and the sync build_mesh_face (light pull + build_accs +
+#         the warp + apply — the exact build the lane runs inside the
+#         window). The warp sub-part is the chunk.gd warp_us/warped_chunks
+#         accumulator delta around the mesh pass (the settle's own warps
+#         are excluded). gen and mesh are MEASURED; build = gen + mesh is
+#         the sum of the two measured parts (derived by addition).
+#   (4.3) THE PROJECTION TABLE — cell size (face_width/6283 = 1.000 m,
+#         /3000 = 2.094 m, /1024 = 6.136 m) x view distance (0.5/1/2/4 km):
+#         chunks = (2*ceil(D/(16c)) + 1)^2 (the SQUARE window the residency
+#         is — the 81-chunk radius-4 anchor), bytes = chunks x the measured
+#         bytes/chunk, stream_ms = chunks x the measured build ms (the
+#         per-pass streaming of the whole window), fill_s = stream_ms / 12
+#         at the 12 ms FACE_STREAM_BUDGET_MS.
+#   (4.4) THE VERDICT — 60 fps = the 16.7 ms frame with the existing 12 ms
+#         face-stream budget: (a) one build must fit a frame (build_ms <=
+#         16.7 — the pacer budgets BETWEEN chunks, a single build runs to
+#         completion); (b) the per-frame streaming demand at the top
+#         speeds must stay under the 12 ms budget — chunk-boundary
+#         crossings per frame <= 2*(v/60)/(16c) (the diagonal worst case)
+#         x build ms, at walk 4.3 (player.gd WALK) and cruise-sprint 33.6
+#         (SPRINT 5.6 x cruising_speed 6). The budget PACES the window
+#         fill (fill_s), it does not cap the view: the deciding numbers
+#         are the resident bytes and fill_s, and the trade is stated per
+#         row (x_vs_6m: the chunks vs the 6.136 m cell at the same view).
+#         The render-side draw-call cost of a large resident set is out of
+#         scope here (headless — no rasterizer).
+# RESULT: ok, bytes_per_chunk, ms_per_chunk, table, demand, fits_60fps,
+#         verdict, fails, ms.
+# ============================================================================
+func _voxelcost_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		Debug.result({"voxelcost": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
+		return
+	var ck: GDScript = load("res://world/chunk.gd")
+	ck.warp_us = 0
+	ck.warp_verts = 0
+	ck.warp_surfaces = 0
+	var warp_flag := 1 if bool(ck._warp_on) else 0
+	var hw: float = SphereMath.face_width(R) * 0.5
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p: Node3D = main._spawn_player()
+	var pf: Vector3 = world.flat_of_world_pos(p.position)
+	pf.x = hw - 8.0
+	pf.z = 0.0
+	p.position = world.world_pos_of_flat(pf.x, pf.y, pf.z)
+	world.recenter(pf.x, pf.z, true)
+	# the warpcensus 240-frame settle: the face lane streams its +x edge
+	# band at the 12 ms budget; whatever lands is the steady-state set.
+	var max_frames := 240
+	var frames := 0
+	while frames < max_frames:
+		frames += 1
+		await get_tree().process_frame
+	# ---- 4.1: the live-tree bytes census over the resident face chunks ----
+	var chunk_n := 0
+	var chunk_meshed := 0
+	var slab_cells := 0
+	var slab_bytes := 0
+	var fl_bytes := 0
+	var mesh_bytes := 0
+	var col_bytes := 0
+	var mesh_slab_n := 0
+	var col_body_n := 0
+	var occluder_n := 0
+	for k in world._face_order:
+		var c: Node3D = world.chunks.get(k)
+		if c == null or c.data.is_empty():
+			continue
+		chunk_n += 1
+		for s in c.data:
+			if s != null:
+				slab_cells += 1
+				slab_bytes += int(s["p"].size()) + int(s["i"].size())
+		for s in c.fl:
+			if s != null:
+				fl_bytes += int(s["p"].size()) + int(s["i"].size())
+		var cmesh := false
+		for s in c.slabs:
+			for inst in [s.mesh_instance, s.fluid_instance, s.flora_instance]:
+				if inst != null and inst.mesh != null:
+					var am: ArrayMesh = inst.mesh
+					for si2 in am.get_surface_count():
+						var arrs: Array = am.surface_get_arrays(si2)
+						for a in arrs:
+							if a != null:
+								mesh_bytes += int(a.size())
+			if s.mesh_instance != null:
+				cmesh = true
+				mesh_slab_n += 1
+			if s.occluder != null:
+				occluder_n += 1
+			if s.collision_body != null:
+				col_body_n += 1
+				for ch in s.collision_body.get_children():
+					if ch is CollisionShape3D and ch.shape is ConcavePolygonShape3D:
+						var sh: ConcavePolygonShape3D = ch.shape
+						col_bytes += int(sh.get_faces().size()) * 12
+		if cmesh:
+			chunk_meshed += 1
+	var bytes_total := slab_bytes + fl_bytes + mesh_bytes + col_bytes
+	var bytes_per_chunk := 0.0 if chunk_n == 0 else roundf(float(bytes_total) / float(chunk_n))
+	# ---- 4.2: the per-chunk build, the lane's own calls, timed ----
+	# MEASURED ON FACE 8'S EDGE ROW (the z face's home-edge row ccz = 63,
+	# along-edge axis = ccx), NOT face 4: face 4's far rows (ccx 0) sit on
+	# the far hemisphere where face_cell_band's home_flat_ext reads d.y <=
+	# 0 and returns (INF, INF) — _face_chunk_min_dist then serves the
+	# 0.0 sentinel and EVERY ensure there builds the mesh (build on
+	# demand), so face 4 cannot produce a data-only chunk. Face 8 is
+	# different: _face_stream's edge-normal gate (edge_dist = hw - p.y =
+	# ~3141 m > win) never streams it during the settle, and on its edge
+	# row the distance to the stand is REAL (~3.1-3.9 km, the diag below
+	# reports it) and far past the 113 m mesh window — the ensures are
+	# data-only by the window rule, exactly like the lane's own
+	# data-only chunks.
+	# The band: a contiguous 16-chunk line on the edge row (along-edge
+	# ccx 25..40, colz = 63*16+8 = 1016), with one pad at each end,
+	# primed UNTIMED so every timed build reads data-live in-line
+	# neighbours.
+	var N := 16
+	var z0 := 400
+	var zedge := 1016
+	var band_us := 0
+	var bt0 := Time.get_ticks_usec()
+	world._ensure_face_chunk(8, z0 - 16, zedge)
+	for i in range(N):
+		world._ensure_face_chunk(8, z0 + i * 16, zedge)
+	world._ensure_face_chunk(8, z0 + N * 16, zedge)
+	band_us = Time.get_ticks_usec() - bt0
+	# The gen path: 16 FRESH data-only ensures on the same edge row
+	# (along-edge ccx 47..62, colx = 760+i*16 — unstreamed, never touched
+	# before): C++ generate_face + banana + the palettize land + the star
+	# seed + the home-neighbor rearm (a dirty mark only —
+	# _face_rearm_home_neighbors flips mesh_built on RESIDENT home
+	# neighbours; the home edge columns ~2.4 km away are not resident, so
+	# it is a no-op here).
+	var gen_us := 0
+	var gen_fresh := 0
+	var gen_diag: Dictionary = {}
+	for i in range(N):
+		var gx: int = 760 + i * 16
+		var gk: String = world._key_f(8, gx / 16, 63)
+		var resident_before := bool(world.chunks.has(gk))
+		var t1 := Time.get_ticks_usec()
+		var c2: Node3D = world._ensure_face_chunk(8, gx, zedge)
+		gen_us += Time.get_ticks_usec() - t1
+		if i == 0:
+			gen_diag = {
+				"key": gk,
+				"resident_before": resident_before,
+				"data_size": -1 if c2 == null else c2.data.size(),
+				"mesh_built": -1 if c2 == null else int(bool(c2.mesh_built)),
+				"in_window": int(world._face_in_mesh_window(8, gx / 16, 63)),
+				"min_dist_m": roundf(world._face_chunk_min_dist(8, gx / 16, 63, float(world._rec_player_wx), float(world._rec_player_wz))),
+			}
+		if not resident_before and c2 != null and not bool(c2.mesh_built):
+			gen_fresh += 1
+	# The mesh path: the sync face build on the 16 band chunks (the exact
+	# call _ensure_face_chunk runs inside the mesh window). The warp
+	# accumulator delta isolates the warp sub-part (the settle's warps are
+	# excluded by taking the delta around this pass only).
+	var warp_us0 := int(ck.warp_us)
+	var warped0 := int(ck.warped_chunks)
+	var mesh_us := 0
+	var mesh_ok := 0
+	for i in range(N):
+		var c3: Node3D = world.chunks.get(world._key_f(8, (z0 + i * 16) / 16, 63))
+		if c3 == null or c3.data.is_empty():
+			continue
+		var t2 := Time.get_ticks_usec()
+		c3.build_mesh_face()
+		mesh_us += Time.get_ticks_usec() - t2
+		if bool(c3.mesh_built):
+			mesh_ok += 1
+	var warp_us1 := int(ck.warp_us)
+	var warped1 := int(ck.warped_chunks)
+	var gen_ms := roundf(float(gen_us) / float(N)) / 1000.0
+	var mesh_ms := roundf(float(mesh_us) / float(N)) / 1000.0
+	var full_ms := roundf(float(gen_us + mesh_us) / float(N)) / 1000.0
+	var warped_delta := maxi(1, warped1 - warped0)
+	var warp_ms := roundf(float(warp_us1 - warp_us0) / float(warped_delta)) / 1000.0
+	# ---- 4.3: the projection table (the formula in the deviations file) ----
+	# chunks(D, c) = (2*ceil(D/(16c)) + 1)^2 — the SQUARE window the
+	# residency is (the 81-chunk radius-4 anchor); bytes = chunks * B with
+	# B = the measured bytes/chunk; stream_ms = chunks * M with M = the
+	# measured build ms/chunk (the per-pass streaming of the whole window);
+	# fill_s = stream_ms / 12 / 1000 at the 12 ms FACE_STREAM_BUDGET_MS.
+	var fw: float = SphereMath.face_width(R)
+	var cells: Array = [fw / 6283.0, fw / 3000.0, fw / 1024.0]
+	var cper: Array = [6283, 3000, 1024]
+	var views: Array = [0.5, 1.0, 2.0, 4.0]
+	var B: float = bytes_per_chunk
+	var M: float = full_ms
+	var table: Array = []
+	var n6: Dictionary = {}
+	for ci in range(cells.size()):
+		var c: float = float(cells[ci])
+		for vm in views:
+			var D: float = float(vm) * 1000.0
+			var r: int = int(ceili(D / (16.0 * c)))
+			var n: int = (2 * r + 1) * (2 * r + 1)
+			if int(cper[ci]) == 1024:
+				n6[str(vm)] = n
+			table.append({
+				"cell_m": roundf(c * 1000.0) / 1000.0, "cells_per_face": int(cper[ci]), "view_km": vm,
+				"chunks": n,
+				"bytes": roundf(float(n) * B),
+				"bytes_gb": roundf(float(n) * B / 1073741824.0 * 1000.0) / 1000.0,
+				"stream_ms": roundf(float(n) * M * 10.0) / 10.0,
+				"fill_s": roundf(float(n) * M / 12.0 / 1000.0 * 100.0) / 100.0,
+			})
+	# the trade factor per row: the chunks vs the 6.136 m cell at the same
+	# view distance (x_vs_6m = 1.0 on the 6.136 m rows).
+	for row in table:
+		var base: int = int(n6.get(str(row["view_km"]), 1))
+		row["x_vs_6m"] = roundf(float(int(row["chunks"])) / float(base) * 100.0) / 100.0
+	# ---- 4.4: the 60 fps verdict (16.7 ms frame, 12 ms face-stream budget)
+	var speeds: Array = [["walk 4.3 m/s", 4.3], ["cruise-sprint 33.6 m/s", 33.6]]
+	var demand: Array = []
+	var max_demand_ms := 0.0
+	for se in speeds:
+		var v: float = float(se[1])
+		var dmax := 0.0
+		for c in cells:
+			var d: float = 2.0 * (v / 60.0) / (16.0 * float(c)) * M
+			dmax = maxf(dmax, d)
+		max_demand_ms = maxf(max_demand_ms, dmax)
+		demand.append({"speed": str(se[0]), "ms_per_frame_worst_cell": roundf(dmax * 10000.0) / 10000.0})
+	var frame_ok: bool = M <= 16.7
+	var budget_ok: bool = max_demand_ms <= 12.0
+	var fits_60fps: Array = []
+	if frame_ok and budget_ok:
+		for row in table:
+			fits_60fps.append("%s m @ %s km" % [str(row["cell_m"]), str(row["view_km"])])
+	var fails: Array = []
+	if chunk_n == 0:
+		fails.append("no_face_chunks")
+	if gen_fresh < N:
+		fails.append("fresh_ensure_not_data_only %d/%d" % [gen_fresh, N])
+	if mesh_ok < N:
+		fails.append("mesh_build_incomplete %d/%d" % [mesh_ok, N])
+	if bytes_per_chunk <= 0.0:
+		fails.append("zero_bytes_per_chunk")
+	var x1m: float = (fw / 1024.0) / (fw / 6283.0)
+	var verdict := "60 fps: one build %.3f ms <= 16.7 ms frame: %s; per-frame streaming demand at cruise-sprint 33.6 m/s = %.3f ms <= 12 ms face-stream budget: %s; %d/%d rows fit. The 12 ms budget PACES the window fill (fill_s), it does not cap the view — the deciding numbers are the resident bytes (bytes_gb) and fill_s; 1 m blocks cost %.1f x the chunks of the 6.136 m cell at the same view distance (x_vs_6m per row). Render-side draw-call cost of a large resident set is out of scope here (headless)." % [M, "yes" if frame_ok else "NO", max_demand_ms, "yes" if budget_ok else "NO", fits_60fps.size(), table.size(), x1m * x1m]
+	Debug.result({"voxelcost": {
+		"ok": fails.is_empty(),
+		"frames": frames,
+		"warp_flag": warp_flag,
+		"face_chunks": chunk_n,
+		"face_chunks_meshed": chunk_meshed,
+		"gen_diag": gen_diag,
+		"slab_cells": slab_cells,
+		"mesh_slabs": mesh_slab_n,
+		"collision_bodies": col_body_n,
+		"occluders": occluder_n,
+		"bytes_per_chunk": {
+			"measure": bytes_per_chunk,
+			"slab_payload_b": roundf(float(slab_bytes) / float(maxi(1, chunk_n))),
+			"fl_payload_b": roundf(float(fl_bytes) / float(maxi(1, chunk_n))),
+			"mesh_b": roundf(float(mesh_bytes) / float(maxi(1, chunk_n))),
+			"collision_b": roundf(float(col_bytes) / float(maxi(1, chunk_n))),
+			"source": "LIVE tree at the warpcensus boundary stand after the 240-frame settle: the palettized slab dicts' p+i PackedByteArray sizes (c.data + c.fl) + every slab mesh's ArrayMesh array bytes + the ConcavePolygonShape3D face bytes (12 B/vertex). The GDScript node/dict overhead is NOT byte-counted (labeled gap).",
+		},
+		"ms_per_chunk": {
+			"build": full_ms,
+			"parts": {
+				"gen_data_ms": gen_ms,
+				"mesh_build_ms": mesh_ms,
+				"warp_ms": warp_ms,
+				"warped_in_pass": warped1 - warped0,
+				"band_priming_ms": roundf(float(band_us) / float(N + 2)) / 1000.0,
+				"note": "MEASURED on this machine: gen = the fresh data-only _ensure_face_chunk (C++ generate_face + banana + palettize land + star seed) on face 8's edge row (unstreamed, real distance ~3.1-3.9 km past the 113 m mesh window); mesh = the sync build_mesh_face (light pull + build_accs + warp + apply) on band chunks with data-live in-line neighbours; warp = the chunk.gd warp_us/warped_chunks accumulator delta around the mesh pass; band_priming_ms = the untimed 18-chunk band priming (the same data-only ensure, a cross-check of gen). build = gen + mesh, the sum of the two measured parts (derived by addition).",
+			},
+		},
+		"table": table,
+		"demand": demand,
+		"fits_60fps": fits_60fps,
+		"verdict": verdict,
+		"fails": fails,
+		"ms": Time.get_ticks_msec() - t0,
+	}})

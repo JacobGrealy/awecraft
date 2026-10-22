@@ -82,3 +82,213 @@ DEVIATIONS
    meshes synchronously inside its own process — nothing persists (no save, no world file, no
    CELLS_PER_FACE, no policy, no key, no light). genhash 25/25 is the gate that proves the
    world is unchanged.
+
+======================================================================
+AC-0469 stage A (2026-10-22) — the classified 1024 / CELLS_PER_FACE /
+64-derivative list. This table IS the proof the formats did not move:
+every 1024 in the tree is classified GRID (changed) / PAYLOAD (untouched:
+the 1,024-BYTE slab/far payload per 16-high section) / OTHER (untouched).
+The (c)-class sweep (bit shifts, & 1023, packed ints, 10-bit assumptions,
+derived 64-chunk constants) is folded in below.
+======================================================================
+
+GRID — CHANGED (cell count, chart divide, chunk-count derivates):
+
+GDScript (single source of truth: SphereMath.CELLS_PER_FACE := 6283,
+derived SphereMath.CHUNKS_PER_FACE := (CELLS_PER_FACE+15)/16 = 393):
+  godot/core/sphere_math.gd:50     CELLS_PER_FACE 1024 -> 6283 + derivation
+                                   comment (W = pi*R/2 = 6283.19 m at
+                                   R=4000 -> W/6283 = 1.000 m/cell) + NEW
+                                   CHUNKS_PER_FACE = 393 (the last edge
+                                   row/col of chunks is partial: 392 full
+                                   + 11 cells).
+  godot/core/sphere_math.gd:421-434  comments "1024-cell grid / W/1024"
+                                   -> CELLS_PER_FACE / 1.000 m.
+  godot/world/world.gd:14707       const FACE_CELLS := 1024 (the mirror
+                                   second source of truth) DELETED.
+  godot/world/world.gd:15422-23    key_for_sphere_pos: FACE_CELLS ->
+                                   SphereMath.CELLS_PER_FACE (clamps
+                                   0..6282).
+  godot/world/world.gd:15176-77    _face_stream: clampi(..., 0, 1023) >> 4
+                                   -> clampi(..., 0, CELLS_PER_FACE-1) >> 4
+                                   (the >> 4 chunk derivation itself is
+                                   grid-independent, unchanged).
+  godot/world/world.gd:15116       _face_stream: mini(64, ...) ->
+                                   mini(CHUNKS_PER_FACE, ...) x2 (the 64
+                                   was 1024/16).
+  godot/world/world.gd:15181       _face_stream: edge_cc = 63 - r ->
+                                   (CELLS_PER_FACE-1) >> 4 - r (= 392 - r;
+                                   63 was (1024-1)>>4).
+  godot/world/world.gd:14986-87    _face_edge_kind: home-edge ccx == 63 /
+                                   ccz == 63 -> ccx/ccz == edge_last
+                                   ((CELLS_PER_FACE-1)>>4 = 392).
+  godot/world/world.gd:14992       _face_edge_kind: neighbour bound
+                                   nccx/nccz > 63 -> > CHUNKS_PER_FACE-1.
+  godot/world/world.gd:15299-15317 _face_rebake_boundary: edge-row
+                                   c.cx == 63 / c.cz == 63 x4 ->
+                                   == edge_last (392).
+  godot/world/world.gd:15462       banana pass: face * 64 + ccx x2 ->
+                                   face * CHUNKS_PER_FACE + ccx.
+  godot/world/world.gd:194,12081,14715,14868,14982,15271,15410,15507
+                                   stale "1024-cell / 1023 / ccx==63"
+                                   comments -> 6283 / 6282 / (CELLS_PER_FACE-1)>>4.
+  godot/world/generator.gd:245     generate_face: face * 64 + cx x2 ->
+                                   face * CHUNKS_PER_FACE + cx (the GD
+                                   twin of C++ sp_col_index).
+  godot/world/chunk.gd:1838        _warp_cell_point: u1024/v1024 / 1024.0
+                                   -> / float(SphereMath.CELLS_PER_FACE)
+                                   (the GD twin of mesh.cpp:4198; the
+                                   u1024/v1024 names are heritage — they
+                                   hold per-face cell indices).
+  godot/player/player.gd:2840      comment "0..1023" -> 0..
+                                   CELLS_PER_FACE-1 (6282). No CODE in
+                                   player.gd assumed 1024 (the DDA works
+                                   in absolute columns — already generic).
+
+C++ (single source of truth: awesm::SM_CELLS_PER_FACE = 6283,
+derived awesm::SM_CHUNKS_PER_FACE = 393 — sphere_math_cpp.h, +<cstdint>):
+  gdext/src/sphere_math_cpp.h      NEW constants (one per language) +
+                                   derivation comment.
+  gdext/src/sphere_math_cpp.h:187-202  sm_face_chunk_transform:
+                                   (ccx*16+8)/1024.0 x2 and
+                                   ((iu+0.5)/1024.0, (iv+0.5)/1024.0) ->
+                                   / SM_CELLS_PER_FACE.
+  gdext/src/gen.cpp:727-733        sm_chart_dir: fx - face*1024.0 ->
+                                   fx - face*(SM_CHUNKS_PER_FACE*16) —
+                                   the chunk-space span is 6288 cells
+                                   (5 past the 6283 chart cells, which
+                                   chart the gapless continuation) — and
+                                   fx2/1024.0 -> fx2/SM_CELLS_PER_FACE
+                                   (cell i <-> uv i/6283, the grid
+                                   definition). Comment updated.
+  gdext/src/gen.cpp:783-785        sp_col_index: c - face * 64 ->
+                                   c - face * SM_CHUNKS_PER_FACE (the
+                                   chunk-space un-linearization; the 64
+                                   was 1024/16).
+  gdext/src/mesh.cpp:4198          warp_face_verts: u1024/v1024 / 1024.0
+                                   -> / SM_CELLS_PER_FACE.
+
+COUNTS: 25 GRID sites changed (16 GD + 9 C++, counting the 2 new named
+constants); 0 grid sites left literal.
+
+PAYLOAD — UNTOUCHED (the 1,024 = BYTES of block data per 16-high section:
+512 B H u16 LE + 256 B biome + 256 B top id; the v6 save codec's bit-1
+section). Changing ANY of these corrupts the save and far-payload formats:
+  gdext/src/gen.cpp:2880           std::vector<uint8_t> out(1024, 0);
+  gdext/src/gen.cpp:3935           p_far->resize(1024);
+  gdext/src/gen.cpp:4475           p_skip != 0 && p_pay.size() == 1024
+  gdext/src/gen.cpp:4500           p_skip == 0 && far_pay.size() == 1024
+  gdext/src/mesh.cpp:4027          p_far.size() == 1024
+  gdext/src/gen.cpp:274,283,2845,3927,4168,4432,4439,4443,4516  comments
+                                   ("the size is exactly 1024" contract
+                                   at 4443 intact)
+  gdext/src/mesh.cpp:3284          comment (far payload 1024 bytes)
+  godot/world/world.gd:11733       if pay.size() != 1024:
+  godot/world/world.gd:11737       c.far_top = pay.slice(768, 1024)
+  godot/world/world.gd:7684,9160,13155,13225,13263  comments
+  godot/world/chunk.gd:244         comment (1024-byte far payload)
+  godot/core/chunk_io.gd:13,99-100,269,272,303,326,460,465,514
+                                   codec: "AWCR" | u32 | u32 entry count
+                                   (1024) table + the [u32 size][1024
+                                   payload] section + slice(768,1024)
+  godot/world/satellite_bake_worker.gd:81-82,166,171-172,248,252
+                                   shard/far payload record checks +
+                                   record offset (record_index * 1024
+                                   BYTES)
+  godot/scenes/harness.gd:2706-2742,15049,15110,15148,15481,15554
+                                   arm-side payload size/slice checks
+COUNTS: 19 code sites + 16 comments untouched. Save format v6 unchanged;
+no version bump owed (nothing in the format moved).
+
+OTHER — UNTOUCHED (inspected individually; the number merely happens to
+be 1024):
+  Satellite 1024^2 per-face textures: godot/world/satellite_body.gd:15,111
+  (NPIX),718-719,732-733 (shard = BAKE_SHARD_LEN*1024 B),1083;
+  godot/scenes/harness.gd:14161,14231,14488 (NPIX_SAT),14530.
+  1024px ATLAS: godot/autoload/data.gd:50 (ATLAS_PX), godot/core/atlas.gd:3,
+  gdext/src/mesh.cpp:229,320,2214,1847-1849 (atlas_px).
+  Deep-color hash q = r*31*1024 + g*31*32 + b*31 (a 5-bit-per-channel
+  hash, NOT a grid): godot/world/world.gd:2256, gdext/src/mesh.cpp:2473,2869.
+  10-bit BLOCK-ID decode (v4 >> 8) & 0x3FF (block ids, not cells):
+  godot/scenes/harness.gd:15320,15531,15983.
+  REGION_ENTRIES := 1024 — the on-disk region file groups 1024 HOME
+  columns (a storage table size, grid-independent): godot/core/chunk_io.gd:110
+  + godot/world/world.gd:13334 comment.
+  Test coordinates ±1024 m / dist*1024 byte budgets / wide-point fixtures:
+  godot/scenes/harness.gd:25472,26346-26552,26582.
+  1024^2 image sampling (uv*1024 into a 1024px image): godot/scenes/harness.gd:5439-5440,5462-5463.
+  Stage-0 voxelcost cost-model rows (fw/6283 vs fw/3000 vs fw/1024 — the
+  measurement instrument itself compares the three cell sizes):
+  godot/scenes/harness.gd:38358,38542-38543,38555,38597.
+
+STALE GRID ARITHMETIC IN NON-GATE HARNESS ARMS (harness.gd is fenced —
+"pristine except for the probe arm the plan names"; the plan names none):
+  leavetint 5319-5322 (chart /1024.0), stripsprobe 11068 / lightprobe 11331 /
+  pullprobe 11474 / meshprobe 16826 (cz*1024+cx sort keys), farhigh
+  15959-16039 (h2 chart iv*1024+iu, /1024.0, clamp 0..1023), crossface
+  34080-34153,34234,34536-34537,34955-35425 (edge cell 1023, u*1024.0
+  clamp 0..1023, gz/hw*1024), faceedit 36383 (colx/colz >= 1024),
+  ac0433probe 37146-37159,37299 (range(0,1024), edge cell 1023).
+  None is in the stage A gate set (g0/player/light/planetwalk/genhash/
+  save/load/residency/warpcensus all use CELLS_PER_FACE or are
+  home-grid-only). At the new grid these arms mis-aim (1023 is no longer
+  the edge cell; clamps pin to a 1/6 strip) — they run, they probe the
+  wrong place; follow-up ticket owed.
+
+(c) SWEEP — index arithmetic that assumed 1024:
+  - "& 1023" / ">> 10" / "<< 10" grid uses: NONE anywhere in godot/ or gdext/.
+  - packed ints / 10-bit assumptions: only the BLOCK-ID 0x3FF decode above
+    (OTHER — the block-id domain, independent of the grid).
+  - derived 64-chunk constants (1024/16): world.gd 15116/15181/14986-87/14992/
+    15299-15317/15462, generator.gd:245, gen.cpp:785, satellite_body.gd:131-132 —
+    ALL widened to CHUNKS_PER_FACE (393) EXCEPT the satellite (see D2).
+  - ">> 4" cell->chunk derivations: grid-independent, left as-is.
+  - Nothing found that cannot be safely widened on the gate paths. The
+    only non-trivial widen is the sm_chart_dir span (6288 vs 6283) —
+    handled and commented (the 5 padding cells chart the gapless
+    continuation; no wrap is possible: max linearized cell =
+    11*6288 + 6287 = 75,455, int64/int32-safe).
+
+DEVIATIONS (stage A)
+--------------------
+D1. Plan §3 file list applied as anchors, not a boundary. planet_grid.gd
+    (named in §3) DOES NOT EXIST in the tree — noted, nothing owed.
+    generator.gd and chunk.gd (NOT in the §3 table) were edited: the
+    generate_face linearization is the GD twin of C++ sp_col_index (§3
+    names gen.cpp), and chunk.gd:1838 is the GD fallback twin of
+    mesh.cpp:4198 (§3 names mesh.cpp) — user instruction (b)
+    ("parameterise the GRID-class literals in GDScript and C++")
+    requires them; leaving them would desync the native/GDScript warp
+    and break ALL face generation. No file outside godot/ + gdext/ was
+    touched.
+D2. The SATELLITE far tier is not parameterised (fence: no edits outside
+    §3; and it forces a design decision this plan does not make).
+    satellite_body.gd:131-132 FACE_GRID := 64 / FACE_CHUNKS := 4096 +
+    the 1024^2 per-face texture (1 px = 1 cell) + the res:// canonical-
+    seed (44) assets are sized for the 1024-cell grid. Moving to 6283
+    cells is a 6283^2 (40 MB/face, 40x the PNGs) re-bake vs a
+    resampling pass — the plan does not choose. Consequences (measured
+    none — see gates): the in-process bake runs only on NON-canonical
+    seeds (main.gd:1004; canonical seed 44 LOADS the res:// assets —
+    what every stage A gate runs), so the bake's stale f*64+ccx
+    linearization vs the new sp_col_index (f*393+ccx) is unreachable in
+    this gate set; the shell texture the canonical load shows is
+    pre-rebase content under the new grid (a far-view visual mismatch,
+    not a boot/run defect). FOLLOW-UP TICKET OWED: satellite re-bake or
+    resample + FACE_GRID parameterisation.
+D3. Stale harness arms (list above) keep their hardcoded 1024/1023 grid
+    arithmetic — harness.gd is fenced for this stage (no probe arm
+    named in the plan) and none of those arms is in the stage A gate
+    set. They will mis-aim at the new grid; follow-up ticket owed
+    (parameterise to SphereMath.CELLS_PER_FACE — mechanical once the
+    fence lifts).
+D4. Tooling: `python3 -m SCons` is NOT installed on this box and
+    .scratch/run_scons.py is STALE (imports SCons.main — does not exist
+    in the vendored 4.11.1; the real entry is SCons.Script.Main).
+    Working recipe: PYTHONPATH=.scratch/scons_target python3
+    .scratch/scons_target/bin/scons -C gdext platform=linux target=
+    template_release -j6 (SCons itself is vendored at .scratch/scons
+    _target; godot-cpp prebuilt at .scratch/godot-cpp/bin for both
+    platforms). The .so lands in gdext/bin/ — COPY it to godot/bin/
+    (SConstruct has no copy step; a stale godot/bin silently gates old
+    code — gdext/AGENTS.md's trap, made concrete).

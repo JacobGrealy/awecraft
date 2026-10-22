@@ -191,7 +191,8 @@ const FRUSTUM_CULL_MARGIN := 32.0
 #     face_width(R) — one flat metre is one metre of arc; pre-AC-0306 it
 #     covered |x|,|z| <= R). Face 0 = x >= 0, face 1 = x < 0.
 #   faces 2-11 = sparse on-demand data chunks: key "%d:%d:%d" (face,cx,cz)
-#     over the 1024-cell SphereMath grid (chunk = 16x16 cells); data level
+#     over the 6283-cell SphereMath grid (chunk = 16x16 cells, AC-0469);
+#     data level
 #     only in P1a (no meshing/lighting, AC-0144+).
 # Position->key single resolver: key_for_sphere_pos() (world_to_face).
 # P1a: flat get/set_block stay the home pair (player on the flat home face).
@@ -12078,7 +12079,7 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		var dz := int(ent[3])
 		var odx := int(ent[4])
 		var odz := int(ent[5])
-		# AC-0143 face 2-11 chunks live in the 1024-cell sphere grid — the
+		# AC-0143 face 2-11 chunks live in the 6283-cell sphere grid — the
 		# home streaming set has no claim on them. (The old Chebyshev walk
 		# swept them by accident; AC-0152 scopes it to home chunks.)
 		if int(c.face) > 1:
@@ -14704,7 +14705,9 @@ func _fluid_near(x: int, y: int, z: int) -> bool:
 # key_for_sphere_pos / get_block_key / set_block_key access, FIFO-capped,
 # never meshed or lit in P1a (AC-0144+). Faces 0,1 (+Y halves) stay the
 # flat home grid (legacy "%d,%d" key, flat grid, streaming unchanged).
-const FACE_CELLS := 1024  # SphereMath.CELLS_PER_FACE
+# AC-0469: the FACE_CELLS mirror constant is deleted — the grid count
+# lives in ONE home (SphereMath.CELLS_PER_FACE, 6283 at AC-0469); the
+# former users read it through SphereMath now.
 const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
 var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
 var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac0433probe natural-vs-forced discriminator)
@@ -14712,7 +14715,7 @@ var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac04
 # --- AC-0309: cross-face movement (P4 of AC-0144) — the face-side runtime ---
 # The home pair (faces 0,1) keeps its flat 1 m grid UNTOUCHED (D1: genhash
 # 25/25 stays byte-identical — the home terrain never changes). Faces 4-11
-# carry the 1024-cell grid; the player walks/flies from the home patch
+# carry the 6283-cell grid (AC-0469); the player walks/flies from the home patch
 # across a shared cube edge onto the far side. The boundary is
 # continuous by the field's OWN (d, δ) continuity (AC-0311: the C1
 # interim BLEND BAND was deleted — it existed only to hide the seam the
@@ -14865,7 +14868,8 @@ func _solid_ring() -> PackedByteArray:
 # along-edge position's sign picks the face half (z >= 0 vs < 0 on x
 # edges, x >= 0 vs < 0 on z edges); the -half faces (5,7,9,11) use the
 # v-1/u-1 cube form, shifting the raw coordinate by +1. The home edge is
-# u = 1 (x edges) / v = 1 (z edges) -> iu = 1023 / iv = 1023.
+# u = 1 (x edges) / v = 1 (z edges) -> iu = CELLS_PER_FACE-1 / iv =
+# CELLS_PER_FACE-1 (6282 at AC-0469).
 func _face_edge_cells(dx: int, dz: int, along: float, ex: int, ez: int) -> Array:
 	var R: float = Game.planet_R
 	var hw: float = SphereMath.face_width(R) * 0.5
@@ -14979,17 +14983,21 @@ func _face_edge_kind(face: int, ccx: int, ccz: int, dx: int, dz: int) -> Array:
 	# of the chunk's u range (up to 15 cells away — the shared-edge
 	# mismatch no transform can repair). The home edge sits on the
 	# local WEST of chunk 63 on the mirror x faces (the seam cell
-	# iu = 1023 is local slot 0 there) and on the local EAST on the
-	# plain x faces; the z faces' home edge (local NORTH of ccz = 63)
-	# is untouched (the z slot is never mirrored).
+	# iu = CELLS_PER_FACE-1 is local slot 0 there) and on the local EAST
+	# on the plain x faces; the z faces' home edge (local NORTH of
+	# ccz = (CELLS_PER_FACE-1)>>4, AC-0469) is untouched (the z slot is
+	# never mirrored).
 	var mirrored: bool = SphereMath.face_mirror_x(face)
-	var is_home_edge: bool = (dz == 0 and is_x_face and ccx == 63 and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
-			or (dx == 0 and not is_x_face and ccz == 63 and dz == 1)
+	# AC-0469: the home edge sits on the LAST edge-axis chunk (392 at
+	# 6283 cells; was 63 at 1024).
+	var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
+	var is_home_edge: bool = (dz == 0 and is_x_face and ccx == edge_last and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
+			or (dx == 0 and not is_x_face and ccz == edge_last and dz == 1)
 	if is_home_edge:
 		return [1, 0, 0]
 	var nccx: int = ccx - dx if (mirrored and dx != 0) else ccx + dx
 	var nccz: int = ccz + dz
-	if nccx < 0 or nccx > 63 or nccz < 0 or nccz > 63:
+	if nccx < 0 or nccx > SphereMath.CHUNKS_PER_FACE - 1 or nccz < 0 or nccz > SphereMath.CHUNKS_PER_FACE - 1:
 		return [0, 0, 0]
 	var nc: Node3D = chunks.get(_key_f(face, nccx, nccz))
 	if nc == null or nc.data.is_empty():
@@ -15113,7 +15121,9 @@ func _face_stream() -> void:
 		var is_x_face: bool = face <= 7
 		# the in-band (edge-normal) axis: full-width (S) on the x faces,
 		# half-width (S/2) on the z faces (face_cell_scale)
-		var rows: int = mini(64, int(ceili(win / S)) + 1) if is_x_face else mini(64, int(ceili(win / (S * 0.5))) + 1)
+		# AC-0469: the row cap is the per-face chunk count (393 at 6283
+		# cells), not the old 64 = 1024/16.
+		var rows: int = mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / S)) + 1) if is_x_face else mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / (S * 0.5))) + 1)
 		# the along-edge extent of this face's half of the edge
 		# the along-edge clamp must match the face's HALF of the edge:
 		# the first face of each pair (4/6, 8/10) covers the + half
@@ -15173,12 +15183,17 @@ func _face_stream() -> void:
 		var raw_idx: bool = face == 4 or face == 6  # the z>=0 x-faces scale from 0
 		var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
 		var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
-		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, 1023) >> 4
-		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, 1023) >> 4
+		# AC-0469: the clamp is the grid's cell range (6282 at 6283 cells),
+		# not the old 1023 — the >> 4 chunk derivation is grid-independent.
+		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, SphereMath.CELLS_PER_FACE - 1) >> 4
+		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, SphereMath.CELLS_PER_FACE - 1) >> 4
+		# AC-0469: the home-edge chunk is the LAST chunk on the edge axis
+		# ((CELLS_PER_FACE - 1) >> 4 = 392 at 6283 cells; was 63 at 1024).
+		var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
 		for r in range(rows):
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
-			var edge_cc: int = 63 - r
+			var edge_cc: int = edge_last - r
 			if edge_cc < 0:
 				break
 			if is_x_face:
@@ -15268,7 +15283,8 @@ func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
 # data LANDING itself (AC-0433 P0.5, the home-landing hook — a face edge
 # chunk built against an air home ring extends nothing there and carries
 # a full-height seam wall until the straddler's data arrives). Only edge-
-# row face chunks (ccx == 63 on the x faces / ccz == 63 on the z faces)
+# row face chunks (ccx == (CELLS_PER_FACE-1)>>4 on the x faces / ccz ==
+# (CELLS_PER_FACE-1)>>4 on the z faces — 392 at AC-0469)
 # read the home side at all, and only along the edge row's overlap range
 # — a handful of chunks per boundary-column landing. face_rebake_n counts
 # the actual re-bakes (the ac0433probe natural-vs-forced discriminator).
@@ -15288,6 +15304,9 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 	var z_minus: bool = z0 <= float(bxn) and z0 + 16.0 > float(bxn)
 	if not (x_plus or x_minus or z_plus or z_minus):
 		return
+	# AC-0469: edge-row chunks are the LAST edge-axis chunk (392 at 6283
+	# cells; was 63 at 1024).
+	var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
 	for k in _face_order.duplicate():
 		var c = chunks.get(k)
 		if c == null or not bool(c.mesh_built):
@@ -15296,25 +15315,25 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 		var rebake := false
 		# the +edge faces (4,5,8,9) read the +hw column, the -edge faces
 		# (6,7,10,11) the -hw column
-		if (f == 4 or f == 5) and x_plus and int(c.cx) == 63:
+		if (f == 4 or f == 5) and x_plus and int(c.cx) == edge_last:
 			var neg: bool = f == 5
 			var off: float = hw if neg else 0.0
 			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
 			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
 			rebake = hi >= z0 and lo <= z0 + 16.0
-		elif (f == 6 or f == 7) and x_minus and int(c.cx) == 63:
+		elif (f == 6 or f == 7) and x_minus and int(c.cx) == edge_last:
 			var neg: bool = f == 7
 			var off: float = hw if neg else 0.0
 			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
 			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
 			rebake = hi >= z0 and lo <= z0 + 16.0
-		elif (f == 8 or f == 9) and z_plus and int(c.cz) == 63:
+		elif (f == 8 or f == 9) and z_plus and int(c.cz) == edge_last:
 			var neg: bool = f == 9
 			var off: float = hw if neg else 0.0
 			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
 			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
 			rebake = hi >= x0 and lo <= x0 + 16.0
-		elif f >= 10 and z_minus and int(c.cz) == 63:
+		elif f >= 10 and z_minus and int(c.cz) == edge_last:
 			var neg: bool = f == 11
 			var off: float = hw if neg else 0.0
 			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
@@ -15407,7 +15426,8 @@ func chunk_key_face(face: int, ccx: int, ccz: int) -> String:
 # x = (pi*R/4)*u (x in [0, pi*R/4]), face 1 x = (pi*R/4)*(u-1)
 # (x in [-pi*R/4, 0]); z = (pi*R/4)*(2v-1). (Pre-AC-0306 this was R, tying the
 # face width to the radius — the 0.72 m-per-block defect.) Faces 2-11 resolve
-# to their 1024-cell grid columns. Deterministic: same position + R => same key.
+# to their 6283-cell grid columns (AC-0469). Deterministic: same position
+# + R => same key.
 func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 	var r: Dictionary = SphereMath.world_to_face(pos, R)
 	var face: int = int(r["face"])
@@ -15419,8 +15439,8 @@ func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 		return {"face": face, "cx": int(roundf(fx)), "cz": int(roundf(hw * (2.0 * v - 1.0)))}
 	return {
 		"face": face,
-		"cx": clampi(int(floorf(u * float(FACE_CELLS))), 0, FACE_CELLS - 1),
-		"cz": clampi(int(floorf(v * float(FACE_CELLS))), 0, FACE_CELLS - 1),
+		"cx": clampi(int(floorf(u * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1),
+		"cz": clampi(int(floorf(v * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1),
 	}
 
 # --- AC-0307: rigid per-column sphere placement (P2 of AC-0144) ---
@@ -15459,7 +15479,7 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	# per-face salt too — one world seed (the C++ tree rolls in the same
 	# chunk run on the raw seed; the salt was the flat-frame construct,
 	# retired by the sphere domain).
-	WorldGen.apply_banana_trees(fdata, face * 64 + ccx, face * 64 + ccz, Game.world_seed, Data.HEIGHT)
+	WorldGen.apply_banana_trees(fdata, face * SphereMath.CHUNKS_PER_FACE + ccx, face * SphereMath.CHUNKS_PER_FACE + ccz, Game.world_seed, Data.HEIGHT)
 	c.data_landed(fdata, PackedByteArray())
 	c.no_caves = false
 	if int(c.band) == 0:
@@ -15504,8 +15524,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	return c
 
 # Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
-# columns (routes to the flat API); faces 1-11 (colx,colz) = 1024-cell grid
-# columns (chunk = 16x16 cells). Non-home reads generate on first access
+# columns (routes to the flat API); faces 1-11 (colx,colz) = 6283-cell grid
+# columns (chunk = 16x16 cells, AC-0469). Non-home reads generate on first access
 # (data level; AC-0119's never-generate rule covers the flat read path).
 func get_block_key(face: int, colx: int, colz: int, y: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:

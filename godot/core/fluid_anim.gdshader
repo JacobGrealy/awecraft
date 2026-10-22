@@ -40,6 +40,16 @@ varying vec3 v_world_pos;
 const float TILE_F = 1.0 / 32.0;
 
 
+// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
+// the contract comment lives in world/chunk_lit_opaque.gdshader). P1
+// is INERT: the stub below answers false for every d, so the discard
+// is byte-identical to the pre-ticket build; P2 turns the real query
+// on.
+uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
+bool ac0451_covered(float d) {  // AC-0451 P1 STUB: never covered (P2 turns the query on)
+	return u_coverage > 0.5 && false;
+}
+
 void vertex() {
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -48,7 +58,8 @@ void fragment() {
 	// AC-0401: the fog-wall partition (chunk_lit_opaque.gdshader owns the
 	// contract) - the animated water/lava surface stays inside the
 	// world's fog window; the satellite body owns the view beyond it.
-	if (distance(v_world_pos, u_cam_pos) >= u_fog_far) {
+	float d = distance(v_world_pos, u_cam_pos);
+	if (d >= u_fog_far && !ac0451_covered(d)) {  // AC-0451 P1: the coverage rule (the stub is inert)
 		discard;
 	}
 	// AC-0036 (+AC-0245): same underwater near-cull as chunk_lit_fluid

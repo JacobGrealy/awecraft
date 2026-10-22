@@ -19,10 +19,28 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 
 namespace awesm {
 
 constexpr double SM_PI = 3.141592653589793238462643383279502884;
+
+// AC-0469 stage A: the planet grid's CELLS PER FACE EDGE. One named
+// constant per language — the GD twin is SphereMath.CELLS_PER_FACE
+// (godot/core/sphere_math.gd, keep the two in lockstep). Derivation: a
+// face is W = pi*R/2 wide (the grid lock, 4 face-widths = 2*pi*R); at the
+// shipped R = 4000, W = 6283.19 m, so 6283 cells span the face and one
+// cell is W/6283 = 1.000 m — the user-fixed ~1 m x 1 m x 1 m block.
+// (The pre-AC-0469 value was 1024 cells = 6.136 m cells.)
+// SM_CHUNKS_PER_FACE: face chunks per axis (ceil — the last row/column of
+// chunks is partial: 392*16 = 6272 full cells + 11 more = 393 chunks).
+// The chunk-SPACE linearization (face*SM_CHUNKS_PER_FACE + ccx, gen.cpp's
+// sp_col_index / generator.gd's generate_face) therefore spans
+// SM_CHUNKS_PER_FACE*16 = 6288 cells per face — 5 padding cells past the
+// 6283 chart cells; sm_chart_dir strips THAT span and divides by
+// SM_CELLS_PER_FACE (cell i <-> uv i/6283, the grid definition).
+constexpr int64_t SM_CELLS_PER_FACE = 6283;
+constexpr int64_t SM_CHUNKS_PER_FACE = (SM_CELLS_PER_FACE + 15) / 16; // 393
 
 struct SmV3 {
 	double x, y, z;
@@ -184,8 +202,8 @@ static inline bool sm_face_mirror_x(int face) {
 // components (the home-lane K formulas are the degenerate x̂=(1,0,0) case).
 static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) {
 	bool mirrored = sm_face_mirror_x(face);
-	double u0 = ((double)ccx * 16.0 + 8.0) / 1024.0;
-	double v0 = ((double)ccz * 16.0 + 8.0) / 1024.0;
+	double u0 = ((double)ccx * 16.0 + 8.0) / (double)SM_CELLS_PER_FACE;
+	double v0 = ((double)ccz * 16.0 + 8.0) / (double)SM_CELLS_PER_FACE;
 	SmV3 Pc = sm_uv_to_world(face, u0, v0, R);
 	SmV3 n = {Pc.x / R, Pc.y / R, Pc.z / R};
 	double s[3][3];
@@ -198,8 +216,8 @@ static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) 
 		for (int lz = 0; lz < 16; lz++) {
 			int iv = ccz * 16 + lz;
 			SmV3 w = sm_uv_to_world(face,
-					((double)iu + 0.5) / 1024.0,
-					((double)iv + 0.5) / 1024.0, R);
+					((double)iu + 0.5) / (double)SM_CELLS_PER_FACE,
+					((double)iv + 0.5) / (double)SM_CELLS_PER_FACE, R);
 			w.y -= R;
 			double y = (double)lz + 0.5;
 			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x;

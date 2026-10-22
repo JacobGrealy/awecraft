@@ -1774,7 +1774,8 @@ static var warp_verts: int = 0
 static var warp_surfaces: int = 0
 
 # AC-0458 (plan.html §3.2): rewrite each vertex of a face-lane build from
-# chunk-local metres to world metres, pointwise on the legacy 1024 chart —
+# chunk-local metres to world metres, pointwise on the face chart (the
+# cell count is SphereMath.CELLS_PER_FACE — 6283 at AC-0469) —
 # the same construction as PlanetGrid.cell_to_world on that chart:
 # (R + ly) * normalize(SM.uv_to_world(face, u, v, R)) - (0, R, 0), where the
 # local height ly is the radial offset (as cell_to_world's h). The chart
@@ -1835,7 +1836,9 @@ func _warp_face_slabs(res: Dictionary) -> void:
 func _warp_cell_point(face_i: int, R: float, mirrored: bool, ccx: float, ccz: float, lx: float, lz: float, ly: float) -> Vector3:
 	var u1024: float = ccx + (16.0 - lx if mirrored else lx)
 	var v1024: float = ccz + lz
-	var dir: Vector3 = SphereMath.uv_to_world(face_i, u1024 / 1024.0, v1024 / 1024.0, R)
+	# AC-0469: u1024/v1024 are per-face CELL indices (the names are the
+	# pre-AC-0469 1024-chart heritage); the chart divide is CELLS_PER_FACE.
+	var dir: Vector3 = SphereMath.uv_to_world(face_i, u1024 / float(SphereMath.CELLS_PER_FACE), v1024 / float(SphereMath.CELLS_PER_FACE), R)
 	return (R + ly) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
 
 

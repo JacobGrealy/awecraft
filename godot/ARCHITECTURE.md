@@ -1662,6 +1662,30 @@ p2b3_probe.gd, p2c1_probe.gd.
   render-path only: generation untouched (genhash 25/25), the cloud shells
   keep their exact radii/centres, and the AC-0398/AC-0399/AC-0400 behaviours
   (interpolated lighting, view-weighted fill, single-source seam) stand.
+- **AC-0451 P1 — the near-field discard becomes a RULE, landed inert
+  (stubbed)**: the handover between the near tiers and the satellite body
+  is a distance gap by construction (near dies at d >= u_fog_far, the
+  body's op ramp only becomes solid at u_render_edge = (render_radius+1)*16
+  — the ring in between belongs to neither; from the air it is the wide
+  disc under the player). The fix makes it a RULE — "stop drawing only
+  where something else is already drawing" — asked of the layer that
+  would take over. Every near-field `u_fog_far` discard (the eight
+  chunk_lit_*.gdshader, lod_avg.gdshader + its AC-0446 seam twin,
+  fluid_anim{,_bf}.gdshader) now routes through `ac0451_covered(d)`
+  (contract comment in chunk_lit_opaque.gdshader): P1 lands it as a
+  MARKED STUB answering false for every d, so the discard fires exactly
+  where it fired pre-ticket — P1 changes nothing the player can see, and
+  byte-identical A/B renders (aerial h≈300 nadir / ground / render-edge
+  + the switch ON) are the acceptance proof (`tasks/AC-0451/`). The
+  switch `AWECRAFT_COVERAGE=0|1` is env-only (NO Options row — the
+  AC-0445 precedent: a correctness rule, not a toggleable look), pushed
+  change-gated as `u_coverage` by `world._ac0401_push()` to the same
+  material set as `u_fog_far` (+ `_lod_avg_material`, the AC-0443
+  latch-only-when-landed pattern; both lod variants declare it so the
+  AC-0446 material-shader swap keeps the stored parameter valid). P2
+  turns the real coverage query on (the switch then governs it); the
+  body's own discard (satellite_body.gdshader) is the handover's other
+  half and is untouched in P1.
 - **AC-0402 — the sky's altitude-aware space blend (the "leaving a planet"
   half)**: the user's report — the sky-to-space transition completes by ~1600
   m (space term 0.13→0.92 over 700–1600 m, fully black by 1600 m, the same
