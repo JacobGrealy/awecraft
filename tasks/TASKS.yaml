@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-22T09:26
+  updated_at: 2026-10-22T15:24
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29875,7 +29875,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-22T09:26
+  updated_at: 2026-10-22T15:24
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29987,7 +29987,55 @@ intake:
     \ sees first, not a side effect of a refactor.\nORDER: (2b) one residency rule, travel-gated, no cap,\
     \ planet-wide; (3) faces 0/1 through the one node/lane path with the home branch deleted; (4) the\
     \ spawn cell-size measurement + renders; (5) light ownership; (6) deletion; with the twelve-chart\
-    \ lap mandatory evidence rather than a waived subset."
+    \ lap mandatory evidence rather than a waived subset.\n\nTHE GRID NUMBERS, measured round 37 — this\
+    \ is what \"no home\" costs or saves, on the ground.\nThe home patch spans 6,283.2 m across, which\
+    \ is EXACTLY one cube-face width (face_width = pi*R/2 at R=4000). So home is not a different shape\
+    \ from a face: it is the SAME face built at a finer resolution.\n- face grid: 1,024 cells across a\
+    \ 6,283 m face -> 6.136 m cells -> 1,048,576 columns per face.\n- home grid: 6,283 cells across the\
+    \ same 6,283 m -> 1.0 m cells -> 39,476,089 columns.\n- ratio: 37.6x more columns on the home patch\
+    \ than on any other face, for identical ground area.\nCONSEQUENCE OF EACH DIRECTION, stated plainly:\n\
+    (a) Unify at FACE resolution (6.136 m cells): the spawn area's ground becomes 6.1x coarser and it\
+    \ loses 37.6x of its columns. Everything becomes consistent and much cheaper, but the starting area\
+    \ — the place the player stands at the beginning of the game — visibly loses detail. This is the direction\
+    \ the \"one planet\" thesis points at, and also the one with a visible cost at the exact spot the\
+    \ player looks first.\n(b) Unify at HOME resolution (1 m cells) planet-wide: 473.7 MILLION columns\
+    \ across the 12 faces, 37.6x the current planet. Not shippable as a streaming world at this scale;\
+    \ it would need a different LOD strategy, not a merge.\n(c) ONE LANE, cell size as a per-face DATA\
+    \ property: same code path for all 12 faces, no branch on face number, no special-cased home in streaming,\
+    \ residency, keys, light or placement — but faces 0/1 carry a finer cell size in data. The separation\
+    \ the user is asking to delete (two lanes, two policies, \"is this home?\" checks) goes; the terrain\
+    \ the player starts on does not change. This is the only option that removes the SEPARATION without\
+    \ either degrading the spawn area or multiplying the planet.\nRECOMMENDATION: (c) now, with (a) available\
+    \ as a later, user-visible decision with renders. Choosing (a) inside this refactor would silently\
+    \ change the look of the starting area, which is precisely the kind of side effect that should be\
+    \ shown, not discovered.\n\nTHE DESIGN STATEMENT THAT SETTLES IT (user, round 37, verbatim): \"there\
+    \ are going to be multiple planets, there is no home. You fly in at whatever part of the planet you\
+    \ want. The experience has to be the same around the entire planet.\"\nWHAT THAT DECIDES, and it is\
+    \ not the option I offered. I asked which RESOLUTION faces 0/1 should keep; that was the wrong question,\
+    \ because it presupposed a privileged starting region. Under this design there is no arrival point,\
+    \ so there is no region that deserves different treatment — not finer terrain, not a different lane,\
+    \ not a different anything. The home patch's 1 m grid is exactly the artefact of a design the project\
+    \ has moved past.\nSO THE ANSWER IS: faces 0/1 use the FACE grid like every other face. The 1 m home\
+    \ patch dies with the home branch. The ground near the current spawn becomes 6.136 m cells — identical\
+    \ to everywhere else — which is the point: the player who flies in at some arbitrary spot gets exactly\
+    \ the experience a player would get anywhere.\nTHE COST, stated once and not relitigated: today's\
+    \ spawn area is 37.6x denser in columns than any other face (39.5M vs 1.05M for the same 6,283 m square).\
+    \ Removing it makes the starting area 6.1x coarser than it looks today. That is a real, visible change\
+    \ and it is the intended one — uniformity, not the old privilege preserved under a new name.\nWHAT\
+    \ THIS IS NOT: it is not a decision to re-tune the planet's absolute voxel scale. 6.136 m cells are\
+    \ what every non-home face already uses; whether that is the right voxel size for the game is a separate,\
+    \ planet-scale design question that belongs with the multiple-planets work, not inside this merge.\
+    \ Doing both at once would change every standing gate value on the planet and make neither measurable.\n\
+    WORK ORDER THIS IMPLIES (multi-slice, and it is the largest remaining piece): (1) faces 0/1 generated\
+    \ and streamed through the face path with the home grid deleted; (2) the 1 m-grid consumers traced\
+    \ and moved to cell units (player movement/physics, ray/aim, edits, drops, mobs) — the AC-0462 machinery\
+    \ already established that cell-space conversion must use the exact inverse, not per-axis dots; (3)\
+    \ the spawn/arrival logic updated to pick a surface point on the face grid rather than a home flat\
+    \ coordinate; (4) re-baseline every standing value that moves, declared as a deliberate rebase with\
+    \ the reason; (5) the twelve-chart lap as mandatory evidence, since \"the same experience everywhere\"\
+    \ cannot be proven on two seams.\nHONEST SIZE: this is not a slice, it is the rest of the migration.\
+    \ It should be tracked as its own ticket rather than smuggled into AC-0463's remaining stages, because\
+    \ it changes the world rather than the code that streams it."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
