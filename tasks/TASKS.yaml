@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-22T16:59
+  updated_at: 2026-10-22T17:00
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -30309,7 +30309,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-22T15:24
-  updated_at: 2026-10-22T16:59
+  updated_at: 2026-10-22T17:00
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30434,5 +30434,45 @@ intake:
     HONEST SIZE, stated plainly: this regenerates the planet at 37.6x the addressing resolution and moves
     every gate value on it. It is the largest single change in the project''s history, it is not a slice,
     and it will take multiple rounds with measurement at each step. Stage 0 priced it; the user has ruled
-    on the constraint; the remaining work is engineering, in the order above.'
+    on the constraint; the remaining work is engineering, in the order above.
+
+
+    CELLS_PER_FACE BLAST-RADIUS CENSUS (round 39) — measured before touching anything, because my radius
+    estimates have been wrong twice in this session (AC-0459''s parser list, AC-0465''s producer count)
+    and each wrong guess cost a builder run.
+
+    COUNTS: CELLS_PER_FACE named in 29 GDScript sites; the literal 1024 appears in 120 GDScript sites
+    and 33 C++ sites; FACE_CELLS in 3.
+
+    THE IMPORTANT FINDING: those counts OVERSTATE the work, because 1024 is used for at least three unrelated
+    things and only one of them is the grid:
+
+    1. THE GRID (must change): the chart divide and the cube-map indexing — gen.cpp:710-733 is the clearest
+    case, where the comment spells out "index is face*1024 + the face''s OWN cell index" and then divides
+    by 1024 to recover u,v. Also the clamp ranges (0..1023) and the per-face cell loops.
+
+    2. THE SLAB PAYLOAD (must NOT change): gen.cpp:2880 (std::vector<uint8_t> out(1024)), gen.cpp:3935
+    (p_far->resize(1024)), and the "size is exactly 1024" contract at 4443. That 1,024 is BYTES of block
+    data per 16-high slab section (16x16x4? — whatever the palette layout is), entirely independent of
+    how many cells span a face. Changing it by mistake would corrupt the save and far-payload formats.
+
+    3. ASSORTED (inspect individually): texture sizes, buffer capacities, hashes and other round numbers
+    that merely happen to be 1024.
+
+    CONSEQUENCE FOR THE PLAN: a blind "replace 1024 with 6283" sweep would be catastrophic — it would
+    rewrite the payload format and the save format in the same stroke as the grid. The work must proceed
+    by CLASS, and the first deliverable of any implementation stage is the classified list (grid / payload
+    / other) with file:line, exactly as AC-0459''s audit was.
+
+    ALSO NOTE, and it is the encouraging part: the grid change is mostly a CONSTANT change plus the places
+    that assume it. Residency, chunk size (16 cells) and the streaming window are all expressed in CHUNKS
+    or in metres and need no change at all — which is why the earlier projection could say the memory
+    cost is a view-distance question rather than a rewrite.
+
+    ORDER OF WORK THIS IMPLIES: (1) classify every 1024/CELLS_PER_FACE site into grid / payload / other,
+    with file:line; (2) change the GRID class only, parameterising anything that genuinely needs the count;
+    (3) let the world regenerate and expect every standing value to move (declared rebase, waived); (4)
+    measure fill time and per-chunk cost at the new resolution and attack the two bottlenecks the stage-0
+    table identified; (5) delete the home grid, since at 1 m everywhere there is nothing for it to be
+    special about; (6) the twelve-chart lap as mandatory evidence.'
   comments: []
