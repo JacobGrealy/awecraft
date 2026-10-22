@@ -292,3 +292,59 @@ D4. Tooling: `python3 -m SCons` is NOT installed on this box and
     platforms). The .so lands in gdext/bin/ — COPY it to godot/bin/
     (SConstruct has no copy step; a stale godot/bin silently gates old
     code — gdext/AGENTS.md's trap, made concrete).
+
+AC-0469 stage B — deviations (face-lane window unit fix)
+=======================================================
+D5. THE FIX, single-sourced. New helper world.gd `_chunks_across(win_m,
+    stride_m) = int(ceili(win_m / (16.0 * stride_m))) + 1` (the ONE
+    metres->chunk conversion of the face lane; placed after
+    _face_in_mesh_window, before _face_stream). The `rows` site in
+    _face_stream (old ~15126) converted from
+    `mini(CHUNKS_PER_FACE, int(ceili(win / S)) + 1) if is_x_face else
+    int(ceili(win / (S * 0.5))) + 1)` to
+    `mini(CHUNKS_PER_FACE, _chunks_across(win, S)) if is_x_face else
+    mini(CHUNKS_PER_FACE, _chunks_across(win, S * 0.5))` — the z-face
+    half-width stride (S*0.5) kept verbatim, only the missing factor 16
+    added once. At sim_dist 4 (win 64 m, 1 m cells): x-face rows
+    65 -> 5, z-face rows 129 -> 9; at the old 6.136 m cells the helper
+    would give 2/1 rows where the old code gave 12 (the old value was
+    coincidence, the helper is the unit-correct one). The plan's
+    "along-edge lo/hi extent" check: lo/hi do NOT have the defect —
+    they stay flat METRES until mapped to cell indices (idx_lo/idx_hi =
+    lo/hi divided by the S*0.5 m/cell stride = cells, correct units),
+    so no change there.
+D6. Sibling audit — sites checked inside _face_stream and deliberately
+    left (genuinely in cells/metres, NOT the metres/cells-as-chunks
+    error):
+    - lo/hi (p ± win, clamped ±hw): flat-metre POSITIONS, never indices.
+    - edge_dist > win: metres vs metres (the AC-0309 edge-normal gate).
+    - idx_lo/idx_hi: metres / (S*0.5 m per cell) = CELLS — correct; the
+      along-edge axis charts at half cell width (stride line).
+    - cc0/cc1: (cell index ± 16-cell = 1-chunk pad) clamped to the cell
+      range 0..CELLS_PER_FACE-1 then >> 4 = cells to chunks — correct
+      two-step; the 16 is CELLS of padding by the pre-warp-curvature
+      comment, not a mis-read of the window.
+    - edge_cc * 16 + 8 / cc * 16 + 8: chunk-LOCAL centre cell slot.
+    - _face_chunk_min_dist (15055): ccx*16+1 / +14 cell corners —
+      cell indices, CORRECT, left per plan.
+    - _face_in_mesh_window: sim_dist*16 m + 8.0*S (cells->metres
+      margin) vs _face_chunk_min_dist (metres) — units consistent,
+      left (outside _face_stream; not in the plan's edit set).
+    Grep `win / S|/ S` in world.gd returns exactly the one converted
+    site — no other window-in-cells arithmetic exists in the file.
+D7. WHAT DID NOT MOVE: eviction sweep (win_ev.y = _stream_window's
+    128 m, travel-gated >16 m), travel gate, residency policy, the
+    window VALUE (win = sim_dist*16 flat m from the ONE
+    _stream_window), chunk size 16, generation, mesher, warp. No
+    measured radius change — the window is still 64 m; only the unit
+    bug in the row count is gone.
+D8. RESIDENCY RESULT (the gate of the fix): leak false, stable true,
+    converged true, verdict STABLE, keys_same true. Face residency
+    plateaus at 130 (home 127) with a stationary player — pre-fix it
+    grew 79 -> 499 unboundedly over the same arm (round 41, log
+    residency-r1/r2 series). Convergence series 78->95->109->126->130
+    ->130 then 6 flat samples (130,127). Plateau 130 vs pre-fix 499 =
+    3.8x fewer resident face chunks, bounded by win (64 m) vs evict
+    radius (128 m): the furthest streamed row (x-face row 4 = 64-80 m
+    in-band) is inside the evict radius, so creation now stays within
+    what the sweep can clear.

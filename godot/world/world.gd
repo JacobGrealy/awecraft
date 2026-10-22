@@ -15087,6 +15087,18 @@ func _face_in_mesh_window(face: int, ccx: int, ccz: int) -> bool:
 	var p: Vector2 = _face_player_flat()
 	return _face_chunk_min_dist(face, ccx, ccz, p.x, p.y) <= float(int(Settings.values.get("sim_dist", 4)) * 16) + 8.0 * S
 
+# AC-0469 stage B: the ONE metres->chunk conversion of the face lane.
+# A chunk is 16 cells, so the distance across in chunks is
+# ceili(win_m / (16 * stride)) + 1 — the old rows site divided by the
+# cell size and counted CELLS where the row loop indexes CHUNKS: at
+# 6.136 m cells the two agreed by coincidence (64 m -> 12 rows), at
+# 1 m cells it created 65 rows for a 64 m window (~6x the chunk count)
+# and face residency climbed 79 -> 499 under a stationary player.
+# stride_m is the per-cell stride of the axis (S on the x faces'
+# in-band axis, S*0.5 on the half-width z-face chart).
+func _chunks_across(win_m: float, stride_m: float) -> int:
+	return int(ceili(win_m / (16.0 * stride_m))) + 1
+
 # D5: the boundary-band face-chunk streaming (the recenter hook). Window
 # = the face cells within the home sim band of the player's (patch-
 # clamped) flat position, on the 8 non-home faces that border the patch.
@@ -15123,7 +15135,10 @@ func _face_stream() -> void:
 		# half-width (S/2) on the z faces (face_cell_scale)
 		# AC-0469: the row cap is the per-face chunk count (393 at 6283
 		# cells), not the old 64 = 1024/16.
-		var rows: int = mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / S)) + 1) if is_x_face else mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / (S * 0.5))) + 1)
+		# AC-0469 stage B: the window is flat metres and rows indexes
+		# CHUNKS — the ONE conversion is _chunks_across (the z faces'
+		# in-band axis keeps its half-width stride S*0.5).
+		var rows: int = mini(SphereMath.CHUNKS_PER_FACE, _chunks_across(win, S)) if is_x_face else mini(SphereMath.CHUNKS_PER_FACE, _chunks_across(win, S * 0.5))
 		# the along-edge extent of this face's half of the edge
 		# the along-edge clamp must match the face's HALF of the edge:
 		# the first face of each pair (4/6, 8/10) covers the + half
