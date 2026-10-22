@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 stage 0 feasibility</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage 0 — what does 1 m everywhere actually cost?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measurement ticket: add one arm, change no world behaviour.</b> The user has set the goal — blocks stay ~1 m × 1 m × 1 m, multiple planets, fly in anywhere, the same experience across the whole planet — so the FACE grid at 6.136 m cells is the anomaly to be replaced, not the standard to copy. Before anyone regenerates the planet, this stage produces the cost table that decides the view-distance trade.</p>
+<h2>1. Goal</h2><p>A measured cost table for candidate (cell size × view distance) combinations: resident chunks, resident bytes, per-chunk build time, and whether each fits a frame budget — so the 1 m decision is made on numbers.</p>
+<h2>2. The arithmetic that is already known (do not re-derive; extend it)</h2>
+<ul>
+<li><code>face_width(R) = πR/2 = 6,283.2 m</code> at R = 4000. <code>face_cell_size = face_width / CELLS_PER_FACE</code>.</li>
+<li>1,024 cells → 6.136 m blocks → 1,048,576 columns/face. 3,000 → 2.094 m. 6,283 → 1.000 m blocks → 39,476,089 columns/face.</li>
+<li><b>Residency is radius-based, so it does NOT scale with the total</b>: a 4-chunk radius is 81 chunks of 16×16 = 20,736 columns whatever the grid. What scales is CHUNKS PER METRE: a 16 m cell chunk covers 16 m at 1 m cells and 98 m at 6.136 m cells, so covering the same physical distance needs <b>37.6×</b> more chunks at 1 m.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>residency</code> arm (AC-0463 s2a) and the <code>warpcensus</code> arm (per-chunk cost, <code>warp_ms_per_chunk</code>, <code>warp_verts</code>)</td><td>Add ONE arm <code>voxelcost</code>.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the resident-chunk accounting that <code>residency</code> already reads; the per-chunk data size (the slab payload: find the real figure — do not guess it)</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>as template</td><td>Add the row; <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>tasks/AC-0469/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> <code>CELLS_PER_FACE</code>, generation, streaming, the mesher, keys, saves, light. <b>Nothing about the world changes in this stage.</b></p>
+<h2>4. What to measure and report</h2>
+<ul>
+<li><b>4.1 Bytes per resident chunk, measured</b> — from the actual slab payload plus the node/mesh overhead the tree really holds, not from a datasheet. State where the figure came from.</li>
+<li><b>4.2 Milliseconds per chunk build, measured</b> — the face lane's own figure already exists (<code>warpcensus</code>: ~0.42 ms warp + the mesher; report the full build, and say which part is measured vs derived).</li>
+<li><b>4.3 The projection table.</b> For each candidate cell size (1.000, 2.094, 6.136 m) × each candidate view distance (say 0.5, 1, 2, 4 km): the number of 16-cell chunks needed to cover that disc, the resident bytes, and the per-pass streaming time at the measured per-chunk cost. Give the formula in the deviations so anyone can re-derive a cell.</li>
+<li><b>4.4 The verdict.</b> Which combinations fit a 60 fps frame budget (16.7 ms) with the existing 12 ms face-stream budget, and which do not. <b>State the trade explicitly</b>: 1 m blocks at a given view distance costs N× the chunks of 6.136 m blocks at the same distance.</li>
+</ul>
+<p>RESULT keys: ok, bytes_per_chunk {measure, source}, ms_per_chunk {build, parts}, table [{cell_m, view_km, chunks, bytes, stream_ms}], fits_60fps [ … ], verdict, fails.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>No world change</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,voxelcost --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; voxelcost produces the table with a stated verdict.</td></tr>
+<tr><td>Docs</td><td><code>harness_doc.py --check</code></td><td>exit 0.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>A defensible cost table for 1 m / 2 m / 6 m blocks at several view distances, with measured inputs and stated formulas, so the user can choose the trade.</p>
+<h2>7. Risks</h2><p>The derived parts must be LABELLED as derived. A fabricated bytes-per-chunk figure would poison the whole decision — if the real payload size cannot be established from the code, say so and give a range with its basis rather than a confident wrong number.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. <b>Do not change CELLS_PER_FACE or anything that alters the world.</b></li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>The migration's code unification is well advanced (one key shape, one placement, one node path, one travel gate, instruments repaired). The user's design statement — multiple planets, no home, same experience everywhere, ~1 m blocks — makes the FACE grid the remaining anomaly. This stage prices that change.</p>
+</body></html>

@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-22T15:25
+  updated_at: 2026-10-22T16:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -30306,10 +30306,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: in-progress
   labels: []
   created_at: 2026-10-22T15:24
-  updated_at: 2026-10-22T15:25
+  updated_at: 2026-10-22T16:59
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30391,5 +30391,48 @@ intake:
     NOT TO BE DONE BLIND: this moves every standing gate value on the planet and regenerates terrain everywhere,
     so it is a declared rebase, and the user has already waived genhash stability for this migration.
     The first step is a MEASUREMENT, not a commit: cost per chunk and resident counts at 1 m cells, taken
-    on a prototype flag rather than by changing the default.'
+    on a prototype flag rather than by changing the default.
+
+
+    1 m BLOCKS ARE A FIXED GAMEPLAY CONSTRAINT, NOT A COST TRADE (user, round 38, verbatim): "It does
+    not matter what it costs 1m is an unchangeable gameplay element."
+
+    WHAT THIS CHANGES: every earlier "should we?" question about resolution is dead. The cost table from
+    stage 0 stops being a decision input and becomes the SPECIFICATION OF WHAT MUST BE ENGINEERED. The
+    plan is no longer "choose a cell size"; it is "make 1 m work", and the numbers say exactly which parts
+    must get cheaper.
+
+    THE CRUCIAL REFRAME THE MEASUREMENT ITSELF SUGGESTS, and it is encouraging rather than scary: the
+    game ALREADY runs 1 m cells wherever it streams the home patch, and does so stably — the residency
+    baseline measured home at ~125 resident chunks, ~200 KB each, STABLE and leak-free. So 1 m voxels
+    are not an untried regime: they are the regime the spawn area has run in for the whole project. What
+    is missing is not feasibility, it is UNIFORMITY — everywhere should behave the way the home patch
+    already behaves.
+
+    WHAT THE COSTS ACTUALLY SAY, re-read under the fixed constraint (do not misread them as "impossible"):
+
+    - The 47 GB / 11 min figure is for 1 m blocks at a FOUR KILOMETRE view distance. Nothing in the game
+    does that today: the home patch at 1 m covers roughly a couple of hundred metres of near field with
+    ~125 chunks, and the horizon beyond it comes from the FAR TIER and the low-LOD aggregate path that
+    already exist. So the shipped answer is 1 m detail in the near field everywhere, with the existing
+    far tier owning distance — the same arrangement the spawn already uses.
+
+    - The per-pass budget is NOT the problem: stage 0 measured per-frame movement demand at under 2.3
+    ms against the 12 ms face budget, at 33.6 m/s.
+
+    - The ACTUAL bottlenecks are per-chunk cost (gen 13.4 ms + mesh 19.2 ms measured) and initial fill
+    time, because chunk COUNT at 1 m rises 37.6x for the same metres. Those two are exactly what the far
+    tier, LOD and native lanes exist to attack, and they are the engineering agenda — not reasons to move
+    the constraint.
+
+    SO THE WORK IS: CELLS_PER_FACE to 6283 (1.000 m blocks) planet-wide, chunk size unchanged at 16 cells
+    = 16 m, faces 0-11 through the one lane, the far tier and low LOD extended to cover the near field''s
+    shortfall, generation and meshing throughput attacked until the fill is acceptable, and every standing
+    value re-baselined as a declared rebase (already waived by the user for this migration). The home
+    grid is deleted in the same stroke — it stops being special because everything becomes what it was.
+
+    HONEST SIZE, stated plainly: this regenerates the planet at 37.6x the addressing resolution and moves
+    every gate value on it. It is the largest single change in the project''s history, it is not a slice,
+    and it will take multiple rounds with measurement at each step. Stage 0 priced it; the user has ruled
+    on the constraint; the remaining work is engineering, in the order above.'
   comments: []
