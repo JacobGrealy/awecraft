@@ -6918,6 +6918,32 @@ func band_of(dx: int, dz: int) -> int:
 	return -1
 
 
+# AC-0469 stage G1: the ONE residency predicate — "should this chunk be
+# resident right now?" Both lanes ask it, and each gets its OWN lane's
+# current rule, unchanged. It dispatches on which space the chunk is in
+# (stage F §2.1: the lanes do not share a coordinate space):
+#  - face <= 1 (the home space): the taxicab band predicate — the chunk
+#    delta from the recenter center (last_pcx/last_pcz — the same
+#    reference the drain fills use) through in_stream_set, exactly the
+#    recenter sweep's membership test.
+#  - face >= 2 (the extended-flat chart space): the face distance rule —
+#    _face_chunk_min_dist to the patch-clamped player flat position,
+#    within the shared window's evict radius (the sim band in metres +
+#    FACE_STREAM_EVICT_MARGIN, through _stream_window), exactly the
+#    _face_stream window test. The is_inf sentinel (the far hemisphere)
+#    reads 0.0 there, i.e. resident — the same answer the eviction test
+#    always got.
+# Membership only: no radius, margin or cadence moves; band_of (the band
+# 0/1/3 classification) and the sweep's old-center hysteresis queries
+# (the PREVIOUS recenter center — a different question) stay on
+# in_stream_set directly.
+func resident_of(face: int, cx: int, cz: int) -> bool:
+	if face <= 1:
+		return in_stream_set(cx - last_pcx, cz - last_pcz)
+	var p: Vector2 = _face_player_flat()
+	return _face_chunk_min_dist(face, cx, cz, p.x, p.y) <= _stream_window(int(Settings.values.get("sim_dist", 4)), FACE_STREAM_EVICT_MARGIN).y
+
+
 func _bucket_count() -> int:
 	return maxi(2 * render_radius + 3, 2 * (b1_eff() + 1) + 2)
 
@@ -12109,7 +12135,10 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		_stream_outside.clear()
 		for _kso in chunks:
 			var _cso: Node3D = chunks[_kso]
-			if int(_cso.face) <= 1 and not in_stream_set(int(_cso.cx) - pcx, int(_cso.cz) - pcz):
+			# AC-0469 stage G1: through the ONE predicate (face <= 1 —
+			# the home branch: in_stream_set from the recenter center,
+			# pcx/pcz here ARE last_pcx/last_pcz).
+			if int(_cso.face) <= 1 and not resident_of(int(_cso.face), int(_cso.cx), int(_cso.cz)):
 				_stream_outside[_kso] = true
 		_stream_outside_sig = [rr, b1_eff()]
 	var crx_entries: Array = []
@@ -12181,7 +12210,11 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		if int(c.face) > 1:
 			continue
 		cx_scanned += 1  # AC-0348 census: home-face columns visited by the sweep
-		if in_stream_set(dx, dz):
+		# AC-0469 stage G1: the membership question through the ONE
+		# predicate (face <= 1 above — the home branch, the delta from
+		# the current recenter center; the old-center hysteresis tests
+		# below stay on in_stream_set directly — a different question).
+		if resident_of(int(c.face), int(c.cx), int(c.cz)):
 			# AC-0278: re-entry is a distance fact (out of set w.r.t. the
 			# previous center, in now) - no flag to clear.
 			if not in_stream_set(odx, odz):
@@ -15368,14 +15401,17 @@ func _face_stream() -> void:
 			# R = 4000) went with the band — it existed to keep the
 			# blended strip resident; nothing reads face chunks past
 			# the mesh window, so the plain win + margin stands.
-			# AC-0463 slice 2b: the evict radius from the ONE window helper.
-			var evict_r: float = win_ev.y
+			# AC-0469 stage G1: the per-chunk residency question through
+			# the ONE predicate (its face branch IS this test:
+			# _face_chunk_min_dist to the patch-clamped flat position
+			# within the shared window's evict radius — win_ev.y, the
+			# sim band + FACE_STREAM_EVICT_MARGIN; AC-0463 slice 2b).
 			for k in _face_order.duplicate():
 				var c = chunks.get(k)
 				if c == null:
 					_face_order.erase(k)
 					continue
-				if _face_chunk_min_dist(int(c.face), int(c.cx), int(c.cz), p.x, p.y) > evict_r:
+				if not resident_of(int(c.face), int(c.cx), int(c.cz)):
 					_face_free_chunk(k)
 
 func _face_free_chunk(key: String) -> void:

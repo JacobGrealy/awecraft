@@ -186,3 +186,42 @@ Far-tier rebase: FACE_GRID 64 -> SphereMath.CHUNKS_PER_FACE (393), threaded thro
 - THE STAGED ORDER IS FOUR STEPS, each playable: (1) one `resident_of(key)` predicate with ZERO behaviour change; (2) one resident list and one sweep; (3) creation through the unified per-frame pass with the three (b) rules as sub-rules, gated on boundary p95 <= 38 plus planetwalk and negctrl; (4) delete `_face_stream` and its constants under the full stage-E gate set.
 - TREE PROVABLY UNTOUCHED, as this stage required: genhash 25/25 byte-identical to the stage-E reference, and residency leak false / STABLE at face 74 with home 127 in this run (the round-50 hand run read 74/138 — same plateau band, face count exact).
 - WHERE THE MIGRATION ACTUALLY STANDS: one grid, one placement, one key shape, one node path, one landing, one queue, one drain, one travel gate, one window, cubic 1 m blocks, complete far tier, correct prestream, green twelve-chart lap, bounded residency — and now a designed, staged, failure-aware plan for the final merge, which remains genuinely open and is the largest single piece left.
+
+## RUN — Fri Oct 23 05:38:21 EDT 2026 — AC-0469 stage G1
+- LANDED (G1): world.gd gains ONE predicate `resident_of(face, cx, cz) -> bool` after band_of (~6918): face<=1 -> in_stream_set(cx-last_pcx, cz-last_pcz) (the recenter center; pcx/pcz at the call sites ARE last_pcx/last_pcz after 12030 — pcx is a LOCAL of the recenter fn, last_pcx is the global the drain fills use); face>=2 -> _face_chunk_min_dist <= _stream_window(sim_dist, FACE_STREAM_EVICT_MARGIN).y with p=_face_player_flat(). Both call lanes converted: (1) outside-set rebuild (old 12112), (2) the recenter sweep's current-center membership (old 12184); (3) the face windowed-eviction test (old 15378, now `not resident_of`). OLD-CENTER hysteresis tests (12187/12227/12289, odx/odz) left on in_stream_set directly — a different question (previous center), not "right now". Temporary AWECRAFT_G1_CHECK cross-check (old vs new per site, push_error + G1RCHECK counts) in place for the check run; to be deleted before the final gates. No radius, margin, cadence or metric moved.
+- GATES (G1, all MATCH, named scripts — no inline godot command lines):
+  identity-check run (AWECRAFT_G1_CHECK=1, run_stage_g1_check.sh; g0-r25/
+  residency-r10/planetwalk-r17, all rc=0 SCRIPT/SHADER 0/0): 28,381 old-vs-
+  new comparisons (sweep 3,646+19,988; face-evict 327+4,420), ZERO
+  mismatches; outside-set site never fires in the arms (empty chunks dict
+  at first recenter, no radius change) — its identity is the one-line diff
+  (D22). Temporary check then DELETED; final set on the clean tree
+  (run_stage_g1_gates.sh):
+  - g0-r26: rc=0, SCRIPT/SHADER 0/0.
+  - genhash-r12: rc=0, 25/25 slabs; GENHASH lines diff EMPTY vs the
+    stage-E reference (genhash-r9) and the stage-F reference (genhash-
+    r11) — the world is byte-identical.
+  - residency-r11: rc=0, leak=false, ok=true, steady face 74 / home 138
+    FLAT over 6 samples, converged=true, keys_same=true, verdict STABLE,
+    face evictions 0 — the stage-F plateau (face exact; home in the
+    127-138 run band).
+  - planetwalk-r18: rc=0, 25/26 pairs covered with mesh_built AND
+    body_present at every destination (lap_0-1 = home_pair_midline, the
+    documented uncovered pair, C3).
+  - save-r5 / load-r5: rc=0, ok=true both; load simband_ms 6812 (~6.6 s
+    class).
+  No A/B decision forced: the predicate dispatches on the space (home
+  taxicab vs extended-flat Euclidean) and each branch is the lane's own
+  rule verbatim — no metric had to move. Single predicate = step 1 done;
+  steps 2-4 of the stage-F order follow (step 2+ needs the A/B choice).
+  Results page re-rendered (summary-g1.json = the two gate runs merged;
+  the live summary.json is gate_run's per-invocation output, so the page
+  points at the merge).
+
+## Coordinator triage — stage G1: one residency predicate, and the identity was PROVED not assumed (round 52)
+- VERIFIED BY MY OWN RUN: leak false / stable true at face 74 / home 127, converged in 497 ms, g0 0/0 and genhash 25/25 — the same plateau as stages E and F, so the refactor moved nothing.
+- THE IDENTITY PROOF IS THE PART THAT MAKES THIS TRUSTWORTHY: the builder ran a temporary env-gated runtime cross-check (since deleted) comparing the new predicate against the old inline test on **28,381 comparisons — sweep 3,646 + 19,988, face-evict 327 + 4,420 — with ZERO mismatches**, and noted that the one never-fired site was verified by a one-line expression diff instead. That is a far stronger statement than "the gates are green", because green gates cannot distinguish "the refactor is correct" from "the refactor is never consulted on the interesting path".
+- THE PREDICATE DISPATCHES, AND THAT IS CORRECT RATHER THAN A FAILURE: `resident_of(face, cx, cz)` answers by space — faces 0/1 through the home taxicab `in_stream_set` around the recenter centre, faces 2+ through the extended-flat `_face_chunk_min_dist` against the ONE window helper, with the is_inf sentinel still meaning resident. Stage F established the two lanes have no common metric, so dispatch preserves both answers without inventing one.
+- THE A/B DECISION WAS NOT FORCED, which was the point of choosing this step first: the refactor needed no metric change, so the open question (extended-flat vs angular bands) is still open and still belongs to the user or a later stage rather than having been decided by a builder in passing.
+- ONE DISTINCTION WORTH KEEPING: three "right now" sites were converted (the recenter sweep's membership, the outside-set rebuild, the face windowed-eviction test), but the old-centre HYSTERESIS queries deliberately stayed on `in_stream_set` — that is a different question (r+1 candidate / r+2+ free) and merging it would have silently changed the eviction hysteresis.
+- STATE: step 1 of the four-step residency merge is landed and proved. Steps 2-4 (one resident list and one sweep; creation through the unified per-frame pass with the three geometric rules as sub-rules; deleting `_face_stream` and its constants) remain, and step 3 is where the budget-stall failure stage F named becomes live.

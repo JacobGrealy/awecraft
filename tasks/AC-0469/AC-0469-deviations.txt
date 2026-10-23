@@ -943,3 +943,83 @@ run_stage_f_gates.sh (named script — the pgrep -f "[g]odot" slot-test trap):
   residency-r7/D19 reads 74/127; the coordinator's round-50 hand run read
   74/138 — the home steady count sits in the 127-138 band across runs, the
   face count is exact).
+
+======================================================================
+AC-0469 stage G1 (2026-10-23) — one resident_of predicate (pure refactor)
+======================================================================
+
+D21. THE PREDICATE, and how it dispatches. world.gd gains ONE function,
+    placed after band_of (~6940):
+
+        func resident_of(face: int, cx: int, cz: int) -> bool:
+            if face <= 1:
+                return in_stream_set(cx - last_pcx, cz - last_pcz)
+            var p: Vector2 = _face_player_flat()
+            return _face_chunk_min_dist(face, cx, cz, p.x, p.y) <= \
+                _stream_window(int(Settings.values.get("sim_dist", 4)),
+                               FACE_STREAM_EVICT_MARGIN).y
+
+    It dispatches on WHICH SPACE the chunk is in (stage F §2.1: the two
+    lanes do not share a coordinate space, so one space is impossible):
+    face <= 1 = the home space (taxicab over flat integer chunk deltas
+    from the recenter center); face >= 2 = the extended-flat chart space
+    (Euclidean over the chunk's corner cells' extended-flat positions,
+    with the is_inf far-hemisphere sentinel reading 0.0 = resident,
+    exactly as the old test always read it). Three sites converted —
+    the only sites that ask "resident RIGHT NOW" (the current center /
+    the current flat position):
+      (1) the outside-set rebuild in the recenter (old 12112):
+          `not in_stream_set(cx - pcx, cz - pcz)` -> `not resident_of(face, cx, cz)`
+          (the face <= 1 clause stays — the outside set is home-only);
+      (2) the recenter sweep's per-entry membership (old 12184):
+          `in_stream_set(dx, dz)` (dx/dz = delta from the current center)
+          -> `resident_of(int(c.face), int(c.cx), int(c.cz))`
+          (face <= 1 guaranteed by the 12181 continue above);
+      (3) the face windowed-eviction test (old 15378):
+          `_face_chunk_min_dist(...) > evict_r` -> `not resident_of(face, ccx, ccz)`
+          (the predicate's face branch recomputes the SAME radius:
+          _stream_window(sim_dist, FACE_STREAM_EVICT_MARGIN).y — the
+          local evict_r is gone, win_ev.y still feeds nothing else;
+          win = win_ev.x unchanged).
+    DELIBERATELY NOT converted (a different question, not "right now"):
+    the sweep's OLD-CENTER hysteresis tests (12187/12227/12289, odx/odz
+    = delta from the PREVIOUS recenter center — the predicate answers
+    the current frame, not the previous one), band_of (the band
+    0/1/3 CLASSIFICATION, not membership), _face_in_mesh_window
+    (the mesh window, sim_dist*16 + 8S — a (b) rule per stage F, not a
+    residency test), and the drain/fill sites (7057/7529 etc., outside
+    the plan's sweep anchor; they already read last_pcx/last_pcz
+    directly and are unchanged). NO value, radius, margin, cadence,
+    travel gate, generation, mesher, key, save, light or warp moved.
+D22. HOW THE IDENTICAL ANSWERS WERE PROVEN (plan §4.2): a TEMPORARY
+    runtime cross-check, removed after the check run. Each converted
+    site computed BOTH the old inline expression and resident_of and,
+    under AWECRAFT_G1_CHECK=1, counted mismatches (push_error on any)
+    and printed `G1RCHECK <site> n=.. m=..` per comparison. Check run
+    (named script run_stage_g1_check.sh; logs g0-r25/residency-r10/
+    planetwalk-r17, all rc=0 SCRIPT/SHADER 0/0):
+      - sweep (home lane, site 2):      3,646 comparisons residency,
+                                        19,988 planetwalk — m=0 both.
+      - face-evict (face lane, site 3):   327 comparisons residency,
+                                        4,420 planetwalk — m=0 both.
+      Total 28,381 comparisons, ZERO mismatches; the check could fail
+      (push_error -> a red g0) and did not. The temporary instrument
+      (2 vars + 1 func + 3 site stubs) is DELETED; the final gate set
+      ran on the clean tree.
+    Site 1 (outside-set) never fired in the arms (no "outside-set"
+    line in any log): it runs only on a stream-set signature change,
+    and it iterates the chunks dict — empty at the first recenter
+    (nothing has landed at boot; inference from the empty evidence);
+    no radius change happens in any arm, so no later rebuild. Its
+    identity is the one-line diff: for face <= 1,
+    resident_of expands to in_stream_set(cx - last_pcx, cz - last_pcz),
+    and at that point in the recenter function the local pcx/pcz ARE
+    last_pcx/last_pcz (assigned at 12030, never reassigned before the
+    site) — the two expressions are literally the same.
+D23. REFERENCE NOTE (plan §4.1 said "the player's flat position" for
+    the home lane): the home lane's membership reference is the
+    RECENTER CENTER, not the player position — pcx/pcz inside the
+    recenter fn (local; may carry the ahead offset), last_pcx/last_pcz
+    globally (the drain fills' reference). The predicate uses
+    last_pcx/last_pcz; at all three converted sites that is the SAME
+    value the old inline test used (verified above, D22).
