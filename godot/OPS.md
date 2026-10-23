@@ -232,7 +232,25 @@ The user downloads it at `http://192.168.0.224:8080/AweCraft.exe` (or `127.0.0.1
   returns the identity after `set_instance_transform()` — the write path renders correctly,
   don't trust the read-back for diagnostics.
 
-## 7. Why this file exists (rule harvest)
+## 7. Gates: know an arm's variance before you trust it as an oracle
+
+Two rounds in a row (AC-0469 G4, AC-0463 L2) a gate was specified as "identical" against an arm that
+swings by more than the change it is being asked to detect. Both times the code was correct and the
+threshold was wrong:
+
+- **`boundary` crossing_frame p50** has read 14, 21, 26, 31 and 32 across runs of effectively the same
+  tree; **p95** held at 37-40. Judge a crossing-latency change on p95, never on p50.
+- **`lightstate` RESULT is not JSON-deterministic.** A same-tree A/B (two runs, no code change) drifts
+  in its pacing fields (grid census, hole counts). Compare its light-VALUE fields, not its JSON.
+
+**The rule:** before using any arm as an identity oracle for a refactor, establish its run-to-run
+variance first — either from earlier runs in `.scratch/`, or from a same-tree A/B. If the arm's own
+spread is comparable to the effect being claimed, the arm cannot prove or refute that effect, and the
+proof has to come from a structural argument instead (a diff that reduces the new expression to the
+old one, a cross-check with a counted sample, or an expression audit). A green gate that would also
+have been green with the change reverted proves nothing.
+
+## 8. Why this file exists (rule harvest)
 
 The sandbox/push/git rules above used to be referenced as "CONTINUITY.md §00p INFRA LESSON v3 +
 BUILD RECIPE". Compaction dropped that section, and the rules survived only inside
