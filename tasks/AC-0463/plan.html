@@ -1,39 +1,34 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 slice 2b one travel gate</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 slice 2b — one travel gate and one window, shared by both lanes</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Behaviour-preserving extraction.</b> The user has decided the policy (round 35): eviction is travel-gated, a stationary player sheds nothing, no cap, and there must be no special-cased home. This slice makes the two lanes express that with ONE mechanism instead of two.</p>
-<h2>1. Goal</h2><p>A single travel-gate predicate and a single window computation, used by both lanes, with no face-number special-casing — the mechanism the later "delete the home branch" slice needs to exist.</p>
-<h2>2. What is actually true today (measured by the coordinator, round 36 — do not re-derive)</h2>
+<!DOCTYPE html><html ns2="urn:x" lang="en"><head><meta charset="utf-8"><title>AC-0463 light ownership diagnosis</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 stage L1 — what would one light-ownership model require?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Diagnosis and design only — no behaviour change.</b> Light is the last structural split: <code>_star_faces</code> holds per-face engines while the home path lights differently. AC-0469's stage F ranked this the riskiest slice of the whole migration, gated by AC-0358's feed invariant and the <code>lightstate</code> arm — so it is diagnosed before anything moves.</p>
+<h2>1. Goal</h2><p>A written, evidence-backed answer to: what exactly differs between the two light paths, can one ownership model serve faces 0–11, what would break first, and in what order could it be changed while keeping the world lit.</p>
+<h2>2. What to establish (each with file:line evidence)</h2>
 <ul>
-<li><b>Home eviction is already movement-driven</b>: it happens inside <code>recenter</code> (world.gd:11841), in the <code>to_free</code> loop around 12238, deferring over-cap frees through <code>_deferred_free</code> (AC-0257) and releasing through <code>_free_chunk_key</code> (11612) / <code>_col_checkin</code>.</li>
-<li><b>Face eviction</b> is gated on <code>moved &gt; 16.0</code> against <code>_face_evict_last</code> (14679, used at 15151-15153), with the window <code>win = sim_dist * 16</code> and <code>evict_r = win + FACE_STREAM_EVICT_MARGIN</code>.</li>
-<li>So both lanes ALREADY satisfy the user's chosen behaviour (nothing sheds while stood still). The separation is in the MECHANISM, which is what this slice removes.</li>
+<li><b>2.1 The two paths, precisely.</b> How the home path owns and feeds light (the <code>star</code> engine, its seed/feed/re-bake cycle) versus <code>_star_faces</code> (per-face <code>AweStarlight</code> instances, D4). What is per-face that would have to become per-world, and what is per-world that is currently duplicated per-face?</li>
+<li><b>2.2 The FEED invariant (AC-0358) and what it constrains.</b> Read what AC-0358 established — the measured bakes, the strip window the payload carries, the reference the arm compares against — and state exactly which assumption a unified model would have to preserve. <b>This is the part that will silently break lighting if it is missed.</b></li>
+<li><b>2.3 The per-face machinery that is genuinely per-face.</b> The migration has already established the pattern: some face-lane behaviours are geometric and must survive as rules (the edge-normal gate, the edge bands, the mirror chart). Do the same classification here — which light behaviours are (a) identical across faces and can unify, (b) genuinely per-face (orientation, the mirror class, the chart's own normal) and must survive as rules, or (c) only exist because there are two engines.</li>
+<li><b>2.4 The first failure.</b> Name the single most likely breakage of a naive unification and the arm or invariant that would catch it. Consider: stale light after an edit, a face whose engine is seeded with the wrong orientation, the far/h-only transition, the AC-0358 re-bake.</li>
+<li><b>2.5 A staged order</b> that keeps the world lit after each step, with the gate that proves each step. Step 1 should be the one that changes no behaviour, as in the residency merge.</li>
+<li><b>2.6 The cost of NOT doing it.</b> If the answer is that two engines are cheap and safe to keep, say so with evidence — a split that costs nothing is not debt worth risk.</li>
 </ul>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_face_evict_last</code> (14679) and its gate (15151-15153); <code>recenter</code>'s <code>to_free</code> loop (~12238); the window expressions in both (<code>win</code>, <code>evict_r</code>, and whatever <code>recenter</code> computes)</td><td>Edit: extract ONE predicate and ONE window helper; call them from both sites.</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the <code>residency</code> arm (AC-0463 s2a)</td><td>No edit; it is the acceptance instrument.</td></tr>
-<tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_star_faces</code>, the <code>star</code> engine's ownership and feed path, the light seed on chunk landing (<code>_face_land</code>), the re-bake paths</td><td>READ ONLY. This stage changes nothing.</td></tr>
+<tr><td>gdext/src/starlight.cpp</td><td>the <code>AweStarlight</code> class and its bindings</td><td>READ ONLY.</td></tr>
+<tr><td>godot/HARNESS.md</td><td>the <code>lightstate</code> and <code>light</code> arm rows, and AC-0358's recorded invariant</td><td>READ ONLY — do not regenerate.</td></tr>
+<tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append the design note.</td></tr>
 </table>
-<p><b>Do not touch:</b> the actual thresholds' VALUES, the bands, <code>stream_ho_cap</code>, the deferred-free mechanics, generation, the drain, keys, saves, light, the warp. <b>This slice changes no number and no behaviour.</b></p>
-<h2>4. Edit shape</h2>
-<ul>
-<li><b>4.1 One travel gate.</b> Extract the "has the player moved enough to justify an eviction sweep" test into one predicate (taking the current flat position and a threshold), and call it from BOTH lanes. Keep the existing 16 m value as the threshold <b>and keep the face lane's existing state variable semantics</b> — the home lane may need its own "last sweep position" to preserve behaviour exactly; that is allowed (two callers, one rule).</li>
-<li><b>4.2 One window.</b> Extract the resident-window computation (the <code>sim_dist</code>→metres window and the evict radius including its margin) into one helper used by both, <b>preserving each lane's current effective numbers</b>. If the two lanes' windows are genuinely different quantities (e.g. face cells vs 1 m home cells), the helper takes the cell size as a parameter and says so in a comment — a parameter for a UNIT is not the face-number special-casing this ticket is deleting.</li>
-<li><b>4.3 No face-number branch added.</b> The predicate and the window must not take a face number at all. If you find yourself needing one, STOP and report — that is the separation surviving under a new name.</li>
-</ul>
-<h2>5. Gates — identical behaviour, because this is an extraction</h2>
+<h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>World and lanes unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,residency,planetwalk,homecensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; <b>residency must reproduce stage 2a's numbers</b> — home settles ~93 with peak ~125 and ~151 evictions over that traverse, face ~93 steady, verdict STABLE, leak false. <b>Report the numbers next to stage 2a's and say whether they match.</b></td></tr>
-<tr><td>Both placement modes</td><td>Same with <code>--env 'AWECRAFT_WARP_HOME=0'</code></td><td>All rc=0, genhash 25/25.</td></tr>
-<tr><td>Start flow</td><td><code>save</code> and <code>load</code></td><td><code>ok</code> true; <b>simband_ms near 6.7 s</b> (this tree's normal). A jump toward 50 s means a chunk stopped registering or eviction moved.</td></tr>
+<tr><td>Nothing changed</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; the light and lightstate arms report their normal values. <b>Any drift means this stage touched something — it must not.</b></td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>One travel gate and one window helper, both lanes on them, no face number anywhere in either, and the residency numbers unchanged.</p>
-<h2>7. Risks</h2><p>The danger is subtle behaviour drift in <code>recenter</code>: its frees are deferred and identity-guarded (AC-0257 — a pooled column keeps its <code>instance_id</code>, so <code>col_gen</code> is the discriminator). Do not touch that machinery; only the decision of WHEN the sweep runs moves. If preserving behaviour requires two separate state variables, that is acceptable and expected — what must be shared is the rule, not the bookkeeping.</p>
-<h2>8. Fences</h2><div class="stop"><ul>
+<h2>5. Acceptance</h2><p>A design note answering §2.1–§2.6 with file:line evidence and a staged order, and a tree provably untouched.</p>
+<h2>6. Risks</h2><p>The honest answer may be "keep two engines" — that is a finding, and a better one than a risky merge justified only by tidiness. A note that concludes "unify" without naming the AC-0358 constraint and the first failure would be worse than no note.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No threshold changes, no "while I'm here" cleanup.</li>
+<li><b>No code changes at all.</b> This stage writes a design note and runs the gates to prove the tree is untouched.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>User decisions (round 35): travel-gated eviction, no stationary shedding, no cap, and no home. Slice 1 unified node creation; 2a measured the baseline. This unifies the trigger and the window. Next: pull faces 0/1 through the one path and delete the home branch, then the spawn cell-size renders.</p>
+<h2>8. Resume point</h2><p>Everything except light is unified: one grid (1 m cubic, AC-0471), one placement, one key shape, one node path, one landing, one generation queue and drain, one travel gate and window, one residency model (AC-0469 G1–G4). The twelve-chart lap covers 25 of 26 boundaries. This designs the last split instead of guessing it.</p>
 </body></html>

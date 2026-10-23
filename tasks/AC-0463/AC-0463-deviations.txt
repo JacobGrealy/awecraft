@@ -181,3 +181,309 @@ AC-0463 slice 2b — deviations (one travel gate + one window; behaviour-preserv
    Start flow: save ok=true (v1_softfail=true — the baseline's own value); load ok=true,
    simband_ms 6872 (baseline 6633 — near the ~6.7 s normal, nowhere near the 50 s a lost
    registration or a mis-moved eviction would produce).
+
+AC-0463 stage L1 — deviations (light ownership diagnosis, MEASUREMENT/DESIGN ONLY, no code change)
+
+1. THE SHAPE
+   Nothing was modified. world.gd / chunk.gd / starlight.cpp / mesh.cpp / harness.gd read only,
+   at the plan's anchors. Deliverable: this note (2.1-2.6) + the gate set proving the tree
+   untouched (see continuity.md GATES entry). One reading that changes how 2.4/2.5 are read:
+   the face lane's "re-bake on the payload" does not feed the payload to the bake — see 2.1.
+
+2.1 THE TWO PATHS, PRECISELY
+   HOME path — ONE engine, payload-fed:
+   - Ownership: `var star` (world.gd:265), created once (world.gd:3945-3946:
+     AweStarlight.new() + set_tables on the pre-warmed Lighting value copies).
+     `star_owed` (266) and `star_remesh` (267) are the world's light queues.
+   - Seed: _star_seed_column (world.gd:6336-6350) — star.seed_column(cx,cz, slabs_flat(data))
+     top-down all 24 sections + star_owed[key]=true (6346, 6350). Called from the gen landing
+     (7095-7096, REAL band only), the load/reload landings (7597/7605/7624), the regen landings
+     (13001/13740/14389), and halo promotion (6405-6414, already-settled guard 6412).
+   - Lifecycle (recenter, world.gd:12341-12400): real->halo = _star_halo_evict
+     (6390-6396: evict_column + erase owed/remesh); halo->real = _star_halo_promote
+     (6405-6414) + every stamped slab re-armed into the remesh lane (12385-12388).
+     FAR/h-only NEVER seeds (a light hole — AC-0346: far promotes via the owed full regen,
+     _far_promo_owed 12376-12377, whose landing does the flood).
+   - Edit: star.on_edit(x, y, z, id) in HOME world coords (world.gd:12999, 14387) — the C++
+     two-phase (starlight.cpp:42-78): affected set = 3x3 x/z x sections 0..si+1; phase 1
+     zeroes the set + boundary-injects the surviving outside light; phase 2 re-runs the sky
+     scan + glow re-queue; landing-order healing via settle_notify boundary_inject (monotone
+     max, starlight.cpp:60-78). Mesh side: _star_rearm_edit (world.gd:6467-6487) re-arms the
+     own column's slabs 0..si and the 8 neighbors' slabs si-1..si+1 into the remesh lane.
+   - Regen-merge landing: _star_reseed_column (world.gd:6358-6383) — per-slab
+     on_section_data (a byte-identical re-land is a NO-OP, zero churn, 6366-6378), seam-
+     unsatisfiable -> whole-column seed (6380); changed -> late-invalidate (6382-6383).
+   - Feed (per frame, the DRAIN subset WP_STAR, world.gd:6117-6123, const 4776):
+     _star_step (6177-6199) — dt-scaled budget: STAR_STEP_BUDGET_MS 3.0 steady /
+     LOAD_STAR_STEP_BUDGET_MS 30.0 loading (300-301, applied 6190-6191);
+     _star_settled_drain (6206-6232) — per settled column: last_eff =
+     column_light_dict (classic eff dict with "arr", 6219, 6226), eff_gen bumped ONLY if
+     the arr changed (6227-6228, the face/eff cache dep), E2 re-arm (6229):
+     _star_e2_rearm (6241-6268) compares each BUILT neighbor's stamped-slab window
+     [si*16-2, si*16+17] (6260-6261) with C++ star.frame_diff (6262) — a zero frame is a
+     provable no-op; halo (unseeded) neighbors are NEVER armed (6246-6254);
+     _star_remesh_drain (6276-6318) — paced re-bake (STAR_REMESH_KEYS_PER_FRAME 2 /
+     LOAD 8, 302-303, applied 6279; one slab per key per frame, 6312-6316), each slab
+     re-bakes from the engine's CURRENT settled light via _mesh_dispatch_hslab (6312, def 9208).
+   - Bake: the dispatch captures pl = star.slab_light_payload(cx, cz, 0, top_slab), sets
+     pl["star"]=true and pl["lver"]=star.box_epochs(cx,cz,-1,24) (world.gd:9419-9427; the
+     same capture at 6556-6560 tex-refresh and 8852-8866 the AC-0297 full-bake, which gates
+     on star.box_settled first, 8850). The worker (mesh.cpp:3535-3627) expands the payload
+     into the classic light dict + the 8 margin strips, ZERO-FILLING rows outside the
+     payload window (mesh.cpp:3588-3621); the landing re-checks the lver against
+     box_epochs(-1,24) and datadrops a mid-flight mutation (world.gd:9079, 9440-9443).
+   - Idle: star_light_idle (world.gd:6156-6159) = owed empty AND remesh empty AND
+     pending_cells 0. Per-chunk light_settled = _star_update_light_settled (6491-6497).
+
+   FACE path — PER-FACE engines, pull-fed (the reading that matters):
+   - Ownership: `var _star_faces: Dictionary = {}` face -> AweStarlight (world.gd:14915),
+     lazily created per face in _star_for_face (14921-14927, same set_tables); the stated
+     reason (14919-14920): "the same engine — the per-instance (cx,cz) key space means one
+     instance per face, no C++ change."
+   - Seed: _face_land (world.gd:15851) — data, edits, transform (15864), then
+     st.seed_column(ccx, ccz, slabs_flat(c.data)) + star_owed[key]=true (15873-15876).
+     The SAME shared star_owed dict the home drain also iterates.
+   - Landing mesh: c.build_mesh_face() with NO payload (15880-15881) -> classic pull with
+     EMPTY strips (chunk.gd:1996-1998) — the AC-0297 landing light (self-lit own column).
+   - Edit: set_block_key (world.gd:15954-15987) — sync build_mesh_face() (15982) + WHOLE-
+     COLUMN seed_column reseed (15985) + star_owed (15986). No on_edit, no per-slab path.
+   - Feed: _face_star_pass (world.gd:14935-14976, called 6124 from the SAME drain block):
+     per face, st.step(STAR_STEP_BUDGET_MS*1000) — FIXED budget, no dt-scale, no loading
+     window (14942-14943); then over star_owed, keys with 3 parts, face>=2, face==this face
+     (14947-14948): column settled -> pl = st.slab_light_payload(cx,cz,0, top>>4) (14956)
+     and new_eff = st.column_light_dict (14962); arr EQUAL to last_eff -> light_settled
+     = true, erase (14967-14970); arr DIFFERS -> last_eff = the STAR arr (14971),
+     c.build_mesh_face(pl) (14975).
+   - THE FEED IS NOT WHAT THE COMMENT SAYS: build_mesh_face accepts a payload only if
+     light_d.has("arr") (chunk.gd:1995); slab_light_payload returns "eff" and NEVER "arr"
+     (starlight.cpp:822-884); _face_star_pass never sets pl["star"]=true (contrast home
+     9425/6559/8865). So the "star engine wins (re-bake the column on the payload)"
+     (world.gd:14973-14974) actually RE-PULLS the classic light with empty strips — the
+     computed payload is DISCARDED at the bake. The face mesh light is ALWAYS the
+     own-column pull; the per-face engine is a CHANGE DETECTOR + last_eff bookkeeper
+     (last_eff holds the STAR arr after settle — that is what crossface C4 reads,
+     harness.gd:35052), and the payload+dict are recomputed per settled column and thrown
+     away (14956-14962).
+   - Evict: _face_free_chunk (world.gd:15549-15565) — st.evict_column (15554-15556) +
+     erase owed/remesh (15557-15558). No halo promote/demote; face chunks are NEVER far
+     (world.gd:13108).
+   - Cross-seam: _face_rebake_boundary (15611-15676) — a home boundary column CHANGE ->
+     the resident face EDGE-ROW chunks re-bake via build_mesh_face() PULL (15676; ring/
+     geometry, face_rebake_n counter 14900); _face_rearm_home_neighbors (15571-15595) — a
+     face LANDING re-meshes the adjacent home boundary chunks (home dispatch = star payload).
+
+   WHAT IS PER-FACE THAT WOULD HAVE TO BECOME PER-WORLD:
+   - the (cx,cz) key space (14919-14920): engine keys are per-instance, so ONE engine must
+     key columns by (face,cx,cz) (or hold 12 sub-namespaces) — face 4's column (63,5) and
+     face 6's column (63,5) are different physical columns;
+   - the lazy per-face instance creation (14921-14927), per-face seed (15873-15876),
+     per-face settle drain (14944-14976), per-face step (14942-14943), per-face evict
+     (15554-15556);
+   - per-face ORIENTATION the engines already see implicitly through each instance's local
+     frame: the mirror-class x flip (SphereMath.face_local_x, world.gd:15950-15952,
+     15964-15967) and the face transform (face_chunk_transform 15864 + the warp post-pass,
+     chunk.gd:2028-2031). Light math is frame-independent (the engine relaxes the data in
+     whatever (cx,cz) frame it is seeded with), so orientation survives as a SEED/RING rule,
+     not as an engine rule.
+
+   WHAT IS PER-WORLD THAT IS CURRENTLY DUPLICATED PER-FACE:
+   - the tables copy: every instance runs set_tables (14925) duplicating 3946;
+   - the settled-drain ALGORITHM: _star_settled_drain (6206-6232) and the face drain
+     (14944-14976) are two implementations of "settled -> publish last_eff -> re-bake if
+     changed", differing in feed (star payload vs pull), pacing (paced remesh lane vs
+     sync whole-column) and bookkeeping (eff_gen bump 6228 vs light_settled flag 14968/14972);
+   - the shared star_owed queue drained by BOTH: the home drain scans face keys that can
+     never settle in the home engine (6210-6217 — wasted, never wrong), and the face drain
+     re-scans the WHOLE queue PER FACE (O(faces x owed), 14938-14949);
+   - the 3 ms step budget (300) applied per engine, dt-scaled at home (6189-6191) but fixed
+     per face (14943);
+   - the evict bookkeeping (6394-6395 vs 15557-15558) — incl. face keys erasing from
+     star_remesh, which they never enter (the face lane never calls _star_remesh_add).
+
+2.2 THE AC-0358 FEED INVARIANT AND WHAT IT CONSTRAINS
+   Records: tasks/AC-0358/AC-0358-results.html (sections 2-4) + HARNESS.md:396 (the standing
+   brightslab row; RE-ESTABLISHED as an INVARIANT by AC-0349).
+   - What was measured: the arm re-bakes every checked slab FOUR ways — A (per-slab, engine
+     payload), B (per-slab, legacy reference), A2 (full-window merged, engine payload),
+     B2 (full-window merged, legacy reference). The APPLIED game mesh rides the merged
+     (full-window) path (AC-0297) — it is A2. The standing bakes are 68/41/50 over the six
+     cases — CONTENT-SHAPED, not a fixed count; the gate is "the applied bake equals the
+     settled payload's bake" (eng_mism 0, mesh_pa_mism 0, mesh_qa_mism 0, ob_bakes 0,
+     lver_drops 0, conv_frame <= 120). C2/C5/C6 carry the documented scoped-bake boundary
+     under-light (mesh_pb_mism 3/1/1 — reported, NOT gated: the legacy ref pulls sky 15
+     from UNSEEDED halo neighbors the scoped payload cannot see).
+   - The strip window the payload carries: slab_light_payload (starlight.cpp:789-887)
+     carries w_lo/w_hi = the bake-box row window [si0*16-2, (si1+1)*16+1] — the 2-row
+     overhang (797-803, incl. the top-margin under-light fix) — plus side[4] (rows x 32 B,
+     inner+outer) and corner[4] (rows x 4 B) neighbor strips over EXACTLY that window
+     (831-883); unseeded neighbors read ZERO (missing-strip semantics, 787-788 and
+     650-659: a band-edge slab bakes its halo-side margins against zero and settles; the
+     promotion re-injects and the E2 re-arm re-bakes — "never permanently stale, only
+     pending the promotion"). The worker zero-fills every strip row OUTSIDE the window
+     (mesh.cpp:3588-3621).
+   - The reference the arm compares against: a FRESH classic-pull reference built for the
+     SAME inputs — and, since the AC-0358 fix, fed the SAME window the payload carries
+     (its w_lo/w_hi). Then the applied mesh matches it STRICT on all six fields (q/v/n/c/u/i)
+     for every checked slab (23/23), via the swap builds (the classic path re-fed the
+     payload's own full-window input reproduces A2 exactly, all slabs, interior and
+     boundary).
+   - WHAT A UNIFIED MODEL MUST PRESERVE (the part that silently breaks lighting):
+     (i) the applied bake must remain a PURE FUNCTION OF THE CAPTURED PAYLOAD — captured
+     under the 3x3 x/z x [si0..si1] BOX gate (box_settled, starlight.cpp:660-675; the
+     dispatch gate at world.gd:8850) with the box_epochs lver (9426) re-checked at landing
+     (9079) so a mid-flight mutation datadrops the bake;
+     (ii) the payload must carry EXACTLY the row window + the 8 neighbor strips over that
+     window, zero-filled outside, unseeded = zero — the window, not the light, drives the
+     applied mesh: AC-0358's C4 proved two cell-IDENTICAL feeds with different strip
+     windows (per-slab [46,65] vs full-window [0,top]) drift the greedy layout and the
+     boundary colors (5,094-7,867 non-zero margin cells outside the arm window were zero in
+     the mis-scoped leg) — "the light values did not change" is NOT the invariant;
+     (iii) the reference (and any arm) must be fed the SAME window the bake consumed.
+     A unified model that changes what window a slab's payload covers, or WHEN the payload
+     is captured relative to settle (the home captures at BOX settle; the face captures at
+     COLUMN settle, 14954-14956), breaks (i)-(iii). On face chunks NO current arm can see
+     it: brightslab is home-only (R16 near the spawn), so the face side of this invariant
+     is unguarded today (see 2.4).
+
+2.3 THE CLASSIFICATION (the AC-0469 pattern — tasks/AC-0469/continuity.md:171)
+   (a) IDENTICAL ACROSS FACES, unifiable:
+   - the engine itself: one AweStarlight class, one table set, the same
+     seed_column/step/evict_column/on_edit (starlight.cpp:176-200; world.gd:3945-3946 vs
+     14924-14925). The C++ is face-agnostic; nothing face-specific exists in it.
+   - the "settled -> publish last_eff -> re-bake if changed" drain STRUCTURE (home
+     6206-6232 vs face 14944-14976) — the same algorithm, different feed and pacing.
+   - the owed-queue + evict-on-free bookkeeping (6350, 6394-6395 vs 15876, 15557-15558).
+   - the 3 ms step budget constant (world.gd:300).
+   (b) GENUINELY PER-FACE, must survive as rules:
+   - the (face, cx, cz) KEY SPACE: each face's (cx,cz) is that face's local chart grid; the
+     keys are uniformly 3-part since AC-0459 (world.gd:11616-11622, the home key is
+     "0:cx:cz"; the face>=2 split is already a predicate at 14948). One engine MUST key
+     columns by (face,cx,cz) — otherwise same-(cx,cz) columns of different faces clobber
+     each other's light.
+   - ORIENTATION / MIRROR CLASS: the local-x slot against the face's u
+     (face_local_x, world.gd:15950-15952, 15964-15967) and the face transform + warp
+     (15864, chunk.gd:2028-2031). Light math is frame-independent, so this survives as a
+     SEED/RING rule exactly like the residency work's mirror-chart rule survived.
+   - the AC-0297 LANDING rule: the face landing light is the classic pull, self-lit with
+     EMPTY strips (chunk.gd:1986-1998, world.gd:15868-15872) — byte-equal to the settled
+     star AT THE BOUNDARY (the evidence: world.gd:8838-8842, 0/98304 cells). That is the
+     face lane's visible-light contract; changing the feed (step 4) changes it deliberately
+     and must be gated, not slipped.
+   (c) EXIST ONLY BECAUSE THERE ARE TWO ENGINES:
+   - the per-face instance dict + lazy creation + the "one instance per face, no C++
+     change" comment (world.gd:14915, 14919-14927).
+   - the second drain implementation, with its O(faces x owed) re-scan (14938-14949), and
+     the home drain's futile scan of face keys (6210-6217).
+   - the UNUSED face payload: slab_light_payload + column_light_dict computed per settled
+     column and discarded at the bake (14956-14962; chunk.gd:1995 — no "arr"; no
+     pl["star"]=true, contrast 9425/6559/8865). Work that exists only because the face
+     pass was written to mirror the home's payload capture.
+   - the whole-column reseed per face edit (15985) vs the home's per-cell on_edit two-phase
+     (12999; starlight.cpp:42-78): on_edit takes HOME world coords (wx,wy,wz), a face cell
+     has none, so the face lane rides the coarse fallback (un-settle all 24 sections).
+   - the fixed per-face step with no dt-scale and no loading window (14942-14943) vs the
+     home's dt-scaled budget (6189-6191): worst case ~4 faces x 3 ms at a cube corner, on
+     top of the home's 3 ms.
+
+2.4 THE FIRST FAILURE
+   The single most likely breakage of a naive unification: STALE FACE LIGHT AFTER AN EDIT.
+   The face lane's re-bake trigger is a COMPARE-AND-ERASE one-shot (world.gd:14967-14976):
+   it fires only when the settled star arr differs from last_eff, then erases the owed key.
+   The home edit path un-settles in HOME world coords (star.on_edit(x,y,z,id), world.gd:12999
+   — a face cell has no such coordinate). A naive unification that routes a face edit there
+   un-settles the WRONG column: the face column's star arr never changes, the trigger never
+   fires, the owed key is already erased, and the mesh keeps its PRE-EDIT light permanently
+   (until the next landing). The twin feed-side failure is the AC-0358 class: a face slab
+   re-baked from a payload captured outside its own settle state, or with a window that does
+   not match what its bake consumes — the applied mesh drifts from the same-input reference
+   even when the light is cell-identical (window, not light, drives the bake; AC-0358 C4,
+   5,094-7,867 margin cells).
+   THE ARM / INVARIANT THAT CATCHES IT:
+   - the invariant: the AC-0358 FEED invariant (HARNESS.md:396) — applied bake == settled
+     payload == fresh same-input reference, payload path authoritative (eng_mism +
+     mesh_pa_mism + mesh_qa_mism). It is the right gate for this failure — and it is
+     currently enforced on HOME chunks only (brightslab C1-C6, R16 near the spawn).
+   - the only face-side light gate in the battery: crossface C4 (harness.gd:34999-35060) —
+     light_never_unlit_ok = eff_home >= 1 AND eff_face >= 1 (35059), reading last_eff at
+     ONE seam air cell (35046-35054). It catches a seam light that goes to ZERO (a
+     clobbered key space, a mis-seeded engine) but NOT a wrong-but-lit bake.
+   - CONSEQUENCE: a wrong-but-lit face bake is INVISIBLE to the current gate set (genhash
+     is terrain-only; light/lightstate are home-only at R16/r4). A face-side FEED arm
+     (brightslab-shaped, on a face site) must be BUILT FIRST — the instrument precedes the
+     change — before the feed step (2.5 step 4) lands.
+   The other candidates, ruled in/out: a face engine seeded with the wrong orientation (a
+   (face,cx,cz) clobber or a mirror flip) = light against the wrong neighbors, caught only
+   by crossface C4's weak eff>=1 — the SECOND likely breakage; the far/h-only transition is
+   HOME-ONLY (face chunks are never far, world.gd:13108) and is guarded there by the halo
+   arm (HARNESS.md:398) — giving face chunks a far tier would be a NEW behaviour, not a
+   merge; the AC-0358 re-bake itself (a settled-payload re-bake with a mismatched window)
+   is caught by brightslab on home (same-window reference leg) and by nothing on faces.
+
+2.5 THE STAGED ORDER (the world stays lit after every step; the AC-0469 pattern —
+   tasks/AC-0469/continuity.md:174)
+   STEP 1 — ZERO BEHAVIOUR CHANGE: one engine accessor + one key predicate. star_for(face)
+   (face<=1 -> the home star, face>=2 -> _star_faces[face]) + the one 3-part-key face
+   parser (the keys are already uniformly 3-part, world.gd:11616-11622; the face>=2 test
+   already exists at 14948). No C++, no feed, no budget, no key-space change — the face
+   rule of AC-0469 step 1 (resident_of). GATE: this stage's set (g0, genhash 25/25
+   byte-identical, light, lightstate at standing values) + crossface C4 never-unlit +
+   planetwalk. Proof of "no behaviour": byte-identical values.
+   STEP 2 — ONE DRAIN LOOP over the ONE owed queue: replace the per-face re-scan
+   (14938-14949) with one pass dispatching on the key's face part through star_for. BOTH
+   FEEDS STAY EXACTLY AS TODAY (home payload-fed, face pull-fed). A scheduling change only.
+   GATE: the same set + lightstate's ab (arr_diff_cells/vc_diff must not move — drift there
+   is a settle-order change, a finding per world/AGENTS.md).
+   STEP 3 — ONE EDIT PATH (contained, per-face): route a face edit through the engine's
+   per-cell two-phase (on_edit in the face's local coords against its own engine, or the
+   (face,cx,cz)-keyed single engine) instead of the whole-column reseed (15985). The face
+   settle now heals exactly like home's (the contained affected set, starlight.cpp:42-78);
+   the re-bake trigger is untouched. Changes face SETTLE behaviour (cheaper, contained) but
+   must NOT change the applied light — the FEED invariant says the applied bake is a pure
+   function of the settled payload, and the payload is the same settled light. GATE:
+   crossface (the D edit sections + C4 never-unlit), genhash 25/25 byte-identical, light +
+   lightstate (home must be unaffected).
+   STEP 4 — ONE FEED (the decision step — a VISIBLE light change): switch the face re-bake
+   to the star-payload feed (the pl["star"]=true + worker strip expansion pattern,
+   world.gd:9419-9427 / mesh.cpp:3535-3627). The face SUBSURFACE light becomes
+   neighbor-aware — the own-column pull (chunk.gd:1996-1998) is retired for faces; the
+   2.3(b) AC-0297 landing rule is changed deliberately and must be re-baselined. GATE:
+   crossface C4 "light 15/15" (the seam stays byte-equal by the contract), the NEW
+   face-side FEED arm from 2.4 (built BEFORE this step), light/lightstate (home
+   unchanged), genhash 25/25. IF the user does not want the visible change, STOP HERE:
+   one engine (per-face keys) + the contained edit path + the face pull feed preserved is a
+   defensible terminal state (2.6).
+   STEP 5 — DELETE THE SPLIT: _star_faces (14915), the lazy creation (14921-14927), the
+   second drain (14944-14976), the per-face step (14942-14943), the duplicated evict
+   bookkeeping (15557-15558). One instance, one drain, one feed. GATE: the full set (g0,
+   genhash byte-identical, light, lightstate, crossface, planetwalk, boundary r4).
+
+2.6 THE COST OF NOT DOING IT
+   The engine DUPLICATION itself is cheap, with evidence: C++ cost zero (the same class,
+   the per-instance key space is the stated reason for the split, world.gd:14919-14920);
+   the per-frame face-side cost is bounded — the step runs only while a face is pending
+   (14942-14943), the steady-state owed scan is ~free (owed ~ 0), and the worst case
+   (~4 faces x 3 ms at a cube corner + the home 3 ms) is ALREADY ABSORBED on this tree
+   (boundary r4 p95 38 ms and planetwalk are green with it — tasks/AC-0469/continuity.md:153,
+   265). So: two engines are safe to keep TODAY.
+   But the split is not zero-cost — the debt, with evidence:
+   1. WASTED PAYLOAD: per settled face column per settle window, slab_light_payload +
+      column_light_dict are computed and discarded (14956-14962, chunk.gd:1995), while a
+      comment claims a feed the code does not perform (14973-14974).
+   2. COARSE FACE EDITS: every face edit un-settles ALL 24 sections via the whole-column
+      reseed (15985) instead of the contained 3x3 x sections 0..si+1 two-phase
+      (starlight.cpp:42-78) — the fallback cost, paid per edit, forever.
+   3. TWO DRAIN IMPLEMENTATIONS to keep in sync (6206-6232 vs 14944-14976) — the exact
+      bug surface AC-0469 stage F ranked the riskiest slice of the migration.
+   4. A VISIBLE LIGHT DIVERGENCE: the face subsurface light is the own-column pull —
+      neighbor-blind. A torch in an adjacent face chunk changes the star arr, triggers the
+      re-bake, re-pulls the SAME own-data light, and the mesh never shows the crossed light
+      (home shows it — the payload's strips, mesh.cpp:3596-3621). A feature gap only the
+      eyes (or the owed face-side FEED arm) can see.
+   VERDICT: the split is not "cheap and safe enough that it is not debt" — it is debt, but
+   the honest terminal states are STAGED, not naive: step 3 (one engine, per-face keys,
+   contained edit path, pull feed preserved) kills costs 1-3 with NO visible change and is
+   the cheap safe option; steps 3+4+5 (one feed) also kill cost 4 but require the face-side
+   FEED arm built first and a re-baseline of the face light. A merge justified only by
+   tidiness (jumping to step 4 with no new arm) is worse than keeping two engines — the
+   plan's §6 warning holds, and the evidence here says the risk sits in the feed, not in
+   the engine count.
