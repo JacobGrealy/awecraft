@@ -14990,6 +14990,26 @@ func star_for(face: int) -> Variant:
 		return star
 	return _star_faces.get(face)
 
+# AC-0463 stage L6: the face build's payload feed — the face-side
+# equivalent of the home bake's pl["star"]=true (world.gd:6608/8914/
+# 9474). The engine's settled column as the dispatch payload: the
+# full-height eff + the [w_lo, w_hi] 2-row-overhang window + the 8
+# neighbour strips over it (starlight.cpp:789-887) — the SAME input
+# shape the home pair bakes from (build_accs' star expansion,
+# mesh.cpp:3535-3627). build_mesh_face consumes it on the "star" flag
+# (L6: a star payload is a payload, not a re-pull — the payload
+# carries "eff" and never "arr"). Unseeded columns (or a null engine)
+# return {} — the build then falls back to the own-column pull (the
+# AC-0297 landing contract, now the fallback).
+func _face_payload_for(st: Variant, c: Node3D) -> Dictionary:
+	if st == null:
+		return {}
+	var pl: Dictionary = st.slab_light_payload(int(c.cx), int(c.cz), 0, maxi(0, int(c.top) >> 4))
+	if not bool(pl.get("ok", false)):
+		return {}
+	pl["star"] = true
+	return pl
+
 # D4: the face light pass — step each face instance; a face column whose
 # light has settled re-bakes its slabs on the star payload ONLY if the
 # payload differs from the landing (pull) light (the AC-0297 seam
@@ -15050,6 +15070,11 @@ func _face_star_pass() -> void:
 		c.light_settled = true
 		# the settled payload differs from the landing light — the
 		# star engine wins (re-bake the column on the payload).
+		# AC-0463 L6: the flag the home bake sets (world.gd:6608) —
+		# build_mesh_face now CONSUMES this star payload (window +
+		# 8 neighbour strips) instead of discarding it for the
+		# own-column pull (the L5 structural fact, the fix's target).
+		pl["star"] = true
 		c.build_mesh_face(pl)
 		star_owed.erase(key)
 
@@ -15751,7 +15776,9 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 			# meta, not the world census (a sibling edge row's landing
 			# increments the world counter without touching this chunk).
 			c.set_meta("ac0433_rebake_n", int(c.get_meta("ac0433_rebake_n", 0)) + 1)
-			c.build_mesh_face()
+			# AC-0463 L6: the payload feed like every other face build
+			# ({} fallback = the shipped own-column pull).
+			c.build_mesh_face(_face_payload_for(star_for(int(c.face)), c))
 
 # C5: the player's sim anchor (world.gd side). Inside the home patch the
 # anchor is the home identity frame (the player's column basis, as
@@ -15944,19 +15971,23 @@ func _face_land(c: Node3D, face: int, ccx: int, ccz: int, key: String, fdata: Pa
 	if int(c.band) == 0 and not c.data.is_empty():
 		_rt_dirty()  # AC-0373: a face chunk joins RESIDENT with data landed
 	# AC-0309 D4: seed the per-face AweStarlight (the same engine — the
-	# per-instance (cx,cz) key space, no C++ change). The landing light is
-	# the classic pull (the AC-0297 seam contract: byte-equal to the
-	# settled star at the boundary); _face_star_pass re-bakes iff the
-	# settled payload differs.
+	# per-instance (cx,cz) key space, no C++ change). AC-0463 L6: the
+	# landing mesh now bakes from the payload — the SAME feed as the
+	# drain and the edit (one feed, the home pair's path); the own-
+	# column pull (byte-equal to the settled star at the boundary on
+	# the AC-0297 contract) is the fallback for the unseeded case.
+	# _face_star_pass re-bakes iff the settled payload differs.
 	var st: Variant = _star_for_face(face)
 	if st != null:
 		st.seed_column(ccx, ccz, ChunkIO.io_cpp().slabs_flat(c.data))
 		star_owed[key] = true
 	# D3: the mesh — the face build (AC-0460: the occluder parity — the
 	# fallback lattice rides this same build). Inert when the player is
-	# far from the edges (data-only outside the mesh window).
+	# far from the edges (data-only outside the mesh window). AC-0463
+	# L6: the payload feed (a null st or an unseeded column yields {}
+	# — exactly the shipped own-column pull fallback).
 	if _face_in_mesh_window(face, ccx, ccz):
-		c.build_mesh_face()
+		c.build_mesh_face(_face_payload_for(st, c))
 	# the adjacent home boundary chunk(s) now have live face data across
 	# their edge — re-mesh them (their ring reads the face side live).
 	_face_rearm_home_neighbors(face, ccx, ccz)
@@ -16053,17 +16084,22 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 	if not edits.has(key):
 		edits[key] = {}
 	edits[key][fi] = {"b": id, "f": 0}
-	# the face build is sync (its build lane) — the edit re-bakes in the
-	# same call (mesh + collision), then the star re-seeds (the light
-	# follows the edit; the drain re-bakes iff it settles different).
-	if c.mesh_built:
-		c.build_mesh_face()
-	# AC-0463 L4: the ONE edit entry — the face lane keeps its
-	# whole-column reseed, driven by the EXPLICIT face-cell coordinates
-	# this call already holds (face + the face chunk key (c.cx, c.cz) +
-	# the 3-part key): the entry never derives them from a world
-	# position (the L1 hazard).
+	# AC-0463 L6: the ONE edit entry (the L4 reseed rule, itself
+	# untouched) runs FIRST, so the sync re-bake below reads the
+	# POST-SEED payload — the same feed as the landing and the drain:
+	# at every face build site the mesh light is the engine's payload
+	# (window + 8 neighbour strips), never a re-derived pull. (Before
+	# L6 the build ran BEFORE the reseed, on the own-column pull.)
+	# AC-0463 L4: the entry is driven by the EXPLICIT face-cell
+	# coordinates this call already holds (face + the face chunk key
+	# (c.cx, c.cz) + the 3-part key): it never derives them from a
+	# world position (the L1 hazard).
 	_star_edit_entry(1, face, Vector2i(int(c.cx), int(c.cz)), key, c)
+	# the face build is sync (its build lane) — the edit re-bakes in
+	# the same call (mesh + collision), from the post-seed payload;
+	# the drain re-bakes iff it settles different.
+	if c.mesh_built:
+		c.build_mesh_face(_face_payload_for(star_for(face), c))
 	return true
 
 

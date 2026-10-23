@@ -1982,17 +1982,22 @@ func build_mesh_face(light: Dictionary = {}) -> void:
 	# a solid test only, no geometry crosses the seam). The rings come
 	# from the face-aware resolver (World._face_rings: the same-face
 	# neighbour via the C++ snap_rings, the home edge via the resampled
-	# LIVE ring, the window/sector edges = solid). Light: a passed
-	# payload (the settled star), else the classic pull with EMPTY strips
-	# (the home strip cache is home-grid-keyed — a face chunk self-lights
-	# from its own data; the AC-0297 seam contract: at the boundary the
-	# pull light is byte-equal to the settled star).
+	# LIVE ring, the window/sector edges = solid). Light (AC-0463 L6 —
+	# one feed): a passed STAR payload — the engine's settled column as
+	# window + 8 neighbour strips (starlight.cpp:789-887), the SAME
+	# input the home pair bakes from (the C++ build_accs star
+	# expansion, mesh.cpp:3535-3627; the flag the C++ checks is
+	# "star" — the payload carries "eff" and NEVER "arr", the L5
+	# structural fact) — else the classic pull with EMPTY strips (the
+	# fallback now: an unseeded column; the AC-0297 seam contract, at
+	# the boundary the pull light byte-equal to the settled star,
+	# holds for that path).
 	if data.is_empty():
 		return
 	var mc: Variant = mesh_cpp()
 	var nbs_face: Dictionary = Game.world._face_rings(self)
 	var light_d: Dictionary = light
-	var has_payload: bool = not light_d.is_empty() and light_d.has("arr")
+	var has_payload: bool = not light_d.is_empty() and (light_d.has("arr") or light_d.has("star"))
 	if not has_payload:
 		var ze := PackedByteArray()
 		light_d = Lighting.compute_light_flat_chunk_pull(data, int(cx), int(cz), Data.HEIGHT, ze, ze, ze)

@@ -1104,3 +1104,211 @@ AC-0463 stage L5 (the face-side FEED arm — measurement only) — 2026-10-23
      pacing finding (L2 §6) and the residency home-steady wander —
      the arm and the product code are untouched by L5, and every
      light-value field on every censused chunk is unchanged.
+
+==================================================================
+STAGE L6 — 2026-10-23 — one feed: the face build consumes its
+payload (the visible-light stage — the one stage the light
+migration cannot prove by identity)
+==================================================================
+
+1. WHAT CHANGED (the two files of plan §4; no C++)
+   chunk.gd build_mesh_face (1975-2047): the payload predicate now
+   accepts the STAR payload —
+       has_payload = not light_d.is_empty()
+                     and (light_d.has("arr") or light_d.has("star"))
+   "star" is exactly the flag the C++ checks (mesh.cpp:3535,
+   light.get("star", false)); "arr" stays for legacy cached-eff
+   callers. The payload carries "eff" and never "arr" (the L5
+   structural fact) — before L6 the face call therefore ALWAYS
+   fell through to the own-column pull (chunk.gd:1996-1998) and
+   the computed payload was discarded at the bake.
+   world.gd: (a) _face_payload_for(st, c) — the face-side
+   equivalent of the home bake's pl["star"]=true (world.gd:
+   6608/8914/9474): slab_light_payload(cx, cz, 0, top>>4) +
+   pl["star"]=true; {} for a null engine or an !ok payload (the
+   own-column pull fallback — the shipped line, byte-identical
+   for the unseeded case). (b) the DRAIN re-bake now sets
+   pl["star"]=true on the payload it already computed and passed —
+   the L5 discard site, now the consumer. (c) the LANDING
+   (_face_land) and the CROSS-SEAM re-bake
+   (_face_rebake_boundary) build from _face_payload_for(...).
+   (d) the EDIT (set_block_key) runs the L4 reseed entry FIRST
+   and then the sync build — the build now reads the POST-SEED
+   payload (before L6: build on the pre-reseed state, reseed
+   after). No C++ change: build_accs already consumes the star
+   payload (the same shape the home pair bakes from;
+   mesh.cpp:3535-3627).
+   Scope note: plan §4 names _face_land as the conversion site;
+   the gate (applied==payload at every moment) requires ALL FOUR
+   face build sites — the drain (the discard site), the landing
+   (the first build — on glow-free terrain the drain NEVER
+   re-bakes there: the pull arr == the settled arr always, so a
+   drain-only conversion would change nothing visible), the edit
+   (the reseed-order fix), and the cross-seam re-bake. All four
+   are the plan's one feed; the AC-0297 landing contract is now
+   the fallback, was the only feed.
+
+2. THE FINDING (gate a: d_a_b at the pre-settle transient)
+   The gate demands d_a_b = 0 at EVERY sample, including the
+   pre-settle transient. The measured numbers (facefeed r5, the
+   frozen L5 arm — unmodified by L6):
+     x stand (face 5):   S 0, U.p1_seed_state 313 (pending 158),
+                         p1b 0, p1s 0, p2 0, N 0
+     z stand (face 11):  S 0, U.p1_seed_state 82  (pending 77),
+                         p1b 0, p1s 0, p2 0, N 0
+   BYTE-IDENTICAL to L5's r4 on every measured field (every
+   a_md5, every settled, every pending, every w_lo/w_hi window).
+   The transient 313/82 is the arm's own pull (a) — a pure
+   function of c.data, fully converged (a==c, d_a_c=0) — versus
+   the engine's post-seed state (b) — the glow pre-written at the
+   torch cell, not yet relaxed (pending 158/77). That gap is the
+   engine's settle lag: a function of the FROZEN reseed rules and
+   the FROZEN step/drain, and of no product feed. It was 313/82
+   before L6 and is 313/82 after; no permitted edit can move it,
+   and the frozen arm's (a) is a pure function of c.data that
+   this stage does not touch. Reported as a finding per the
+   template; the stage's own job — the BUILD consuming the
+   payload — is proven separately (§3).
+
+3. HOW THE BUILD (NOT THE ARM) CONSUMES THE PAYLOAD IS PROVEN
+   (i) THE IN-ARM A/B (L5 r4 vs L6 r5): every measured field
+       identical except one — last_eff_matches_a at
+       U.p1_seed_state flips True -> False on BOTH stands.
+       last_eff is the mesh's applied-light record (apply_accs
+       <- res.light = the C++ star-expanded dict,
+       mesh.cpp:3587/3944; _eff_store over its arr). A pull build
+       stores (a) and matches (a) always (L5). At p1 the L6 build
+       is the post-seed PAYLOAD build (the edit reseed-first
+       order): its record is the payload's eff, which differs
+       from the converged pull by exactly the 313/82 window cells
+       (the glow pre-write) -> False. At p1s the payload has
+       settled (d_a_b=0: payload == pull) and the drain re-baked
+       -> True again. The mesh's record follows the PAYLOAD,
+       never the pull.
+   (ii) THE GATE'S OWN SUGGESTED EXPERIMENT, IN THE FROZEN ARM:
+       between p1_seed_state and p1s_settled the payload CHANGES
+       (b_win_md5 676e5693... -> fa676b8f..., x stand: the glow
+       relaxes across the column) while the pull is BYTE-
+       IDENTICAL (a_md5 d42cc5b7... at all four U samples) and
+       the mesh's applied record follows the payload (last_eff
+       False -> True). Altered a payload value, observed the mesh
+       change.
+   (iii) THE MECHANISM (why a margin can only come from the
+       payload): bake_box fills the 20x20xrows margin ring ONLY
+       from C.eff_strips (mesh.cpp:1199-1300), which the face
+       build sets only in the star branch (mesh.cpp:3622-3626;
+       the face ctx strips are the empty ze2, chunk.gd:2000-
+       2003). Before L6 every face margin ring was 0 by
+       construction. The facefeed b_side_md5 fields (nonempty,
+       sky eff 15, both stands at settle) are the strip content
+       the build now bakes.
+
+4. STEADY-STATE LIGHT (the plan's honest expectation)
+   a==b at settle (d_a_b=0 at S/p1s/p2/N, both stands) -> the
+   settled column eff is UNCHANGED (the payload eff == the pull
+   eff byte-for-byte at settle). The change shows up where the
+   plan said it would: the pre-settle transient (313/82 window
+   cells, facefeed) and the boundary margin strips (mechanism,
+   §3). It does NOT change the steady-state light broadly — the
+   plan's failure mode (a window bug) is excluded by the A/B
+   render (§5) and by every light-value gate (§6).
+
+5. RENDER A/B (gate d) — tasks/AC-0463/ac0463_L6_{before,after}.png
+   Same seed 44, same AIM (flat 3171.6,200,-6,1.5708,-0.85 — the
+   camera over the ocean 30 m +x of the face-5 land patch, looking
+   back -x across the patch and the home/face SEAM), same TIME
+   0.5 (daytime — 0.25 measured night/stars in framing), same
+   RADIUS 6, same SNAP_DRAIN 600, Forward+ (the lavapipe proxy —
+   evidence about geometry/layout/light, never the shipped look)
+   on both. BEFORE on the pristine tree (git status verified
+   before the edit; the engine process loads scripts at boot, so
+   the source edit cannot affect the already-running render).
+   THE SCENE: the chart-face scene is a ~16 m land patch hugging
+   the seam (tops ~186) in the ocean: the LIT area = the
+   daytime sky-lit strip and tops (sampled (105-121) gray, sky
+   eff 15); the DARK area = the stone cliff face (sampled
+   (19,20,20)). CONSTRAINT (deviation from the gate's "torch-lit"
+   wording): the snapshot path ALWAYS creates a fresh world
+   (main.gd:837 — no save load) and the arms that place face
+   torches are fenced (harness.gd uneditable; the facefeed branch
+   early-returns before the snapshot tail) — no torch exists at
+   render time. On this terrain the A/B delta does not depend on
+   a torch: L5 measured the boundary rows sky-saturated (a
+   neighbour's glow would mask against sky eff 15), so the margin
+   A/B is the sky-lit vs margin-0 comparison.
+   THE DIFF: 3254/921600 pixels differ at all (0.353%); 583
+   (0.063%) above the max-channel>8 antialiasing noise. 100% of
+   the substantive diff = SIX small blobs at the WATER/TERRAIN
+   interface (shoreline wave phase — the water shader animates
+   between two independent runs) + one antialiased tree edge
+   against the shifting water backdrop. ZERO difference on the
+   terrain (the face strip, the cliff, the tops, the trees),
+   zero in the sky, zero in the near field (frame rows 4-7).
+   The near wall was ALREADY lit (77-106 gray) before the change
+   (own-column sky light — identical by a==b); the boundary-
+   margin change is not visible in this scene because the
+   visible boundary-row faces here carry a zero neighbour margin
+   at build time (a neighbour not yet seeded at landing — the
+   margin is captured at the last build and the face lane has no
+   E2 re-arm, the L1-documented gap) or are interior faces lit
+   by the own-column eff (identical before/after by a==b).
+   VERDICT: no chunk-boundary band / square patch / brightness
+   step on the chart faces in steady state — the change is
+   NEARLY INVISIBLE in steady state, EXACTLY the plan's honest
+   expectation ("a==b at settle"). It is NOT the plan's failure
+   mode: the steady-state light did not change broadly (it did
+   not change at all). The change is in the transient (facefeed
+   313/82) and the margin strips (mechanism §3).
+
+6. GATES (logs .scratch/AC-0463-gates/, combined summary-l6.json)
+   g0 r20: rc=0, 0/0 (3 s) — the edit parses and boots clean.
+   facefeed r5: rc=0, 0/0, ok=true (19 s) — the §2/§3 matrix.
+   genhash r13: 25/25 GENHASH lines BYTE-IDENTICAL to L5's r12
+     (diff empty) — the world/* touch owes the 25/25.
+   crossface r3: FIELD-BY-FIELD IDENTICAL to L5's r2 — every
+     light field green as L5 (C4 seam light 15/15,
+     light_never_unlit_ok true, D1-D5 all true); the red set is
+     the DOCUMENTED STANDING class, unchanged:
+     a_transform_scale_ok, b_edge_continuity_ok (delta 23.0),
+     e_boundary_roundtrip_ok, e_face_tower_rt,
+     f_crossing_sprint_jump_ok, walk_ok. NO NEW RED.
+   light r11: FIELD-IDENTICAL to L5's r10 — surface_eff 15,
+     cave_eff 0, torch_level 14, torch_far_before 0,
+     torch_far_after 9, cave_pocket [8,120,-50],
+     cave_census_cands 590 (only cave_census_ms 462->452,
+     machine). No face in its sample — unchanged, as predicted.
+   lightstate r8: every LIGHT-VALUE field identical to L5's r7 —
+     ab.arr_diff_cells 1 @ [0,141,0] (chunk 0:0:1, slab 8,
+     arr_size 98304), vc_diff 4 (287/288/289), demoted 1,
+     stragglers 3, leaks 0 (every censused chunk + before/after),
+     low_on_high 0, double-LOD 0/0, wash_detected false. Census
+     COVERAGE (not a light value): 23 -> 21 chunks (the -1,-2 /
+     -2,1 pair dropped; all shared keys identical, leaks 0) —
+     the documented streaming-paced class (L5 §6, L2 §6). The
+     move hole census 106 -> 116 (flat trajectory both) — the
+     home-side pacing class (the face lane is the byte-stable one).
+   seamcensus r3: ok=true, rows_ok=393216 — the standing value.
+   residency r9: ok=true, leak=false, face STEADY at 74 (all six
+     steady samples), keys_same=true, STABLE, ev_face=0; the home
+     steady 103 is inside the documented run-to-run wander
+     (93/103 class, L5).
+   planetwalk r8: ok=true, 25/26 boundary pairs (mesh AND body at
+     every crossing), the uncovered lap_0-1 = the documented
+     home_pair_midline waiver.
+
+7. DEVIATIONS FROM THE PLAN
+   - Gate (a) "d_a_b must be 0 at EVERY sample including the
+     pre-settle transient" is literally unsatisfiable by the
+     frozen arm (the §2 finding). Not tuned around: reported,
+     with the in-arm A/B as the consumption proof instead.
+   - The gate (d) "torch-lit area" became a sky-lit area (the
+     §5 constraint: fresh-world renders carry no torch; the arm
+     is fenced). Stated, not hidden.
+   - Scope: all four face build sites converted, not only
+     _face_land (the §1 scope note — the gate's "at every moment"
+     requires the edit + landing + drain + cross-seam).
+   - The set_block_key reorder (reseed before the sync build) is
+     a call-site ordering change only: _star_edit_entry runs
+     exactly once, with the same explicit face-cell coordinates,
+     the same 3-part key, the same chunk (the L4 entry and the
+     reseed rule are untouched — the frozen list is respected).
