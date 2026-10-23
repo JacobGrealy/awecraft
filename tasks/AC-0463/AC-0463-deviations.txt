@@ -1312,3 +1312,330 @@ migration cannot prove by identity)
      exactly once, with the same explicit face-cell coordinates,
      the same 3-part key, the same chunk (the L4 entry and the
      reseed rule are untouched — the frozen list is respected).
+
+================================================================================
+AC-0463 stage L7 (what the per-face engines still do after L3 + L6 —
+design note, no code change) — 2026-10-23
+================================================================================
+
+1. THE SHAPE
+   Nothing was modified. world.gd / chunk.gd / starlight.cpp / sphere_math.gd
+   read only, at the plan's anchors; harness.gd read only for the arm
+   consumers. All line numbers are the POST-L6 tree (the L1/L2/L3/L4/L5/L6
+   edits shifted the file; this note cites current lines). Deliverable: this
+   note (2.1-2.5) + the gate set proving the tree untouched (see
+   continuity.md GATES entry). One reading that changes how 2.4/2.5 are
+   read: the home drain's scan of face keys, which L1 called "wasted, never
+   wrong", is not provably inert — see 2.2(c).
+
+2.1 THE REMAINING FUNCTION — what a per-face AweStarlight still does that
+    nothing else does
+   The C++ engine is the sole holder of a face column's light state: the
+   per-instance secs map (starlight.cpp:1370), keyed by the per-instance
+   (cx,cz,si) packing sec_key (143-146, 28 bits cx / 28 bits cz / 5 bits si).
+   The home `star` instance (world.gd:265, created 3945-3946) contains no
+   face columns and cannot serve them — a face 4 column (63,5) and a face 6
+   column (63,5) are different physical columns, and that key-space collision
+   is the stated reason the split exists (14969-14970). After L3 (one drain
+   entry, _star_drain_pass 6179-6185) and L6 (the feed consumes the payload),
+   a per-face instance still does five things nothing else does:
+   (1) THE RELAXATION STEP for face columns — _face_star_pass's step lane
+       (15026-15031): st.step(int(STAR_STEP_BUDGET_MS)*1000) with the fixed
+       budget, gated on st.pending_cells() > 0 (15030). Nothing else steps
+       face columns; the home step (6190-6212, dt-scaled) touches only
+       `star`. (star_light_idle, 6151-6154, waits on the SHARED star_owed —
+       face keys block the idle gate even though star.pending_cells() is
+       home-only.)
+   (2) THE SETTLED ORACLE + last_eff PUBLISH + THE COMPARE-AND-ERASE
+       RE-BAKE — the one owed dispatch of _face_star_pass (15039-15079, L3's
+       single loop): per face key, st.column_settled (15052) ->
+       st.slab_light_payload (15054) + st.column_light_dict (15060) ->
+       compare the settled arr with c.last_eff's arr (15063-15065) -> equal:
+       light_settled = true + erase (15066-15067); different: publish
+       c.last_eff (15069), light_settled (15070), pl["star"] = true +
+       c.build_mesh_face(pl) (15077-15078), erase (15079). This is the face
+       lane's REMESH TRIGGER — the only place a face column is re-baked
+       because its light settled different from the last build.
+   (3) THE PAYLOAD SOURCE FOR ALL FOUR FACE BUILD SITES (L6's one feed):
+       _face_payload_for (15004-15011) reads st.slab_light_payload — the
+       full-height eff + the [w_lo,w_hi] 2-row-overhang window + the 8
+       neighbour strips (starlight.cpp:789-887) — and every face build
+       consumes it: the drain re-bake (15078), the landing (15989-15990),
+       the cross-seam re-bake (15779-15781), the edit re-bake (16101-16102).
+       The neighbour strips are ENGINE-ONLY: the pull fallback feeds EMPTY
+       strips (chunk.gd:2001-2003), and L5 measured the strips carry the
+       margin light the build bakes (the b_side_md5 field). Without the
+       engine, _face_payload_for returns {} (15005-15006) and every face
+       build falls back to the own-column pull (chunk.gd:2000-2003) —
+       i.e. DELETING THE ENGINES SILENTLY REVERTS L6. The engine is the
+       feed's source.
+   (4) THE EDIT ENTRY POINT: _star_edit_entry lane 1 (6532-6536) — a face
+       edit runs st2.seed_column (whole column) + star_owed, driven by the
+       explicit face-cell coordinates (L4). (on_edit is home-only: it takes
+       HOME world coords, starlight.cpp:187, world.gd:6528 — a face cell has
+       none.)
+   (5) THE EVICTION LIFECYCLE: _face_free_chunk (15652-15668) —
+       st.evict_column (15659) frees the engine state of a freed column;
+       star_owed.erase (15660); the star_remesh.erase (15661) is defensive
+       residue — face keys never enter star_remesh (every _star_remesh_add
+       caller is home-keyed: 6126, 6281, 6457, 6470, 6487, 6500, 8111, 8115,
+       8484).
+   What the per-face engines do NOT do (home-only, unchanged): the per-slab
+   E2 wave (6254-6281), the paced remesh lane (6289-6331, home-chunk-keyed on
+   high_stamps/flush_slabs, _is_real_col 6310), the halo evict/promote
+   (6403-6433), the box-epoch lver bakes (6603-6610, 9470). Two bookkeeping
+   facts for 2.2/2.4: the face light_settled flag (15066/15070) has ZERO
+   product readers — product code only writes it (6546, 15066, 15070) and
+   resets it (chunk.gd:711/841/861/879/2267); only the arms read it
+   (harness.gd:12213 residency status, 35071 crossface, 39542 facefeed). And
+   a face chunk's last_eff is read by product code only in the face
+   dispatch's own compare (15063) — the home _strips_for (10793/10803) is
+   home-keyed, and the GDScript strip kernels (10811+, 11095-11355) are
+   test-only references (10812: "the game never calls this"). The arms read
+   it (crossface 35062-35070, facefeed).
+
+2.2 WHAT CONSUMES THE SETTLED SIGNAL ON FACES — and what would go wrong if
+    the per-face engines vanished
+   (a) THE REMESH TRIGGER = the compare-and-erase re-bake (15052-15079).
+       Without the engines: star_for(face) -> null (14991) -> the dispatch
+       `continue`s (15046-15047) — the face keys are NEVER erased from
+       star_owed (only _face_free_chunk 15660 removes them), so star_owed
+       grows unboundedly with face keys (a leak) and the home drain scans
+       them forever (see (c)); the mesh keeps its landing/edit (pre-settle)
+       light — a torch placed in a neighbouring face chunk never reaches
+       this chunk's mesh margin (the settle re-bake that would capture the
+       neighbour strips, 15077-15078, never fires); and every build site
+       falls back to the empty-strip pull (15005-15006 -> chunk.gd:
+       2001-2003), reverting L6. There is no replacement decision site:
+       nothing else in the product re-bakes a face column on light change.
+   (b) THE E2 RE-ARM: the face lane has NONE — _star_e2_rearm (6254-6281)
+       re-arms HOME-neighbor slabs through home keys (_key, 6281), and a
+       face settle never arms the remesh lane (face keys never enter
+       star_remesh, 2.1(5); the face re-bake is a synchronous whole-column
+       build, 15078). No face decision depends on the E2. The one
+       face-adjacent E2 side-effect is the home drain's face-key action
+       ((c) below) — idempotently harmless: it re-arms the same home slabs
+       the home key's own drain arms (_star_remesh_add is idempotent,
+       6337-6343).
+   (c) THE COMPARE-AND-ERASE IS ALSO A QUEUE-ERASE (15067/15079) — and the
+       shared queue has a SECOND drainer that can beat it to the erase.
+       FINDING — L1's "wasted, never wrong" (the L1 note, deviations 295-297:
+       "the home drain scans face keys that can never settle in the home
+       engine") does not survive contact with the code: _star_settled_drain
+       (6219-6245) iterates the SHARED star_owed with NO face-key guard
+       (6223) and queries the HOME engine with the face chunk's local
+       coordinates (6230). Face-local coordinates are 0-based 0..392
+       (player_anchor 15813-15816; CELLS_PER_FACE 6283,
+       sphere_math.gd:58; the seam edge row is 392, world.gd:15733) while
+       home coordinates are centred -196..196 (hw ~3141.6 m, 15087-15088) —
+       the numeric overlap is the square [0,196]^2. Whenever a SEEDED home
+       column at the same numeric (cx,cz) is resident and settled (in-patch
+       home chunks stay resident — travel-gated eviction, a stationary
+       player sheds nothing, _face_evict_last/_evict_sweep_due 15644-15650),
+       the home drain does ALL THREE of: publish the home column's light
+       into the face chunk's c.last_eff (6239 — unconditionally), bump
+       eff_gen + run the E2 re-arm iff changed (6240-6242), and —
+       unconditionally — append the face key to `done` and erase it from
+       star_owed (6236-6245). The face column then NEVER settles: its owed
+       key is gone, the settle re-bake never runs, the face light_settled
+       flag is never set (15066/15070), and the mesh keeps its pre-settle
+       build light FOREVER (on glow-free terrain the pre-settle payload
+       equals the settled — no visible diff, but the last_eff record is
+       silently the home column's array, which the arms read; with glow —
+       a torch, a cave — the margin light stays stuck on the transient).
+       REACHABILITY is not exotic: it needs the player in a band where the
+       home window (in_stream_set around the player's home projection,
+       6993/6943) still covers in-patch SEEDED columns AND the face window
+       (_face_chunk_min_dist 15358, resident_of 6995) covers face chunks
+       whose local coordinates fall in [0,196]^2 at the same numeric pair —
+       the near-seam region where the flat-frame and face-local-frame
+       coordinates of the player's position agree numerically. It is NOT
+       measured in either direction today: crossface samples a face chunk at
+       local chunk 63 (cell 1023, harness.gd:35066-35070) — inside the
+       overlap band — but only at a sky cell, where the home column's sky
+       equals the face column's sky (15), so the arm cannot distinguish
+       "settled via the face pass" from "key stolen by the home drain"; its
+       l_settled wait (35043-35046) passes on either outcome (the key is
+       simply absent from star_owed). facefeed's samples each carry the edge
+       coordinate 392 (> 196, outside the band) even though their other
+       coordinate (194-196) is inside it. light/lightstate are home-only at
+       the default radius. SO: outside [0,196]^2 the scan is pure waste (a
+       column_settled lookup that can never be true — home coordinates do
+       not exceed 196); inside it, it is a LATENT PRE-EMPTION of the face
+       settle. An arm that samples the band WITH GLOW is the prerequisite
+       for declaring it deletable or harmless.
+
+2.3 PER-FACE STATE — ENGINE STATE OR CHUNK/MESH STATE
+   (i) THE (face,cx,cz) KEY SPACE — ENGINE state. It is implemented as the
+       identity of the per-instance key namespace: sec_key packs (cx,cz,si)
+       PER INSTANCE (starlight.cpp:143-146, secs map 1370), and the stated
+       reason for the split is exactly this (world.gd:14969-14970: "the
+       per-instance (cx,cz) key space means one instance per face, no C++
+       change"). A world-wide engine must key columns by (face,cx,cz) — a
+       C++ key migration (28 bits cx / 28 bits cz -> 4 bits face + 24 bits
+       each; face coords max 392, home max +/-196, both fit) — or hold 12
+       sub-namespaces. Irreducibly per-face under the current C++. This is
+       the ONLY one of L1's three per-face items that is engine state.
+   (ii) MIRROR-CLASS ORIENTATION (face_local_x, world.gd:16061/16075) and
+       the face transform + warp (15969; chunk.gd:2033-2036) — CHUNK/MESH/
+       DATA-LAYOUT state. The light math is frame-independent: the engine
+       relaxes the data in whatever (cx,cz) frame it is seeded in (the seed
+       carries the layout, 15982), and the orientation lives in the data
+       layout + placement + ring rules, consumed at seed/build time. It
+       survives without the per-face engine (L1 285-287: "survives as a
+       SEED/RING rule, not an engine rule" — confirmed against the
+       post-L6 tree).
+   (iii) THE AC-0297 PULL-LANDING RULE — CHUNK/BUILD state: the {} fallback
+       of _face_payload_for (15005-15009) + the empty-strip pull
+       (chunk.gd:2000-2003). Not engine state.
+   ANSWER: exactly one of the three is engine state — the key space — and it
+   is the very reason the instances are per-face. The other two survive a
+   world-wide engine unchanged.
+
+2.4 THE THREE CANDIDATE END STATES, COSTED
+   (a) DELETE the per-face engines; the home engine owns all twelve faces.
+       WHAT THE MIGRATION MUST GAIN FIRST:
+       1. A C++ key-space migration: sec_key (starlight.cpp:143-146) + every
+          bound method that takes (cx,cz) (180-206 — 18 of the 25 bindings)
+          + every GDScript call site (~21 product: world.gd 6196-6393, 6535,
+          6605, 8547, 8901, 9470, 11804, 13408, 15007, 15052-15060, 15659,
+          15982; ~26 arm sites: harness.gd 12050-14076, 26692, 39388-39605).
+          A native-layer change: the .so rebuild, the ARCHITECTURE.md sync,
+          the gdext invariants.
+       2. A face-key routing decision in _star_settled_drain: with one
+          engine, face keys settle IN the home engine — the home drain
+          would publish last_eff + eff_gen + E2 + erase (6236-6245) on face
+          keys AND the face dispatch (15039-15079) would settle the same
+          keys again — the double-settle L2 §5 / L3 flagged ("dispatching
+          per key would double-settle the face columns"). The home drain
+          needs a face-key filter or dispatch; and the paced remesh lane
+          (6289-6331) is home-chunk-keyed (high_stamps/flush_slabs,
+          _is_real_col 6310) — face slabs carry no high_stamps, so the face
+          settle must BYPASS it and keep the synchronous whole-column
+          re-bake -> the dispatch at 15039-15079 survives as the face feed
+          in all scenarios.
+       3. A step-budget policy: face columns move from their own fixed
+          3 ms x N (15026-15031) into the home's single dt-scaled budget
+          (6190-6212) — settle pacing changes -> re-baseline the face arms
+          (the facefeed transients 313/82, the residency face-lane steady
+          74, the crossface settle waits).
+       WHAT BREAKS IF SKIPPED: (1) the CLOBBER — face 4's (63,5) and face
+       6's (63,5) share one key -> light against the wrong columns (L1's
+       named "second likely breakage", deviations 414-415); the key
+       migration is not optional, without it (a) is not viable. (2) the
+       double-settle. (3) unpaced face transients.
+       CODE TOUCHED: starlight.cpp (key + 18 methods) + world.gd (all call
+       sites + the drain filter + the step merge) + the .so rebuild +
+       re-baselining >= 4 arms. The largest code change of the three.
+       RISK: highest, and it sits in the gate blind spot: light/lightstate
+       are home-only, crossface C4 is eff >= 1 (harness.gd:35075-35076), and
+       a wrong-but-lit face bake is invisible to the current set (L1
+       409-413); facefeed covers the feed input, but a symmetric clobber
+       moves both sides together. What (a) BUYS: one engine object instead
+       of 13, no lazy-creation side effect, no per-face step lane —
+       tidiness. It unifies no POLICY: all 12 instances already run the same
+       class, tables and policy; the "no home" thesis is about lanes, and
+       the per-face instances are not a home/face policy split.
+   (b) KEEP them as settle-trackers; delete only the residue L1 listed.
+       L1's (c) list (deviations 372-386), status after L3 + L6:
+       - the O(faces x owed) re-scan — GONE (L3: the single dispatch
+         15039-15079).
+       - the unused face payload — GONE (L6: the build consumes it at all
+         four sites, 15078/15990/15781/16102).
+       - the per-face instance dict + lazy creation + comment (14965,
+         14969-14977) — the engine itself: that IS the "keep" in KEEP.
+       - the "second drain implementation" — now the single-pass dispatch;
+         it is the face's own settle policy (synchronous whole-column
+         re-bake + light_settled), not duplicated machinery — keep.
+       - THE HOME DRAIN'S FACE-KEY SCAN (6223-6245 acting on face keys) —
+         REMAINS, and per 2.2(c) it is NOT the "wasted, never wrong" waste
+         L1 claimed. It is the ONE true residue — and deleting it is a
+         1-3 line guard (skip face keys in _star_settled_drain) that is a
+         BEHAVIOUR CHANGE on the overlap band (it removes the pre-emption)
+         -> it needs its own small stage: an arm that samples the band with
+         glow, or a declared re-baseline. It cannot slip into "delete the
+         residue" as a no-op.
+       - the whole-column reseed per face edit (6532-6536) — REMAINS (L4
+         deliberately froze it; L1's "contained edit path" — the per-cell
+         on_edit two-phase — was never landed; on_edit takes home world
+         coords and a face cell has none, so containment is itself a C++
+         change — see (c) below).
+       - the fixed per-face step without dt-scale (15026-15031) — REMAINS
+         (L3 preserved the cadence).
+       - the star_remesh.erase in _face_free_chunk (15661) for a key that
+         never enters star_remesh — a one-line defensive residue (L1
+         300-301).
+       CODE TOUCHED: at most the 1-3 line guard + the one-line erase +
+       comments — and the guard needs measurement first (2.2(c)). No feed,
+       key-space or pacing moves. RISK: lowest.
+   (c) A MIDDLE OPTION — (b) + the contained face edit (L1's step 3, never
+       landed): replace the whole-column reseed (6535) with a contained
+       per-cell un-settle. on_edit (starlight.cpp:187; the two-phase
+       42-78) takes a home world position; a face cell has no home
+       coordinate — so this needs ONE small C++ addition (an on_edit taking
+       local (cx,cz,x,y,z) + id against the per-face instance — a thin
+       wrapper over the same two-phase core) + the lane-1 swap in
+       _star_edit_entry (6532-6536). It retires L1's cost #2 (every face
+       edit un-settles ALL 24 sections, deviations 472-474) while keeping
+       the per-face engines. The applied light must not change — the
+       settled light is identical under the contained or the whole-column
+       un-settle (the FEED invariant: the applied bake is a pure function
+       of the settled payload). GATE: crossface D sections + C4 never-
+       unlit, facefeed (the transient CHANGES SHAPE — the contained
+       un-settle settles faster — declared re-baseline), genhash 25/25,
+       light/lightstate unchanged (home).
+       CODE TOUCHED: one C++ binding + one GDScript lane + the facefeed
+       re-baseline. RISK: moderate — it changes face settle behaviour, and
+       the gate coverage for face settle pacing is the documented arm-
+       variance class (OPS.md §7).
+   RECOMMENDATION: (b). Reasons:
+   1. The engines now do exactly one job nothing else does — they are the
+      settle-trackers and the sole source of the neighbour-strip payload
+      the build consumes (2.1(3): deleting them silently reverts L6).
+      Their cost was measured bounded (L1 461-467: the step runs only while
+      a face is pending; the worst case ~4 x 3 ms is already absorbed —
+      boundary r4 p95 38 ms and planetwalk are green on this tree).
+   2. (a)'s risk sits exactly where the gates cannot see: the key clobber
+      is L1's named failure mode, and a wrong-but-lit face bake is
+      invisible to the current gate set (L1 409-413). This stage's own
+      2.2(c) shows that even a scan declared "wasted, never wrong" carries
+      an unmeasured hazard — deleting the engines on a third guess about
+      this subsystem is the failure mode the plan's §6 names ("a deletion
+      justified by a guess").
+   3. (b) leaves nothing unexplained: every item on L1's defect list is
+      either gone (the re-scan, the unused payload) or live settle-tracker
+      function (the engine, the dispatch, the step, the evict) or named
+      with a follow-up (the scan guard -> its own measured stage; the
+      coarse edit -> (c)).
+   4. If the coordinator wants to retire L1's cost #2 (the per-edit
+      whole-column reseed), (c) is the follow-up stage — a separate,
+      measurable step, not a deletion.
+   5. (a) buys tidiness only: it unifies no policy (the 12 instances already
+      agree), and the ticket's "no home" thesis is about lanes, not about
+      the per-instance key namespace.
+
+2.5 IF (b) WINS, IS THERE ANYTHING LEFT TO DELETE AT ALL?
+   STEP 5 AS WRITTEN ("delete _star_faces, the lazy creation, the second
+   drain, the per-face step, the duplicated evict bookkeeping" — L1
+   deviations 455-457) IS EMPTY under (b): every named item is live
+   settle-tracker function (2.1) — deleting them is (a), and (b) rejects it.
+   The engine stays, the dispatch stays, the step stays, the evict stays.
+   The one item on L1's defect list that is both still present and NOT live
+   function is the home drain's face-key scan — and 2.2(c) shows it is not
+   the harmless waste L1 claimed: outside [0,196]^2 it is pure waste (a
+   column_settled lookup that can never be true), inside it it is a latent
+   pre-emption of the face settle (the key erase + the last_eff overwrite),
+   unmeasured in either direction. So the honest (b) closure is:
+   - STEP 5: EMPTY — there is nothing to delete; the per-face engines are
+     kept BY DESIGN as settle-trackers (the key space is engine state,
+     2.3(i), and the engines are the feed's source, 2.1(3));
+   - FOLLOW-UP 1 (its own small stage): the face-key guard in
+     _star_settled_drain — a 1-3 line behaviour change on the overlap band,
+     which needs an arm that samples the band WITH GLOW (or a declared
+     re-baseline) before it lands;
+   - FOLLOW-UP 2 (optional, a separate stage): the contained face edit per
+     2.4(c).
+   An empty step 5 closes this ticket on a different footing than a
+   deletion: "the split is kept by design, and the remaining residue is one
+   measured guard" — not "the split is removed." That is the footing to
+   close on, and it is worth stating before a builder is turned loose.
