@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-23T09:52
+  updated_at: 2026-10-23T18:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0463
+- AC-0472
 - AC-0451
 - AC-0399
 - AC-0094
@@ -29872,11 +29872,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-23T09:52
-  completed_at: null
+  updated_at: 2026-10-23T18:07
+  completed_at: 2026-10-23T18:07
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The old split is gone - there is one way the world works, with no leftover special\
@@ -30085,7 +30085,29 @@ intake:
     \ pass.\nRECOMMENDATION: do not reopen this as a big ticket. Plan item 1 (light ownership) as its\
     \ own measure-first stage under this ticket's ID, then close this ticket on the strength of items\
     \ 2 and 3 being evidenced, with the honest note that \"remove the legacy split\" was completed incrementally\
-    \ across AC-0459, AC-0465, AC-0467, AC-0469 and this one rather than in a single landing."
+    \ across AC-0459, AC-0465, AC-0467, AC-0469 and this one rather than in a single landing.\n\nCLOSED\
+    \ (round 64). WHAT THIS TICKET ASKED FOR: remove the legacy home/face split and prove it gone. WHAT\
+    \ IS TRUE NOW, all measured:\n- ONE STRUCTURE ACROSS TWELVE FACES: one key shape, one canonical placement,\
+    \ one node-creation path, one landing path, one generation queue and drain, one travel gate, one window,\
+    \ one residency model (AC-0469 G1-G4), and — this ticket's own work — one light accessor (star_for),\
+    \ one light drain entry (_star_drain_pass), one light edit entry (_star_edit_entry) and one light\
+    \ feed (the face build now consumes the star payload, L6).\n- THE PROOF IS BROADER THAN WHEN THE TICKET\
+    \ WAS FILED: the twelve-chart lap crosses 25 of 26 derived boundaries with mesh AND body at every\
+    \ destination (the one waiver is the documented home-pair midline, which is not a chart boundary),\
+    \ a negative control shows the lap can fail, and identity-proving evidence exists for every behaviour-preserving\
+    \ step (28,381 comparisons for the residency predicate; a counted six-arm before/after diff for the\
+    \ edit entry; byte-identical feeds for the drain).\n- WHAT WAS NOT DONE, AND WHY THAT IS THE RIGHT\
+    \ ANSWER: step 5 (\"delete _star_faces\") is EMPTY. After L3 and L6, every item it meant to delete\
+    \ is live settle-tracker function — deleting it would need a C++ key migration over 18 of 25 bindings\
+    \ and ~47 call sites, would silently revert L6 if done carelessly, and buys only tidiness. The engines\
+    \ stay because they CARRY FUNCTION, not because nobody got round to it.\n- THREE OF MY OWN CLAIMS\
+    \ WERE REFUTED BY MEASUREMENT, which is the healthiest part of the record: L1 said the face light\
+    \ was visibly divergent (measured zero; L6's render A/B shows 0.06% substantive pixel change, no seam);\
+    \ L5 expected the payload might be unobtainable for faces (it was obtainable, just unconsumed); and\
+    \ L1 called the home drain's face-key scan \"wasted but never wrong\" (it is neither proven wrong\
+    \ nor proven right — see AC-0472).\n- CARRIED FORWARD, NOT SWEPT: AC-0472 (the face-key overlap hazard\
+    \ between the home and face coordinate ranges, unmeasured in both directions), and the optional contained\
+    \ face edit that would retire the per-edit whole-column reseed."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
@@ -30708,6 +30730,72 @@ intake:
     chart faces. The home pair does NOT need this change - and under the "no home" design it is the chart
     faces that must become the standard, which makes this the next real step toward uniformity rather
     than a detour.
+
+    '
+  comments: []
+- id: AC-0472
+  title: 'face-key overlap: home drain can erase a face chunk''s light key'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-23T18:06
+  updated_at: 2026-10-23T18:06
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    When you walk near the boundary between the starting area and the rest of the planet, the glow around
+    a torch or cave mouth can stay stuck in a half-lit state and never settle. It is a narrow band, it
+    is not obvious, and nobody has yet confirmed whether it happens at all — but the code path that would
+    cause it is reachable and unguarded. This ticket measures whether it happens and guards against it.
+
+
+    ## 2) Technical Details
+
+    FOUND BY AC-0463 stage L7 (diagnosis, code untouched). The home light drain scans KEYS THAT BELONG
+    TO FACE CHUNKS as well as its own, because `_star_settled_drain` must keep querying the home engine
+    for face keys or it would double-settle (another key type, L2''s note). There is NO face-key guard
+    at world.gd:6223. Home chunk coordinates run -196..196; face chunk coordinates run 0..392. In the
+    [0,196]^2 OVERLAP the two namespaces collide numerically, so a settled home column can:
+
+    - overwrite a face chunk''s published `last_eff` (world.gd:6239), and
+
+    - erase the face key from the face engine''s owed/settled bookkeeping (world.gd:6236-6245).
+
+    Consequence if it fires: that face column never settles, so its margin-ring glow stays stuck on the
+    transient (pre-settle) light and never re-meshes to the settled value.
+
+
+    WHY IT COULD NOT EXIST BEFORE: AC-0459/AC-0465 gave both lanes one key shape (`face:cx:cz`) and AC-0469/AC-0471
+    put both on the same 1 m grid with overlapping chunk index ranges. The unification made the collision
+    possible; nothing has checked it since.
+
+
+    TASKS:
+
+    1. MEASURE first — do not fix on suspicion. Instrument the drain to count, over a boundary walk and
+    a stationary settle, how many face keys are erased by the home drain and how many face `last_eff`
+    values are overwritten by it. Zero counts means the hazard is theoretical and the guard is defence
+    only; non-zero counts with a wrong settled value means it is a live bug with a reproducer.
+
+    2. GUARD with the cheapest correct thing: a face-key check in the home drain so it skips keys it does
+    not own. That is 1-3 lines and is the recommendation from L7.
+
+    3. GATE on `lightstate` INVARIANTS (leaks 0, wash false — not its pacing fields, see godot/OPS.md
+    §7), `facefeed` numbers, `light` field values, genhash 25/25, plus the measurement from task 1 before
+    and after.
+
+
+    Estimated: small. Risk: LOW if measured first, MODERATE if the guard is written blind — a guard that
+    skips keys the home drain legitimately needs would re-open the double-settle that L3 ruled out structurally.
+
+    FILES: godot/world/world.gd (`_star_settled_drain` ~6223-6245). Refs: AC-0463 (L2, L3, L7), AC-0358
+    (feed invariant), godot/OPS.md §7 (arm variance).
 
     '
   comments: []
