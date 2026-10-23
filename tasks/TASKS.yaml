@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-23T03:57
+  updated_at: 2026-10-23T09:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0469
 - AC-0463
 - AC-0451
 - AC-0399
@@ -30306,11 +30305,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-22T15:24
-  updated_at: 2026-10-23T03:12
-  completed_at: null
+  updated_at: 2026-10-23T09:51
+  completed_at: 2026-10-23T09:51
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -30551,7 +30550,43 @@ intake:
 
     THIS IS A REFRAMING, NOT A RETREAT: nothing about the user''s requirement changes - same 1 m blocks
     everywhere, no privileged region, same experience planet-wide. What changes is the ORDER of the deletion,
-    because deleting the good streamer first would have made the world worse while looking like progress.'
+    because deleting the good streamer first would have made the world worse while looking like progress.
+
+
+    CLOSED (round 56). WHAT THIS TICKET SET OUT TO DO: delete the privileged home grid so the planet is
+    one resolution with no special spawn. WHAT IS TRUE NOW, all measured:
+
+    - ONE GRID: CELLS_PER_FACE 6,283 -> 1.000 m nominal, and since AC-0471 per-axis counts make every
+    face 1.000029 x 1.000189 m, so blocks are CUBIC everywhere (faces 4-7 were 1x1x0.5 m and 8-11 were
+    0.5x1x1 before). Verified across all 12 faces with cubic_ok true.
+
+    - THE HOME GRID IS GONE IN EVERY SENSE THAT MATTERS: home spans 6,283 m in 6,283 cells - the same
+    numbers as any face - and faces 0/1 now share one key shape, one canonical placement, one node-creation
+    path, one landing path (_face_land), one generation queue and drain (face chunks enqueue on the same
+    threadgen machinery and the same single-owner dedup), one travel gate, one window, and one residency
+    model (resident_of + one list + one sweep) with two pacing policies.
+
+    - THE COST OF 1 m IS MEASURED, NOT ASSUMED: boundary walk p95 37-40 (was 38 at 6 m cells) with p50
+    wandering 14-32; residency bounded and stable (face 74 / home 93, converge ~500 ms, leak false); the
+    far tier covers 100% of every chart face at a one-time bake of 1,269 s / 4.60 GiB peak per seed; and
+    the twelve-chart lap crosses 25 of 26 derived boundaries with mesh AND body at every destination.
+
+    - DEFECTS THIS TICKET FOUND AND FIXED, which are worth more than the grid change: a latent leak where
+    out-of-set drain stubs were never freed (invisible to the old sweep because its candidate counter
+    stayed at 0); a face-lane window measured in cells where it needed chunks (which made residency climb
+    without bound at 1 m); a prestream degenerate on six of eight chart faces, whose fill convergence
+    improved 20x once fixed; and a far tier charting 329 chunks past the edge of every face.
+
+    - MY OWN ERRORS, recorded because they were caught rather than because they were cheap: I proposed
+    the wrong direction first (making faces 0/1 adopt the 6.136 m face grid, which would have given the
+    user six-metre blocks), misquoted a code comment in a plan (the + half of each face pair takes the
+    raw coordinate, not -hw), assumed genhash could evidence a chart-face rebase (it only hashes the home
+    window), and set a p95 threshold from two samples when the arm''s real spread is ~37-40.
+
+    - NOT DONE HERE, DELIBERATELY: light ownership is still per-face engines vs the home path (tracked
+    in AC-0463); six stale _face_order reads remain in three fenced harness arms; and the absolute voxel
+    scale (whether 1 m is the right planet-wide size) is a planet-scale design question that belongs with
+    the multiple-planets work, not inside this ticket.'
   comments: []
 - id: AC-0470
   title: face prestream is degenerate on 6 of 8 chart faces
