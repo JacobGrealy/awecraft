@@ -1,38 +1,32 @@
-<!DOCTYPE html><html ns="http://www.w3.org/1999/xhtml" lang="en"><head><meta charset="utf-8"><title>AC-0469 sE face gen on the worker</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage E — face chunks generate on the worker, not on the frame</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is the first slice of generalising the home lane, and it targets the one thing the face lane actually lacks: <b>asynchronous generation</b>.</p>
-<h2>1. Goal</h2><p>A face chunk's terrain is requested through the existing threaded generation path and lands via the drain, instead of being built synchronously inside <code>_ensure_face_chunk</code>. The synchronous path stays as the fallback that the player query uses, so nothing can fail to appear — but the common case stops paying generation on the frame.</p>
-<h2>2. Why this and not "delete the home lane"</h2>
-<p>Measured (round 48): the home pair is now the SAME grid as the chart faces (6,283 cells at 1 m), so the resolution separation is gone. What differs is machinery, and the home lane holds the good half — worker generation, IO poll, drain, band priorities, pooling. The face lane's remaining weakness is that <code>_ensure_face_chunk</code> calls <code>WorldGen.generate_face</code> <b>synchronously</b>; the twelve-chart lap showed crossings stay solid only because of that synchronous build, which is a hitch rather than a gap. Making the face lane async is the step that lets the two lanes eventually become one.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sF unified residency diagnosis</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage F — what would it take for banded residency to own faces 0–11?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Diagnosis and design only — no behaviour change.</b> Everything else in this ticket is unified: one grid, one placement, one key shape, one node-creation path, one landing, one generation queue and drain, one travel gate and window. What is left is the last structural difference — the home lane owns banded residency for faces 0/1, and <code>_face_stream</code> owns a bespoke budgeted window for faces 4–11. This stage states precisely what merging them requires, so the implementation stage is not a guess.</p>
+<h2>1. Goal</h2><p>A written, evidence-backed answer to: can the banded residency model run faces 0–11 in one place, what coordinates would it need, what does <code>_face_stream</code> do that the bands do not, and what would break first.</p>
+<h2>2. What to establish (each with file:line evidence)</h2>
+<ul>
+<li><b>2.1 The coordinate question.</b> Banded residency is computed around <code>_rec_player_wx/wz</code> in FLAT coordinates (home patch). A player on a chart face has flat coordinates only through the extended-flat chart (<code>face_cell_band</code> / the <code>_face_player_flat</code> clamp). <b>Can one coordinate space express "the player's surroundings" for all 12 faces without special cases?</b> Say what the space would be, or say why it cannot be one.</li>
+<li><b>2.2 The inventory of differences.</b> List what <code>_face_stream</code> does that the band model does not: the edge-normal gate, the per-face edge band, the along-edge half-window, the budgeted pass, the separate <code>_face_order</code>/<code>_face_evict_last</code> bookkeeping. For each, say whether it is (a) subsumed by bands, (b) genuinely face-specific and must survive as a rule inside the unified lane, or (c) only needed because the current split exists.</li>
+<li><b>2.3 What the bands actually guarantee.</b> Read <code>stream_set</code> / <code>in_stream_set</code> / the band radii and state what guarantees "the chunk under and around the player exists" today, and whether that guarantee is expressible per-face.</li>
+<li><b>2.4 The failure that would come first.</b> Name the single most likely breakage of a naive merge, and the arm that would catch it. (Candidates to consider: the 16 m travel gate interacting with a band that is 98 m wide; the face budget disappearing so a wide band stalls a frame; the edge band near the home boundary.)</li>
+<li><b>2.5 A staged implementation order</b> that keeps the world playable after each step, with the gate that proves each step.</li>
+</ul>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_ensure_face_chunk</code> (find by name; the synchronous <code>WorldGen.generate_face</code> call), the threaded request/drain machinery the home lane uses (<code>threadgen_poll</code>, the worker handoff, the drain in <code>_process</code>), <code>_chunk_checkout_registered</code></td><td>Edit: add a face branch that ENQUEUES; keep the sync path as fallback.</td></tr>
-<tr><td>the worker/generator side</td><td>wherever the home lane's generation request is fulfilled (find by name — do not guess)</td><td>Edit: accept a face request (face, ccx, ccz).</td></tr>
-<tr><td>godot/scenes/harness.gd</td><td><code>planetwalk</code>, <code>residency</code>, <code>boundary</code></td><td>READ ONLY — they are the acceptance instruments.</td></tr>
-<tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_stream</code>, <code>_face_order</code>, <code>_face_evict_last</code>, <code>in_stream_set</code>, the band radii (<code>band0_r</code>/<code>band1_r</code>/<code>stream_set</code>), <code>_face_player_flat</code>, <code>recenter</code>, <code>_face_land</code>, <code>threadgen_enqueue_face</code></td><td>READ ONLY. This stage changes nothing.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>face_cell_band</code>, <code>world_to_face</code>, <code>home_point</code></td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append the design note.</td></tr>
 </table>
-<p><b>Do not touch:</b> the home lane's own policy, residency rules, the eviction sweep, the travel gate, the prestream arithmetic (just fixed), keys, saves, light, the mesher, the warp.</p>
-<h2>4. Edit shape</h2>
-<ul>
-<li><b>4.1 Enqueue when it is safe, build when it is not.</b> The prestream and the ordinary window requests should enqueue. The <b>player's own column query</b> (<code>get_block_key</code>'s <code>is_inf</code> sentinel path) must keep building synchronously when the chunk is absent — that is what guarantees the player never stands on nothing, and removing it would reopen the AC-0145 hazard.</li>
-<li><b>4.2 Landing must be complete before the chunk counts as resident.</b> A drained face chunk must go through the same landing the home lane uses (data, light seed, mesh, collision, occluder) — the AC-0460 occluder parity and the AC-0466 mesh+body checks are the proof it did not half-land.</li>
-<li><b>4.3 Reuse the existing queue and drain.</b> Do not invent a second worker protocol or a second drain; if the home lane's structures cannot carry a face request without a change, make the smallest change that lets them.</li>
-<li><b>4.4 Keep the budget honest.</b> The face pass still spends at most <code>FACE_STREAM_BUDGET_MS</code>; enqueueing must not turn a budgeted pass into an unbounded one.</li>
-</ul>
-<h2>5. Gates</h2>
+<h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Nothing disappears</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,planetwalk,residency,seamcensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; <b>planetwalk 25/26 with mesh AND body at every destination</b> (the one waiver is the documented home-pair midline); residency leak false / stable true; seamcensus clean.</td></tr>
-<tr><td>The hitch is reduced (the point)</td><td><code>--arms boundary</code></td><td>Crossing latency reported against the current p50 26 / p95 38 ms. An improvement is the expected direction; <b>a regression must be reported, not explained away</b>.</td></tr>
-<tr><td>Generation unchanged</td><td><code>--arms genhash</code></td><td><b>25/25</b> — same terrain, different scheduling.</td></tr>
-<tr><td>Start flow</td><td><code>--arms save,load</code></td><td><code>ok</code> true; report <code>simband_ms</code>.</td></tr>
+<tr><td>Nothing changed</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,residency --timeout 600</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; residency leak false / stable true with the same plateau as stage E (74 face / 138 home). <b>Any drift means this stage touched something — it must not.</b></td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>Face chunks generate off-frame in the common case, the player's own query still cannot fall through, every crossing still has mesh and body, generation is bit-identical, and the latency number is reported honestly.</p>
-<h2>7. Risks</h2><p>(1) An async face chunk that lands late could let a crossing see an unbuilt destination — planetwalk is the guard, and if it goes red this stage is not done. (2) Two queues racing for one chunk would double-generate; keep a single owner per key. (3) If the worker protocol turns out not to be reusable for faces without a large change, STOP and report what the obstacle is rather than building a parallel system.</p>
-<h2>8. Fences</h2><div class="stop"><ul>
+<h2>5. Acceptance</h2><p>A design note answering §2.1–§2.5 with file:line evidence and a staged order, and a tree provably untouched.</p>
+<h2>6. Risks</h2><p>The honest answer may be "these cannot be one model without a change to the band model itself" — that is a finding to report, not a failure. A design note that concludes "merge them" without naming the coordinate space and the first failure would be worse than no note.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. Do not remove the synchronous fallback.</li>
+<li><b>No code changes at all.</b> This stage writes a design note and runs the two gates to prove the tree is untouched.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>1 m cubic blocks everywhere (AC-0471), far tier complete, prestream correct on all faces (AC-0470, fill 20x faster), lap green, residency bounded. This takes the synchronous build off the face path — the last structural difference between the two lanes.</p>
+<h2>8. Resume point</h2><p>One grid (1 m cubic), one placement, one key shape, one node path, one landing, one generation queue and drain, one travel gate and window, the twelve-chart lap green, residency bounded, far tier complete, prestream correct. This stage designs the last merge instead of guessing it.</p>
 </body></html>

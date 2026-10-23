@@ -700,3 +700,246 @@ D20. NEGATIVE CONTROL PRESERVED (the instrument's teeth):
     saw_unbuilt=false (everything built by the time each check
     runs). An always-green instrument would have failed the
     skip run; it did not.
+
+AC-0469 stage F — design note: what would it take for banded residency to own faces 0-11?
+=======================================================
+Diagnosis and design only — this stage changed no code (proof: gates below;
+genhash-r11 byte-identical to the stage-E reference genhash-r9).
+All line numbers are godot/world/world.gd unless prefixed.
+
+2.1 THE COORDINATE QUESTION
+---------------------------
+NO — one coordinate space cannot express "the player's surroundings" for all
+12 faces without special cases, as long as the band model's predicate is a
+taxicab test on flat chunk deltas.
+
+The evidence, in the two facts that decide it:
+- The band space is FLAT INTEGER. in_stream_set(dx, dz) (6894-6898) and
+  band_of (6908-6918) take integer chunk DELTAS from the recenter center;
+  the metric is absi(dx)+absi(dz) (6872-6873, 6898). The player's position
+  in that space is _rec_player_wx/wz — flat metres (3416-3417, stored at
+  recenter 12013-12014).
+- A player on a chart face has NO position of its own in that space:
+  _face_player_flat (15178-15191) is _rec_player_wx/wz CLAMPED to the patch
+  [-hw, hw] (15191). A player 500 m into face 4 has the same flat position
+  as a player standing on the boundary. The extended-flat chart
+  (home_flat_ext, sphere_math.gd:628-634) can place CHUNK cells past the
+  patch (face_cell_band, sphere_math.gd:650-670) but returns (INF, INF)
+  wherever the corner cell's direction has d.y <= 0 (sphere_math.gd:630-631)
+  — the far hemisphere — and the world reads that as the is_inf sentinel
+  (_face_chunk_min_dist returns 0.0, 15171-15172).
+So: the only flat space that contains all face chunks (extended-flat) does
+NOT contain the player (the clamp at 15191); the only space that contains
+BOTH (the planet frame, world_to_face sphere_math.gd:156; player_anchor
+15515-15547) is not the band model's metric — "surroundings" there is an
+angular/spherical radius, and band0_r/band1_r/in_stream_set (228, 234,
+6898) have no angular form without being redefined.
+
+WHAT THE SPACE WOULD BE, stated precisely, so the next stage is not a guess:
+- Option A — keep extended-flat as the shared space. It covers exactly the
+  region the face lane streams today (faces 0/1 + the near-hemisphere edge
+  cells of faces 4-11, where d.y > 0) and keeps two honest special cases:
+  the player clamp (15191) and the is_inf sentinel (15171-15172). This is a
+  merge of the RESIDENCY POLICY, not of the coordinate space.
+- Option B — move the band model itself to the planet frame: in_stream_set /
+  band_of become predicates on per-chunk spherical distance (the player's
+  own face/chunk, world_to_face at 15521). Then faces 0-11 are one model
+  with zero coordinate special cases — but band0_r/band1_r become angular
+  radii, the crossing sweep's band-bounded ring walk (12069-12097, which is
+  O(ring) in taxi integers) must be re-derived for a sphere, and every
+  standing gate value on the planet moves. That is a change to the band
+  model itself, not a merge on top of it.
+FINDING (reporting it, not forcing a conclusion): these cannot be one model
+without changing the band model itself. Option A is the merge this ticket's
+remaining slice describes; Option B is a separate, larger ticket.
+
+2.2 THE INVENTORY — what _face_stream does that the band model does not
+------------------------------------------------------------------------
+(a) subsumed by bands / (b) genuinely face-specific, must survive as a rule
+inside the unified lane / (c) only needed because the split exists:
+
+1. THE EDGE-NORMAL GATE — (b).
+   15296-15302: edge_dist = (hw - p.x) for 4/5, (p.x + hw) for 6/7,
+   (hw - p.y) for 8/9, (p.y + hw) for 10/11; skip the face if edge_dist > win.
+   It exists because the along-edge window alone streamed ALL EIGHT edges'
+   bands on an interior walk (measured: resident 93 -> 272, p95 48 -> 97 ms,
+   flap 10 -> 137 — AC-0309 r30, comment 15288-15295). The home band's
+   "distance to the player chunk" cannot express "near THIS edge"; the
+   unified lane must keep per-edge proximity as a named face rule.
+
+2. THE PER-FACE EDGE BAND (rows) — (b).
+   15257: rows = mini(edge-axis chunk count, _chunks_across(win, stride));
+   the row loop 15337-15359; _chunks_across 15210-15211 is the ONE
+   metres->chunks conversion (the stage-B unit fix, context.md round 41).
+   The shape is a rectangle anchored to the boundary, depth in face chunks
+   along the edge-normal axis — not a taxicab disk around the player.
+   The depth itself is the face analogue of the band radius, but the SHAPE
+   is face-specific and must survive as a rule.
+
+3. THE ALONG-EDGE HALF-WINDOW + MIRROR CHART — (b).
+   15270-15285: lo/hi per face pair — each face covers only its own half of
+   the shared cube edge (4/6/8/10 the + half [0, hw], 5/7/9/11 the - half
+   [-hw, 0]); 15324-15333: raw_idx vs the mirror chart shift for 5/7/9/11
+   (their charts run from the -hw end — pre-fix this left the crossing row
+   unbuilt, AC-0470). Cube-edge topology with mirrored chart origins; not
+   expressible in the home band (which has no face and no edge). Must
+   survive as rules.
+
+4. THE BUDGETED PASS — (c).
+   FACE_STREAM_BUDGET_MS = 12.0 (15234), checked at 15338/15345/15355/15358;
+   called from the per-frame tick (6125) and the recenter (12479). The home
+   lane paces creation differently (threadgen_max cap + drain pacing,
+   FACE_DRAIN_MAX_PER_POLL, stage E; stream_ho_cap on the free). The
+   specific 12 ms pass budget is a split artifact; pacing itself survives
+   inside the unified lane in the home form.
+
+5. THE SEPARATE _face_order / _face_evict_last BOOKKEEPING — (c).
+   _face_order FIFO (14809), FACE_CHUNK_CAP = 512 (14808), the FIFO cap in
+   _face_land (15716-15719), windowed eviction (15364-15379), _face_evict_last
+   (14826). The TRAVEL GATE part is already unified: one _evict_sweep_due
+   (11950-11952) with two callers — home at 12377-12378, face at
+   15365-15366, "two callers, one rule" (11940-11949). The separate list +
+   cap exists only because the split exists; a unified lane keeps one
+   resident list and one sweep. (The face-specific body of _face_free_chunk
+   — the per-face starlight evict, 15386-15388 — rides the shared free path
+   as a hook, the way the home pools ride _free_chunk_key.)
+
+NOTHING IS CLEANLY (a): a taxicab disk cannot subsume edge-strip geometry.
+Three items (the gate, the edge band, the half-window) are face rules that
+must survive INSIDE the unified lane; two (the budget pass, the separate
+bookkeeping) dissolve into the home-side equivalents. Two more items beside
+the plan's list are (b) and must be named: the mesh window
+_face_in_mesh_window (15193-15199, sim_dist*16 + 8S via _face_chunk_min_dist)
+and the sync fallback in _ensure_face_chunk (15651-15672 — the player's own
+column query always builds synchronously, AC-0145).
+
+2.3 WHAT THE BANDS GUARANTEE
+----------------------------
+THE SET (no literal `stream_set` function exists — the set IS in_stream_set,
+6894-6898): taxisquare(render_radius = 4, 200/6872-6873) UNION
+diamond(b1_eff()+1 = 5, 6865-6866/6898) UNION the circle ring (6884-6891),
+all around the recenter center. At defaults (render_radius 4, band1_r 96 ->
+b1_eff 4, 228/234) it is a taxicab disc of radius ~5 chunks.
+THE BANDS (band_of, 6908-6918): taxi <= b0_eff (=4) -> band 0, the only
+region with full 16x16x16 + TICKS + collision (206-210); (b0, render] ->
+band 1 (full mesh); taxi <= b1_eff+1 outside the circle -> band 3 collar
+(data-only); ring -> band 3; else -1.
+THE GUARANTEE, stated: after a recenter, every stream-set cell has a data
+request in the queue — the crossing sweep is band-bounded and walks exactly
+the ring where membership can flip (12062-12097), the in_stream_set checks
+gate every fill (7057, 7529, 12184, 12433), the spawn 5x5 prewarm (12425-
+12439) feeds the drain — and eviction frees only outside candidates under
+the r+1/r+2 two_out hysteresis (12062-12065, 12377-12387). "The chunk under
+and around the player exists" = the band-0 sim diamond (taxi <= 4, 41
+columns at sim 4, 6566-6568, 6754) held by fill + queue + drain, PLUS the
+per-frame synchronous read on the face side (the _ensure_face_chunk sync
+fallback, 15651-15672).
+PER-FACE? The guarantee is expressible per face, but ONLY in a different
+metric: the face lane uses a continuous per-chunk Euclidean distance
+(_face_chunk_min_dist, 15165-15176, extended-flat corner cells) with
+_sim <= sim_dist*16 (15199) and the is_inf -> 0.0 sentinel (15171-15172),
+not the integer taxicab predicate (6898). The RADI differ too: the home
+window/evict is (64 m, 96 m) — margin (b1_eff()+2-band0_r)*16 = 32 m at
+defaults, 12104 (comment 11959) — while the face window/evict is (64 m,
+128 m) — FACE_STREAM_EVICT_MARGIN = 64.0, 14827, applied at 15243/15372.
+The WINDOWS agree (64 m, both through _stream_window, 11961-11963); the
+EVICT MARGINS do not (32 vs 64 m), because the home evict radius must cover
+the band-3 collar and the face lane has no band 3 (its distance is the far
+tier, not resident data). Unification must choose one margin per face — a
+design decision the next stage's plan must make.
+
+2.4 THE FAILURE THAT WOULD COME FIRST
+-------------------------------------
+SINGLE MOST LIKELY BREAKAGE: the edge-crossing frame stall from the face
+budget disappearing — and its correctness twin, the crossing row unbuilt.
+Mechanism: the home lane's only out-of-pass creation path is the recenter
+crossing sweep (11972 ff.) — a ONE-SHOT SYNCHRONOUS event, band-bounded
+(12062-12097), FLAT-KEYED ONLY (_enqueue_build rejects fully-past chunks,
+6925-6931, via _chunk_past_patch 14890-14895), with NO wall-clock budget
+(contrast FACE_STREAM_BUDGET_MS, 15234). A naive merge that routes face
+chunks through it would create the whole face band at the crossing recenter
+(6054) in ONE frame — the ~5-row edge band along the window (the residency
+arm's own policy report: face.edge_rows_x/z = 5) plus the band-bounded
+walk's per-candidate bookkeeping — instead of O(1) enqueues spread over
+many 12 ms passes (15338-15359). And if the merge also drops the sync
+fallback (15651-15672) in favor of the home lane's queue-only creation, the
+same crossing frame is where the player first stands on a face chunk:
+queue-only means the chunk may not be landed yet — a void.
+THE ARM THAT CATCHES IT: the BOUNDARY arm (crossing-frame p95/p50 —
+standing 38 / 26-31, and face_wall_ms) for the stall; the PLANETWALK
+twelve-chart lap (mesh_built + body_present at every crossing, with the
+negctrl saw_unbuilt as the negative control) for the void. Both already
+exist; no new instrument is needed.
+WHY NOT THE OTHER CANDIDATES:
+- The 16 m travel gate against the wide band: the gate is an EVICTION-side
+  hysteresis (12377, 15365) and a stationary player never sweeping is by
+  design (the user chose the travel-gated rule). The real risk it points at
+  is a NEW radius mismatch in the merged lane: if creation window and evict
+  radius stop coming from the same _stream_window quantity (11961-11963), a
+  stationary player re-creates the round-41 leak (face resident 79 -> 499,
+  context.md) — caught by RESIDENCY (leak flag).
+- The edge band near the home boundary: near the edge, the crossing row IS
+  inside the extended-flat disc around the (clamped) player, so a
+  coordinate-only merge mis-times rather than voids it there; it breaks
+  first on the BUDGET side, not the coordinate side.
+
+2.5 A STAGED IMPLEMENTATION ORDER
+---------------------------------
+Every step keeps the world playable because the player's-own-column
+guarantee (the sync fallback, AC-0145) is untouched until step 3, and only
+after the arms prove the unified pass, and the generation/landing machinery
+is already shared (stage E) — so steps 1-2 are behaviour-identical refactors
+that genhash + residency can prove.
+
+STEP 1 — one residency PREDICATE (refactor, zero behaviour change).
+  Introduce resident_of(key) returning band 0/1/3/-1 for BOTH key shapes:
+  face <= 1 -> in_stream_set/band_of unchanged (6894/6908); face >= 2 ->
+  today's face tests (evict: _face_chunk_min_dist <= win_ev.y, 15372-15378;
+  mesh: <= sim_dist*16, 15199). Nothing moves; both lanes call the same
+  function.
+  GATE: genhash 25/25 byte-identical + residency plateau (face 74, home
+  flat, leak false, stable true) + g0 0/0. (Any drift = the "refactor" was
+  not a refactor.)
+STEP 2 — one resident LIST, one eviction SWEEP.
+  Fold _face_order (14809) into the home resident bookkeeping; the ONE
+  travel-gated sweep (already one _evict_sweep_due, 11950) walks one list
+  and frees through the shared free path (_face_free_chunk 15381-15397 stays
+  as the face body — starlight evict 15386-15388 — the way _free_chunk_key
+  is the home body). Keep BOTH evict margins (32 m home / 64 m face, see
+  2.3) behind the unified window until step 3 decides.
+  GATE: residency (plateau + leak false + face evictions bounded) +
+  planetwalk 25/26 (mesh and body at every crossing) + g0.
+STEP 3 — creation through the unified pass, the (b) rules as sub-rules.
+  Extend the PER-FRAME/dispatch pass (not the one-shot crossing sweep —
+  that is 2.4's failure) to 3-part face keys; the face branch keeps the
+  surviving rules as named sub-rules: the edge-normal gate (15296-15302),
+  the edge band rows (15257), the half-window + mirror chart (15270-15285,
+  15324-15333). Enqueue via threadgen_enqueue_face (7198 — already
+  exists, stage E). Keep FACE_STREAM_BUDGET_MS (15234) as the unified
+  pass's pacing unless threadgen_max + FACE_DRAIN_MAX_PER_POLL pacing is
+  proven adequate (a measurement, not a guess). Keep the sync fallback
+  (15651-15672). Delete _face_stream's loop body (15246-15359).
+  GATE: boundary p95 <= 38 (the 2.4 arm) + planetwalk 25/26 + negctrl +
+  residency + genhash 25/25 + seamcensus. NEGATIVE-CONTROL requirement:
+  with the face branch disabled, the twelve-chart lap must FAIL — proving
+  the unified pass, not a leftover, now owns face creation.
+STEP 4 — delete the split.
+  _face_stream (15235), _face_order (14809), _face_evict_last (14826),
+  FACE_CHUNK_CAP (14808), FACE_STREAM_EVICT_MARGIN (14827),
+  _chunks_across (15210, if unused), the call sites (6125, 12479); one
+  evict margin chosen and recorded.
+  GATE: the full stage-E set (g0, genhash, residency, planetwalk,
+  boundary, save, load, seamcensus).
+
+2.6 GATES (this stage changed nothing)
+--------------------------------------
+run_stage_f_gates.sh (named script — the pgrep -f "[g]odot" slot-test trap):
+- g0-r24: rc=0, SCRIPT/SHADER 0/0.
+- genhash-r11: rc=0, 25/25, BYTE-IDENTICAL to the stage-E reference
+  (genhash-r9; diff empty).
+- residency-r9: rc=0, leak=false, ok=true, steady face 74 / home 127 FLAT
+  over 6 samples, converged=true, keys_same=true, verdict STABLE, face
+  evictions 0 — the SAME plateau as stage E (the builder's stage-E log
+  residency-r7/D19 reads 74/127; the coordinator's round-50 hand run read
+  74/138 — the home steady count sits in the 127-138 band across runs, the
+  face count is exact).
