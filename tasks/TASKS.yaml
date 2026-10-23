@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-22T22:29
+  updated_at: 2026-10-22T22:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0471
 - AC-0469
 - AC-0470
 - AC-0463
@@ -30562,6 +30563,56 @@ intake:
     must not reintroduce the leak fixed at ee123a3); and the boundary walk''s crossing latency must not
     regress. Report the per-face window sizes as the evidence, since that is the quantity that is wrong
     today.
+
+    '
+  comments: []
+- id: AC-0471
+  title: blocks on faces 4-11 are 1x1x0.5 m - the grid needs a per-axis cell count
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-22T22:30
+  updated_at: 2026-10-22T22:30
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: 'THE 1 m GRID IS NOT 1 m EVERYWHERE — blocks on the eight chart faces are 1.000 x 1.000 x 0.500
+    m (round 45, found by chasing the lap''s prestream finding into face_cell_scale).
+
+    THE MECHANISM: `face_cell_scale` (sphere_math.gd:450-454) is ANISOTROPIC by design (AC-0309): faces
+    4-7 return (s, s*0.5) and every other chart face returns (s*0.5, s). The halved axis exists because
+    each chart face covers only HALF a cube face along that axis (the pair members 8/10 and 9/11 split
+    it), so the same number of cells has to span half the distance. At the old 6.136 m nominal cell the
+    halved axis was 3.068 m and nobody noticed a 3 m vs 6 m asymmetry inside a world whose blocks were
+    already metres wide. At the 1 m target the same rule yields a 0.500 m axis, and that is now a visible
+    violation of the user''s constraint.
+
+    THE ARITHMETIC: nominal S = face_width/6283 = 1.0000 m, so faces 4-7 are 1.000 x 1.000 x 0.500 m and
+    faces 8-11 are 0.500 x 1.000 x 1.000 m. The z-face u chart checks out internally (6,283 cells x 0.500
+    m = 3,141.6 m = hw), which is why nothing is broken: the geometry is consistent, it is simply not
+    cubic.
+
+    WHY THIS IS THE REAL FINDING BEHIND THE LAP''S SYMPTOM: the lap reported the prestream degenerate
+    on faces 8/10 and over-streaming on 9/11, and blamed the z-face window stride. The stride is downstream
+    of this: the window converts flat metres to CELLS using the halved scale, so the cell count it derives
+    is twice what the chunk derivation expects, and chunks collapse to a corner or blow out to the whole
+    chart. Fixing the window arithmetic alone would paper over a block-size defect with a window tweak.
+
+    WHAT THE FIX ACTUALLY REQUIRES, stated so nobody underestimates it: the halved axis needs HALF the
+    cells (3,141 not 6,283) for its cells to be 1 m, which means CELLS_PER_FACE becomes TWO numbers (u-cells
+    and v-cells) rather than one - a per-axis grid, threaded through indexing, keys, chunk derivation,
+    generation addressing and the C++ lanes. That is a real change to the address space, not a constant
+    tweak, and it must be done as its own stage with the census discipline that AC-0469 stage A used (GRID
+    vs PAYLOAD vs OTHER) because 6283 now appears in the same places 1024 used to.
+
+    SCOPE NOTE: faces 0-3 are already isotropic at 1 m (S, S), so the defect is confined to the eight
+    chart faces. The home pair does NOT need this change - and under the "no home" design it is the chart
+    faces that must become the standard, which makes this the next real step toward uniformity rather
+    than a detour.
 
     '
   comments: []
