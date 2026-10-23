@@ -225,3 +225,52 @@ Far-tier rebase: FACE_GRID 64 -> SphereMath.CHUNKS_PER_FACE (393), threaded thro
 - THE A/B DECISION WAS NOT FORCED, which was the point of choosing this step first: the refactor needed no metric change, so the open question (extended-flat vs angular bands) is still open and still belongs to the user or a later stage rather than having been decided by a builder in passing.
 - ONE DISTINCTION WORTH KEEPING: three "right now" sites were converted (the recenter sweep's membership, the outside-set rebuild, the face windowed-eviction test), but the old-centre HYSTERESIS queries deliberately stayed on `in_stream_set` — that is a different question (r+1 candidate / r+2+ free) and merging it would have silently changed the eviction hysteresis.
 - STATE: step 1 of the four-step residency merge is landed and proved. Steps 2-4 (one resident list and one sweep; creation through the unified per-frame pass with the three geometric rules as sub-rules; deleting `_face_stream` and its constants) remain, and step 3 is where the budget-stall failure stage F named becomes live.
+
+## RUN — Fri Oct 23 06:16:33 EDT 2026 — AC-0469 stage G2 (one resident list + one sweep)
+- LANDED (G2): world.gd — ONE resident list + ONE sweep, two pacing policies over it.
+  (1) `_face_order` is renamed `_resident_order` and now holds the keys of ALL
+  resident chunks (home + face), FIFO by insertion: home appends in
+  `_make_chunk_node` (the only home insert), face appends in `_ensure_face_chunk`
+  (the only face insert); home erases in `_free_chunk_key` (the only home free,
+  including the deferred drain), face erases in `_face_free_chunk`; the sweep's
+  null-cleanup is the backstop. The list mirrors `chunks` membership.
+  (2) New `_resident_sweep(lane, p, pcx, pcz, home_win)` after `_stream_window`
+  (world.gd ~12029): one loop over the list, one `resident_of`, both lanes'
+  removals through it. LANE RES_SWEEP_HOME (called from recenter after the walk
+  + `_strip_candidate_builds`): the r+1/r+2+ hysteresis (two_out / cand_since,
+  the expression VERBATIM from the old walk's else branch) over the list, then
+  the AC-0257 split unchanged — travel gate (_home_evict_last, 16 m), first
+  stream_ho_cap freed now, the rest identity-guarded into _deferred_free.
+  LANE RES_SWEEP_FACE (called from _face_stream under the same travel gate as
+  before): immediate uncapped windowed free via resident_of (verbatim from the
+  old _face_stream loop). PACING stayed PER-LANE (two policies over one list):
+  home's hysteresis counts RECENTER EVENTS (a per-frame cadence would change
+  the r+1/r+2+ semantics) and its cap-defer is the measured AC-0257 rim
+  protection; face's is the immediate uncapped windowed free — one policy
+  cannot express both without a re-measure (step 3).
+  (3) The recenter walk's else branch keeps the exit one-shot only
+  (_stream_outside + _enter_candidate — its cand_since-reset-first order is
+  preserved, the sweep runs after the walk). Set-identity argument (in-code
+  comment): every two_out resident and every live cand_since>0 entry is visited
+  by the walk (the AC-0350 invariant — the boundary rings + the outside set
+  reach every outside-resident column), so the list pass scores exactly the
+  walk's old set.
+  (4) _face_land's FIFO cap now counts FACE chunks and evicts the OLDEST FACE
+  key (the interleaved home keys do not move the cap's victim);
+  _face_rebake_boundary skips home keys. No radius, margin, gate, budget or
+  hysteresis value moved. 12 targeted edits, all in godot/world/world.gd.
+
+## GATES — AC-0469 stage G2 (final, clean tree; logs under .scratch/AC-0469-gates/)
+- (a) g0-r30: rc=0, SCRIPT/SHADER 0/0. genhash-r14: rc=0, 25/25 — BYTE-IDENTICAL to the G1 reference (genhash-r12, diff empty). residency-r17 (final clean run; r13/r14 the same clean tree): rc=0, leak=FALSE, stable=TRUE, face 74 EXACT, home 92 (r13/r14: 93), converge 497 ms, keys_same=true, verdict STABLE, face evictions 0, home evictions 220 (G1: 219). HOME STEADY 92-93 vs the G1-era 127-138 = the D28 FINDING (drain-data-lane leading-arc stubs created out-of-set — a latent leak of hidden candidates the old band-bounded walk never visited and never freed; the unified list pass evicts them per the lane's own 2-recenter hysteresis policy). face EXACT, leak/stable/converge all match; pacing verified unchanged by (b). planetwalk-r19: rc=0, ok=true, 25/26 lap coverage with the documented lap_0-1 (home_pair_midline) waiver; ALL 25 walked crossings have mesh_built AND body_present at the destination AND cross_mesh_built AND cross_body_present at the crossing frame; negctrl inert (ran=false, saw_unbuilt=false).
+- (b) boundary-r3 (the single boundary probe, clean tree): rc=0, ok=true, marker_ok=true, remesh_ok=true, radius 4, crossing_n=38, crossing_frame p50 21 / p95 38 vs the G1 reference 30/38 — p95 EXACT (the plan's "a p95 REGRESSION IS A FAILURE" — none; p50 is LOWER). The AC-0257 capped/deferred free survived the unification: a full render-circle crossing at r4 stalls no more than before.
+- (c) save-r6: rc=0, ok=true (43 s). load-r6: rc=0, ok=true, simband_ms=6603 (G1: 6812 — same ~6.6 s class, the window is unchanged).
+- Every official arm ran on the clean tree (the AWECRAFT_G2CHECK diagnostic — per-recenter G2REC/G2UNVIS scored-vs-walk-visited lines and G2NEW creation lines that pinned the D28 mechanism — was removed before the final g0+r17 confirmation run; its runs are r15/r16 and are NOT part of the official set).
+- Deviations D24-D28 in AC-0469-deviations.txt. Results page re-rendered from summary-g2.json.
+
+## Coordinator triage — stage G2: one list, and the unification EXPOSED A LATENT LEAK the old walk was hiding (round 53)
+- WHAT LANDED: ONE resident list `_resident_order` (FIFO, both lanes) and ONE sweep `_resident_sweep` consulting the shared `resident_of`. Pacing deliberately stayed per-lane - home keeps its recenter-cadence hysteresis and the AC-0257 cap-defer (the measured rim protection), face keeps its per-frame travel-gated free - because the plan's §7 risk said unifying the LIST is safe while unifying the PACING without measuring would be a regression. One list, one loop, two pacing policies; that is the honest landing rather than a forced merge.
+- GATES ALL MATCH OR IMPROVE: genhash 25/25 byte-identical to G1, residency leak false / STABLE, face 74 exact, converge 497 ms, planetwalk 25/26 with mesh and body at every destination and crossing frame, and boundary p50 **21** / p95 **38** against the reference ~30/38 - p95 exact (the number this stage could have broken), p50 lower.
+- THE FINDING, and it is worth more than the refactor: home steady residency reads **92-93 where G1 read 127-138**. The builder pinned it with a per-recenter trace rather than shrugging at variance: the drain data lane stubs a leading arc of out-of-set cells (per-axis rr+1 bound, in_set=0 at birth, taxi 6-7 ahead of travel) that NEVER EXITED the set, so the old bounded walk never visited them and never freed them - with the candidate counter frozen at 0, i.e. invisible to the sweep. That is a LATENT LEAK in the pre-G2 code, and the ~45-chunk difference is exactly its size.
+- SO THE NUMBER MOVED BECAUSE THE BUG WAS FIXED, not because behaviour drifted: those stubs are data-only (written to disk when freed), the eviction is what the 2-recenter policy says should happen, and nothing is lost. Decision: ACCEPT. Reverting to the old count would mean restoring a leak to make a number match, which is the opposite of what this migration is for.
+- HONEST CAVEAT ON THE ACCEPT: I am accepting on the builder's trace and the gates, and the trace is specific enough to be wrong in a checkable way (the in_set=0-at-birth / taxi 6-7 claim). If anyone later finds those stubs were holding something, this is the note that says why the count changed.
+- STATE: three of four merge steps are done (predicate proved on 28,381 comparisons; one list and one sweep landed). Step 3 - creation through the unified per-frame pass with the three geometric rules as sub-rules - is where stage F's budget-stall failure becomes live, and step 4 deletes `_face_stream` and its constants.

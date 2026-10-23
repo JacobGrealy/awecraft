@@ -1,33 +1,39 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sG1 resident_of predicate</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage G1 — one <code>resident_of(key)</code> predicate (zero behaviour change)</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Pure refactor.</b> Step 1 of the four-step residency merge designed at stage F, and the one step that does not depend on the open A/B choice (extended-flat vs angular bands).</p>
-<h2>1. Goal</h2><p>The question "should this chunk be resident right now?" is answered in ONE place, used by both lanes, with every existing value and cadence preserved exactly.</p>
-<h2>2. Why this step first (from stage F's design)</h2>
-<p>Stage F established that the two lanes cannot simply be merged — they do not share a coordinate space, and three face-lane behaviours are genuinely geometric (edge-normal gate, per-face edge bands, along-edge half-window with its mirror chart) while only two are split artefacts (the 12 ms budgeted pass and the separate <code>_face_order</code>/<code>_face_evict_last</code> bookkeeping). <b>Step 1 is deliberately the neutral one</b>: it unifies the PREDICATE without touching the metric, so it is provably behaviour-preserving and does not pre-commit the A/B decision.</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 G2 one resident list</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage G2 — one resident list and one sweep</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Step 2 of the four-step residency merge. Step 1 (<code>resident_of</code>, proved on 28,381 comparisons) is the foundation this builds on.</p>
+<h2>1. Goal</h2><p>The set of chunks that are resident, and the sweep that brings it in line with <code>resident_of</code>, exist once rather than twice — with the SAME membership, the SAME cadence and the SAME eviction outcome as today.</p>
+<h2>2. What exists now (from stage F's inventory — do not re-derive)</h2>
+<ul>
+<li><b>Home</b>: residency is derived from the bands; the sweep lives inside <code>recenter</code> (~12062-12097) with <code>_deferred_free</code> (AC-0257) and the r+1 candidate / r+2+ free hysteresis (~11889). It is one-shot, synchronous, flat-keyed, unbudgeted.</li>
+<li><b>Face</b>: a separate <code>_face_order</code> list (FIFO of face keys) swept past <code>win + margin</code>, gated on >16 m of travel (<code>_face_evict_last</code>).</li>
+<li><b>Both</b> now answer membership through <code>resident_of</code> (step 1: face ≤1 taxicab, face ≥2 extended-flat), and BOTH use the one travel gate and one window helper from AC-0463 slice 2b.</li>
+<li>Only the ORDER LIST and the sweep loop differ. The 12 ms budget pass and the separate bookkeeping are the split artefacts stage F said can die — but <b>the budget is a step-3 concern</b>, not this one.</li>
+</ul>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td>the band predicate <code>in_stream_set</code> and its taxicab arithmetic (~6894-6898); the home sweep's use of it (~12062-12097); <code>_face_chunk_min_dist</code> (~15165) and the face window's membership test in <code>_face_stream</code></td><td>Edit: express both membership tests through ONE predicate.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_order</code> (~14809), <code>_face_evict_last</code> (~14826), the face eviction loop in <code>_face_stream</code>, the recenter sweep (<code>to_free</code>, ~12062-12097), <code>_deferred_free</code> and its drain, <code>resident_of</code></td><td>Edit: one list, one sweep loop, both lanes' removals going through it.</td></tr>
 <tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the band radii, the 16 m travel gate, the eviction radii or margins (32 m home vs 64 m face — stage F flagged that difference as a decision for a later step and it stays untouched here), the budgeted pass, generation, the mesher, keys, saves, light, the warp.</p>
+<p><b>Do not touch:</b> the band radii, the eviction radii/margins (32 m home vs 64 m face — a later decision), the travel-gate threshold, the 12 ms budget pass, the hysteresis semantics, generation, the mesher, keys, saves, light, the warp.</p>
 <h2>4. Edit shape</h2>
 <ul>
-<li><b>4.1 One predicate, two callers.</b> A function taking whatever a caller can supply — for the home lane a flat chunk (cx,cz) plus the player's flat position; for the face lane a face plus (ccx,ccz) plus the player's flat position — returning whether that chunk belongs in the resident set under that lane's CURRENT rule. <b>If the two rules genuinely differ in metric (stage F says they do), the predicate may dispatch on which space the chunk is in, but it must not change either answer.</b></li>
-<li><b>4.2 Identical answers.</b> For a set of sampled chunks, the new predicate must return exactly what the old inline test returned. State how you verified this (an arm, a temporary assertion, or a diff of the two expressions) in the deviations.</li>
-<li><b>4.3 No value moves.</b> Same radii, same margins, same cadence, same travel gate.</li>
+<li><b>4.1 One list.</b> A single ordering structure holds the keys of resident chunks for all faces. Keep the SAME ordering property the face lane relies on (FIFO by insertion) and the same membership the home lane derives, so neither lane's eviction ORDER changes.</li>
+<li><b>4.2 One sweep.</b> One loop consults <code>resident_of</code> and evicts what no longer belongs. <b>The home lane's deferred-free mechanics (AC-0257: over-cap frees deferred, identity-guarded by inst + col_gen) must survive</b> — they exist so a full render circle does not detach its rim in one frame. If one sweep cannot honour both lanes' eviction pacing, say so and keep the PACING per-lane while sharing the membership and the loop structure.</li>
+<li><b>4.3 Nothing else moves.</b> Same radii, same margins, same gates, same hysteresis.</li>
 </ul>
-<h2>5. Gates — all must MATCH, because this is a refactor</h2>
+<h2>5. Gates — all must MATCH</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Nothing moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,residency,planetwalk --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b>; residency leak false / stable true at the stage-F plateau (face ~74, home ~127-138); planetwalk 25/26 with mesh and body at every destination.</td></tr>
-<tr><td>Start flow</td><td><code>--arms save,load</code></td><td><code>ok</code> true; <code>simband_ms</code> reported (the ~6.6 s class).</td></tr>
+<tr><td>Residency unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,residency,planetwalk --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; residency <b>leak false / stable true</b> at the stage-G1 plateau (face 74 / home 127, converge ~500 ms); planetwalk 25/26 with mesh AND body at every destination.</td></tr>
+<tr><td>No streaming stall</td><td><code>--arms boundary</code></td><td>Crossing latency reported against p50 ~26-31 / p95 38. <b>A p95 regression is a failure of this stage</b>, not variance — the eviction pacing is exactly what this step could break.</td></tr>
+<tr><td>Start flow</td><td><code>--arms save,load</code></td><td><code>ok</code> true; <code>simband_ms</code> in the ~6.6 s class.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>One predicate answers residency for both lanes, both answers unchanged, and every standing value identical.</p>
-<h2>7. Risks</h2><p>If making one predicate forces a metric change to keep both answers identical, then the honest outcome is "not possible without choosing extended-flat or angular" — <b>STOP and report that</b>, because that is the A/B decision and it is not this stage's to make.</p>
+<h2>6. Acceptance</h2><p>One list, one sweep loop, membership through <code>resident_of</code>, identical residency numbers and no latency regression.</p>
+<h2>7. Risks</h2><p>The home sweep's pacing exists for a measured reason (a recenter over a full render circle detaching the whole rim in one frame). Unifying the LIST is safe; unifying the PACING without measuring would be a regression — so if the two pacings cannot be expressed as one, keep them as two policies over one list and say so plainly.</p>
 <h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No value, cadence or metric changes.</li>
+<li>No edits outside §3. No radius, margin, gate or budget changes.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>Stage F designed a four-step merge and named its first failure. This is step 1. Steps 2-4 (one resident list and sweep; creation through the unified pass; deleting <code>_face_stream</code>) follow, and step 2 onward needs the A/B decision recorded at stage F.</p>
+<h2>9. Resume point</h2><p>G1 landed the one predicate with a 28,381-comparison identity proof. Steps 3-4 (creation through the unified per-frame pass; deleting <code>_face_stream</code>) follow, and step 3 is where stage F's budget-stall failure becomes live.</p>
 </body></html>

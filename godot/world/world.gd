@@ -11659,7 +11659,12 @@ func _make_chunk_node(cx: int, cz: int) -> Node3D:
 	var nb := band_of(int(cx) - last_pcx, int(cz) - last_pcz)
 	c.band = nb if nb >= 0 else 3
 	c.collision_enabled = collision_enabled and c.band == 0
-	chunks[_key(cx, cz)] = c
+	# AC-0469 stage G2: the ONE resident order list — both lanes register
+	# their keys here (the face lane appends in _ensure_face_chunk); the
+	# list mirrors chunks membership (appended at insert, erased at free).
+	var _hk := _key(cx, cz)
+	chunks[_hk] = c
+	_resident_order.append(_hk)
 	# AC-0373: NO stamp here — a spawn's data is always empty (the pool
 	# reset + no data write between checkout and the insert), so the new
 	# member fails the memo's band-0/data-present filter; its first data
@@ -11762,6 +11767,7 @@ func _free_chunk_key(key: String) -> void:
 	if int(c.band) == 0 and not c.data.is_empty():
 		_rt_dirty()  # AC-0373: a memo member leaves the resident set
 	chunks.erase(key)
+	_resident_order.erase(key)  # AC-0469 G2: the ONE resident list
 	queued_keys.erase(key)
 	fluid_dirty.erase(key)
 	tex_refresh.erase(key)
@@ -11988,6 +11994,83 @@ func _stream_window(sim_dist: int, evict_margin_m: float) -> Vector2:
 	var win_m := float(sim_dist) * 16.0
 	return Vector2(win_m, win_m + evict_margin_m)
 
+# AC-0469 stage G2 — the ONE resident sweep: one loop over the ONE
+# resident order list (_resident_order), the ONE predicate
+# (resident_of), both lanes' removals going through it. The PACING is
+# per-lane — two policies over ONE list, stated plainly (plan §4.2: the
+# two cadences cannot be one policy without breaking a measured
+# behaviour):
+#   RES_SWEEP_HOME — recenter cadence (called from recenter after the
+#       walk): the r+1 candidate / r+2+ free hysteresis (two_out,
+#       cand_since >= 2 — the expression verbatim from the old walk's
+#       else branch) feeds to_free, and the AC-0257 split frees the
+#       first stream_ho_cap now and DEFERS the rest (the
+#       identity-guarded _deferred_free drain): a recenter over a full
+#       render circle must not detach the whole rim in ONE frame. The
+#       hysteresis counts RECENTER EVENTS, so it runs here, not per
+#       frame.
+#   RES_SWEEP_FACE — per-frame cadence (called from _face_stream when
+#       the ONE travel gate passes): immediate, uncapped windowed free
+#       (win + FACE_STREAM_EVICT_MARGIN, through resident_of).
+# The list is FIFO by insertion for BOTH lanes: the face eviction order
+# (the relative order of face keys, the cap's oldest-face victim) is the
+# same as when the list was face-only, and the home free set / cadence /
+# hysteresis are the same as the old walk's — every two_out resident and
+# every live cand_since>0 entry is visited by the walk (the AC-0350
+# invariant: the outside set + the boundary rings reach every
+# outside-resident column), so the list pass sees exactly the walk's set.
+# The one visible difference: the intra-sweep ORDER of the home free is
+# FIFO (insertion) instead of ring-scan order — which already-hidden
+# r+2+ candidates get deferred swaps; the cap, the deferral and the
+# identity guard are unchanged (the boundary p95 verifies no stall).
+const RES_SWEEP_HOME := 0
+const RES_SWEEP_FACE := 1
+
+func _resident_sweep(lane: int, p: Vector2, pcx: int, pcz: int, home_win: Vector2) -> void:
+	var to_free: Array[String] = []
+	for key in _resident_order.duplicate():
+		var c = chunks.get(key)
+		if c == null:
+			_resident_order.erase(key)
+			continue
+		var f := int(c.face)
+		if f <= 1:
+			if lane != RES_SWEEP_HOME:
+				continue
+			# the home policy (verbatim from the old recenter walk's else
+			# branch): AC-0080 two-stage hysteresis — r+1 candidate
+			# (keep node+data+edits+mesh, the fog hides it); r+2+ for 2
+			# recenter events = free. Jitter at r+1 resets cand_since.
+			var dx := int(c.cx) - pcx
+			var dz := int(c.cz) - pcz
+			var two_out := not in_circle_ring(dx, dz) and (absi(dx) + absi(dz)) * 16.0 > home_win.y
+			if not two_out:
+				c.cand_since = 0
+			else:
+				c.cand_since += 1
+				if c.cand_since >= 2:
+					to_free.append(key)
+		else:
+			if lane != RES_SWEEP_FACE:
+				continue
+			# the face policy (verbatim from the old _face_stream loop):
+			# the windowed free through the ONE predicate.
+			if not resident_of(f, int(c.cx), int(c.cz)):
+				_face_free_chunk(key)
+	# the home PACING (AC-0257 + AC-0463 slice 2b, unchanged): the travel
+	# gate (the recenter's crossing is the home lane's movement), the
+	# cap-defer and the identity-guarded checkin.
+	if lane == RES_SWEEP_HOME and _evict_sweep_due(_home_evict_last, p, 16.0):
+		_home_evict_last = p
+		var free_n := 0
+		for key in to_free:
+			if free_n >= stream_ho_cap:
+				var dc: Node3D = chunks[key]
+				_deferred_free.append({"key": key, "inst": dc.get_instance_id(), "colgen": dc.col_gen})
+				continue
+			_free_chunk_key(key)
+			free_n += 1
+
 # AC-0445: recenter is an X/Z-ONLY crossing event. The AC-0234 vertical
 # (Y) trigger in the player is deleted — a pure vertical flight no longer
 # recenters, no longer throttles the build queue, and no longer invalidates
@@ -12090,7 +12173,6 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# events = free. Jitter at r+1 resets cand_since, so a chunk never
 	# flaps in and out.
 	var rr := render_radius
-	var to_free: Array[String] = []
 	var cand_builds: Array = []
 	# AC-0350: the crossing sweep is BAND-BOUNDED — O(ring) instead of
 	# O(resident). The old walk visited EVERY resident column (1453 at R24)
@@ -12323,19 +12405,15 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 				_stream_outside[key] = true  # AC-0350: the leaver enters the outside set (bookkeeping only)
 				if _enter_candidate(key, c):
 					cand_builds.append(key)
-			# Free once TWO rings clear the set after 2 recenter events;
-			# one-ring-out chunks keep node+data as candidates (the old r+1
-			# behavior). AC-0152 ring: the Euclidean one-ring-out predicate
-			# is in_circle_ring itself — the old L2 (R+1)^2 threshold missed
-			# the diagonal ring corners ((R+1,1) at R^2+2R+2 > (R+1)^2),
-			# which would have been freed instead of kept as candidates.
-			var two_out := not in_circle_ring(dx, dz) and (absi(dx) + absi(dz)) * 16.0 > home_win.y
-			if not two_out:
-				c.cand_since = 0
-			else:
-				c.cand_since += 1
-				if c.cand_since >= 2:
-					to_free.append(key)
+			# AC-0469 stage G2: the r+1 candidate / r+2+ free hysteresis
+			# (two_out / cand_since >= 2, the AC-0080 two-stage rule) moved
+			# to the ONE resident sweep (_resident_sweep's home pass) —
+			# the same expression over the one order list, run after the
+			# walk so the exit one-shot above keeps its old
+			# cand_since-reset-first order. The set is identical: every
+			# two_out resident and every live cand_since>0 entry is visited
+			# by this walk (the AC-0350 invariant), so the sweep's list
+			# pass sees exactly the entries this branch used to score.
 	# AC-0346 backstop (AC-0350): the 1→1 hop class — a FULL-data column
 	# outside the real band at BOTH centers. Not within K of any band edge,
 	# so the bounded passes above never visit it; the old walk demoted it on
@@ -12394,29 +12472,13 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	var tf1 := Time.get_ticks_usec()
 	var crx_scan_us := tf1 - rt0  # AC-0348: the synchronous chunk-scan sub-part (walk + the band calls)
 	_strip_candidate_builds(cand_builds)
-	# AC-0257 (instance cap): the per-frame detach/checkin is bounded by
-	# the SAME cap as the attach burst (stream_ho_cap — the "Chunk meshes
-	# per frame" setting, "one configurable number"). The free's heavy
-	# work is the instance detach + the pool checkins (_lod_free_all +
-	# _col_checkin — dozens of node detaches per column), so a recenter
-	# over a full render circle used to detach the whole rim in ONE frame.
-	# Free the first stream_ho_cap columns now, DEFER the rest — they are
-	# already hidden candidates (r+1), so a few frames of deferral are
-	# invisible; the drain runs from _process at the same cap.
-	# AC-0463 slice 2b: the home eviction sweep is travel-gated by the ONE
-	# travel gate (the face lane's 16 m rule — plan §4.1). The recenter's
-	# crossing is the home lane's movement; the cap-defer and the
-	# identity-guarded checkin (AC-0257) are untouched.
-	if _evict_sweep_due(_home_evict_last, Vector2(wx, wz), 16.0):
-		_home_evict_last = Vector2(wx, wz)
-		var free_n := 0
-		for key in to_free:
-			if free_n >= stream_ho_cap:
-				var dc: Node3D = chunks[key]
-				_deferred_free.append({"key": key, "inst": dc.get_instance_id(), "colgen": dc.col_gen})
-				continue
-			_free_chunk_key(key)
-			free_n += 1
+	# AC-0469 stage G2: the home pass of the ONE resident sweep — the
+	# r+1 candidate / r+2+ free hysteresis over the one order list, then
+	# the AC-0257 capped / deferred free (the cap exists so a recenter
+	# over a full render circle does not detach the whole rim in ONE
+	# frame; the travel gate, the cap-defer and the identity-guarded
+	# checkin are untouched — see _resident_sweep).
+	_resident_sweep(RES_SWEEP_HOME, Vector2(wx, wz), pcx, pcz, home_win)
 	_rp_free_ms += (Time.get_ticks_usec() - tf1) / 1000.0
 	threadgen_poll()
 	threadmesh_poll()
@@ -14839,7 +14901,7 @@ func _fluid_near(x: int, y: int, z: int) -> bool:
 # the per-axis counts cells_u/cells_v — 6,283 or 3,141 — derive from it);
 # the former users read them through SphereMath now.
 const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
-var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
+var _resident_order: Array = []  # AC-0469 G2: the ONE resident order list — FIFO by insertion, BOTH lanes (the home lane appends in _make_chunk_node)
 var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac0433probe natural-vs-forced discriminator)
 
 # --- AC-0309: cross-face movement (P4 of AC-0144) — the face-side runtime ---
@@ -15394,30 +15456,19 @@ func _face_stream() -> void:
 	# — travel-gated by the ONE travel gate (the home recenter sweep is
 	# the twin caller, plan §4.1; the per-chunk band query stays off the
 	# idle frame).
-	if not _face_order.is_empty():
+	# AC-0469 stage G2: the face pass of the ONE resident sweep — the
+	# same loop the recenter's home pass runs over the one order list
+	# (the PACING is per-lane, see _resident_sweep; the win + margin
+	# test is resident_of's face branch, unchanged from G1).
+	if not _resident_order.is_empty():
 		if _evict_sweep_due(_face_evict_last, p, 16.0):
 			_face_evict_last = p
-			# AC-0311 piece 3: the +FACE_BLEND_BAND*S term (196 m at
-			# R = 4000) went with the band — it existed to keep the
-			# blended strip resident; nothing reads face chunks past
-			# the mesh window, so the plain win + margin stands.
-			# AC-0469 stage G1: the per-chunk residency question through
-			# the ONE predicate (its face branch IS this test:
-			# _face_chunk_min_dist to the patch-clamped flat position
-			# within the shared window's evict radius — win_ev.y, the
-			# sim band + FACE_STREAM_EVICT_MARGIN; AC-0463 slice 2b).
-			for k in _face_order.duplicate():
-				var c = chunks.get(k)
-				if c == null:
-					_face_order.erase(k)
-					continue
-				if not resident_of(int(c.face), int(c.cx), int(c.cz)):
-					_face_free_chunk(k)
+			_resident_sweep(RES_SWEEP_FACE, p, 0, 0, Vector2())
 
 func _face_free_chunk(key: String) -> void:
 	var c: Node3D = chunks.get(key)
 	if c == null:
-		_face_order.erase(key)
+		_resident_order.erase(key)
 		return
 	var st: Variant = _star_faces.get(int(c.face))
 	if st != null:
@@ -15427,7 +15478,7 @@ func _face_free_chunk(key: String) -> void:
 	if int(c.band) == 0 and not c.data.is_empty():
 		_rt_dirty()  # AC-0373: a memo member leaves the resident set
 	chunks.erase(key)
-	_face_order.erase(key)
+	_resident_order.erase(key)
 	_lod_free_all(c, false)
 	if not _nofree:
 		_col_checkin(c)
@@ -15477,7 +15528,7 @@ func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
 # — a handful of chunks per boundary-column landing. face_rebake_n counts
 # the actual re-bakes (the ac0433probe natural-vs-forced discriminator).
 func _face_rebake_boundary(cx: int, cz: int) -> void:
-	if Game.planet_R <= 0.0 or _face_order.is_empty():
+	if Game.planet_R <= 0.0 or _resident_order.is_empty():
 		return
 	var R: float = Game.planet_R
 	var hw: float = SphereMath.face_width(R) * 0.5
@@ -15496,9 +15547,11 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 	# both classes (cx on the x faces, cz on the z faces), so the
 	# full-axis count is the right single source here.
 	var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
-	for k in _face_order.duplicate():
+	for k in _resident_order.duplicate():
 		var c = chunks.get(k)
-		if c == null or not bool(c.mesh_built):
+		# AC-0469 G2: the list now holds home keys too — home chunks are
+		# not edge-row face chunks (their face is 0/1, never 4-11).
+		if c == null or not bool(c.mesh_built) or int(c.face) <= 1:
 			continue
 		var f: int = int(c.face)
 		# AC-0471: the chunk's along-edge flat span = 16 cells of the
@@ -15673,7 +15726,7 @@ func _ensure_face_chunk(face: int, colx: int, colz: int, sync_build: bool = true
 		# has a SINGLE OWNER from this instant: while in-flight the
 		# worker owns it, and no second checkout for the key can exist.
 		chunks[key] = c
-		_face_order.append(key)
+		_resident_order.append(key)  # AC-0469 G2: the ONE resident list (the home lane appends in _make_chunk_node)
 	if c.data.is_empty():
 		if not sync_build and threadgen:
 			# the prestream / window request (the common case): ENQUEUE
@@ -15748,11 +15801,23 @@ func _face_land(c: Node3D, face: int, ccx: int, ccz: int, key: String, fdata: Pa
 	# the adjacent home boundary chunk(s) now have live face data across
 	# their edge — re-mesh them (their ring reads the face side live).
 	_face_rearm_home_neighbors(face, ccx, ccz)
-	# the FIFO cap (the windowed eviction in _face_stream refines it)
-	if _face_order.size() > FACE_CHUNK_CAP:
-		var old: String = String(_face_order.pop_front())
-		if chunks.has(old):
-			_face_free_chunk(old)
+	# the FIFO cap (the windowed eviction in _resident_sweep refines it) —
+	# AC-0469 G2: the list is shared with the home lane, so the cap counts
+	# FACE chunks and evicts the OLDEST FACE key — the face FIFO is
+	# unchanged by the interleaved home keys (the old pop_front of the
+	# face-only list hit the same key).
+	var fn := 0
+	var old := ""
+	for _rk in _resident_order:
+		var _rc = chunks.get(_rk)
+		if _rc == null:
+			continue
+		if int(_rc.face) >= 2:
+			if old == "":
+				old = String(_rk)
+			fn += 1
+	if fn > FACE_CHUNK_CAP and old != "" and chunks.has(old):
+		_face_free_chunk(old)
 
 # AC-0469 stage E: the drain landing for a face request — the SAME
 # _face_land the sync path does (banana + data, light seed, mesh,

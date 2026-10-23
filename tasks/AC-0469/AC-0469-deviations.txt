@@ -1023,3 +1023,104 @@ D23. REFERENCE NOTE (plan §4.1 said "the player's flat position" for
     globally (the drain fills' reference). The predicate uses
     last_pcx/last_pcz; at all three converted sites that is the SAME
     value the old inline test used (verified above, D22).
+
+## AC-0469 stage G2 — one resident list + one sweep
+D24. PACING STAYS PER-LANE (plan §4.2's anticipated outcome, stated
+    plainly): the two lanes' eviction cadences cannot be expressed as
+    one policy without re-measuring a measured behaviour, so G2 keeps
+    them as TWO POLICIES OVER ONE LIST. `_resident_sweep(lane, ...)` is
+    the one loop over the one order list (`_resident_order`) and the
+    one predicate (`resident_of`); the lanes are:
+      - RES_SWEEP_HOME (called from recenter after the walk +
+        _strip_candidate_builds): the r+1 candidate / r+2+ free
+        hysteresis (two_out / cand_since >= 2, the expression VERBATIM
+        from the old walk's else branch) scores the list, then the
+        AC-0257 split — travel gate (_home_evict_last, 16 m), first
+        stream_ho_cap freed now, the rest identity-guarded
+        (inst + col_gen) into _deferred_free, drained at the same cap.
+        The hysteresis counts RECENTER EVENTS: a per-frame cadence
+        would turn "2 recenter events" into "2 frames", and an
+        uncapped/undelayed free would detach the whole render-circle
+        rim in one frame — the measured regression AC-0257 exists to
+        prevent. Unifying the pacing is a step-3 decision (it needs the
+        boundary arm as its instrument).
+      - RES_SWEEP_FACE (called from _face_stream under the same >16 m
+        travel gate as before): immediate, uncapped windowed free —
+        win + FACE_STREAM_EVICT_MARGIN through resident_of, exactly the
+        old _face_stream loop.
+    No radius, margin, gate, budget or hysteresis value moved; the 12 ms
+    budget pass, generation, the mesher, keys, saves, light and the warp
+    are untouched.
+D25. THE ONE BEHAVIOURAL MICRO-DIFF, DECLARED: the intra-sweep ORDER of
+    the home free is now FIFO (list insertion order) instead of the old
+    walk's ring-scan order — to_free is built by the list pass. Which
+    already-hidden r+2+ candidates are freed immediately vs deferred a
+    few frames swaps; the free SET, the cadence, the hysteresis, the
+    cap (stream_ho_cap), the deferral and the identity guard are
+    unchanged. The face lane's eviction order is EXACT: the face keys
+    keep their relative FIFO order inside the shared list, the windowed
+    free is still "all non-resident face keys, uncapped", and the
+    FACE_CHUNK_CAP victim is still the oldest face key (the cap now
+    counts face chunks in the shared list and picks the first face key
+    — the old pop_front of the face-only list hit the same key). The
+    boundary p95 gate verifies no stall from the reorder.
+D26. HYSTERESIS SET-IDENTITY ARGUMENT (why the list pass scores exactly
+    the old walk's set, so the home free set is unchanged): the walk's
+    else branch used to run the hysteresis on its VISITED entries only;
+    the sweep runs it on EVERY home key in the list. The two sets are
+    equal because (a) every two_out resident is visited by the walk
+    (the AC-0350 invariant — the boundary rings reach every
+    outside-resident column, and the jump case backstops with the
+    _stream_outside fills), and (b) every live cand_since>0 entry is
+    either currently two_out (→ (a)) or entered _stream_outside at its
+    exit (→ pass C visits it; the self-heal only removes freed keys).
+    The exit one-shot (_stream_outside + _enter_candidate) stays in the
+    walk, so its cand_since-reset-first order is preserved (the sweep
+    runs after the walk). cx_scanned keeps counting only walk visits, so
+    the AC-0348 census values are unchanged.
+D27. LIST MAINTENANCE: _resident_order mirrors chunks membership — home
+    appends in _make_chunk_node (the only home insert), face appends in
+    _ensure_face_chunk (the only face insert); home erases in
+    _free_chunk_key (the only home free, including the deferred drain),
+    face erases in _face_free_chunk; the sweep's null-cleanup is the
+    backstop. _face_rebake_boundary skips home keys (a home face 0/1 can
+    never match its f==4..11 conditions).
+D28. FINDING — residency home steady 92-93 vs the G1-era 127-138 (this
+    corrects D26's premise (a)): the set-identity argument holds for
+    chunks that EXITED the stream set (every exit event is visited — the
+    boundary rings, and at jumps the old-center fills — and the
+    _stream_outside backstop is complete). It does NOT cover a second
+    population the argument never considered: home stubs created
+    OUT-OF-SET by the drain data lane (world.gd ~10265: the per-axis
+    |dx| <= rr+1 AND |dz| <= rr+1 bound lets queued entries at taxi 6-7
+    — the leading arc ahead of the travel direction, in_set=0 at
+    creation — be stubbed). Such a chunk never WAS in the stream set: it
+    has no exit event, is never added to _stream_outside, and once its
+    taxi from the recenter center exceeds R_outer + K it is never
+    visited by the old band-bounded walk again (K=0 recenter: ring
+    [6,6]; K=1: [5,7]) — so in the OLD code its cand_since froze at 0
+    and it was never freed: a hidden-candidate population, a latent
+    leak. The unified list pass scores it every recenter and frees it
+    after 2 recenter events under the lane's own hysteresis policy
+    (travel gate + AC-0257 cap-defer intact). Evidence: temporary
+    env-gated AWECRAFT_G2CHECK diagnostic (G1's AWECRAFT_G1_CHECK
+    precedent; removed before the final gates; runs r15/r16): per
+    recenter G2UNVIS lines — 278 score events the old walk never ran
+    (10 per K=0 recenter of the traverse; 10-34 at the K=191/393 seam
+    jumps; cand_before values up to 6) and G2NEW lines showing the arc
+    creations at in_set=0, taxi_last=6-7. Result: home steady 92-93
+    (three clean runs: 93/93/92) vs G1's 127-138 — the ~45 gap is
+    exactly the arc stubs the old walk leaked. Face EXACT (74), leak
+    false, stable true, converge ~500 ms, home evictions 220 vs 219
+    (G1). Pacing UNCHANGED: boundary p95 38 = 38 (the measured AC-0257
+    rim protection is intact; p50 21 vs 30). The freed stubs are
+    data-only (band 3, never meshed; the full column is written to disk
+    on free), so no data loss and no visual effect; a player walking
+    back gets them re-stubbed by the drain. Reported as a FINDING per
+    the plan: the gate line expects "home 127" — the 92-93 is a
+    policy-correct eviction of a latent old-walk leak, not a pacing
+    regression. Coordinator's call: (a) accept 92-93 as the post-G2
+    steady state, (b) treat the old walk's coverage gap as a separate
+    ticket, or (c) restrict the home pass to the walk's visited set
+    (not done — that would leave G2's "one sweep" decorative for the
+    home lane).
