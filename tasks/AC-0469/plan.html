@@ -1,38 +1,38 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sD far tier rebase</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage D — the far tier still thinks a face is 64 chunks wide</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The far tier is what draws everything past the near field, and at 1 m cells the near field reaches only ~200 m — so this is not cosmetic. Measured: it covers about a sixth of each chart face.</p>
-<h2>1. The defect (measured by the coordinator, round 47)</h2>
-<p><code>godot/world/satellite_body.gd:131</code> — <code>const FACE_GRID := 64  # faces 2-11: face chunks per axis</code>. A chart face is 6,283 m across and a chunk is 16 cells × 1.000 m = 16 m, so a face is <b>393</b> chunks per axis (<code>CHUNKS_PER_FACE</code>, already a constant since AC-0469 stage A). At the OLD grid 1,024 cells / 16 = 64 chunks, so 64 was the whole face; at the new grid it is <b>64/393 ≈ 16%</b> of it. The bake worker indexes far records as <code>f * face_grid + ccx</code> over a <code>face_grid × face_grid</code> square (<code>satellite_bake_worker.gd:236-248, 328, 359</code>), so chunk indices above 63 have no far record at all.</p>
-<p><code>HOME_N := 394</code> is <b>correct</b> and must not move: the home grid is unchanged at 1 m (6,283 cells / 16 = 392.9 → 393-394).</p>
-<h2>2. Files and anchors</h2>
+<!DOCTYPE html><html ns="http://www.w3.org/1999/xhtml" lang="en"><head><meta charset="utf-8"><title>AC-0469 sE face gen on the worker</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage E — face chunks generate on the worker, not on the frame</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is the first slice of generalising the home lane, and it targets the one thing the face lane actually lacks: <b>asynchronous generation</b>.</p>
+<h2>1. Goal</h2><p>A face chunk's terrain is requested through the existing threaded generation path and lands via the drain, instead of being built synchronously inside <code>_ensure_face_chunk</code>. The synchronous path stays as the fallback that the player query uses, so nothing can fail to appear — but the common case stops paying generation on the frame.</p>
+<h2>2. Why this and not "delete the home lane"</h2>
+<p>Measured (round 48): the home pair is now the SAME grid as the chart faces (6,283 cells at 1 m), so the resolution separation is gone. What differs is machinery, and the home lane holds the good half — worker generation, IO poll, drain, band priorities, pooling. The face lane's remaining weakness is that <code>_ensure_face_chunk</code> calls <code>WorldGen.generate_face</code> <b>synchronously</b>; the twelve-chart lap showed crossings stay solid only because of that synchronous build, which is a hitch rather than a gap. Making the face lane async is the step that lets the two lanes eventually become one.</p>
+<h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/satellite_body.gd</td><td><code>NPIX := 1024</code> (111), <code>HOME_HALF</code>/<code>HOME_N</code> (129), <code>FACE_GRID := 64</code> (131), the state dict fill (~547-549)</td><td>Edit: derive the chart-face grid from the real chunk count instead of a literal.</td></tr>
-<tr><td>godot/world/satellite_bake_worker.gd</td><td>the record indexing (<code>236-252</code>), the bake loops (<code>328, 354-371</code>), the payload size checks (<code>81-82, 166-172</code>)</td><td>Edit only where 64/1024-as-a-grid is assumed.</td></tr>
-<tr><td>godot/core/satellite_body.gdshader</td><td>the H-grid sampling (the 1024² bilinear comment ~554)</td><td>READ ONLY unless a grid constant is baked in.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_ensure_face_chunk</code> (find by name; the synchronous <code>WorldGen.generate_face</code> call), the threaded request/drain machinery the home lane uses (<code>threadgen_poll</code>, the worker handoff, the drain in <code>_process</code>), <code>_chunk_checkout_registered</code></td><td>Edit: add a face branch that ENQUEUES; keep the sync path as fallback.</td></tr>
+<tr><td>the worker/generator side</td><td>wherever the home lane's generation request is fulfilled (find by name — do not guess)</td><td>Edit: accept a face request (face, ccx, ccz).</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td><code>planetwalk</code>, <code>residency</code>, <code>boundary</code></td><td>READ ONLY — they are the acceptance instruments.</td></tr>
 <tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the 1,024-<b>byte</b> payload record contract, <code>CHUNK_WIDTH</code> 16, the near-field streaming, residency, keys, the warp, the seam apparatus.</p>
-<h2>3. Edit shape</h2>
+<p><b>Do not touch:</b> the home lane's own policy, residency rules, the eviction sweep, the travel gate, the prestream arithmetic (just fixed), keys, saves, light, the mesher, the warp.</p>
+<h2>4. Edit shape</h2>
 <ul>
-<li><b>3.1 One source of truth.</b> <code>FACE_GRID</code> must come from the grid (<code>SphereMath.CHUNKS_PER_FACE</code> or the equivalent), never a literal. If the bake worker's state dict needs it, pass it through the same field.</li>
-<li><b>3.2 Budget the rebuild.</b> 393² = 154,449 chunks per face × 8 faces vs 64² = 4,096 × 8 — a 37.7× increase in far records. <b>Measure the bake time and the memory before declaring this shippable</b>; if a full bake is impractical, say so with numbers and propose the LOD/texture-resolution trade rather than silently shipping a partial cover.</li>
-<li><b>3.3 Texture resolution is a separate decision.</b> <code>NPIX = 1024</code> against a 394-chunk home grid is ~2.6 texels/chunk; the same 1,024 against 393 chart chunks is ~2.6 as well, so leaving NPIX alone is coherent — but STATE that reasoning, and report what the far field looks like at the new texel density.</li>
-<li><b>3.4 Nothing else moves.</b> No changes to payload records, near-field streaming, or the shader unless a grid constant is genuinely baked into it.</li>
+<li><b>4.1 Enqueue when it is safe, build when it is not.</b> The prestream and the ordinary window requests should enqueue. The <b>player's own column query</b> (<code>get_block_key</code>'s <code>is_inf</code> sentinel path) must keep building synchronously when the chunk is absent — that is what guarantees the player never stands on nothing, and removing it would reopen the AC-0145 hazard.</li>
+<li><b>4.2 Landing must be complete before the chunk counts as resident.</b> A drained face chunk must go through the same landing the home lane uses (data, light seed, mesh, collision, occluder) — the AC-0460 occluder parity and the AC-0466 mesh+body checks are the proof it did not half-land.</li>
+<li><b>4.3 Reuse the existing queue and drain.</b> Do not invent a second worker protocol or a second drain; if the home lane's structures cannot carry a face request without a change, make the smallest change that lets them.</li>
+<li><b>4.4 Keep the budget honest.</b> The face pass still spends at most <code>FACE_STREAM_BUDGET_MS</code>; enqueueing must not turn a budgeted pass into an unbounded one.</li>
 </ul>
-<h2>4. Gates</h2>
+<h2>5. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Coverage (the point)</td><td>a report of far-record coverage per face — how many of the 393² chunk slots have a far record</td><td><b>100% of each chart face covered</b>, or an explicit statement of what is not and why. Report the number, not an assurance.</td></tr>
-<tr><td>Cost of the change</td><td>bake wall time and resident bytes, before and after</td><td><b>Reported.</b> If the full bake is impractical at 393², say so with numbers — that is a finding, not a failure.</td></tr>
-<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,planetwalk,residency --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; genhash 25/25 (generation unchanged — this is a far-tier indexing fix); planetwalk 25/26 with mesh and body; residency bounded.</td></tr>
-<tr><td>Visual</td><td>one aerial render at the user's vantage, looking down, default settings</td><td>Produced and DESCRIBED by the builder: does the far field now reach the horizon on a chart face, or is there a visible edge? A render without a description is not evidence.</td></tr>
+<tr><td>Nothing disappears</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,planetwalk,residency,seamcensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; <b>planetwalk 25/26 with mesh AND body at every destination</b> (the one waiver is the documented home-pair midline); residency leak false / stable true; seamcensus clean.</td></tr>
+<tr><td>The hitch is reduced (the point)</td><td><code>--arms boundary</code></td><td>Crossing latency reported against the current p50 26 / p95 38 ms. An improvement is the expected direction; <b>a regression must be reported, not explained away</b>.</td></tr>
+<tr><td>Generation unchanged</td><td><code>--arms genhash</code></td><td><b>25/25</b> — same terrain, different scheduling.</td></tr>
+<tr><td>Start flow</td><td><code>--arms save,load</code></td><td><code>ok</code> true; report <code>simband_ms</code>.</td></tr>
 </table>
-<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Render recipe: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s. <code>AWECRAFT_AIM</code> takes FLAT coordinates.</p>
-<h2>5. Acceptance</h2><p>Chart faces are fully covered by the far tier, the cost of that coverage is measured and stated, and nothing else moved.</p>
-<h2>6. Risks</h2><p>The 37.7× record increase may make a full bake impractical; the honest response is to measure it and report the trade (fewer texels, coarser far LOD), not to ship a quarter-covered face and call it done. If a partial cover is unavoidable this stage, say exactly which regions are missing.</p>
-<h2>7. Fences</h2><div class="stop"><ul>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>Face chunks generate off-frame in the common case, the player's own query still cannot fall through, every crossing still has mesh and body, generation is bit-identical, and the latency number is reported honestly.</p>
+<h2>7. Risks</h2><p>(1) An async face chunk that lands late could let a crossing see an unbuilt destination — planetwalk is the guard, and if it goes red this stage is not done. (2) Two queues racing for one chunk would double-generate; keep a single owner per key. (3) If the worker protocol turns out not to be reusable for faces without a large change, STOP and report what the obstacle is rather than building a parallel system.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. Never change the 1,024-byte payload record contract.</li>
+<li>No edits outside §3. Do not remove the synchronous fallback.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>1 m cubic blocks planet-wide (AC-0471), streaming bounded, lap green. This fixes the far tier's stale face grid, which is what makes distance visible at the new resolution.</p>
+<h2>9. Resume point</h2><p>1 m cubic blocks everywhere (AC-0471), far tier complete, prestream correct on all faces (AC-0470, fill 20x faster), lap green, residency bounded. This takes the synchronous build off the face path — the last structural difference between the two lanes.</p>
 </body></html>

@@ -3477,6 +3477,15 @@ var threadgen := false
 var threadgen_max := 3
 var threadgen_pool = null
 var threadgen_inflight: Array = []
+# AC-0469 stage E: the drain's per-poll cap on FACE handoffs (home
+# handoffs stay unpaced — the home landing is a reference swap; the face
+# landing carries the mesh build on the main thread, the ~20 ms class).
+# A completed face result that hits the cap STAYS in inflight (result
+# held, dedup key with it) and lands on a later poll call, so a batch of
+# worker completions cannot pile into one drain frame. 1 = the old face
+# pass's effective per-frame rate (one ensure per FACE_STREAM_BUDGET_MS
+# pass), minus the gen (now off-frame).
+const FACE_DRAIN_MAX_PER_POLL := 1
 var _tg_slots = {}
 # AC-0197: slots dicts are read from pool worker threads (the
 # AC-0152/AC-0178 spin-waits) while the main thread sets/erases
@@ -7179,6 +7188,39 @@ func threadgen_enqueue(cx: int, cz: int, key: String, inst: int, regen: bool = f
 		print("TGEN ENQ %d,%d inflight=%d" % [cx, cz, threadgen_inflight.size()])
 	return true
 
+# AC-0469 stage E: the face-lane request on the SAME worker queue (no
+# second protocol, no second drain — the entry rides the home entry's
+# shape with kind="face"; the worker runs the (face, R) generate_flat,
+# the drain lands it through _face_threadgen_handoff). The key is the
+# 3-part face key (a namespace disjoint from the home "0:cx:cz" keys),
+# so the single-owner dedup (_tg_inflight_keys) covers both lanes and
+# two queues cannot double-generate one chunk.
+func threadgen_enqueue_face(face: int, ccx: int, ccz: int, key: String, inst: int, colgen: int = -1) -> bool:
+	if _tg_inflight_keys.has(key):
+		_tg_dedup += 1
+		return false
+	if threadgen_inflight.size() >= threadgen_max:
+		_tg_capdrop += 1
+		if _tg_debug:
+			print("TGENF CAPDROP %d,%d,%d inflight=%d" % [face, ccx, ccz, threadgen_inflight.size()])
+		return false
+	# args = [ccx_lin, ccz_lin, seed, HEIGHT, SEA, face, R] — the
+	# generate_flat order; the linearization (face*CHUNKS_PER_FACE + cc)
+	# is the generate_face convention, computed ONCE here (the worker
+	# call mirrors generate_args' last line, no second transform site).
+	var entry := {"key": key, "cx": ccx, "cz": ccz, "face": face, "inst": inst, "colgen": colgen, "kind": "face", "args": [face * SphereMath.CHUNKS_PER_FACE + ccx, face * SphereMath.CHUNKS_PER_FACE + ccz, Game.world_seed, int(Data.HEIGHT), int(Data.SEA), face, float(Game.planet_R)], "tenq": Time.get_ticks_msec(), "regen": false}
+	var tid = threadgen_pool.add_task(_threadgen_worker, true)
+	entry["tid"] = tid
+	_tg_slots_mutex.lock()
+	_tg_slots[tid] = entry
+	_tg_slots_mutex.unlock()
+	threadgen_inflight.append(entry)
+	_tg_inflight_keys[key] = true
+	_tg_enq += 1
+	if _tg_debug:
+		print("TGENF ENQ %d,%d,%d inflight=%d" % [face, ccx, ccz, threadgen_inflight.size()])
+	return true
+
 func _threadgen_worker() -> void:
 	var tid = threadgen_pool.get_caller_task_id()
 	_tg_slots_mutex.lock()
@@ -7201,6 +7243,18 @@ func _threadgen_worker() -> void:
 			print("TGSPIN_GIVEUP tid=%d" % tid)  # AC-0178 diag (timing-gated)
 		return
 	var a: Array = entry["args"]
+	if entry.get("kind", "home") == "face":
+		# AC-0469 stage E: the face request on the SAME worker (no second
+		# protocol) — the (face, R) generate_flat (args = [ccx_lin, ccz_lin,
+		# seed, HEIGHT, SEA, face, R]; the linearization is the generate_face
+		# convention, the C++ sp_col_index inverts it — the worker gets the
+		# flat column; the banana pass + the landing run on the main thread
+		# in _face_threadgen_handoff, the home resl split).
+		var wtf := Time.get_ticks_msec()
+		entry["result"] = WorldGen.gen_cpp().generate_flat(int(a[0]), int(a[1]), int(a[2]), int(a[3]), int(a[4]), 0, PackedByteArray(), int(a[5]), float(a[6]))
+		if timing:
+			print("TGENWF %d,%d,%d wms=%d t=%d" % [int(a[5]), int(a[0]), int(a[1]), Time.get_ticks_msec() - wtf, Time.get_ticks_msec()])
+		return
 	var wt := Time.get_ticks_msec()
 	if timing:
 		_tg_concur += 1
@@ -7234,16 +7288,56 @@ func threadgen_poll() -> void:
 	if threadgen_inflight.is_empty():
 		return
 	var i := 0
+	# AC-0469 stage E: the face handoff pacing counter (see
+	# FACE_DRAIN_MAX_PER_POLL).
+	var face_landed := 0
 	while i < threadgen_inflight.size():
 		var e: Dictionary = threadgen_inflight[i]
 		var tid = int(e["tid"])
 		if threadgen_pool.is_task_completed(tid):
+			var res = e.get("result", null)
+			if e.get("kind", "home") == "face":
+				# AC-0469 stage E: a face result is the flat column (a
+				# PackedByteArray, not the home resl Array).
+				if res == null or not (res is PackedByteArray):
+					# AC-0178-class: the worker finished without a result
+					# (slot-spin gave up) — re-enqueue instead of a null
+					# handoff (SCRIPT ERROR + stranded chunk). Dedup-safe:
+					# the key is just erased. At SHUTDOWN the world is
+					# being freed — drop instead of re-enqueue (the
+					# _shutting_down clause, home parity).
+					threadgen_inflight.remove_at(i)
+					_tg_inflight_keys.erase(e["key"])
+					_tg_slots_mutex.lock()
+					_tg_slots.erase(tid)
+					_tg_slots_mutex.unlock()
+					if _shutting_down:
+						continue
+					if _tg_debug:
+						print("TGENF RETRY %d,%d (no result)" % [int(e["cx"]), int(e["cz"])])
+					var rc: Node3D = chunks.get(e["key"])
+					threadgen_enqueue_face(int(e["face"]), int(e["cx"]), int(e["cz"]), e["key"], int(e["inst"]), int(rc.col_gen) if rc != null else -1)
+					continue
+				if face_landed >= FACE_DRAIN_MAX_PER_POLL:
+					# Paced: the completed result STAYS in inflight (the
+					# dedup key with it — the single owner holds) and lands
+					# on a later poll call, so a batch of completions
+					# cannot pile into one drain frame.
+					i += 1
+					continue
+				threadgen_inflight.remove_at(i)
+				_tg_inflight_keys.erase(e["key"])
+				_tg_slots_mutex.lock()
+				_tg_slots.erase(tid)
+				_tg_slots_mutex.unlock()
+				face_landed += 1
+				_face_threadgen_handoff(e, res)
+				continue
 			threadgen_inflight.remove_at(i)
 			_tg_inflight_keys.erase(e["key"])
 			_tg_slots_mutex.lock()
 			_tg_slots.erase(tid)
 			_tg_slots_mutex.unlock()
-			var res = e.get("result", null)
 			# AC-0284b: a far (h-only) result is a 3-elem resl (the payload
 			# rides [2]); the handoff consumes the shape.
 			if res == null or not (res is Array) or (int(res.size()) != 2 and int(res.size()) != 3):
@@ -15128,11 +15222,15 @@ func _chunks_across(win_m: float, stride_m: float) -> int:
 # harmless). Window = the face cells within the home sim band of the
 # player's (patch-clamped) flat position, on the 8 non-home faces that
 # border the patch, edge chunks first (the seam is what the player
-# meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work (an
-# ensure = gen + the sync mesh + the star seed); resident chunks are
-# cheap (the dict lookup) and consume no
-# budget. Inert when the player is far from every edge (the boundary r4
-# walk stays in the spawn region with zero resident face chunks).
+# meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work:
+# AC-0469 stage E — an ensure here is the worker ENQUEUE (O(1); the gen
+# + the mesh + the star seed land in the drain, paced by
+# FACE_DRAIN_MAX_PER_POLL), while resident chunks are cheap (the dict
+# lookup) and consume no budget. The sync build survives only on the
+# player's own column query (the _ensure_face_chunk sync fallback —
+# the is_inf sentinel path; AC-0145). Inert when the player is far
+# from every edge (the boundary r4 walk stays in the spawn region with
+# zero resident face chunks).
 const FACE_STREAM_BUDGET_MS := 12.0
 func _face_stream() -> void:
 	var R: float = Game.planet_R
@@ -15246,12 +15344,17 @@ func _face_stream() -> void:
 				for cc in range(cc0, cc1 + 1):
 					if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 						break
-					_ensure_face_chunk(face, edge_cc * 16 + 8, cc * 16 + 8)
+					# AC-0469 stage E: the prestream/window request ENQUEUES
+					# (sync_build=false) — the gen runs on the worker, the
+					# landing is the drain. The pass still spends at most
+					# FACE_STREAM_BUDGET_MS (the checks are unchanged; an
+					# enqueue is O(1), so the pass cannot run unbounded).
+					_ensure_face_chunk(face, edge_cc * 16 + 8, cc * 16 + 8, false)
 			else:
 				for cc in range(cc0, cc1 + 1):
 					if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 						break
-					_ensure_face_chunk(face, cc * 16 + 8, edge_cc * 16 + 8)
+					_ensure_face_chunk(face, cc * 16 + 8, edge_cc * 16 + 8, false)
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
 	# the windowed eviction (the FIFO cap in _ensure_face_chunk refines it)
@@ -15521,26 +15624,61 @@ func world_pos_of_flat(x: float, y: float, z: float) -> Vector3:
 func flat_of_world_pos(p: Vector3) -> Vector3:
 	return SphereMath.world_to_flat(p, Game.planet_R)
 
-func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
+func _ensure_face_chunk(face: int, colx: int, colz: int, sync_build: bool = true) -> Node3D:
 	var ccx: int = int(floorf(float(colx) / 16.0))
 	var ccz: int = int(floorf(float(colz) / 16.0))
 	var key: String = _key_f(face, ccx, ccz)
 	var c: Node3D = chunks.get(key)
-	if c != null:
-		return c
-	# AC-0463 slice 1: the shared skeleton (same order as before).
-	c = _chunk_checkout_registered(face, ccx, ccz)
-	# AC-0040: face-planet columns get the banana trees too (same shore
-	# rule in face space — the generate_face coordinate/seed transform).
-	# AC-0311 piece 3: R > 0 threads the (face, R) sphere-domain chart
-	# into the C++ (the C1 blend band that used to ride on it is gone —
-	# the (d, δ) field is continuous across the home edge on its own).
-	var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed, Game.planet_R)
-	# AC-0311 piece 2 (finishing-run fix): the banana rolls drop the
-	# per-face salt too — one world seed (the C++ tree rolls in the same
-	# chunk run on the raw seed; the salt was the flat-frame construct,
-	# retired by the sphere domain).
-	WorldGen.apply_banana_trees(fdata, face * SphereMath.CHUNKS_PER_FACE + ccx, face * SphereMath.CHUNKS_PER_FACE + ccz, Game.world_seed, Data.HEIGHT)
+	if c == null:
+		# AC-0463 slice 1: the shared skeleton (same order as before).
+		c = _chunk_checkout_registered(face, ccx, ccz)
+		# AC-0469 stage E: register at checkout (the home-lane pattern —
+		# _make_chunk_node inserts into chunks BEFORE the gen). The chunk
+		# has a SINGLE OWNER from this instant: while in-flight the
+		# worker owns it, and no second checkout for the key can exist.
+		chunks[key] = c
+		_face_order.append(key)
+	if c.data.is_empty():
+		if not sync_build and threadgen:
+			# the prestream / window request (the common case): ENQUEUE
+			# on the existing worker (no second protocol) — the landing
+			# is the drain's _face_threadgen_handoff (the SAME _face_land
+			# as below). A resident-but-unbuilt chunk (a cap-drop at an
+			# earlier enqueue) re-enqueues here — dedup-safe, so a
+			# cap-drop is a retry, not a loss (the home-lane rule).
+			threadgen_enqueue_face(face, ccx, ccz, key, c.get_instance_id(), int(c.col_gen))
+			return c
+		# THE SYNC FALLBACK — the player's own column query
+		# (get_block_key / set_block_key / surface_top_key, including the
+		# far-hemisphere faces whose _face_chunk_min_dist reads the
+		# is_inf sentinel and always meshes) must never return an
+		# unbuilt chunk: the player must never stand on nothing
+		# (AC-0145). If the worker is in-flight for this key, its later
+		# drain result lands as a datadrop (the gen is deterministic —
+		# bit-identical).
+		# AC-0040: face-planet columns get the banana trees too (same
+		# shore rule in face space — the generate_face coordinate/seed
+		# transform).
+		# AC-0311 piece 3: R > 0 threads the (face, R) sphere-domain
+		# chart into the C++ (the C1 blend band that used to ride on it
+		# is gone — the (d, δ) field is continuous across the home edge
+		# on its own).
+		var fdata: PackedByteArray = WorldGen.generate_face(face, ccx, ccz, Game.world_seed, Game.planet_R)
+		# AC-0311 piece 2 (finishing-run fix): the banana rolls drop the
+		# per-face salt too — one world seed (the C++ tree rolls in the
+		# same chunk run on the raw seed; the salt was the flat-frame
+		# construct, retired by the sphere domain).
+		WorldGen.apply_banana_trees(fdata, face * SphereMath.CHUNKS_PER_FACE + ccx, face * SphereMath.CHUNKS_PER_FACE + ccz, Game.world_seed, Data.HEIGHT)
+		_face_land(c, face, ccx, ccz, key, fdata)
+	return c
+
+# AC-0469 stage E: the face-chunk landing — the SAME sequence the sync
+# path used to run inline (data, edits, light seed, transform,
+# collision, mesh + the occluder inside build_mesh_face, the home
+# rearm, the FIFO cap). Both the sync fallback and the drain's handoff
+# call it, so a drained chunk cannot half-land (the AC-0460 occluder
+# parity and the AC-0466 mesh+body checks are the proof it completed).
+func _face_land(c: Node3D, face: int, ccx: int, ccz: int, key: String, fdata: PackedByteArray) -> void:
 	c.data_landed(fdata, PackedByteArray())
 	c.no_caves = false
 	if int(c.band) == 0:
@@ -15555,10 +15693,8 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	# resolution with collision (C5: bodies tile across the boundary).
 	c.transform = SphereMath.face_chunk_transform(face, ccx, ccz, Game.planet_R)
 	c.collision_enabled = true
-	chunks[key] = c
 	if int(c.band) == 0 and not c.data.is_empty():
 		_rt_dirty()  # AC-0373: a face chunk joins RESIDENT with data landed
-	_face_order.append(key)
 	# AC-0309 D4: seed the per-face AweStarlight (the same engine — the
 	# per-instance (cx,cz) key space, no C++ change). The landing light is
 	# the classic pull (the AC-0297 seam contract: byte-equal to the
@@ -15568,10 +15704,9 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	if st != null:
 		st.seed_column(ccx, ccz, ChunkIO.io_cpp().slabs_flat(c.data))
 		star_owed[key] = true
-	# D3: the mesh — the sync face build (the home drain dispatch is
-	# home-grid-keyed and stays untouched; the face chunk is few and the
-	# sync lane is its build lane). Inert when the player is far from the
-	# edges (data-only outside the mesh window).
+	# D3: the mesh — the face build (AC-0460: the occluder parity — the
+	# fallback lattice rides this same build). Inert when the player is
+	# far from the edges (data-only outside the mesh window).
 	if _face_in_mesh_window(face, ccx, ccz):
 		c.build_mesh_face()
 	# the adjacent home boundary chunk(s) now have live face data across
@@ -15582,7 +15717,40 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 		var old: String = String(_face_order.pop_front())
 		if chunks.has(old):
 			_face_free_chunk(old)
-	return c
+
+# AC-0469 stage E: the drain landing for a face request — the SAME
+# _face_land the sync path does (banana + data, light seed, mesh,
+# collision, occluder, the home rearm).
+func _face_threadgen_handoff(e: Dictionary, fdata: PackedByteArray) -> void:
+	var key: String = e["key"]
+	var c: Node3D = chunks.get(key)
+	if c == null:
+		_tg_stale += 1
+		if _tg_debug:
+			print("TGENF STALE %s (chunk gone)" % key)
+		return
+	var expected_inst: int = int(e["inst"])
+	# AC-0247 pattern: + col_gen — a pooled column REUSE keeps its
+	# instance_id, so the inst check alone cannot see a
+	# freed-and-respawned column.
+	if expected_inst >= 0 and (int(c.get_instance_id()) != expected_inst or int(c.col_gen) != int(e.get("colgen", -1))):
+		_tg_stale += 1
+		if _tg_debug:
+			print("TGENF STALE %s (inst mismatch)" % key)
+		return
+	if not c.data.is_empty():
+		# The sync fallback landed first (the player's own column query
+		# built it — the AC-0145 contract); the worker result is
+		# bit-identical (same seed, same gen), so the drop is exact.
+		_tg_datadrop += 1
+		if _tg_debug:
+			print("TGENF DATADROP %s (data already set)" % key)
+		return
+	var face: int = int(e["face"])
+	var ccx: int = int(e["cx"])
+	var ccz: int = int(e["cz"])
+	WorldGen.apply_banana_trees(fdata, face * SphereMath.CHUNKS_PER_FACE + ccx, face * SphereMath.CHUNKS_PER_FACE + ccz, Game.world_seed, Data.HEIGHT)
+	_face_land(c, face, ccx, ccz, key, fdata)
 
 # Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
 # columns (routes to the flat API); faces 1-11 (colx,colz) = per-axis-count

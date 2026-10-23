@@ -629,3 +629,74 @@ D15. GENHASH: 25/25 byte-identical to the standing reference — the
     generation is untouched (this is a far-tier indexing fix; the 5x5
     window sits on the home pair, grid-independent by construction, and
     the bake lane shares the C++ fields but writes no world state).
+
+===========================================================
+AC-0469 stage E — face chunks generate on the worker, not
+on the frame (2026-10-23)
+===========================================================
+
+D16. BOUNDARY ARM INSIGHT (gate b, reported honestly): the r4
+    walk stays in the home spawn region — boundary-r2.log
+    reports face_wall_ms: 0, i.e. the face lane never ran once
+    during the walk (no face chunks exist in the walk region),
+    so this stage's change (face-lane async gen) is NOT IN ANY
+    CROSSING'S PATH. Measured crossing_frame p50 30 / p95 38 /
+    max 47 over 44 crossings (mem_delta 118.4 MB,
+    marker_ok/remesh_ok true) vs the current reference 26/38
+    (AC-0470 boundary-r1.log): p95 EXACT (38 = 38); p50 +4 ms
+    vs that single reference run — but this ticket's own
+    boundary-r1.log (stage-A era, same walk) measured p50 31,
+    and round 43's coordinator run measured 31: the single-run
+    p50 band on this tree is 26-31, and 30 sits in it. This is
+    run-to-run variance on a home-only walk, not a regression
+    attributable to the change (the change cannot affect it —
+    face_wall_ms 0); reported as the measurement is.
+
+D17. THE CROSSING-FRAME SNAPSHOT IS BUILT AT ALL 25 (the
+    honest read, before any ensure): every covered crossing in
+    planetwalk-r15.log reports cross_mesh_built=true AND
+    cross_body_present=true at the crossing frame itself
+    (settle_ms 0-1) — the async prestream (enqueue at window
+    entry, ~64 m ahead of the crossing; the drain landing paced
+    at FACE_DRAIN_MAX_PER_POLL = 1 per frame) arrives BEFORE
+    the player crosses in all 25. The sync fallback (the
+    player's own column query, the is_inf sentinel path)
+    remains the guarantee for the case where it does not — the
+    datadrop clause in _face_threadgen_handoff is that race's
+    guard (a sync-built chunk's later worker result is
+    bit-identical and dropped).
+
+D18. DRAIN PACING — FACE_DRAIN_MAX_PER_POLL := 1 (the design
+    decision the plan left open at §4.3 "the smallest change
+    that lets them"): the face landing carries the main-thread
+    mesh build (~20 ms class), unlike the home handoff (a
+    reference swap). Without pacing, a batch of completed face
+    generations would land in ONE drain frame — trading the
+    face-pass hitch for a drain-frame hitch. 1 per poll call =
+    the old pass's effective per-frame rate (one ensure per
+    12 ms budgeted pass), minus the gen (now off-frame). A
+    paced completion STAYS in inflight (result held, dedup key
+    with it — the single owner holds until landing), so a
+    paced result can never double-land or be re-enqueued.
+
+D19. RESIDENCY PROFILE (gate a): steady face 74 / home 127,
+    FLAT over all 6 steady samples, converged=true,
+    keys_same=true, verdict STABLE, leak=false (face evictions
+    0, home 220). In-flight (registered-but-unbuilt) chunks
+    count as residents from CHECKOUT — the home-lane pattern
+    (_make_chunk_node inserts into chunks before the gen), so
+    the census is a superset of "landed" by at most the
+    in-flight count (<= threadgen_max + the paced tail); the
+    count converges to the same band size as the sync era
+    because the window is unchanged — only who generates and
+    when it lands moved.
+
+D20. NEGATIVE CONTROL PRESERVED (the instrument's teeth):
+    planetwalk-r16.log with AWECRAFT_PWN_SKIP_WAIT=1: ok=true,
+    negctrl ran=true, saw_unbuilt=TRUE — the 0-* crossings'
+    home-side src chunk is unbuilt at stand time (src_mesh_
+    built=false, no wait) and stand_dest_built=false at every
+    snapshot. The normal run (r15) is the contrast:
+    saw_unbuilt=false (everything built by the time each check
+    runs). An always-green instrument would have failed the
+    skip run; it did not.
