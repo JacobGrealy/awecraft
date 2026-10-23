@@ -1,34 +1,37 @@
-<!DOCTYPE html><html ns2="urn:x" lang="en"><head><meta charset="utf-8"><title>AC-0463 light ownership diagnosis</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 stage L1 — what would one light-ownership model require?</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Diagnosis and design only — no behaviour change.</b> Light is the last structural split: <code>_star_faces</code> holds per-face engines while the home path lights differently. AC-0469's stage F ranked this the riskiest slice of the whole migration, gated by AC-0358's feed invariant and the <code>lightstate</code> arm — so it is diagnosed before anything moves.</p>
-<h2>1. Goal</h2><p>A written, evidence-backed answer to: what exactly differs between the two light paths, can one ownership model serve faces 0–11, what would break first, and in what order could it be changed while keeping the world lit.</p>
-<h2>2. What to establish (each with file:line evidence)</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 L2 star_for step 1</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 stage L2 — one accessor for which engine owns a face (zero behaviour change)</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Pure refactor.</b> Step 1 of the five-step light-ownership order designed at L1, and the step L1 specified as changing nothing.</p>
+<h2>1. Goal</h2><p>Asking "which light engine owns this face?" has one answer site, used by every existing caller, and the light is <b>bit-identical</b> before and after.</p>
+<h2>2. What L1 established (do not re-derive)</h2>
 <ul>
-<li><b>2.1 The two paths, precisely.</b> How the home path owns and feeds light (the <code>star</code> engine, its seed/feed/re-bake cycle) versus <code>_star_faces</code> (per-face <code>AweStarlight</code> instances, D4). What is per-face that would have to become per-world, and what is per-world that is currently duplicated per-face?</li>
-<li><b>2.2 The FEED invariant (AC-0358) and what it constrains.</b> Read what AC-0358 established — the measured bakes, the strip window the payload carries, the reference the arm compares against — and state exactly which assumption a unified model would have to preserve. <b>This is the part that will silently break lighting if it is missed.</b></li>
-<li><b>2.3 The per-face machinery that is genuinely per-face.</b> The migration has already established the pattern: some face-lane behaviours are geometric and must survive as rules (the edge-normal gate, the edge bands, the mirror chart). Do the same classification here — which light behaviours are (a) identical across faces and can unify, (b) genuinely per-face (orientation, the mirror class, the chart's own normal) and must survive as rules, or (c) only exist because there are two engines.</li>
-<li><b>2.4 The first failure.</b> Name the single most likely breakage of a naive unification and the arm or invariant that would catch it. Consider: stale light after an edit, a face whose engine is seeded with the wrong orientation, the far/h-only transition, the AC-0358 re-bake.</li>
-<li><b>2.5 A staged order</b> that keeps the world lit after each step, with the gate that proves each step. Step 1 should be the one that changes no behaviour, as in the residency merge.</li>
-<li><b>2.6 The cost of NOT doing it.</b> If the answer is that two engines are cheap and safe to keep, say so with evidence — a split that costs nothing is not debt worth risk.</li>
+<li><b>Home</b>: one <code>star</code> engine (world.gd:265, 3945) — seed at landing (6346), two-phase <code>on_edit</code> in home world coords (12999), dt-scaled step with a settled drain publishing <code>last_eff</code>, E2 frame-diff re-arm and the paced remesh lane (6177-6318); bakes from the star payload with <code>pl["star"]=true</code> and the box-gate lver (9419-9427).</li>
+<li><b>Face</b>: per-face engines in <code>_star_faces</code> (14915, 14921-14927) — seed at <code>_face_land</code> (15875), whole-column reseed per edit (15985), fixed-budget step with a compare-and-erase drain (14935-14976).</li>
+<li><b>The constraint any later stage must respect</b>: the AC-0358 FEED invariant — applied bake == settled payload == fresh same-input reference — and the payload's <code>w_lo/w_hi</code> strip window (2-row overhang, starlight.cpp:797-803) being exactly what the bake consumes.</li>
 </ul>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_star_faces</code>, the <code>star</code> engine's ownership and feed path, the light seed on chunk landing (<code>_face_land</code>), the re-bake paths</td><td>READ ONLY. This stage changes nothing.</td></tr>
-<tr><td>gdext/src/starlight.cpp</td><td>the <code>AweStarlight</code> class and its bindings</td><td>READ ONLY.</td></tr>
-<tr><td>godot/HARNESS.md</td><td>the <code>lightstate</code> and <code>light</code> arm rows, and AC-0358's recorded invariant</td><td>READ ONLY — do not regenerate.</td></tr>
-<tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append the design note.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>star</code> (265), <code>_star_faces</code> (14915, 14921-14927), and every site that picks an engine by face — the seed paths (6346, 15875), the edit paths (12999, 15985), the step/drain paths (6177-6318, 14935-14976), the bake path (9419-9427)</td><td>Edit: express engine selection through ONE accessor.</td></tr>
+<tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<h2>4. Gates</h2>
+<p><b>Do not touch:</b> either engine's behaviour, the step/drain cadence, the payload window, the bake, the reseed rules, the far/h-only path, generation, the mesher, keys, saves, the warp, residency.</p>
+<h2>4. Edit shape</h2>
+<ul>
+<li><b>4.1 One accessor.</b> A function taking a face (and whatever else a caller genuinely has) returning the engine that owns it today — <code>star</code> for faces 0/1, the per-face instance for 2-11. It must not create engines, change lazily, or alter ownership; it answers, it does not decide.</li>
+<li><b>4.2 Same answers, proved.</b> For every converted site, the accessor must return exactly the engine the old inline expression returned. State how you verified it — an assertion, a temporary cross-check over the conversion, or an exhaustive expression diff — in the deviations. <b>A refactor that is merely "not obviously wrong" is not accepted here.</b></li>
+<li><b>4.3 No behaviour moves.</b> Same cadence, same reseed rules, same window, same bake. If converting a site would change WHEN an engine is created or seeded, leave that site and list it — creating an engine lazily is a behaviour change, not a refactor.</li>
+</ul>
+<h2>5. Gates — bit-identical, because this is a refactor</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Nothing changed</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; the light and lightstate arms report their normal values. <b>Any drift means this stage touched something — it must not.</b></td></tr>
+<tr><td>Light unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; the <code>light</code> arm's fields identical except timing (L1 recorded its normal values: 15/0/14/0/9 pocket [8,120,-50]); <code>lightstate</code>'s RESULT <b>JSON-identical</b> to the L1 run (arr_diff 1 @ [0,141,0], vc_diff 4, demoted 1, leaks 0x20, wash false).</td></tr>
+<tr><td>Streaming unaffected</td><td><code>--arms residency,planetwalk</code></td><td>leak false / stable at the current plateau; planetwalk 25/26 with mesh and body.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>5. Acceptance</h2><p>A design note answering §2.1–§2.6 with file:line evidence and a staged order, and a tree provably untouched.</p>
-<h2>6. Risks</h2><p>The honest answer may be "keep two engines" — that is a finding, and a better one than a risky merge justified only by tidiness. A note that concludes "unify" without naming the AC-0358 constraint and the first failure would be worse than no note.</p>
-<h2>7. Fences</h2><div class="stop"><ul>
+<h2>6. Acceptance</h2><p>One accessor answers engine ownership for every caller, every answer identical, and every light field bit-identical.</p>
+<h2>7. Risks</h2><p>The dangerous site is any place that obtains an engine as a side effect of creating one (the per-face instances are created lazily). Converting such a site to a pure accessor would stop the creation happening — so those stay as they are and are listed. If that leaves the accessor covering very few sites, say so and report the count; a one-caller accessor is not worth the indirection.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li><b>No code changes at all.</b> This stage writes a design note and runs the gates to prove the tree is untouched.</li>
+<li>No edits outside §3. No behaviour change of any kind.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>Everything except light is unified: one grid (1 m cubic, AC-0471), one placement, one key shape, one node path, one landing, one generation queue and drain, one travel gate and window, one residency model (AC-0469 G1–G4). The twelve-chart lap covers 25 of 26 boundaries. This designs the last split instead of guessing it.</p>
+<h2>9. Resume point</h2><p>L1 designed the five-step order and found that the face lane carries a light payload it never uses. This is step 1. Steps 2-3 unify the drain and the edit path; step 4 (one feed) is the only visible change and needs a face-side FEED arm first; step 5 deletes <code>_star_faces</code>.</p>
 </body></html>

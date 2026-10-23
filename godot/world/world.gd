@@ -14926,6 +14926,20 @@ func _star_for_face(face: int) -> Variant:
 	_star_faces[face] = st
 	return st
 
+# AC-0463 stage L2: the ONE answer to "which light engine owns this
+# face?" — face 0/1 -> the home `star` engine (line 265); face 2-11 ->
+# the per-face instance from _star_faces (null while not yet created).
+# It ANSWERS, it does not decide: it never creates an engine (the lazy
+# creation stays in _star_for_face, the only site the first face landing
+# needs), never mutates, never changes ownership. The converted call
+# sites (the face drain read, the evict read, the edit read) each return
+# the byte-identical engine — the per-site expression diff is in the
+# AC-0463 deviations, stage L2.
+func star_for(face: int) -> Variant:
+	if face <= 1:
+		return star
+	return _star_faces.get(face)
+
 # D4: the face light pass — step each face instance; a face column whose
 # light has settled re-bakes its slabs on the star payload ONLY if the
 # payload differs from the landing (pull) light (the AC-0297 seam
@@ -14936,7 +14950,7 @@ func _face_star_pass() -> void:
 	if _star_faces.is_empty():
 		return
 	for face in _star_faces.keys():
-		var st: Variant = _star_faces[face]
+		var st: Variant = star_for(face)  # AC-0463 L2: the one ownership answer (face>=2 here, keys are the per-face instances)
 		if st == null:
 			continue
 		if int(st.pending_cells()) > 0:
@@ -15551,7 +15565,7 @@ func _face_free_chunk(key: String) -> void:
 	if c == null:
 		_resident_order.erase(key)
 		return
-	var st: Variant = _star_faces.get(int(c.face))
+	var st: Variant = star_for(int(c.face))  # AC-0463 L2: the one ownership answer (face>=2 at every _face_free_chunk caller)
 	if st != null:
 		st.evict_column(int(c.cx), int(c.cz))
 	star_owed.erase(key)
@@ -15980,7 +15994,7 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 	# follows the edit; the drain re-bakes iff it settles different).
 	if c.mesh_built:
 		c.build_mesh_face()
-	var st2: Variant = _star_faces.get(face)
+	var st2: Variant = star_for(face)  # AC-0463 L2: the one ownership answer (face>=2 — 0/1 routed to set_block above)
 	if st2 != null:
 		st2.seed_column(int(c.cx), int(c.cz), ChunkIO.io_cpp().slabs_flat(c.data))
 		star_owed[key] = true

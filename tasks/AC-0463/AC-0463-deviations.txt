@@ -487,3 +487,116 @@ AC-0463 stage L1 — deviations (light ownership diagnosis, MEASUREMENT/DESIGN O
    tidiness (jumping to step 4 with no new arm) is worse than keeping two engines — the
    plan's §6 warning holds, and the evidence here says the risk sits in the feed, not in
    the engine count.
+
+AC-0463 stage L2 — deviations (one engine accessor, pure refactor)
+
+1. THE SHAPE
+   One new accessor, star_for(face: int) -> Variant (world.gd:14938), placed beside the
+   lazy creator it complements. It ANSWERS, it does not decide: face 0/1 -> the home `star`
+   engine (world.gd:265); face 2-11 -> _star_faces.get(face) (null until the first face
+   landing). It never creates an engine, never mutates, never changes ownership. The lazy
+   creator _star_for_face (world.gd:14921-14927) is untouched and remains the only site
+   where a per-face engine comes into existence. Four edits in world.gd, all inside plan §3.
+
+2. SITES CONVERTED (3) — proof method: EXHAUSTIVE EXPRESSION DIFF (plan §4.2)
+   Every converted site obtained the engine by a PURE READ of _star_faces, with face proven
+   >= 2 at every caller (3) — and the accessor's face>=2 branch IS the old expression, so
+   each diff is an identity, not an argument:
+   (a) FACE DRAIN READ — _face_star_pass (world.gd:14953): old `_star_faces[face]` with
+       `face in _star_faces.keys()`. Every key of _star_faces was inserted by
+       _star_for_face, called only from _face_land (15887), whose entry paths are all
+       guarded to face>=2 (3) — so face >= 2 and the key exists:
+       star_for(face) = _star_faces.get(face) = _star_faces[face]. Same object.
+   (b) EVICT READ — _face_free_chunk (world.gd:15568): old `_star_faces.get(int(c.face))`.
+       Callers: the _resident_sweep face lane (12055-12061 — the `f <= 1` branch is the
+       home lane, so _face_free_chunk only ever receives face>=2) and the FIFO cap
+       (15910-15915, guarded `int(_rc.face) >= 2`). star_for(int(c.face)) =
+       _star_faces.get(int(c.face)). Same expression.
+   (c) EDIT READ — set_block_key (world.gd:15997): old `_star_faces.get(face)`; the guard
+       at 15971 routes face 0/1 to the home set_block above, so face>=2 here.
+       star_for(face) = _star_faces.get(face). Same expression.
+   Runtime backing: the bit-identical gate set — genhash 25/25 byte-identical, the light
+   arm field-identical, and planetwalk/residency at standing values, the arms that DO
+   execute the converted face sites (planetwalk lands/drains/evicts face chunks across 25
+   boundary crossings).
+
+3. THE INVARIANT THE DIFF STANDS ON — EVERY FACE REACHING _star_faces IS >= 2
+   The only inserter is _star_for_face, called only from _face_land (world.gd:15887).
+   _face_land's only entry is _ensure_face_chunk (+ the drain twin _face_threadgen_handoff,
+   world.gd:15934), and every one of its callers is guarded:
+     - _create_pass FACE part: `for face in range(4, 12)` (world.gd:15495)
+     - the mob spawn ring: `f2 <= 1: continue` (world.gd:14804-14805)
+     - get_block_key / set_block_key: `face == 0 or face == 1` -> the home API (15959/15971)
+     - surface_top_key (world.gd:15748): all 8 callers guarded — player.gd:775 (face > 1),
+       world.gd:14808 (after the f2<=1 skip), harness.gd:34552 (af > 1), 35050/35075/35095
+       (the crossface chart face), 36390 (face <= 1: return), 38041 (f <= 1: return)
+   Home chunks are keyed "0:cx:cz" (AC-0459); face chunks exist only for face>=2. So
+   _star_faces holds only >= 2 keys, and every c.face seen by _face_free_chunk is >= 2.
+
+4. SITES LEFT AS CREATORS (2) — listed per plan §4.3 (the CRITICAL TRAP)
+   - _star_for_face itself (world.gd:14921-14927): the lazy creator; a per-face engine
+     exists from its first call onwards.
+   - _face_land (world.gd:15887): `var st = _star_for_face(face)` — the first landing on a
+     face CREATES the engine as a side effect. A pure accessor here would stop the creation
+     (every later .get(face) read would return null and the face light would never step,
+     settle or re-bake) — a behaviour change, so it stays and is listed.
+
+5. SITES THAT ARE NOT FACE-SELECTION (left as bare `star`, listed)
+   The home-lane anchors the plan names (seed 6346, edit 12999, step/drain 6177-6318,
+   bake 9419-9427 + the halo/reseed/rearm siblings) carry no face variable — they ARE the
+   home path, whose key is "0:cx:cz" by definition (AC-0459); routing them through
+   star_for(0) would invent a face literal for zero information. One of them is positively
+   DANGEROUS to convert: _star_settled_drain (world.gd:6206-6232) iterates the SHARED
+   star_owed queue and queries the home `star` even for face keys — the wasted scan is
+   CURRENT behaviour (L1 §2.1: "wasted, never wrong"); dispatching per key through
+   star_for would let the home drain settle face columns through the HOME engine — a
+   double-settle against the face drain (eff_gen bumps, E2 re-arms, settle order). So the
+   home drain keeps `star` for every key, as today.
+
+6. LIGHTSTATE — NOT JSON-IDENTICAL TO L1: THE ARM IS NOT JSON-DETERMINISTIC (FINDING)
+   The plan expected lightstate's RESULT "JSON-identical to the L1 run". It is not — and
+   the drift is the arm's, not the change's. Measured:
+   - L1 run (lightstate-r1, pristine tree) vs L2 run (lightstate-r2, this change): 15
+     fields differ — ab.waited_frames 15->14, three grid chunks absent in L1
+     (-1,-2 / -1,2 / -2,1), move.hole_slabs_now 126->106 (hole_traj flat in both).
+   - DECISIVE A/B: lightstate r3, the SAME tree as r2 (no code moved between the two):
+     grid census 23 -> 21 chunks (-1,-2 and -2,1 drop out), hole_slabs_now 106 -> 96.
+     Two runs of the identical tree differ in exactly the same field classes — the
+     census/pacing fields drift run-to-run with no code change at all.
+   MECHANISM (harness.gd:7386-7405): the grid census is "every chunk with data+mesh+
+   last_eff at the instant the built>=20 wait loop exits" — frame-budget pacing under
+   machine load; the hole count is sampled at a fixed 1800-frame point of the demote
+   cycle. Both are pacing, not light.
+   EVERY LIGHT-VALUE FIELD IS IDENTICAL ACROSS ALL THREE RUNS (r1 = L1, r2/r3 = L2):
+   arr_diff_cells 1 @ [0,141,0] (chunk 0:0:1 slab 8), vc_diff 4, demoted 1, leaks 0 on
+   every censused chunk, stragglers 3, wash_detected false, low_on_high_n 0, double-LOD
+   0/0, worst null, and per-chunk mean_eff identical wherever a chunk is censused in both
+   runs. The plan's "leaks 0x20" count itself drifts: 20 in r1, 23 in r2, 21 in r3.
+   THE CHANGE IS ALSO PROVABLY INERT FOR THIS ARM: lightstate is home-only at the default
+   radius, player at spawn — 3,141 m from the nearest patch edge against the 64 m face
+   stream window, so zero face chunks exist and none of the three converted sites can
+   execute; the arm edits through the home set_block, not set_block_key.
+   CONSEQUENCE: "JSON-identical" is not reproducible even between runs of one tree (L1's
+   own identity with its prior run was a match, not a guarantee). The standing gate should
+   be read as "all light-value fields identical" — which holds exactly across r1/r2/r3.
+
+7. CALLER COUNT — STATED PER PLAN §7
+   The accessor has 3 call sites today: the face drain read, the evict read, the edit
+   read. Plus 1 creator site left beside it (4) and the home sites out of scope (5). That
+   is thin — not a one-caller accessor, but close. It is kept because it is the designated
+   answer site of the L1 staged order: step 2 (one drain loop) dispatches every owed key's
+   face part through it, and step 5 (deleting _star_faces) retires the creator in favour
+   of this face 0/1 half. Its value today is the single answer to ownership, not
+   indirection savings.
+
+8. GATES (logs .scratch/AC-0463-gates/)
+   set 1: python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate
+   --timeout 900 — all ok (rc=0, script=0 shader=0). g0 r11: 0/0. genhash r9: 25 GENHASH
+   lines BYTE-IDENTICAL to the L1 run (r8; diff empty). light r6: field-identical to L1
+   (r5) — 15/0/14/0/9, pocket [8,120,-50], cave_census_cands 590; only cave_census_ms 463
+   vs 461 (machine timing, not a gate value). lightstate r2: see 6.
+   set 2: --arms residency,planetwalk --timeout 900 — all ok. residency r4: leak=false,
+   verdict STABLE (steady face 74 / home 93, keys_same=true, converged 503 ms, 6/6 samples
+   flat), face evictions 0, both seam crossings ok. planetwalk r5: 25 of 26 boundary pairs
+   covered with mesh+body at every destination (the standing lap_0-1 home_pair_midline
+   waiver), ok=true.
