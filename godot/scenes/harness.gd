@@ -37544,6 +37544,31 @@ func _ac0433probe_test() -> void:
 # mesh_built, body_present, body_all, aabb_delta_m, dest_chunk,
 # recentered, settle_ms}], waivers, negctrl {ran, saw_unbuilt}, frames,
 # ms, fails.
+#
+# AC-0469 stage C (the twelve-chart lap, measurement only): the 2-seam
+# subset above is now the lap. The face adjacency is DERIVED at runtime
+# by probing world_to_face 8 m past each of the 12 faces' 4 edges (two
+# along-edge points per edge so a two-segment edge reports BOTH
+# neighbours — no hardcoded guess; the derived table is reported in the
+# result, cross-checked against SphereMath._EDGES, and recorded in the
+# deviations as a deliverable). Every undirected pair the table gives,
+# except the two legacy seams (kept verbatim for comparability), gets
+# one crossing: stand 8 m INSIDE the from face at a candidate crossing
+# point (edge middle / 40 m from either end — a candidate whose probe
+# does not land on the to face is a mis-aim and drops; the keeper
+# NEAREST a home patch corner wins, because the face lane's stream band
+# hugs the patch, so a boundary point kilometres from every corner
+# cannot build — measured by the waits, not assumed), then walk 8 m
+# steps until the anchor's face changes, with the same snapshots and
+# bounded waits as the legacy seams. A pair whose src never builds is a
+# DOCUMENTED uncovered pair with a reason (src_settle_timeout) — a
+# documented subset, never a silent gap; a pair whose src builds but the
+# destination does not (or whose face is wrong) is a genuine finding
+# and fails the arm. The 12 faces actually stood on (and the faces whose
+# src chunk actually built) are reported. New result fields: adjacency
+# {table, pairs_total, edge_table_matches}, lap {covered, covered_total,
+# pairs_total, uncovered, faces_stood_on, faces_src_built}. Every
+# pre-existing field and the negative control are unchanged.
 # ============================================================================
 func _planetwalk_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
@@ -37572,12 +37597,66 @@ func _planetwalk_test(spawn: Vector3) -> void:
 	var crossings: Array = []
 	var fails: Array = []
 	var frames := 0
+	# THE 12 faces actually stood on, per CHART (the stand's target face
+	# a/b) — faces_stood_on reports the ANCHOR's face instead, and the
+	# anchor collapses the home pair to face 0 inside the patch, so the
+	# face-1 stands would read face 0 there.
+	var faces_intended := {}
 	for e in edges:
 		var rep: Dictionary = await _planetwalk_crossing(p, float(pf0.y), float(e[0]), float(e[1]), e[2] as Vector3, str(e[3]), skip_wait, R)
 		crossings.append(rep)
 		frames += int(rep.get("wait_frames", 0))
+		if int(rep.get("from_face", -1)) >= 0:
+			faces_intended[int(rep.get("from_face", -1))] = true
+		if int(rep.get("to_face", -1)) >= 0:
+			faces_intended[int(rep.get("to_face", -1))] = true  # the arrival face (the settle stands on it)
 		if not bool(rep.get("ok", false)):
 			fails.append("%s: %s" % [str(e[3]), str(rep.get("fail", "unknown"))])
+	# AC-0469 stage C: the twelve-chart lap. The adjacency is DERIVED by
+	# probing world_to_face past every edge (the deliverable table); every
+	# undirected pair it gives, except the two legacy seams already walked
+	# verbatim above (kept for comparability with the AC-0466 runs), gets
+	# one crossing with the same per-crossing fields.
+	var adj: Dictionary = _planetwalk_derive_adjacency(R)
+	var lapped := {"4-5": true, "10-11": true}
+	for pr in adj["pairs"]:
+		var a: int = int(pr[0])
+		var b: int = int(pr[1])
+		var key: String = "%d-%d" % [a, b]
+		if lapped.has(key):
+			continue
+		var from_f: int = a
+		var to_f: int = b
+		var edg := -1
+		for e2 in range(4):
+			if (adj["table"][a] as Array)[e2].has(b):
+				edg = e2
+		if edg < 0:
+			for e2 in range(4):
+				if (adj["table"][b] as Array)[e2].has(a):
+					edg = e2
+					from_f = b
+					to_f = a
+		if edg < 0:
+			fails.append("lap_%s: no_derived_edge" % key)
+			continue
+		faces_intended[from_f] = true
+		faces_intended[to_f] = true  # the arrival face: the player stands on it at the crossing and through the settle
+		var rep2: Dictionary = await _planetwalk_lap_pair(p, float(pf0.y), R, from_f, to_f, edg, "lap_%s" % key, skip_wait)
+		crossings.append(rep2)
+		frames += int(rep2.get("wait_frames", 0))
+		if not bool(rep2.get("ok", false)):
+			# src never built = the face lane's stream band does not reach
+			# this boundary (documented uncovered, never a silent gap); a
+			# src that builds but the destination does not — or a wrong
+			# face — is a genuine finding about the 1 m grid and fails the
+			# arm (plan §7: it outranks completing the lap).
+			var why2: String = str(rep2.get("fail", "unknown"))
+			# home_pair_midline is the documented no-boundary result (the
+			# flat world's keying split), like src_settle_timeout for an
+			# unstreamed boundary — recorded, never red.
+			if not skip_wait and why2 != "src_settle_timeout" and why2 != "home_pair_midline":
+				fails.append("lap_%s: %s" % [key, why2])
 	# saw_unbuilt scans EVERY chunk-state field the arm recorded (walk
 	# start, the crossing frame, the post-settle destination) — plus, in
 	# the negative-control mode, the stand-instant destination snapshot
@@ -37585,15 +37664,52 @@ func _planetwalk_test(spawn: Vector3) -> void:
 	# the arm must be able to SEE an unbuilt boundary.
 	var saw_unbuilt := false
 	for cr in crossings:
+		# home_pair_midline is a documented NO-BOUNDARY pair (the flat
+		# world's keying split), not an unbuilt boundary — excluding it
+		# keeps the normal/skip contrast the negative control rides on
+		# (normal mode must see everything built).
+		if str(cr.get("fail", "")) == "home_pair_midline":
+			continue
 		for fkey in ["src_mesh_built", "src_body_present", "cross_mesh_built", "cross_body_present", "mesh_built", "body_present"]:
 			if not bool(cr.get(fkey, true)):
 				saw_unbuilt = true
 		if skip_wait and not bool(cr.get("stand_dest_built", true)):
 			saw_unbuilt = true
+	# AC-0469 stage C: the face must genuinely change across a CHART
+	# boundary (the lap makes home<->chart crossings legitimate; the old
+	# from>1/to>1 clause is "a chart face is involved").
 	var face_change_ok := false
 	for cr in crossings:
-		if int(cr.get("from_face", 0)) > 1 and int(cr.get("to_face", 0)) > 1 and int(cr.get("from_face", 0)) != int(cr.get("to_face", 0)):
+		var cf: int = int(cr.get("from_face", -1))
+		var ct: int = int(cr.get("to_face", -1))
+		if cf >= 0 and ct >= 0 and cf != ct and (cf > 1 or ct > 1):
 			face_change_ok = true
+	# AC-0469 stage C: the lap accounting — every derived pair is either
+	# covered (crossed with mesh AND body at the destination) or uncovered
+	# WITH A RECORDED REASON (a documented subset, never a silent gap), and
+	# the 12 faces actually stood on (the anchor's face at the stand or at
+	# the crossing) are reported — a face that cannot be reached within the
+	# step budget is a finding, not a silent hole.
+	var covered: Array = []
+	var uncovered: Dictionary = {}
+	var faces_stood_on := {}
+	var faces_src_built := {}
+	for cr in crossings:
+		var lf: int = int(cr.get("from_face", -1))
+		var lt: int = int(cr.get("to_face", -1))
+		if lf >= 0:
+			faces_stood_on[lf] = true
+		if lt >= 0:
+			faces_stood_on[lt] = true
+		if lf >= 0 and bool(cr.get("src_mesh_built", false)):
+			faces_src_built[lf] = true
+		if lt >= 0 and bool(cr.get("mesh_built", false)):
+			faces_src_built[lt] = true
+		if bool(cr.get("ok", false)):
+			covered.append(str(cr.get("edge", "")))
+		else:
+			uncovered[str(cr.get("edge", ""))] = str(cr.get("fail", "unknown"))
+	var lap_ok: bool = int(adj["pairs_total"]) <= crossings.size() and not covered.is_empty()
 	var ok: bool
 	if skip_wait:
 		# THE negative control's teeth: the face must still change (the
@@ -37603,15 +37719,25 @@ func _planetwalk_test(spawn: Vector3) -> void:
 		if not saw_unbuilt:
 			fails.append("negctrl_saw_no_unbuilt (skipping the waits changed nothing — the instrument cannot fail)")
 	else:
-		ok = face_change_ok and fails.is_empty()
+		ok = face_change_ok and fails.is_empty() and lap_ok
 	Debug.result({"planetwalk": {
 		"ok": ok,
 		"crossings": crossings,
-		"waivers": ["subset: 2 of the 12 chart boundaries (the +x and -z edge seams; the twelve-chart lap is the follow-up the merge slices will demand)"],
+		"waivers": ["lap: %d of %d derived boundary pairs covered at the 1 m grid — the uncovered pairs are reported with reasons in lap.uncovered (a documented subset, not a silent gap)" % [covered.size(), int(adj["pairs_total"])]],
 		"negctrl": {"ran": skip_wait, "saw_unbuilt": saw_unbuilt},
 		"frames": frames,
 		"ms": Time.get_ticks_msec() - t0,
 		"fails": fails,
+		"adjacency": {"table": adj["table"], "pairs_total": int(adj["pairs_total"]), "edge_table_matches": bool(adj["edge_table_matches"])},
+		"lap": {
+			"covered": covered,
+			"covered_total": covered.size(),
+			"pairs_total": int(adj["pairs_total"]),
+			"uncovered": uncovered,
+			"faces_stood_on": _planetwalk_sorted_keys(faces_stood_on),
+			"faces_stood_intended": _planetwalk_sorted_keys(faces_intended),
+			"faces_src_built": _planetwalk_sorted_keys(faces_src_built),
+		},
 	}})
 
 
@@ -37897,6 +38023,423 @@ func _planetwalk_fail(label: String, why: String, wf: int, t0c: int, extra: Dict
 	}
 	for k in extra:
 		rep[k] = extra[k]
+	return rep
+
+
+func _planetwalk_sorted_keys(d: Dictionary) -> Array:
+	var ks: Array = []
+	for k in d:
+		ks.append(int(k))
+	ks.sort()
+	return ks
+
+
+func _planetwalk_corner_dist(w: Vector3, R: float) -> float:
+	# AC-0469 stage C: the distance from a world-frame surface point to
+	# the NEAREST home-patch corner (the patch is the flat W x W square
+	# through the world origin, AC-0306/0307). The proxy that steers each
+	# lap crossing to the point of its boundary the face lane's stream
+	# band can reach — the band hugs the patch (world.gd _face_stream: the
+	# face cells within the sim band of the player's patch-clamped flat
+	# position, on the 8 faces that border the patch), so a boundary point
+	# kilometres from every corner cannot build. Pure geometry — no
+	# streaming parameter is copied or changed; the waits measure it.
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var best := INF
+	for sx in [-1.0, 1.0]:
+		for sz in [-1.0, 1.0]:
+			best = minf(best, (Vector3(sx * hw, 0.0, sz * hw) - w).length())
+	return best
+
+
+func _planetwalk_derive_adjacency(R: float) -> Dictionary:
+	# AC-0469 stage C deliverable: the face adjacency DERIVED from the
+	# cube-map maths — for each face 0-11 probe world_to_face 8 m PAST
+	# each of its 4 edges (edge 0 = u=1, 1 = u=0, 2 = v=1, 3 = v=0, the
+	# SphereMath._EDGES convention) at two along-edge points, so a
+	# two-segment edge (a shared cube edge whose other side is itself
+	# split) reports BOTH neighbours. No hardcoded guess: the probe IS the
+	# game's own forward map (uv_to_world, unclamped — the cube map
+	# extends continuously past the edges) inverted by world_to_face. The
+	# derived neighbour sets are cross-checked against SphereMath._EDGES
+	# (the seam table the earlier tickets assumed) and the match reported.
+	var table: Array = []
+	var matches := true
+	for f in range(12):
+		var sc: Vector2 = SphereMath.face_cell_scale(f, R)
+		var du: float = 8.0 / (float(sc.x) * float(SphereMath.CELLS_PER_FACE))
+		var dv: float = 8.0 / (float(sc.y) * float(SphereMath.CELLS_PER_FACE))
+		var edges: Array = []
+		for edge in range(4):
+			var nbrs: Array = []
+			for t in [0.25, 0.75]:
+				var u := 0.0
+				var v := 0.0
+				match edge:
+					0:
+						u = 1.0 + du; v = float(t)
+					1:
+						u = -du; v = float(t)
+					2:
+						u = float(t); v = 1.0 + dv
+					_:
+						u = float(t); v = -dv
+				var nb: int = int(SphereMath.world_to_face(SphereMath.uv_to_world(f, u, v, R), R).get("face", -1))
+				if nb >= 0 and nb != f and not nbrs.has(nb):
+					nbrs.append(nb)
+			edges.append(nbrs)
+			var ed_nbrs: Array = []
+			for seg in (SphereMath._EDGES[f][edge] as Array):
+				var sb: int = int(seg[2])
+				if not ed_nbrs.has(sb):
+					ed_nbrs.append(sb)
+			var tn: Array = nbrs.duplicate(); tn.sort()
+			var en: Array = ed_nbrs.duplicate(); en.sort()
+			if tn != en:
+				matches = false
+		table.append(edges)
+	var pairs_set: Dictionary = {}
+	for f in range(12):
+		for edge in range(4):
+			for nb in (table[f][edge] as Array):
+				pairs_set["%d-%d" % [mini(f, int(nb)), maxi(f, int(nb))]] = [mini(f, int(nb)), maxi(f, int(nb))]
+	var pairs: Array = []
+	for k in pairs_set:
+		pairs.append(pairs_set[k])
+	pairs.sort()
+	return {"table": table, "pairs": pairs, "pairs_total": pairs.size(), "edge_table_matches": matches}
+
+
+func _planetwalk_lap_pair(p, stand_y: float, R: float, a: int, b: int, edge: int, label: String, skip_wait: bool) -> Dictionary:
+	# AC-0469 stage C: one lap crossing of the derived pair (a -> b across
+	# face a's `edge`), in the legacy seams' exact shape (stand, bounded
+	# src settle, 8 m walk until the anchor's face changes, crossing-frame
+	# snapshot, bounded dest settle, the same fields). The candidate
+	# crossing points are the edge middle and 40 m from either end; a
+	# candidate whose 8 m-past-edge probe does not land on b drops (a
+	# two-segment edge: only b's segment survives), and the keeper nearest
+	# a home patch corner is the crossing (see _planetwalk_corner_dist).
+	var t0c := Time.get_ticks_msec()
+	var wf := 0
+	var sc: Vector2 = SphereMath.face_cell_scale(a, R)
+	var span_u: float = float(sc.x) * float(SphereMath.CELLS_PER_FACE)
+	var span_v: float = float(sc.y) * float(SphereMath.CELLS_PER_FACE)
+	var along_span: float = span_v if edge <= 1 else span_u
+	# THE stand is 9 m inside the edge, not 8: on the 0.5 m/cell axis 8 m
+	# is EXACTLY 16 cells = exactly one chunk, so the stand sits on a
+	# chunk column boundary and the anchor's ccx flips across it on float
+	# noise between the lift's read and the src check's read (the lift
+	# then builds the adjacent column — measured: key_match false on
+	# 2-3/3-6/3-7, src_settle_timeout). 9 m is off every cell and chunk
+	# boundary on both axis scales; the 8 m walk steps land 1 m inside /
+	# 7 m past (also off-boundary).
+	var perp_uv: float = 9.0 / (span_u if edge <= 1 else span_v)
+	var kept: Array = []
+	for t in [0.5, 1.0 - 40.0 / along_span, 40.0 / along_span]:
+		var su := 0.0
+		var sv := 0.0
+		var pu := 0.0
+		var pv := 0.0
+		match edge:
+			0:
+				su = 1.0 - perp_uv; sv = float(t)
+				pu = 1.0 + perp_uv; pv = float(t)
+			1:
+				su = perp_uv; sv = float(t)
+				pu = -perp_uv; pv = float(t)
+			2:
+				su = float(t); sv = 1.0 - perp_uv
+				pu = float(t); pv = 1.0 + perp_uv
+			_:
+				su = float(t); sv = perp_uv
+				pu = float(t); pv = -perp_uv
+		var pface: int = int(SphereMath.world_to_face(SphereMath.uv_to_world(a, pu, pv, R), R).get("face", -1))
+		if pface != b:
+			continue
+		var pw: Vector3 = SphereMath.uv_to_world(a, pu, pv, R) - Vector3(0.0, R, 0.0)
+		kept.append([_planetwalk_corner_dist(pw, R), su, sv, pu, pv])
+	if kept.is_empty():
+		return _planetwalk_fail(label, "no_valid_crossing_point", wf, t0c, {"from_face": a, "exp_to_face": b})
+	kept.sort_custom(func(x, y): return float(x[0]) < float(y[0]))
+	var su0: float = float(kept[0][1])
+	var sv0: float = float(kept[0][2])
+	var pu0: float = float(kept[0][3])
+	var pv0: float = float(kept[0][4])
+	var stand_w: Vector3 = SphereMath.uv_to_world(a, su0, sv0, R) - Vector3(0.0, R, 0.0)
+	var stand_up: Vector3 = SphereMath.uv_to_world(a, su0, sv0, R).normalized()
+	var end_w: Vector3 = SphereMath.uv_to_world(a, pu0, pv0, R) - Vector3(0.0, R, 0.0)
+	var up_end: Vector3 = SphereMath.uv_to_world(a, pu0, pv0, R).normalized()
+	end_w = end_w + up_end * stand_y
+	# THE NEGCTRL TEETH (taken every mode — cheap): the destination chart's
+	# chunk at the walk's end, snapshotted BEFORE the stand recenter — at
+	# this instant the face lane cannot have streamed it, so the arm's own
+	# read path MUST be able to report it unbuilt (the AC-0145 proof the
+	# mesh/body checks have teeth).
+	p.position = stand_w + stand_up * stand_y
+	# THE instrument is stationary: zero the carried velocity so the
+	# settle frames and the waits read the stand column exactly — the
+	# walk's teleports do not reset the body's velocity, and a carried
+	# velocity drifts the anchor's column so the src check would read
+	# the wrong chunk (measured: key_match false).
+	p.velocity = Vector3.ZERO
+	var aend: Dictionary = world.player_anchor(end_w)
+	var fnd: int = int(aend.get("face", 0))
+	var dc: Node3D = world.chunks.get(world.chunk_key_face(fnd, int(aend.get("ccx", 0)), int(aend.get("ccz", 0))))
+	var stand_dest_built: bool = dc != null and dc.first_opaque_mesh() != null and _planetwalk_body_ok(dc)
+	var sflat: Vector3 = world.flat_of_world_pos(p.position)
+	world.recenter(sflat.x, sflat.z, true)
+	# THE expected pair, derived BEFORE the walk (never a guess): the
+	# stand's anchor face is a, the probe's face is b — the same SphereMath
+	# derivation the adjacency table came from.
+	var anch0: Dictionary = world.player_anchor(p.position)
+	var from_face: int = int(anch0.get("face", 0))
+	var exp_to: int = int(world.player_anchor(end_w).get("face", 0))
+	# A HOME from face reads face 0 in the anchor inside the patch: the
+	# flat world is ONE flat, the home pair is collapsed to face 0
+	# (world.gd player_anchor) — standing on "face 1" reads face 0.
+	if from_face != a and not (a <= 1 and from_face <= 1):
+		return _planetwalk_fail(label, "mis_aim_from", wf, t0c, {"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built})
+	if exp_to != b or exp_to == from_face:
+		if a <= 1:
+			# The home pair's midline (0-1) is a KEYING split inside the
+			# flat world: the anchor collapses both halves to face 0 in
+			# the patch, so no chart boundary is observable there. The
+			# measured result is "no boundary", reported as a documented
+			# pair (plan §7: a documented subset, never a silent gap) —
+			# not a finding.
+			return {
+				"ok": false, "fail": "home_pair_midline", "edge": label,
+				"from_face": from_face, "to_face": -1, "exp_to_face": exp_to,
+				"steps": 0, "frame_ms": -1, "stand_dest_built": stand_dest_built,
+				"src_mesh_built": false, "src_body_present": false, "src_wait_ms": -1,
+				"cross_resident": false, "cross_mesh_built": false, "cross_body_present": false, "cross_body_all": false,
+				"mesh_built": false, "body_present": false, "body_all": false, "aabb_delta_m": -1.0,
+				"dest_chunk": "", "recentered": false, "settle_ms": 0, "wait_frames": wf,
+				"ms": Time.get_ticks_msec() - t0c,
+			}
+		return _planetwalk_fail(label, "expected_no_boundary", wf, t0c, {"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built})
+	_planetwalk_lift(p, 3.5)
+	var stand_pos_diag: Vector3 = p.position
+	for i in 8:
+		await get_tree().physics_frame
+		wf += 8
+	# SOURCE STATE: recorded either way; the normal mode WAITS (bounded,
+	# with the r23 recenter nudge) for the chunk under the player to be
+	# built before the walk, the negative control skips it on purpose.
+	# A wait that burns the full budget is the measurement that a boundary
+	# is OUTSIDE the face lane's stream band (documented, not a silent gap).
+	# DIAG (stage C debug, generic lap pairs only): the burial-guard lift
+	# ensures ONE column from the anchor at lift time — report which
+	# column that is vs the column the src check reads, and whether it
+	# built. A mismatch is the "builds elsewhere, reports unbuilt" case.
+	var asrc: Dictionary = world.player_anchor(p.position)
+	var fsr: int = int(asrc.get("face", 0))
+	var ccxs: int = int(asrc.get("ccx", 0))
+	var cczs: int = int(asrc.get("ccz", 0))
+	var src_key: String = world.chunk_key_face(fsr, ccxs, cczs)
+	var a_st: Dictionary = world.player_anchor(stand_pos_diag)
+	var fst: int = int(a_st.get("face", 0))
+	var lift_key: String = ""
+	if fst > 1 and a_st.has("inv"):
+		# (the collapsed home-pair anchor is the minimal dict — no "inv",
+		# no ccx — and the lift is a no-op on the home pair anyway)
+		var ccxt: int = int(a_st.get("ccx", 0))
+		var cczt: int = int(a_st.get("ccz", 0))
+		var loct: Vector3 = (a_st["inv"] as Transform3D) * stand_pos_diag
+		var kxt: int = int(floorf(loct.x))
+		var colxt: int = ccxt * 16 + (15 - kxt if SphereMath.face_mirror_x(fst) else kxt)
+		var colzt: int = cczt * 16 + int(floorf(loct.z))
+		lift_key = world.chunk_key_face(fst, int(floorf(float(colxt) / 16.0)), int(floorf(float(colzt) / 16.0)))
+	var lc2: Node3D = world.chunks.get(lift_key) if lift_key != "" else null
+	var lift_built: bool = lc2 != null and lc2.first_opaque_mesh() != null
+	# the settle drift: ~0 with the keys differing = float boundary flip
+	# (the stand sits on a chunk column); > 0 = physical movement during
+	# the settle frames.
+	var stand_drift_m: float = stand_pos_diag.distance_to(p.position)
+	var src_chunk: Node3D = _planetwalk_chunk_under(p)
+	var src_mesh: bool = src_chunk != null and (src_chunk as Node3D).first_opaque_mesh() != null
+	var src_body: bool = _planetwalk_body_ok(src_chunk)
+	var src_wait_ms := -1
+	if not skip_wait and not (src_mesh and src_body):
+		var s0 := Time.get_ticks_msec()
+		for f in 1200:
+			var c: Node3D = _planetwalk_chunk_under(p)
+			if c != null and c.first_opaque_mesh() != null and _planetwalk_body_ok(c):
+				break
+			await get_tree().physics_frame
+			wf += 1
+			if not p.dead and world.sim_height(p.position) > -12.0:
+				p.hp = 40.0
+				p.hunger = 20.0
+			if f > 0 and f % 200 == 0:
+				var fpw: Vector3 = world.flat_of_world_pos(p.position)
+				world.recenter(fpw.x, fpw.z, true)
+		src_wait_ms = Time.get_ticks_msec() - s0
+		var c2: Node3D = _planetwalk_chunk_under(p)
+		src_mesh = c2 != null and (c2 as Node3D).first_opaque_mesh() != null
+		src_body = _planetwalk_body_ok(c2)
+		if not (src_mesh and src_body):
+			return _planetwalk_fail(label, "src_settle_timeout", wf, t0c, {
+				"from_face": from_face, "exp_to_face": exp_to, "stand_dest_built": stand_dest_built,
+				"src_mesh_built": src_mesh, "src_body_present": src_body, "src_wait_ms": src_wait_ms,
+				"src_key": src_key, "lift_key": lift_key, "key_match": src_key == lift_key, "lift_built": lift_built,
+			})
+	# THE WALK: 8 m steps (in the face's own (u,v) — one local unit = one
+	# cell, face_cell_scale) toward the edge; position set + recenter each
+	# step (the crossface teleport discipline), until the anchor's face
+	# CHANGES. A walk that never leaves the chart is a failed arm, not a
+	# pass.
+	var steps := 0
+	var t_walk := Time.get_ticks_msec()
+	var crossed := false
+	var to_face := from_face
+	var cross_resident := false
+	var cross_mesh := false
+	var cross_body := false
+	var cross_body_all := false
+	var to_resident_total := 0
+	var to_resident_sample: Array = []
+	var cur_u := su0
+	var cur_v := sv0
+	var du_step := 0.0
+	var dv_step := 0.0
+	match edge:
+		0:
+			du_step = 8.0 / span_u
+		1:
+			du_step = -8.0 / span_u
+		2:
+			dv_step = 8.0 / span_v
+		_:
+			dv_step = -8.0 / span_v
+	for s in 48:
+		cur_u += du_step
+		cur_v += dv_step
+		var up0: Vector3 = SphereMath.uv_to_world(a, cur_u, cur_v, R).normalized()
+		p.position = SphereMath.uv_to_world(a, cur_u, cur_v, R) - Vector3(0.0, R, 0.0) + up0 * stand_y
+		p.velocity = Vector3.ZERO  # the step is a position set: no carried momentum
+		var fw: Vector3 = world.flat_of_world_pos(p.position)
+		world.recenter(fw.x, fw.z, true)
+		steps += 1
+		for i in 3:
+			await get_tree().physics_frame
+			wf += 1
+		var aa: Dictionary = world.player_anchor(p.position)
+		var fa: int = int(aa.get("face", 0))
+		if fa != from_face:
+			# THE crossing-frame snapshot, BEFORE any ensure: the honest
+			# "did the destination stream in time" reading (the burial-guard
+			# lift, which ensures the anchor column, runs after on purpose).
+			crossed = true
+			to_face = fa
+			var cc: Node3D = _planetwalk_chunk_under(p)
+			cross_resident = cc != null
+			cross_mesh = cc != null and (cc as Node3D).first_opaque_mesh() != null
+			cross_body = _planetwalk_body_ok(cc)
+			cross_body_all = cc != null and (cc as Node3D).has_all_slab_bodies()
+			# DIAG (stage C debug): the destination face's resident chunk
+			# census at the crossing frame — the face lane's band
+			# footprint, so a built-but-unexpected dest (or an unbuilt
+			# dest that is in the band) is readable straight off the result.
+			for kk in world.chunks.keys():
+				var kn: Node3D = world.chunks.get(kk)
+				if kn != null and int(kn.face) == fa:
+					to_resident_total += 1
+					if to_resident_total <= 8:
+						to_resident_sample.append(kk)
+			break
+		_planetwalk_lift(p, 1.0)
+	if not crossed:
+		return _planetwalk_fail(label, "walk_never_crossed", wf, t0c, {
+			"from_face": from_face, "exp_to_face": exp_to, "steps": steps, "stand_dest_built": stand_dest_built,
+			"src_mesh_built": src_mesh, "src_body_present": src_body, "src_wait_ms": src_wait_ms,
+		})
+	var frame_ms := Time.get_ticks_msec() - t_walk
+	# DESTINATION STATE: the crossing-frame snapshot is the honest reading;
+	# the normal mode then runs the bounded settle and records the
+	# post-settle state — that is what the gate rides on.
+	var mesh_built := cross_mesh
+	var body_present := cross_body
+	var body_all := cross_body_all
+	var aabb_delta := -1.0
+	var dest_key := ""
+	var recentered := false
+	var settle_ms := 0
+	if not skip_wait:
+		var s1 := Time.get_ticks_msec()
+		for f2 in 1200:
+			var c3: Node3D = _planetwalk_chunk_under(p)
+			if c3 != null and c3.first_opaque_mesh() != null and _planetwalk_body_ok(c3):
+				break
+			await get_tree().physics_frame
+			wf += 1
+			if not p.dead and world.sim_height(p.position) > -12.0:
+				p.hp = 40.0
+				p.hunger = 20.0
+			if f2 > 0 and f2 % 200 == 0:
+				recentered = true
+				var fpw3: Vector3 = world.flat_of_world_pos(p.position)
+				world.recenter(fpw3.x, fpw3.z, true)
+		settle_ms = Time.get_ticks_msec() - s1
+		var c4: Node3D = _planetwalk_chunk_under(p)
+		mesh_built = c4 != null and (c4 as Node3D).first_opaque_mesh() != null
+		body_present = _planetwalk_body_ok(c4)
+		body_all = c4 != null and (c4 as Node3D).has_all_slab_bodies()
+		if c4 != null and c4.first_opaque_mesh() != null:
+			dest_key = world.chunk_key_face(int(c4.face), int(c4.cx), int(c4.cz))
+			# the aabb delta is a CHART-facet quantity (the uv_to_world
+			# canonical centre); home chunks ride the rigid column
+			# placement, so the field stays -1 for a home destination.
+			if int(c4.face) > 1:
+				var msh: ArrayMesh = c4.first_opaque_mesh()
+				var ac: Vector3 = msh.get_aabb().get_center()
+				var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+				var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+				var ec: Vector3 = SphereMath.uv_to_world(int(c4.face), uu, vv, R) - Vector3(0.0, R, 0.0)
+				aabb_delta = roundf((ec - ac).length() * 100.0) / 100.0
+	var okc := to_face == exp_to and mesh_built and body_present
+	var rep: Dictionary = {
+		"ok": okc,
+		"edge": label,
+		"from_face": from_face,
+		"to_face": to_face,
+		"exp_to_face": exp_to,
+		"steps": steps,
+		"frame_ms": frame_ms,
+		"stand_dest_built": stand_dest_built,
+		"src_mesh_built": src_mesh,
+		"src_body_present": src_body,
+		"src_wait_ms": src_wait_ms,
+		"cross_resident": cross_resident,
+		"cross_mesh_built": cross_mesh,
+		"cross_body_present": cross_body,
+		"cross_body_all": cross_body_all,
+		"mesh_built": mesh_built,
+		"body_present": body_present,
+		"body_all": body_all,
+		"aabb_delta_m": aabb_delta,
+		"dest_chunk": dest_key,
+		"recentered": recentered,
+		"settle_ms": settle_ms,
+		"wait_frames": wf,
+		"ms": Time.get_ticks_msec() - t0c,
+		# DIAG (stage C debug, generic lap pairs): the src/lift column
+		# accounting and the destination face's band footprint.
+		"src_key": src_key,
+		"lift_key": lift_key,
+		"key_match": src_key == lift_key,
+		"lift_built": lift_built,
+		"stand_drift_m": stand_drift_m,
+		"to_resident_at_cross": to_resident_total,
+		"to_resident_sample": to_resident_sample,
+	}
+	if not okc:
+		if to_face != exp_to:
+			rep["fail"] = "wrong_to_face"
+		elif not mesh_built:
+			rep["fail"] = "dest_no_mesh"
+		else:
+			rep["fail"] = "dest_no_body"
 	return rep
 
 

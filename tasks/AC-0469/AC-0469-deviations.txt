@@ -348,3 +348,165 @@ D8. RESIDENCY RESULT (the gate of the fix): leak false, stable true,
     radius (128 m): the furthest streamed row (x-face row 4 = 64-80 m
     in-band) is inside the evict radius, so creation now stays within
     what the sweep can clear.
+
+================================================================================
+AC-0469 stage C (2026-10-22) — the twelve-chart lap (MEASUREMENT ONLY).
+The arm extended, no game behaviour changed; genhash 25/25 is the proof.
+================================================================================
+
+DERIVED ADJACENCY (THE DELIVERABLE)
+-----------------------------------
+Method (no hardcoded table): for each of the 12 faces, probe
+world_to_face 8 m PAST each of its 4 chart edges (e0 u=1, e1 u=0,
+e2 v=1, e3 v=0) at two along-edge points (a two-segment edge reports
+both neighbours, e.g. face 0 e0 -> [5,4]). The table (face -> [e0,e1,
+e2,e3], neighbour face indices; index = axis*2+sector: 0/1 +Y, 2/3 -Y,
+4/5 +X, 6/7 -X, 8/9 +Z, 10/11 -Z):
+
+  0:  [[5,4], [1],     [8],     [10]]      1:  [[0],     [7,6], [9],     [11]]
+  2:  [[5,4], [3],     [8],     [10]]      3:  [[2],     [7,6], [9],     [11]]
+  4:  [[0],   [2],     [8],     [5]]       5:  [[0],     [2],   [4],     [10]]
+  6:  [[1],   [3],     [9],     [7]]       7:  [[1],     [3],   [6],     [11]]
+  8:  [[4],   [9],     [0],     [2]]       9:  [[8],     [6],   [1],     [3]]
+  10: [[5],   [11],    [0],     [2]]       11: [[10],    [7],   [1],     [3]]
+
+Undirected pairs (26): 0-1, 0-4, 0-5, 0-8, 0-10, 1-6, 1-7, 1-9, 1-11,
+2-3, 2-4, 2-5, 2-8, 2-10, 3-6, 3-7, 3-9, 3-11, 4-5, 4-8, 5-10, 6-7,
+6-9, 7-11, 8-9, 10-11.
+Cross-checked TWICE: (a) runtime, against SphereMath._EDGES
+(adjacency.edge_table_matches true in every RESULT); (b) an
+independent Python re-derivation (.scratch/AC-0469-gates/
+derive_adjacency.py) — edge_table_matches true, pairs_total 26.
+
+C1. The plan estimated "24" boundary pairs; the DERIVED count is 26
+    (the plan's figure was an estimate, not a measurement — the
+    deliverable is the derived table, and it is what the lap walks).
+
+C2. CROSSING-POINT SELECTION: the stand is on the from face at the
+    candidate crossing point (the edge middle, or the candidate whose
+    8 m-past-edge probe lands on the to face, nearest a home patch
+    corner — the face lane's stream band hugs the patch, so a corner
+    crossing is the best-served one; a candidate whose probe misses
+    the to face drops). The stand sits 9 m inside the edge (NOT the
+    legacy seam's 8 m): on the 0.5 m/cell axis 8 m is EXACTLY 16
+    cells = exactly one chunk, so the stand sits ON a chunk column
+    boundary and the anchor's ccx flips across it on float noise
+    between the lift's read and the src check's read (measured pre-
+    fix: key_match false on 2-3/3-6/3-7, spurious src_settle_timeout
+    — the lift had built the adjacent column). 9 m is off every cell
+    and chunk boundary on both axis scales; the 8 m walk steps land
+    1 m inside / 7 m past (also off-boundary). The player's velocity
+    is zeroed at the stand and at every walk step (position sets do
+    not reset CharacterBody3D momentum; measured stand_drift_m 0.0
+    in every crossing after the fix).
+
+C3. THE HOME PAIR HAS NO OBSERVABLE BOUNDARY. The pair (0,1) is a
+    KEYING split inside the flat world: world.player_anchor collapses
+    the whole home pair to face 0 inside the patch (|fx|,|fz| <= hw
+    return the minimal {"face":0,...} dict — no inv/ccx), and past
+    the patch the face-1 side resolves to the bordering CHART face
+    (6/7/9/11), never face 1. So no walk inside the patch ever sees a
+    face change at the midline, and the 1-* pairs cross from the
+    collapsed home anchor (from_face reads 0) directly into the chart
+    faces. The arm reports lap_0-1 as `fail: "home_pair_midline"` — a
+    documented pair (plan section 7: a documented subset, never a
+    silent gap), excluded from the red conditions and from the
+    saw_unbuilt scan (it is a no-boundary result, not an unbuilt
+    boundary — excluding it keeps the normal/skip contrast: normal
+    mode sees saw_unbuilt false, skip mode true).
+
+C4. COVERAGE (the final run): 25 of 26 derived pairs covered with
+    mesh AND body at the destination (23 generic lap crossings + the
+    2 legacy seams walked verbatim: 4-5 and 10-11 stay in the legacy
+    _planetwalk_crossing so old and new runs stay comparable).
+    Uncovered: lap_0-1 = home_pair_midline (C3) — the only one.
+    Faces stood on (anchor's face at stand/crossing): 0,2,3,4,5,6,7,
+    8,9,10,11 (11 distinct — face 1 reads face 0 by the C3 collapse).
+    Chart faces actually stood on (stand origin + arrival face of
+    every pair): all 12 (lap.faces_stood_intended). The src chunk
+    actually built on faces 0,2,3,4,5,6,7,8,9,10,11 (face 1's src is
+    the home chunk, face 0's). No src_settle_timeout in the final
+    runs: every chart src built at the stand (src_wait_ms -1).
+
+C5. THE HEADLINE MEASUREMENT — THE FACE LANE PRESTREAMS ONLY THE 4
+    X-FACES; THE CROSSINGS STILL LAND ON BUILT TERRAIN VIA THE
+    GAME'S OWN ON-DEMAND COLUMN ENSURE.
+    (a) _face_stream (world.gd ~15120) streams only an 80 m band
+        (win = sim_dist*16 = 64 m, 5 edge rows r=0..4: edge chunks
+        388-392 on the home-edge axis, x faces) hugging the
+        PATCH-CLAMPED player. Faces 2/3 are NEVER streamed at the
+        lap stands (edge gate p.x+hw > win; and SphereMath
+        .face_cell_band returns (INF,INF,INF) for face<4 / far
+        hemisphere). The x-face bands are the designed shape
+        (measured footprint at a crossing, e.g. 5:392:0-6 = the
+        y=+hw edge row x the z window).
+    (b) THE Z-FACE BAND DEFECT (measured + code): the along-edge
+        window index at world.gd:15199 maps the flat window through
+        stride S*0.5 (0.5 m), but the z-faces' along-edge axis (u =
+        x) charts at 1.0 m/cell (the sector half over the 6283-cell
+        chart) — the index is DOUBLED. Faces 8/10 (x>=0): the window
+        (x+hw)/0.5 clamps to the last chart cell for every x in [0,
+        hw] -> the band degenerates to ONE column (ccx 392, the x=+hw
+        corner) x 9 rows — measured footprint at the 0-8 crossing:
+        8:392:384-392 (9 chunks) vs the designed ~10 columns (ccx
+        382-392) x 9 rows. Faces 9/11 (x<0): the window spans the
+        WHOLE chart (ccx 0-392) starting at ccx 0 (the x=-hw corner)
+        — a 2x-wide superset the 12 ms budget never gets through
+        (the crossing window ccx 384-392 is ~384 chunks from the
+        fill's start). The code comment at 15187 ("the along-edge
+        axis is the half-width axis (S/2 per cell)") is true for the
+        x faces and wrong for the z faces.
+    (c) YET EVERY crossing (all 25) shows the destination chunk
+        RESIDENT with mesh AND body at the crossing frame — the
+        snapshot the arm takes BEFORE any ensure (the burial-guard
+        lift runs after on purpose). The builder is the game's own
+        on-demand column ensure: the player's per-frame state
+        queries (the fluid checks player.gd:579-583/748/888 ->
+        _world_get_block/_sim_get_block -> world.get_block_key, and
+        the live auto-step's surface_top_key at player.gd:790) call
+        _ensure_face_chunk on the player's OWN anchor column every
+        physics frame, and _face_in_mesh_window's is_inf sentinel
+        (face<4 / far hemisphere -> min_dist 0.0) makes that ensure
+        build the MESH synchronously. The crossing frame is 3 physics
+        frames after the arrival step — enough. So the player
+        experiences no hole at any of the 25 boundaries; what the
+        measurement shows is that the PRESTREAM (build ahead of the
+        crossing) is unmet on the z/-Y faces: the destination is
+        built by the arrival, not ahead of it. Scattered corner
+        chunks in the resident census (e.g. 4:0:11, 9:0:8, 11:1:8)
+        are the same on-demand path at the corner-ward anchor the
+        141 m stand altitude produces; not isolated per chunk.
+    (d) The 8-9/10-11 style corner crossings land ~20-40 m OUTSIDE
+        the degenerate z-face band and still cross on built terrain
+        (cross_resident true at frame 1, settle_ms 0-1) — evidence
+        the on-demand path, not the band, is what makes the lap green.
+
+C6. INSTRUMENT RESIDUALS (stage-C debug fields, generic lap pairs
+    only; the legacy helper is field-for-field untouched):
+    src_key/lift_key/key_match/lift_built — the lift's ensured column
+    vs the column the src check reads (key_match true in every
+    final-run pair except the home-from pairs, where lift_key "" —
+    the lift is a no-op on the collapsed home anchor); stand_drift_m
+    (0.0 in every crossing — the C2 velocity zeroing holds);
+    to_resident_at_cross/to_resident_sample (the destination face's
+    resident census at the crossing frame — the C5 band footprints
+    are read straight off these). Two residual key_match false in
+    the corner face-3 stands (3-9: src 3:4:392 vs lift 3:5:392;
+    3-11: 3:4:0 vs 3:5:0) — the lift's mirror column form (15-kx)
+    under the 141 m altitude at the corner; both chunks built, both
+    pairs covered — measurement plumbing, not a behaviour finding.
+
+C7. NEGATIVE CONTROL (unchanged semantics, still firing): normal
+    mode saw_unbuilt FALSE (the contrast — everything the arm reads
+    is built, the home_pair_midline entry excluded per C3); skip
+    mode (AWECRAFT_PWN_SKIP_WAIT=1) saw_unbuilt TRUE (the 0-* pairs'
+    home src reads unbuilt at check time without the waits, and the
+    stand-instant destination snapshots stand_dest_built false).
+    The face still changes in skip mode (the walks run) — the
+    instrument has teeth (AC-0145).
+
+C8. WALL: arm ms ~28.5 s (final normal run, 26 crossings incl. the
+    two legacy seams; the home-src settles for the 0-* pairs are the
+    only waits — src_wait_ms 0.7-3.8 s; every chart src is -1).
+    Negative control ~19 s. Gate run (g0+genhash+planetwalk) ~2 min
+    including boot.

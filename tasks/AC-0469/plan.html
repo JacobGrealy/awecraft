@@ -1,36 +1,38 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sB fix face leak</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage B — fix the face-lane leak (the window is measured in cells, not chunks)</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Bounded fix: the face stream's creation window is computed in CELLS where it must be in CHUNKS, so at 1 m cells it creates ~6× more chunks than eviction removes.</p>
-<h2>1. The diagnosis (measured, round 41-42 — this is the whole bug)</h2>
-<p>In <code>_face_stream</code> (world.gd:15108), the per-face row count is:</p>
-<pre>var rows: int = mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / S)) + 1) if is_x_face else mini(SphereMath.CHUNKS_PER_FACE, int(ceili(win / (S * 0.5))) + 1)</pre>
-<p><code>win</code> is a distance in FLAT METRES (64 at <code>sim_dist</code> 4). <code>S</code> is the CELL size (<code>face_cell_size</code>). Dividing metres by cell size yields CELLS — but <code>rows</code> indexes CHUNKS, and a chunk is <b>16 cells</b>. At the old 6.136 m cells the two were within a factor of ~10 of each other by coincidence (64/6.136 = 11 → 12 rows); at 1 m cells it becomes 64 → <b>65 rows</b>, i.e. ~6× the chunk count, while eviction still sweeps a 128 m radius only after 16 m of travel. Creation outruns eviction and face residency climbs without bound: measured 79 → 499 with a stationary player, <code>leak: true</code>.</p>
-<h2>2. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sC twelve-chart lap</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage C — the twelve-chart lap</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Measurement only: extend the traversal arm, change no game behaviour. AC-0466 covered <b>2 of 12</b> boundaries and waived the rest; the user's requirement — "the experience has to be the same around the entire planet", now at a 1 m grid — cannot be evidenced on two seams.</p>
+<h2>1. Goal</h2><p>Every one of the twelve chart faces is visited and every crossing between neighbours is measured for mesh presence, collision body, and crossing latency at the 1 m grid.</p>
+<h2>2. What exists to build on</h2>
+<p><code>planetwalk</code> (harness.gd, AC-0466) already stands on a chart, walks until <code>player_anchor()["face"]</code> changes, and reports <code>mesh_built</code>, <code>body_present</code> and <code>frame_ms</code> per crossing, plus a negative control (<code>AWECRAFT_PWN_SKIP_WAIT=1</code>) that proves it can fail. It covers the x_seam 4→5 and z_seam 10→11 boundaries and records the other ten as a waiver.</p>
+<h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_face_stream</code> (15108) — specifically the <code>rows</code> computation (~15127) and, if it has the same defect, the along-edge <code>lo</code>/<code>hi</code> extent which is in flat metres and must be converted to chunk indices the same way; <code>_face_chunk_min_dist</code> (15055) uses cell indices and is CORRECT — leave it</td><td>Edit the chunk-index conversion only.</td></tr>
-<tr><td>godot/core/sphere_math.gd</td><td><code>CHUNKS_PER_FACE</code> (added at AC-0469 stage A) — the existing chunk constant</td><td>READ ONLY — do not add a second constant.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>planetwalk</code> arm and its crossing helper (find by name)</td><td>Edit: extend coverage; keep every existing field and the negative control.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>world_to_face</code>, <code>uv_to_world</code>, the cube-map adjacency — derive neighbour pairs from the maths</td><td>READ ONLY. Do not hardcode a guess at which faces adjoin.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>the <code>planetwalk</code> row</td><td>Update the notes; <code>harness_doc.py --render</code>.</td></tr>
 <tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the eviction sweep, the travel gate, the residency policy, the window VALUE in metres, the chunk size (16), generation, the mesher, the warp.</p>
-<h2>3. Edit shape</h2>
+<p><b>Do not touch:</b> placement, streaming, residency, keys, light, the warp, the mesher. The arm only observes.</p>
+<h2>4. Edit shape</h2>
 <ul>
-<li><b>3.1 One conversion, stated once.</b> Express the chunk count as <code>ceil(win_m / (16.0 * S)) + 1</code> (and the z-face half-width variant as <code>win_m / (16.0 * S * 0.5)</code> — keep whatever halving rule is there now, only fix the units). Prefer introducing ONE small helper (e.g. <code>_chunks_across(metres, cell_m)</code>) used by every site that needs it, so a future cell-size change cannot desynchronise them again — that is the durable fix, not the two edits.</li>
-<li><b>3.2 Audit the siblings.</b> Any other place in <code>_face_stream</code> that turns metres into indices must use the same helper. List them in the deviations. <b>Do not change a value that is genuinely in cells</b> (e.g. <code>ccx * 16 + 1 .. + 14</code>, the <code>&amp; 15</code> local slot) — say which ones you checked and why they are correct.</li>
-<li><b>3.3 Nothing else moves.</b> Same window metres, same eviction radius, same travel gate.</li>
+<li><b>4.1 Derive adjacency, do not assume it.</b> For each face 0–11, find at least one neighbour by probing the cube map (walk along +u/−u/+v/−v and see which face <code>world_to_face</code> reports). Record the derived adjacency table in the deviations — it is a deliverable, and it also cross-checks the seam pairs the earlier tickets assumed.</li>
+<li><b>4.2 Cross every boundary</b> the derived table gives (up to 24 directed pairs; deduplicate to undirected). If the 600 s budget cannot hold a full lap, cover as many as fit, <b>report exactly which were covered and which were not</b>, and state the wall time — a documented subset is acceptable, a silent one is not.</li>
+<li><b>4.3 Per crossing, report</b>: from_face, to_face, steps, frame_ms, mesh_built, body_present, dest_chunk. Keep the standing fields unchanged so old and new runs are comparable.</li>
+<li><b>4.4 The negative control must still fire</b> — the arm's teeth survive the extension, or the extension is worthless.</li>
+<li><b>4.5 Also assert all 12 faces are REACHABLE</b>: a short report of which faces were actually stood on. If a face cannot be reached within the step budget that is a finding, not a silent gap.</li>
 </ul>
-<h2>4. Gates</h2>
+<h2>5. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>THE LEAK IS GONE (the point)</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms residency --timeout 900</code></td><td><b><code>leak: false</code>, <code>stable: true</code>, <code>converged: true</code></b>, and face residency must PLATEAU at a small number — report the plateau and compare it with the pre-fix 499. If it still grows, the diagnosis is incomplete: report that rather than trying more values.</td></tr>
-<tr><td>Nothing else broke</td><td><code>--arms g0,player,light,planetwalk,seamcensus</code></td><td>All rc=0, SCRIPT/SHADER 0/0; planetwalk still crosses into the new edge chunks; seamcensus clean.</td></tr>
-<tr><td>Save/load</td><td><code>--arms save,load</code></td><td><code>ok</code> true; report <code>simband_ms</code>.</td></tr>
+<tr><td>The lap</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,planetwalk --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b> (nothing about the world may change); planetwalk ok with crossings whose faces genuinely differ, each destination having mesh AND body; report the covered/total count.</td></tr>
+<tr><td>Negative control</td><td>same arm with <code>--env 'AWECRAFT_PWN_SKIP_WAIT=1'</code></td><td><code>neghtrl.saw_unbuilt</code> true — the arm can still fail.</td></tr>
+<tr><td>Docs</td><td><code>harness_doc.py --check</code></td><td>exit 0.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>5. Acceptance</h2><p>Face residency plateaus at a bounded count with a stationary player, the helper makes the metres→chunks conversion single-sourced, and no other behaviour moved.</p>
-<h2>6. Risks</h2><p>Shrinking the window too far would stream too little and leave holes at the boundary — <code>planetwalk</code> and <code>seamcensus</code> are the guards. If residency plateaus but the boundary now shows unbuilt chunks, the radius needs to be larger, and that is a MEASURED adjustment reported as such, not a silent widening.</p>
-<h2>7. Fences</h2><div class="stop"><ul>
+<h2>6. Acceptance</h2><p>Every reachable boundary crossed and measured, the derived adjacency table recorded, all 12 faces accounted for, and the negative control still firing.</p>
+<h2>7. Risks</h2><p>A full lap may exceed the budget at the 1 m grid (chunk counts per face rose 37.6×) — shorten the walk per crossing rather than the coverage, and say what was cut. If a crossing shows a missing mesh or body at 1 m, that is a genuine finding about the new grid and outranks completing the lap.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §2. Do not change the eviction sweep or the travel gate.</li>
+<li>No edits outside §3. No behaviour change.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>8. Resume point</h2><p>The grid is 1 m (stage A, f926ab5). This fixes the unit bug that change exposed in the face lane. Then the throughput work (gen 13.4 ms, mesh 19.2 ms per chunk) and the far-tier re-baseline follow.</p>
+<h2>9. Resume point</h2><p>The grid is 1 m (f926ab5), its face-lane unit bug is fixed (ee123a3), residency is bounded at 130/117, and the home-pair walk holds its standing latency (da92a60). This proves the rest of the planet.</p>
 </body></html>

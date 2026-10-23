@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-10-22T18:07
+  updated_at: 2026-10-22T22:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
 - AC-0469
+- AC-0470
 - AC-0463
 - AC-0451
 - AC-0399
@@ -30513,4 +30514,54 @@ intake:
     us/vert over 1,428,528 verts (still trivial), warpcensus builds 326 warped chunks with an AABB delta
     of 0.01 m, and home residency is unchanged at 117 with a 177 peak. So the leak is a FACE-LANE unit
     bug, not a general cost failure.'
+  comments: []
+- id: AC-0470
+  title: face prestream is degenerate on 6 of 8 chart faces
+  source: agent
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-22T22:29
+  updated_at: 2026-10-22T22:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    Nothing visible today, but this is why nothing is visible: the world only pre-loads terrain ahead
+    of the player on four of the eight chart faces. On the other four the pre-loading window is broken
+    - one face pre-loads a single corner column, two faces pre-load the entire chart, and two never pre-load
+    at all. It does not show as a hole because the per-frame player query builds the ground synchronously
+    the moment you need it, so the cost is paid as a hitch instead of seen as a gap. Fixing it turns "the
+    world keeps up" from an accident into a property.
+
+
+    2) Technical Details
+
+    FOUND BY AC-0469 stage C, the twelve-chart lap (25 of 26 boundaries crossed, mesh and body present
+    at every destination, no holes). That is exactly why this needs its own ticket: the lap proves the
+    world is never missing, and simultaneously shows that the face lane''s PRESTREAM is degenerate on
+    six of the eight chart faces, so "the world is there" is currently guaranteed by synchronous on-demand
+    builds rather than by streaming.
+
+    THE DEFECT, per the lap''s deviations C5: the z-face band window (world.gd:15199) doubles the along-edge
+    index because the z faces'' u axis charts at 1.0 m/cell with stride 0.5. Measured consequences: faces
+    8 and 10 degenerate to a single corner column (footprint 8:392:384-392); faces 9 and 11 over-stream
+    the whole chart from ccx 0; faces 2 and 3 never stream at all. The x faces (4-7) behave.
+
+    WHY IT MATTERS BEYOND TIDINESS: the game''s own per-frame player column query (get_block_key -> _ensure_face_chunk,
+    the is_inf-sentinel sync mesh build) is what keeps every crossing solid. That is a synchronous build
+    on the critical path, which is the class of cost the whole streaming design exists to keep off the
+    frame - and the same pattern that produced the AC-0145 free-fall finding when a wait was unchecked.
+
+    VERIFY: after the fix, each of faces 2-11 has a non-degenerate prestream window of the expected size;
+    the lap still shows mesh and body at every crossing; the residency arm stays bounded (the prestream
+    must not reintroduce the leak fixed at ee123a3); and the boundary walk''s crossing latency must not
+    regress. Report the per-face window sizes as the evidence, since that is the quantity that is wrong
+    today.
+
+    '
   comments: []
