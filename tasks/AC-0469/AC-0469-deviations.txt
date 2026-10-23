@@ -1124,3 +1124,108 @@ D28. FINDING — residency home steady 92-93 vs the G1-era 127-138 (this
     ticket, or (c) restrict the home pass to the walk's visited set
     (not done — that would leave G2's "one sweep" decorative for the
     home lane).
+
+--- stage G3 (one creation pass) ---
+
+D29. THE STAGE-3 DECISION: BOTH PACINGS WERE EXPRESSIBLE IN ONE PASS —
+    NEITHER MOVED. world.gd gains `_create_pass(p, pcx, pcz, part)` —
+    the ONE creation pass, taking the player position and asking
+    resident_of what is missing, with the pacing EXPLICIT in the part
+    selector AND in the body (plan §5.1):
+    - CREATE_PART_HOME: the 5x5 spawn pre-warm moved VERBATIM from
+      recenter() — one-shot, synchronous, flat-keyed, UNBUDGETED (no
+      time check in that block; a time check there is the edge-crossing
+      frame stall this stage exists to not cause). It runs in recenter
+      at exactly the old pre-warm's position (before RECPROBE and the
+      crossing-ring append — the ring's `us` still excludes the face
+      part, as before, and the crossing-frame metric is unchanged).
+    - CREATE_PART_FACE: the face band, ALWAYS inside
+      FACE_STREAM_BUDGET_MS (12 ms) from every call site (recenter
+      included) — the budget checks are verbatim in the ensure loops.
+      Moving it out of the budget re-opens the stall the same way.
+    Two paced call sites share ONE membership and ONE rule set
+    (plan §8's acceptable landing, reached WITHOUT a forced merge):
+    recenter calls the HOME part where the pre-warm loop was; the
+    per-frame and recenter face calls go through `_face_stream`, now a
+    thin entry = FACE part + the G2 travel-gated sweep tail (both call
+    sites, same position as before). No home work entered the budgeted
+    part; no face work left it.
+    MEMBERSHIP (plan §5.1 "ask resident_of what is missing"):
+    - the home part asks `resident_of(0, pcx+pdx, pcz+pdz)` per cell
+      instead of the direct `in_stream_set(pdx, pdz)` — at that call
+      site pcx/pcz ARE last_pcx/last_pcz (assigned at the top of
+      recenter), so the dispatched expression is bit-identical (the
+      G1/D22 one-line identity; G1's 28,381-comparison run proved that
+      dispatch class);
+    - the face part enumerates its band from the SAME
+      `_stream_window(sim_dist, FACE_STREAM_EVICT_MARGIN)` value whose
+      `.y` the sweep's resident_of face branch tests — one value, no
+      re-derived copy (the round-41 creation/eviction drift class is
+      closed at the source);
+    - the face part's "missing" query is the idempotent
+      `_ensure_face_chunk` checkout, exactly as before. An explicit
+      resident_of filter over the band was NOT added: the band is the
+      face lane's creation window (enumeration, not membership — the
+      sweep owns membership on the same value), the filter would be
+      vacuous on the band's candidates, and it would drop stage E's
+      cap-drop re-enqueue of resident-but-unbuilt chunks.
+    THE THREE RULES AS SUB-RULES (plan §5.2), verbatim expressions with
+    the original comments retained, each individually checkable as a
+    named function:
+    - `_face_edge_dist` (rule 1, AC-0309 r30): the edge-normal gate
+      distance — a face farther than win from its edge is skipped
+      entirely;
+    - `_face_band_rows` (rule 2, stage B / AC-0471): the per-face edge
+      band rows — the FULL in-band (edge-normal) axis on both classes
+      (u on the x faces, v on the z faces, per-axis scale reads the
+      true cell size), the row count from the ONE metres->chunks
+      helper `_chunks_across`, capped at the per-face edge-axis chunk
+      count (393 on the full axis);
+    - `_face_edge_chart` (rule 3, AC-0309 + the AC-0470 fix +
+      AC-0471): the along-edge half-window with its mirror chart —
+      each face covers only HALF the edge (+ half [0, hw] for 4/6/8/10,
+      - half [-hw, 0] for 5/7/9/11); the mirror chart is the ONE
+      boolean `raw_idx = face in {4,6,8,10}` (the AC-0470 fix — NOT
+      re-derived); the z faces index the halved axis' 3,141-cell chart
+      (cells_u, range 3,140, >> 4); +-1 chunk padding; returns
+      [cc0, cc1, edge_last] ([-1, -1, -1] when hi <= lo).
+    SAME WORK, SAME ORDER (plan §5.3): the creation set is identical
+    (the band and the pre-warm are unchanged except the home part's
+    predicate dispatch, proven bit-identical above) and the creation
+    ORDER is identical (pre-warm pdx/pdz nested; faces 4..11, r from
+    the edge inward, cc0..cc1). The only reordering is among pure
+    per-face computations (rows / chart / gate vs the old rows / lo-hi
+    / gate / chart order) — no side effects, no budget spend (the time
+    checks live only in the ensure loops, unchanged).
+    SYNC FALLBACK (plan §5.4): untouched — the is_inf path on
+    get_block_key still builds synchronously (AC-0145); the travel
+    gate, radii/margins, hysteresis, generation, mesher, keys, saves,
+    light, warp: untouched.
+
+D30. GATE NUMBERS (stage G3, clean tree; logs under
+    .scratch/AC-0469-gates/):
+    (a) NO STALL (boundary-r4): crossing_n 32, crossing_frame
+        p50 14 / p95 37 / max 44 ms (G2 reference: 38 crossings,
+        p50 21 / p95 38 / max 47). p95 37 <= 38 — the stage's hard
+        gate: NO stall (1 ms UNDER G2; p50 14 is the lowest of this
+        tree's recent single-run band 14-31). crossing_burst (the
+        synchronous sweep wall) p50 4.1 / p95 9.1 / max 15.1 — the
+        home one-shot is inside the ring exactly as before.
+    (b) planetwalk-r20: ok, 25/26 pairs covered with mesh_built AND
+        body_present at the destination AND cross_mesh_built AND
+        cross_body_present at the crossing frame (the one uncovered:
+        lap_0-1 home_pair_midline — the documented stage-C waiver, the
+        home-pair keying collapse, not a boundary); faces_stood_on
+        0,2-11. residency-r18: leak FALSE, stable TRUE, verdict
+        STABLE, converged 497 ms, keys_same true, face 74 EXACT /
+        home 93 (G2: 92-93), face evictions 0 — the G2 plateau.
+        seamcensus-r4: ok, rows_ok 393,216 (clean).
+    (c) genhash-r15: 25/25 GENHASH lines BYTE-IDENTICAL to the G2
+        reference (genhash-r14, diff empty) — the world is unchanged
+        by the pass (the arm prints hashes without a RESULT line;
+        r15's log is structurally identical to the reference's, 32
+        lines).
+    (d) save-r7: ok. load: re-run in the background after the
+        combined run's load-r7 was killed mid-boot by the executor's
+        600 s command cap (load is a >10 min wall arm; all other arms
+        in that run completed — see the GATES entry).

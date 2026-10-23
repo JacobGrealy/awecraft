@@ -274,3 +274,78 @@ Far-tier rebase: FACE_GRID 64 -> SphereMath.CHUNKS_PER_FACE (393), threaded thro
 - SO THE NUMBER MOVED BECAUSE THE BUG WAS FIXED, not because behaviour drifted: those stubs are data-only (written to disk when freed), the eviction is what the 2-recenter policy says should happen, and nothing is lost. Decision: ACCEPT. Reverting to the old count would mean restoring a leak to make a number match, which is the opposite of what this migration is for.
 - HONEST CAVEAT ON THE ACCEPT: I am accepting on the builder's trace and the gates, and the trace is specific enough to be wrong in a checkable way (the in_set=0-at-birth / taxi 6-7 claim). If anyone later finds those stubs were holding something, this is the note that says why the count changed.
 - STATE: three of four merge steps are done (predicate proved on 28,381 comparisons; one list and one sweep landed). Step 3 - creation through the unified per-frame pass with the three geometric rules as sub-rules - is where stage F's budget-stall failure becomes live, and step 4 deletes `_face_stream` and its constants.
+
+## RUN — AC-0469 (stage G3) — $(date)
+Step 3 of the 4-step residency merge: ONE creation pass that consults the same resident_of membership and the same window as the sweep, the three geometric face rules as sub-rules, NO edge-crossing frame stall. Gates: g0 first, then g0,boundary (p95 <= 38 vs G2 21/38), planetwalk,residency,seamcensus, genhash 25/25, save,load (~6.6 s class). Engine work via named scripts only (the pgrep -f "[g]odot" trap).
+
+## LANDED — AC-0469 stage G3 (one creation pass; no code touched outside godot/world/world.gd)
+- godot/world/world.gd (5 targeted edits):
+  (1) `_create_pass(p, pcx, pcz, part)` — the ONE creation pass (after _chunks_across):
+      CREATE_PART_HOME = the 5x5 spawn pre-warm VERBATIM from recenter(), now with the
+      membership through resident_of's home branch (bit-identical dispatch: pcx/pcz ARE
+      last_pcx/last_pcz at the call site; G1's 28,381-comparison identity proves the
+      dispatch class) — one-shot, synchronous, flat-keyed, UNBUDGETED (no time check —
+      that IS the stall). CREATE_PART_FACE = the face band, ALWAYS inside
+      FACE_STREAM_BUDGET_MS from every call site (the budget checks are verbatim in the
+      ensure loops). Pacing explicit in the part selector AND the body (plan §5.1).
+  (2) The three geometric rules extracted as sub-rules, verbatim expressions + original
+      comments retained, each individually checkable: `_face_edge_dist` (1: the
+      edge-normal gate, AC-0309 r30), `_face_band_rows` (2: FULL in-band axis, rows from
+      the ONE _chunks_across helper, cap the per-face edge-axis chunk count),
+      `_face_edge_chart` (3: along-edge half-window + mirror chart — the AC-0470 fix as
+      ONE boolean raw_idx = face in {4,6,8,10}, not re-derived; z faces index the halved
+      axis' 3,141-cell chart; +-1 chunk padding; returns [cc0,cc1,edge_last], [-1,-1,-1]
+      when hi<=lo).
+  (3) recenter(): the 5x5 pre-warm loop replaced in-place by
+      `_create_pass(_face_player_flat(), pcx, pcz, CREATE_PART_HOME)` (same position —
+      before RECPROBE + the crossing-ring append; the ring `us` still excludes the face
+      part, the crossing-frame metric unchanged).
+  (4) `_face_stream()` = thin face-side entry: `_create_pass(p, 0, 0, CREATE_PART_FACE)`
+      + the G2 travel-gated RES_SWEEP_FACE tail verbatim (both old call sites, 6125 /
+      recenter, unchanged).
+  (5) Same work, same order: creation set identical (band + pre-warm unchanged except
+      the proven-identical predicate dispatch); creation order identical (pre-warm pdx/pdz;
+      faces 4..11, r edge-inward, cc0..cc1). Only pure per-face computation order moved
+      (rows/chart/gate) — no side effects, no budget spend.
+  - NOT touched: sync fallback (get_block_key is_inf path), travel gate, radii/margins,
+    hysteresis, generation, mesher, keys, saves, light, warp, harness.gd.
+
+## GATES — AC-0469 stage G3 (all green; logs under .scratch/AC-0469-gates/)
+- (a) NO STALL (boundary-r4, the stage's reason for existing): rc=0, ok=true,
+  marker_ok/remesh_ok true, crossing_n=32, crossing_frame p50 14 / p95 37 / max 44
+  ms vs the G2 reference 21/38 (n=38, max 47). **p95 37 <= 38 — NO stall** (1 ms
+  UNDER G2; p50 14 is the low end of this tree's recent single-run band 14-31).
+  crossing_burst (the synchronous sweep wall, the ring `us`) p50 4.1 / p95 9.1 /
+  max 15.1 — the home one-shot sits inside the ring exactly as before.
+- (b) planetwalk-r20: rc=0, ok=true, 25/26 pairs covered with mesh_built AND
+  body_present at the destination AND cross_mesh_built AND cross_body_present at
+  the crossing frame (no crossing-row void); uncovered = lap_0-1
+  home_pair_midline (the documented stage-C waiver — the home-pair keying
+  collapse, not a boundary); faces_stood_on 0,2-11. residency-r18: rc=0,
+  leak=FALSE, stable=TRUE, verdict STABLE, converged 497 ms, keys_same=true,
+  face 74 EXACT / home 93 (the G2 plateau 92-93), face evictions 0. seamcensus-r4:
+  rc=0, ok=true, rows_ok=393,216 (clean).
+- (c) genhash-r15: rc=0, 25/25 GENHASH lines BYTE-IDENTICAL to the G2 reference
+  (genhash-r14; diff empty) — the world is bit-identical under the pass (the arm
+  prints hashes with no RESULT line; r15's log is structurally identical to the
+  reference's 32-line log).
+- (d) save-r7: rc=0, ok=true. load-r9: rc=0, ok=true, simband_ms 6945
+  (the ~6.6 s class — this arm's run band on the tree: 6670/6628/6812/6603/6945
+  across stages A/B/G1/G2/G3; the pre-warm is identical work, the window is
+  unchanged). Note: the combined run's load-r7 was killed mid-boot by the
+  executor's 600 s command cap (load is a ~13 min wall arm) — load-r9 re-ran
+  alone (in a background job); every other arm in the combined run completed.
+- Deviations D29-D30 (AC-0469-deviations.txt): the stage-3 decision (both
+  pacings expressible — neither moved; two paced call sites share one
+  membership + one rule set), the membership/window consultation, the three
+  sub-rules, same-work-same-order, and the gate numbers.
+- Results page re-rendered from summary-g3.json (the per-arm walls for the
+  combined-run arms are file-mtime deltas; load/g0/boundary are gate_run-reported).
+
+## Coordinator triage — stage G3: one creation pass, no stall (round 54)
+- VERIFIED BY MY OWN RUN, because "no stall" is exactly the claim this stage could fake: boundary p50 26 / p95 **38** / max 38, n=36, ok true with marker_ok and remesh_ok. p95 at or below the 38 reference, so the failure stage F named in advance did not happen.
+- WHAT LANDED IS SMALLER THAN THE PLAN'S AMBITION AND BETTER FOR IT: one entry point `_create_pass(p, pcx, pcz, part)` with two parts — the home 5x5 spawn pre-warm (verbatim from recenter, now asking `resident_of`'s home branch, whose dispatch is bit-identical because pcx/pcz ARE last_pcx/last_pcz) and the face band (same `_stream_window` value the sweep's predicate uses). The THREE GEOMETRIC RULES were extracted as named sub-rule helpers with their original comments retained (`_face_edge_dist`, `_face_band_rows`, `_face_edge_chart`), and the AC-0470 half-split survives as the ONE boolean `raw_idx = face in {4,6,8,10}` precisely so nobody re-derives it.
+- BOTH PACINGS WERE EXPRESSIBLE AND NEITHER MOVED, which is the §8 acceptable landing rather than the forced merge: home stays one-shot, synchronous, flat-keyed and unbudgeted at recenter; face work stays inside the 12 ms budget from every call site. Two paced call sites now share one membership, one window and one rule set - that is the unification that was safe, and the pacing difference that was not safe to erase was kept.
+- NOTHING ELSE MOVED: genhash 25/25 byte-identical to G2, residency leak false / stable at face 74 / home 93 (the G2 plateau, so the latent-leak fix from last round stayed fixed), planetwalk 25/26 with mesh and body at every destination, simband in the normal class.
+- THE HONEST NOTE ON THE LATENCY: p50 has now read 21 (G2) and 26 (mine) for the same code, and 14 in the builder's run - this arm's p50 wanders by more than the change it is being asked to detect, which is why p95 (stable at 37-38 across G2, G3 and this run) is the number I judge the stage on. Recorded so nobody later reads a p50 delta as a regression or an improvement.
+- STATE: three of four merge steps done, and the last one is now a deletion: `_face_stream` is a thin face-side entry (pass + travel-gated sweep), so G4 removes the remaining constants and any dead path.

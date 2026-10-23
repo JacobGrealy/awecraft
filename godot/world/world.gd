@@ -12517,21 +12517,14 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 	# from stranding the queue. Inside-out (taxi, layer) scoring (AC-0313)
 	# builds the inner ring first, so the pre-warm's own ordering already
 	# favors the footing the load gate waits on.
-	for pdx in range(-2, 3):
-		for pdz in range(-2, 3):
-			# AC-0040: in_stream_set takes a DELTA from the center (its
-			# circle/diamond/ring tests are center-relative). The old call
-			# passed the ABSOLUTE (pcx+pdx, pcz+pdz), which only coincides
-			# with the delta at the origin — away from it the pre-warm 5x5
-			# silently shrank (at (1,6) only 8 of 25 cells survived),
-			# starving the recenter of its build queue.
-			if not in_stream_set(pdx, pdz):
-				continue
-			var wcx := pcx + pdx
-			var wcz := pcz + pdz
-			if not chunks.has(_key(wcx, wcz)):
-				stub_chunk(wcx, wcz)
-			_enqueue_build(wcx, wcz)
+	# AC-0469 stage G3: the HOME part of the ONE creation pass — the
+	# one-shot, synchronous, flat-keyed, UNBUDGETED spawn pre-warm
+	# (membership through resident_of's home branch — the same predicate
+	# the sweep's home branch consults; see _create_pass). Stage F §2.4:
+	# it stays as it is — a time check here is the edge-crossing frame
+	# stall; the FACE part runs below through _face_stream, always
+	# budgeted at FACE_STREAM_BUDGET_MS.
+	_create_pass(_face_player_flat(), pcx, pcz, CREATE_PART_HOME)
 	# AC-0293: the 5x5 startup burst (the high-priority group task, the
 	# elems/slots handoff, the group prune/consume) is RETIRED — the
 	# pre-warm enqueue above + the drain's normal data pass (AC-0322 feed)
@@ -15305,130 +15298,211 @@ func _face_in_mesh_window(face: int, ccx: int, ccz: int) -> bool:
 func _chunks_across(win_m: float, stride_m: float) -> int:
 	return int(ceili(win_m / (16.0 * stride_m))) + 1
 
-# D5: the boundary-band face-chunk streaming (the recenter hook). Window
-# = the face cells within the home sim band of the player's (patch-
-# clamped) flat position, on the 8 non-home faces that border the patch.
-# Paced (FACE_STREAM_PER_RECENTER new chunks per recenter — the first
-# crossing is a one-shot recenter-class burst spread over a few frames);
-# resident chunks past the expanded window are evicted (star evict +
-# the pooled-column checkin).
-# D5: the boundary-band face-chunk streaming — the per-frame pass (the
-# recenter hook also calls it; the time budget makes the double call
-# harmless). Window = the face cells within the home sim band of the
-# player's (patch-clamped) flat position, on the 8 non-home faces that
-# border the patch, edge chunks first (the seam is what the player
-# meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work:
-# AC-0469 stage E — an ensure here is the worker ENQUEUE (O(1); the gen
-# + the mesh + the star seed land in the drain, paced by
-# FACE_DRAIN_MAX_PER_POLL), while resident chunks are cheap (the dict
-# lookup) and consume no budget. The sync build survives only on the
-# player's own column query (the _ensure_face_chunk sync fallback —
-# the is_inf sentinel path; AC-0145). Inert when the player is far
-# from every edge (the boundary r4 walk stays in the spawn region with
-# zero resident face chunks).
+# AC-0469 stage G3 sub-rule 1 (AC-0309 r30, verbatim): the edge-normal
+# gate — the face's edge distance in flat metres. A face farther than
+# win from its edge is skipped entirely: the along-edge window is
+# non-empty for EVERY face when the player is mid-patch (the projection
+# always falls inside some half of some edge), so the window alone
+# streamed all eight edges' face bands on an interior walk — the
+# boundary r4 interior walk read resident 93 → 272, p95 48 → 97 ms,
+# flap 10 → 137. Stream this face's band only when the player is within
+# win of THAT edge (edge-normal distance); on the face side of the seam
+# the distance is negative and still streams.
+func _face_edge_dist(face: int, p: Vector2, hw: float) -> float:
+	var is_x_face: bool = face <= 7
+	if is_x_face:
+		return (hw - p.x) if (face == 4 or face == 5) else (p.x + hw)
+	return (hw - p.y) if (face == 8 or face == 9) else (p.y + hw)
+
+# AC-0469 stage G3 sub-rule 2 (stage B + AC-0471, verbatim): the
+# per-face edge band rows — the in-band (edge-normal) axis is the FULL
+# axis on both classes (u on the x faces, v on the z faces — the
+# per-axis scale reads the true cell size; the stage-B S*0.5 on the z
+# faces was the HALVED axis' size misapplied to the edge-normal axis).
+# The window is flat metres and rows indexes CHUNKS — the ONE
+# conversion is _chunks_across; the cap is the per-face edge-axis chunk
+# count (393 on the full axis).
+func _face_band_rows(face: int, R: float, win: float) -> int:
+	var is_x_face: bool = face <= 7
+	var sc: Vector2 = SphereMath.face_cell_scale(face, R)
+	return mini(SphereMath.chunks_u(face) if is_x_face else SphereMath.chunks_v(face), _chunks_across(win, sc.x if is_x_face else sc.y))
+
+# AC-0469 stage G3 sub-rule 3 (AC-0309 + the AC-0470 fix + AC-0471,
+# verbatim): the along-edge half-window with its mirror chart. Each
+# face covers only HALF the edge: the first face of each pair (4/6,
+# 8/10) covers the + half ([0, hw]), the second (5/7, 9/11) the - half
+# ([-hw, 0]). The old `face <= 5`/`face <= 9` lumps the two members of
+# a pair together, so a z<0 player gets lo = 0, hi = 0 for face 5 (and
+# a x<0 player gets the same for face 9) — hi <= lo, the face is
+# skipped, and HALF THE PLANET BOUNDARY STREAMS NO FACE CHUNKS: a
+# player walking the +x edge south of the seam walks off the home
+# boundary into a hole to the void (the AC-0309 no-hole contract).
+# Measured in the crossface arm r15/r16 (the arm's explicit prewarm
+# masked it until the walk died in the crack).
+# The flat window is mapped through the SECTOR's chart formula (the
+# face coordinate scales the flat coordinate only in the z>=0 sectors;
+# the mirror x sectors (5/7) run their chart from the -hw end — the
+# raw flat index streamed the far corner of the mirror faces, 3000 m
+# from the seam, and left the crossing row unbuilt):
+#   x faces 4/6 (z>=0):  face v =  z/hw
+#   x faces 5/7 (z<0):   face v = (z+hw)/hw
+#   z faces 8/10 (x>=0): face u =  x/hw        (raw)
+#   z faces 9/11 (x<0):  face u = (x+hw)/hw
+# AC-0470 (landed): the flag now covers the first member of BOTH pairs
+# — the + half (4/6/8/10) scales from 0, the mirror members (5/7/9/11)
+# run their chart from the -hw end. Pre-fix the z pair split was never
+# applied: faces 8/10 took the +hw form and their window clamped to
+# the chart's far corner (cc 196 of 197, 1 column — measured in this
+# ticket's diag, the crossing row was never prestreamed there).
+# AC-0471's true stride self-fixed the mirror members 9/11, leaving
+# 8/10 to this flag. (+-1 chunk padding for the pre-warp curvature at
+# the outer rows) The z faces index the halved axis' 3,141-cell chart
+# (per-axis range 3,140 on the halved axis — the along-edge axis on
+# every streamed face; the >> 4 chunk derivation is grid-independent).
+# Returns [cc0, cc1, edge_last]; [-1, -1, -1] when hi <= lo (the
+# face's half of the edge is out of the window — the face is skipped
+# this pass).
+func _face_edge_chart(face: int, p: Vector2, hw: float, win: float, R: float) -> Array:
+	var is_x_face: bool = face <= 7
+	var lo: float
+	var hi: float
+	if is_x_face:
+		if face == 5 or face == 7:
+			lo = maxf(-hw, p.y - win)
+			hi = minf(0.0, p.y + win)
+		else:
+			lo = maxf(0.0, p.y - win)
+			hi = minf(hw, p.y + win)
+	else:
+		if face == 9 or face == 11:
+			lo = maxf(-hw, p.x - win)
+			hi = minf(0.0, p.x + win)
+		else:
+			lo = maxf(0.0, p.x - win)
+			hi = minf(hw, p.x + win)
+	if hi <= lo:
+		return [-1, -1, -1]
+	var sc: Vector2 = SphereMath.face_cell_scale(face, R)
+	var stride: float = sc.y if is_x_face else sc.x
+	# AC-0470: ONE boolean — the + half of each pair scales from 0, the
+	# mirror half from -hw (do not re-derive it).
+	var raw_idx: bool = face == 4 or face == 6 or face == 8 or face == 10
+	var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
+	var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
+	var along_max: int = (SphereMath.cells_v(face) if is_x_face else SphereMath.cells_u(face)) - 1
+	var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, along_max) >> 4
+	var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, along_max) >> 4
+	var edge_last: int = ((SphereMath.cells_u(face) - 1) >> 4) if is_x_face else ((SphereMath.cells_v(face) - 1) >> 4)
+	return [cc0, cc1, edge_last]
+
+# AC-0469 stage G3 — the ONE creation pass: both lanes' chunk creation
+# through one entry point, taking the player position and asking
+# resident_of what is missing. It consults the SAME membership the
+# resident sweep uses (resident_of — the home part through its face
+# <= 1 branch, the one the G1 identity run proved bit-identical on
+# 28,381 comparisons) and the SAME window as the sweep (the one
+# _stream_window call with the same arguments resident_of's face branch
+# makes — the creation band and the eviction test cannot drift apart,
+# the round-41 leak class). The PACING is explicit in the part selector
+# AND in the body (stage F §2.4: neither direction may move):
+#   CREATE_PART_HOME — the recenter one-shot (the 5x5 spawn pre-warm):
+#       UNBUDGETED, synchronous, flat-keyed — it stays as it is. A
+#       time check here is the edge-crossing frame stall this stage
+#       exists to not cause (boundary p95 <= 38).
+#   CREATE_PART_FACE — the face band: ALWAYS inside FACE_STREAM_BUDGET_MS
+#       (the 12 ms budget), from every call site (recenter included).
+#       Moving it out of the budget re-opens the stall the same way;
+#       its correctness twin (the crossing-row void) is kept out by
+#       leaving the sync fallback on get_block_key's is_inf path
+#       untouched. The three genuinely geometric face rules (stage F
+#       (b)) survive as sub-rules, each individually checkable:
+#       _face_edge_dist (1: the edge-normal gate), _face_band_rows
+#       (2: the per-face edge band rows through _chunks_across),
+#       _face_edge_chart (3: the along-edge half-window with its
+#       mirror chart, the AC-0470 half-split as ONE boolean).
+const CREATE_PART_HOME := 0
+const CREATE_PART_FACE := 1
 const FACE_STREAM_BUDGET_MS := 12.0
-func _face_stream() -> void:
+func _create_pass(p: Vector2, pcx: int, pcz: int, part: int) -> void:
 	var R: float = Game.planet_R
 	if R <= 0.0:
 		return
+	if part == CREATE_PART_HOME:
+		# the 5x5 spawn pre-warm — verbatim from recenter() (the
+		# one-shot, UNBUDGETED, flat-keyed synchronous home creation —
+		# the NORMAL queue enqueue, the only spawn/recenter data path,
+		# AC-0160/AC-0293): queue the spawn 5x5 (taxi <= 2 — exactly
+		# the 8-neighborhood the startup _build_ready gate needs) so
+		# the threadgen data pass starts while the slice walks.
+		for pdx in range(-2, 3):
+			for pdz in range(-2, 3):
+				# AC-0469 stage G3: the membership through the ONE
+				# predicate the sweep's home branch consults —
+				# resident_of face 0 = in_stream_set from the recenter
+				# center (pcx/pcz ARE last_pcx/last_pcz at this call
+				# site, so the delta is the pre-warm's (pdx, pdz)
+				# exactly; the G1 identity run proved that dispatch on
+				# 28,381 comparisons). AC-0040: in_stream_set takes a
+				# DELTA from the center (its circle/diamond/ring tests
+				# are center-relative).
+				if not resident_of(0, pcx + pdx, pcz + pdz):
+					continue
+				var wcx := pcx + pdx
+				var wcz := pcz + pdz
+				if not chunks.has(_key(wcx, wcz)):
+					stub_chunk(wcx, wcz)
+				_enqueue_build(wcx, wcz)
+		return
+	# the face part (always budgeted — see the part contract above).
+	# Window = the face cells within the home sim band of the player's
+	# (patch-clamped) flat position, on the 8 non-home faces that
+	# border the patch, edge chunks first (the seam is what the player
+	# meets). Each pass spends at most FACE_STREAM_BUDGET_MS of work:
+	# AC-0469 stage E — an ensure here is the worker ENQUEUE (O(1); the
+	# gen + the mesh + the star seed land in the drain, paced by
+	# FACE_DRAIN_MAX_PER_POLL), while resident chunks are cheap (the
+	# dict lookup) and consume no budget. The sync build survives only
+	# on the player's own column query (the _ensure_face_chunk sync
+	# fallback — the is_inf sentinel path; AC-0145). Inert when the
+	# player is far from every edge (the boundary r4 walk stays in the
+	# spawn region with zero resident face chunks).
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var p: Vector2 = _face_player_flat()
-	# AC-0463 slice 2b: the ONE stream window (shared with the home lane) —
-	# the sim band in flat metres + the evict radius past its margin.
+	# AC-0463 slice 2b: the ONE stream window (shared with the home
+	# lane, and with the sweep — the same _stream_window call with the
+	# same arguments resident_of's face branch makes): the sim band in
+	# flat metres + the evict radius past its margin. The band below
+	# enumerates with win (the sim band); the sweep's membership (and
+	# the eviction) uses win + the margin through the same value.
 	var win_ev: Vector2 = _stream_window(int(Settings.values.get("sim_dist", 4)), FACE_STREAM_EVICT_MARGIN)
 	var win: float = win_ev.x
 	var t0: int = Time.get_ticks_msec()
 	for face in range(4, 12):
 		var is_x_face: bool = face <= 7
-		# AC-0471: the in-band (edge-normal) axis is the FULL axis on both
-		# classes (u on the x faces, v on the z faces) — the per-axis
-		# scale reads the true cell size (S on the full axis; the stage-B
-		# S*0.5 on the z faces was the HALVED axis' size misapplied to the
-		# edge-normal axis).
-		# AC-0469 stage B: the window is flat metres and rows indexes
-		# CHUNKS — the ONE conversion is _chunks_across; the cap is the
-		# per-face edge-axis chunk count (393 on the full axis).
-		var sc: Vector2 = SphereMath.face_cell_scale(face, R)
-		var rows: int = mini(SphereMath.chunks_u(face) if is_x_face else SphereMath.chunks_v(face), _chunks_across(win, sc.x if is_x_face else sc.y))
-		# the along-edge extent of this face's half of the edge
-		# the along-edge clamp must match the face's HALF of the edge:
-		# the first face of each pair (4/6, 8/10) covers the + half
-		# ([0, hw]), the second (5/7, 9/11) the - half ([-hw, 0]). The
-		# old `face <= 5`/`face <= 9` lumps the two members of a pair
-		# together, so a z<0 player gets lo = 0, hi = 0 for face 5 (and a
-		# x<0 player gets the same for face 9) — hi <= lo, the face is
-		# skipped, and HALF THE PLANET BOUNDARY STREAMS NO FACE CHUNKS:
-		# a player walking the +x edge south of the seam walks off the
-		# home boundary into a hole to the void (the AC-0309 no-hole
-		# contract). Measured in the crossface arm r15/r16 (the arm's
-		# explicit prewarm masked it until the walk died in the crack).
-		var lo: float
-		var hi: float
-		if is_x_face:
-			if face == 5 or face == 7:
-				lo = maxf(-hw, p.y - win)
-				hi = minf(0.0, p.y + win)
-			else:
-				lo = maxf(0.0, p.y - win)
-				hi = minf(hw, p.y + win)
-		else:
-			if face == 9 or face == 11:
-				lo = maxf(-hw, p.x - win)
-				hi = minf(0.0, p.x + win)
-			else:
-				lo = maxf(0.0, p.x - win)
-				hi = minf(hw, p.x + win)
-		if hi <= lo:
+		# sub-rule 2 (stage B / AC-0471): the per-face edge band rows —
+		# the FULL in-band (edge-normal) axis on both classes, the row
+		# count from the ONE metres->chunks helper (_chunks_across), the
+		# cap the per-face edge-axis chunk count (393 on the full axis).
+		var rows: int = _face_band_rows(face, R, win)
+		# sub-rule 3 (AC-0309 + the AC-0470 fix + AC-0471): the
+		# along-edge half-window with its mirror chart — each face
+		# covers only HALF the edge; the + half scales from 0, the
+		# mirror half from -hw (ONE boolean, do not re-derive); the z
+		# faces index the halved axis' 3,141-cell chart.
+		var chart: Array = _face_edge_chart(face, p, hw, win, R)
+		if chart[0] < 0:
 			continue
-		# AC-0309 r30: the along-edge window is non-empty for EVERY face when
-		# the player is mid-patch (the projection always falls inside some half
-		# of some edge), so the window alone streamed all eight edges' face
-		# bands on an interior walk — the boundary r4 interior walk read
-		# resident 93 → 272, p95 48 → 97 ms, flap 10 → 137. Stream this face's
-		# band only when the player is within win of THAT edge (edge-normal
-		# distance); on the face side of the seam the distance is negative and
-		# still streams.
-		var edge_dist: float
-		if is_x_face:
-			edge_dist = (hw - p.x) if (face == 4 or face == 5) else (p.x + hw)
-		else:
-			edge_dist = (hw - p.y) if (face == 8 or face == 9) else (p.y + hw)
-		if edge_dist > win:
+		# sub-rule 1 (AC-0309 r30): the edge-normal gate — a face
+		# farther than win from its edge is skipped entirely.
+		if _face_edge_dist(face, p, hw) > win:
 			continue
-		# the along-edge axis is the half-width axis — AC-0471: 3,141 cells
-		# of (W/2)/3141 = 1.00019 m (pre-fix 6,283 of S*0.5 = 0.500 m). The
-		# flat window must be mapped through the SECTOR's chart formula (the
-		# face coordinate scales the flat coordinate only in the z>=0
-		# sectors; the mirror x sectors (5/7) run their chart from the -hw
-		# end — the raw flat index streamed the far corner of the mirror
-		# faces, 3000 m from the seam, and left the crossing row unbuilt):
-		#   x faces 4/6 (z>=0):  face v =  z/hw
-		#   x faces 5/7 (z<0):   face v = (z+hw)/hw
-		#   z faces 8/10 (x>=0): face u =  x/hw        (raw)
-		#   z faces 9/11 (x<0):  face u = (x+hw)/hw
-		# AC-0470 (landed): the flag now covers the first member of BOTH
-		# pairs — the + half (4/6/8/10) scales from 0, the mirror members
-		# (5/7/9/11) run their chart from the -hw end. Pre-fix the z pair
-		# split was never applied: faces 8/10 took the +hw form and their
-		# window clamped to the chart's far corner (cc 196 of 197, 1
-		# column — measured in this ticket's diag, the crossing row was
-		# never prestreamed there). AC-0471's true stride self-fixed the
-		# mirror members 9/11, leaving 8/10 to this flag.
-		# (+-1 chunk padding for the pre-warp curvature at the outer rows)
-		var stride: float = sc.y if is_x_face else sc.x
-		var raw_idx: bool = face == 4 or face == 6 or face == 8 or face == 10  # the + half of each pair scales from 0
-		var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
-		var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
-		# AC-0469: the clamp is the grid's cell range, not the old 1023.
-		# AC-0471: the per-axis range (3,140 on the halved axis — the
-		# along-edge axis on every streamed face); the >> 4 chunk
-		# derivation is grid-independent.
-		var along_max: int = (SphereMath.cells_v(face) if is_x_face else SphereMath.cells_u(face)) - 1
-		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, along_max) >> 4
-		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, along_max) >> 4
-		# AC-0469: the home-edge chunk is the LAST chunk on the edge axis
-		# (the full axis on both classes — 392 at 6283 cells).
-		var edge_last: int = ((SphereMath.cells_u(face) - 1) >> 4) if is_x_face else ((SphereMath.cells_v(face) - 1) >> 4)
+		# sub-rule 3's chart (the along-edge extent of this face's HALF
+		# of the edge through the sector's mirror formula — see
+		# _face_edge_chart): cc0/cc1 the along-edge chunk range,
+		# edge_last the home-edge chunk (the LAST chunk on the edge axis
+		# — the full axis on both classes, 392 at 6283 cells).
+		var cc0: int = int(chart[0])
+		var cc1: int = int(chart[1])
+		var edge_last: int = int(chart[2])
 		for r in range(rows):
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
@@ -15452,14 +15526,19 @@ func _face_stream() -> void:
 					_ensure_face_chunk(face, cc * 16 + 8, edge_cc * 16 + 8, false)
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
-	# the windowed eviction (the FIFO cap in _ensure_face_chunk refines it)
-	# — travel-gated by the ONE travel gate (the home recenter sweep is
-	# the twin caller, plan §4.1; the per-chunk band query stays off the
-	# idle frame).
-	# AC-0469 stage G2: the face pass of the ONE resident sweep — the
-	# same loop the recenter's home pass runs over the one order list
-	# (the PACING is per-lane, see _resident_sweep; the win + margin
-	# test is resident_of's face branch, unchanged from G1).
+# AC-0463 slice 2b / AC-0309 D5: the face-side entry (stage G3) — the
+# FACE part of the ONE creation pass (_create_pass), then the windowed
+# eviction (the FIFO cap in _ensure_face_chunk refines it) —
+# travel-gated by the ONE travel gate (the home recenter sweep is the
+# twin caller, plan §4.1; the per-chunk band query stays off the idle
+# frame).
+# AC-0469 stage G2: the face pass of the ONE resident sweep — the same
+# loop the recenter's home pass runs over the one order list (the
+# PACING is per-lane, see _resident_sweep; the win + margin test is
+# resident_of's face branch, unchanged from G1).
+func _face_stream() -> void:
+	var p: Vector2 = _face_player_flat()
+	_create_pass(p, 0, 0, CREATE_PART_FACE)
 	if not _resident_order.is_empty():
 		if _evict_sweep_due(_face_evict_last, p, 16.0):
 			_face_evict_last = p
