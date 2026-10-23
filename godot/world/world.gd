@@ -6499,6 +6499,42 @@ func _star_rearm_edit(c: Node3D, cx: int, cz: int, si: int) -> void:
 					nc.flush_slabs.erase(si2)
 					_star_remesh_add(nkey, si2)
 
+# AC-0463 L4: THE ONE edit entry — every block edit that changes light
+# enters the light system here, and the entry KNOWS its lane
+# (lane 0 = home, 1 = face). Neither lane's rule changed — L4 is the
+# shared door, not a new rule: what changes is that the entry knows
+# which lane it is in, and the face route receives face-cell
+# coordinates EXPLICITLY.
+#
+#   home (lane 0) — the two-phase on_edit in HOME world coords (hpos):
+#     on_edit un-settles the 3x3 x/z neighborhood x sections 0..min
+#     (si+1, 23) (starlight.cpp:407-459); on its false return (an
+#     unseeded section in the set) hgate decides the whole-column
+#     re-seed (set_block carries its REAL-band gate, set_fluid carries
+#     no gate — each site's own rule, unchanged), then the mesh re-arm
+#     with the same args as the old call sites.
+#   face (lane 1) — the whole-column reseed in the per-face engine's
+#     (cx, cz) key space (seed_column + star_owed), driven by the
+#     EXPLICIT face-cell coordinates (fface, fcell) and the face chunk
+#     key fkey the caller already holds (set_block_key). The entry
+#     NEVER derives face coordinates from a world position — that
+#     projection is the L1 hazard: the face re-bake is a compare-and-
+#     erase one-shot, so a wrong column un-settles, the trigger never
+#     fires, and the stale light is silent.
+func _star_edit_entry(lane: int, fface: int = -1, fcell: Vector2i = Vector2i(-1, -1), fkey: String = "", fchunk: Node3D = null, hpos: Vector3i = Vector3i.ZERO, hid: int = 0, hcx: int = 0, hcz: int = 0, hchunk: Node3D = null, hgate: bool = true) -> void:
+	if lane == 0:
+		if star == null:
+			return
+		var _staredit: bool = star.on_edit(hpos.x, hpos.y, hpos.z, hid)
+		if not bool(_staredit) and hgate:
+			_star_seed_column(hchunk)
+		_star_rearm_edit(hchunk, hcx, hcz, hpos.y >> 4)
+	elif lane == 1:
+		var st2: Variant = star_for(fface)
+		if st2 != null:
+			st2.seed_column(int(fcell.x), int(fcell.y), ChunkIO.io_cpp().slabs_flat(fchunk.data))
+			star_owed[fkey] = true
+
 # The chunk-level settled flag (kept for the band re-entry + the save
 # guard fallbacks): all STAMPED slabs carry a settled-bake mark.
 func _star_update_light_settled(c: Node3D) -> void:
@@ -13008,11 +13044,13 @@ func set_block(x: int, y: int, z: int, id: int, create := true) -> bool:
 	# only: an edit that lands on an unseeded halo column is not seeded
 	# here (the halo stays engine-free; a promotion re-seeds the column
 	# with its current data).
-	if star != null:
-		var _staredit: bool = star.on_edit(x, y, z, id)
-		if not bool(_staredit) and _is_real_col(cx - last_pcx, cz - last_pcz):
-			_star_seed_column(c)
-		_star_rearm_edit(c, cx, cz, y >> 4)
+	# AC-0463 L4: through the ONE edit entry — the home lane keeps this
+	# site's exact rule (the entry's lane-0 body is the statements
+	# above); this site's REAL-band re-seed gate travels with the edit
+	# as hgate (a pure read of last_p*/band0_r — the same value the old
+	# short-circuit reached). The face args are the no-face sentinels
+	# (lane 0 never reads them).
+	_star_edit_entry(0, -1, Vector2i(-1, -1), "", null, Vector3i(x, y, z), id, cx, cz, c, _is_real_col(cx - last_pcx, cz - last_pcz))
 	if _fluid_near(x, y, z):
 		_fluid_write = true
 		# AC-0244 (2026-09-09 user bug): natural (worldgen) water is fl=0 -
@@ -14396,11 +14434,10 @@ func set_fluid(x: int, y: int, z: int, id: int, lvl: int, create := false) -> vo
 	# AC-0283 P2: fluids carry light (water att 3, lava glow 15) — a
 	# fluid write is a data edit for the engine (the id changed), same
 	# re-arm as set_block.
-	if star != null:
-		var _staredit: bool = star.on_edit(x, y, z, id)
-		if not bool(_staredit):
-			_star_seed_column(c)
-		_star_rearm_edit(c, cx, cz, y >> 4)
+	# AC-0463 L4: the ONE edit entry — the home lane, this site's own
+	# rule (no real-column gate on the re-seed; it travels as hgate).
+	# The face args are the no-face sentinels (lane 0 never reads them).
+	_star_edit_entry(0, -1, Vector2i(-1, -1), "", null, Vector3i(x, y, z), id, cx, cz, c, true)
 	_record_edit(cx, cz, i, id, lvl)
 	if lvl > 0:
 		fluid_wet[_key(cx, cz)] = true
@@ -16021,10 +16058,12 @@ func set_block_key(face: int, colx: int, colz: int, y: int, id: int) -> bool:
 	# follows the edit; the drain re-bakes iff it settles different).
 	if c.mesh_built:
 		c.build_mesh_face()
-	var st2: Variant = star_for(face)  # AC-0463 L2: the one ownership answer (face>=2 — 0/1 routed to set_block above)
-	if st2 != null:
-		st2.seed_column(int(c.cx), int(c.cz), ChunkIO.io_cpp().slabs_flat(c.data))
-		star_owed[key] = true
+	# AC-0463 L4: the ONE edit entry — the face lane keeps its
+	# whole-column reseed, driven by the EXPLICIT face-cell coordinates
+	# this call already holds (face + the face chunk key (c.cx, c.cz) +
+	# the 3-part key): the entry never derives them from a world
+	# position (the L1 hazard).
+	_star_edit_entry(1, face, Vector2i(int(c.cx), int(c.cz)), key, c)
 	return true
 
 

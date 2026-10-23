@@ -742,3 +742,161 @@ AC-0463 stage L3 — deviations (one drain loop, two feeds preserved, pure refac
     across all three runs — so the residency gate is met and the home-field
     drift is recorded as arm variance, the same class as the lightstate pacing
     finding (L2 §6), not a change effect.
+
+================================================================================
+AC-0463 stage L4 (one edit entry, explicit face coordinates) — 2026-10-23
+================================================================================
+
+1. WHAT LANDED (world.gd only, 4 hunks — see the diff)
+   ONE edit entry `_star_edit_entry(lane, fface, fcell, fkey, fchunk,
+   hpos, hid, hcx, hcz, hchunk, hgate)` (world.gd:6524) — every block
+   edit that changes light enters the light system through it, and it
+   knows its lane:
+     lane 0 (home): the two-phase on_edit in HOME world coords —
+       star.on_edit(hpos.x, hpos.y, hpos.z, hid); on a false return the
+       per-site hgate decides the whole-column re-seed (_star_seed_column);
+       then _star_rearm_edit(hchunk, hcx, hcz, hpos.y >> 4). The old
+       statements, the same args.
+     lane 1 (face): the whole-column reseed in the per-face engine's
+       (cx, cz) key space — star_for(fface), st2.seed_column(int(fcell.x),
+       int(fcell.y), slabs_flat(fchunk.data)), star_owed[fkey] — driven
+       by the EXPLICIT face-cell coordinates the caller already holds.
+   Call sites (the complete edit surface — verified by grep):
+     set_block     -> lane 0 with hgate = _is_real_col(cx-last_pcx, cz-last_pcz)
+                      (this site's REAL-band rule; the gate is a pure read of
+                      last_p*/band0_r — star.on_edit is C++ and touches no
+                      GDScript state, so the value equals the one the old
+                      short-circuit reached)
+     set_fluid     -> lane 0 with hgate = true (this site's own rule: no gate)
+     set_block_key -> lane 1 with (face, Vector2i(int(c.cx), int(c.cz)), key, c)
+                      — the face chunk key it already has; the entry never
+                      derives face coordinates from a world position (L1 hazard)
+   NOT edits, listed and untouched (like L2 listed the creators): the
+   landing/promotion seeds _star_seed_column @ 6427/7109/7610/7637/13753,
+   _star_reseed_column @ 7618, _face_land @ 15916 (a LANDING's first seed,
+   not a block edit).
+   Callers lacking face coordinates: NONE — set_block_key is the only
+   face-edit caller and it holds (face, c.cx, c.cz, key).
+   NOTE (tooling): this Godot 4.7.1 parse rejects named-argument call
+   syntax — `f(1, c=5)` = "Assignment is not allowed inside an
+   expression" (minimal repro run on the engine before the final shape).
+   The signature therefore orders the face args first: the face call is
+   compact (5 args), the home call carries the no-face sentinels
+   (-1, Vector2i(-1,-1), "", null) that lane 0 never reads.
+
+2. THE BEFORE SET — what a given edit un-settles TODAY (stated, per plan §7)
+   HOME edit at (x, y, z) [set_block / set_fluid]:
+     a) star.on_edit un-settles the AFFECTED SET = the SEEDED sections
+        {(cx+dx, cz+dz, ssi) : dx, dz in -1..1, ssi in 0..min(y>>4+1, 23)}
+        (starlight.cpp:407-459) — in column terms, the edited column's
+        3x3 x/z neighborhood (up to 9 home columns), restricted to seeded
+        columns (an unseeded neighbour drops and heals on landing);
+     b) on a FALSE return (own section unseeded / broken seam): the
+        caller re-seeds the WHOLE edited column (cx, cz) — gated by
+        _is_real_col(cx-last_pcx, cz-last_pcz) at set_block, UNGATED at
+        set_fluid;
+     c) _star_rearm_edit re-arms the MESH slabs (mesh lane — not the
+        engine's un-settle set).
+   FACE edit at (face, colx, colz) [set_block_key]: exactly ONE column —
+        the face chunk column (face, c.cx, c.cz): seed_column re-seeds
+        it whole, star_owed[key] arms the re-bake dispatch.
+   Trigger sets: home = on_edit's internal re-queue + _star_rearm_edit's
+   remesh adds; face = star_owed[key].
+
+3. WHY THE AFTER SET IS IDENTICAL (expression diff)
+   The entry passes IDENTICAL args to IDENTICAL engine calls:
+     lane 0: star.on_edit(x, y, z, id) — the same four ints; the false
+       branch runs _star_seed_column(c) under the same per-site gate and
+       _star_rearm_edit(c, cx, cz, y >> 4) with the same args (hcx=cx,
+       hcz=cz, hpos.y=y); statement position in set_block/set_fluid is
+       the same as the old block.
+     lane 1: star_for(face) (the L2 accessor — same read as before),
+       seed_column(int(c.cx), int(c.cz), slabs_flat(c.data)) (same ints,
+       same C++ call), star_owed[key] (same key string); statement
+       position in set_block_key is the same (after build_mesh_face).
+   No engine call gained, lost, re-ordered or re-argued. The un-settle
+   sets of §2 are functions of exactly those calls — hence identical.
+
+4. THE COUNTED COMPARISON — scripted edit sequences, before vs after
+   The edit-facing arms each script an edit sequence and assert light;
+   the BEFORE pass ran on the pristine L3 tree (working tree == HEAD,
+   verified clean), the AFTER pass on the one-edit-entry tree, same
+   machine, same day. .scratch/AC-0463-gates/l4_compare.py recursively
+   diffs the RESULT JSON of each pair and classifies every leaf diff
+   (light value vs pacing, OPS.md 7). Result:
+     light       IDENTICAL (only cave_census_ms 463 vs 459, machine)
+     lightstate  IDENTICAL (pacing: waited_frames, hole_traj 96 vs 116 —
+                 the documented hole-count drift class, L2/L3 precedent)
+     interact    IDENTICAL (every field)
+     brightslab  IDENTICAL (all eng_mism/mesh_pa_mism/bakes/ob_bakes/
+                 max_delta/slab fields equal; only frame-timing moved:
+                 conv_frame 20 vs 19, final_exact_frame 17 vs 16, fr_log
+                 shifted one frame)
+     faceedit    IDENTICAL (per chart: same fail/candidates/scanned/
+                 aim/local_top; only the documented run-to-run spawn
+                 variance: stand x/z ~0.2-2 m, lift 0.15 m)
+     crossface   IDENTICAL (every field incl. the walk/fly numbers)
+   TOTAL VALUE DIFFS: 0. The same columns are re-lit, in the same way.
+
+5. THE EDIT ARMS' OWN RESULTS + THE PRE-EXISTING REDS (before == after)
+   - interact: ok=true; place_ok=false BOTH before and after (the AC-0467
+     documented pre-existing flat-aim harness artifact, root cause at
+     tasks/AC-0467/continuity.md:124-146; reproduced on the PRISTINE
+     tree before the change). KNOWN FLAKE, not a new failure.
+   - brightslab: ok=false before AND after, identical values: eng_mism 0
+     in ALL SIX cases (the LIGHT gate — engine settled payload vs legacy
+     reference — is exact) and the reds are the MESH 8-bit quantization
+     class (mesh_pa/pb mism 2/4/2/2/1/4, max_delta 0.0039215 = exactly
+     1/255). First measurement of this arm on this tree since AC-0471's
+     1 m-cell rebase (L1-L3 did not run it) — pre-existing, not caused
+     by L4 (the change moves no mesh code). Coordinator triage owed.
+   - faceedit: ok=false before AND after: fail no_target on BOTH charts
+     (candidates 0, scanned 0 — no breakable surface top around the
+     player's own column at this spawn). Identical state on both sides.
+     Last green on this ticket was slice 1 (2026-10-21, pre-AC-0471) —
+     first measurement after the 1 m-cell rebase: pre-existing, not
+     caused by L4. Coordinator triage owed.
+   - crossface: ok=false before AND after, identical values: the reds
+     are the placement/walk/save-rt class (a_cell_vs_uv 49.45 m,
+     a_transform_scale_ok false, b_edge_delta_max 23.0, walk never
+     crossed in 5000 frames, e_face_tower_rt false). The LIGHT fields
+     are GREEN and identical: light_home_eff 15, light_face_eff 15,
+     light_never_unlit_ok TRUE (C4), and the D-section EDIT interactions
+     d1_dig_across / d2_tower_straddle / d3_generator_only ([4,1]==[4,1],
+     sliver [54,54]) / d4 / d5 ALL true. First measurement on this tree
+     since the AC-0309 era — pre-existing, not caused by L4.
+     Coordinator triage owed.
+   None of the three reds is in the edit-light path; all are red on the
+   pristine tree (the BEFORE pass) and byte-equal after.
+
+6. GATES (logs .scratch/AC-0463-gates/; summary-l4-before.json + the
+   after summary)
+   SET 1 (plan §5): g0 r15 0/0 (3 s). genhash r11 — 25 GENHASH value
+   lines BYTE-IDENTICAL to L3's r10 (the pristine tree; diff empty).
+   light r9 — FIELD-IDENTICAL to L3 and the plan's expected values:
+   surface_eff 15, cave_eff 0, torch_level 14, torch_far_before 0,
+   torch_far_after 9, cave_pocket [8,120,-50], cave_census_cands 590
+   (only cave_census_ms 459, machine). lightstate r6 — every LIGHT-VALUE
+   field identical to before r5 (and the plan): ab.arr_diff_cells 1 @
+   [0,141,0] (0:0:1 slab 8, arr_size 98304), vc_diff 4 (287/288/289),
+   demoted 1, stragglers 3, leaks 0 on all 22 censused grid chunks,
+   low_on_high 0, double-LOD 0/0, worst null, wash false. PACE (not
+   gated): hole_slabs_now 116 vs 96, waited_frames 14 vs 15.
+   SET 2: planetwalk r7 — ok=true, 25 of 26 derived boundary pairs
+   covered with mesh AND body at every destination (the standing
+   lap_0-1 home_pair_midline waiver); negctrl n/a this mode.
+   residency r7 — ok=true, leak=false, STABLE (steady face 74 / home 92,
+   keys_same, converged, 6/6 flat), face evictions 0, both seams ok
+   (x_seam 4->5 in 3 steps, z_seam 10->11 in 3 steps). The FACE lane —
+   the lane this ticket's edit path touches — is byte-identical to L3's
+   r5/r6 (74/0/5/12.0). home steady 92 vs the plan's 93: home-timing
+   field, one unit off — the same arm variance L3 measured on an
+   UNCHANGED tree (93 vs 103, REC_SLICE_BUDGET_MS wall-clock budgeted
+   recenter slice). SAME-TREE REPEAT r8 (no code moved between r7 and
+    r8) landed steady face 74 / home 103 — the home steady wanders
+    92-103 across identical-tree runs (L3 showed the same 93-103 spread
+    with no code change), while the FACE lane stays byte-identical
+    (74/0/5/12.0) and every run passes the arm's own verdict (STABLE,
+    leak false, keys_same, converged). The plan's 74/93 plateau is a
+    recorded value INSIDE the arm's own home variance band, not a gate
+    L4 moved.

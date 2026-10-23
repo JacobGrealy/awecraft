@@ -1,39 +1,36 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 L3 one drain loop</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 stage L3 — one drain loop, two feeds preserved</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Step 2 of L1's five-step order. <b>Ownership unifies; what the light IS does not change.</b> The target shape is the one that worked for residency: one loop, two policies.</p>
-<h2>1. Goal</h2><p>One drain entry point drives both light feeds, dispatching to each lane's current policy, with every light value bit-identical.</p>
-<h2>2. What L1/L2 established (do not re-derive)</h2>
-<ul>
-<li><b>Home feed</b>: dt-scaled step and settled drain publishing <code>last_eff</code>, the E2 frame-diff re-arm and the paced remesh lane (world.gd:6177-6318); two-phase <code>on_edit</code> in home world coords (12999); bakes from the payload with <code>pl["star"]=true</code> (9419-9427).</li>
-<li><b>Face feed</b>: fixed-budget step with a compare-and-erase drain (14935-14976); whole-column reseed per edit (15985); the payload is NOT consumed on this path at all (L1's headline finding).</li>
-<li><b>The constraint</b>: AC-0358's FEED invariant and the payload's <code>w_lo/w_hi</code> strip window (2-row overhang, starlight.cpp:797-803) — the window, not the light, drives the applied mesh. <b>Preserve it exactly.</b></li>
-<li><code>star_for(face)</code> (14938) already answers engine ownership; use it rather than adding a second answer site.</li>
-</ul>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 L4 one edit entry</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 stage L4 — one edit entry, with the face coordinates carried explicitly</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Step 3 of L1's five-step order. <b>Behaviour-preserving:</b> the same columns are re-lit, in the same way, as today.</p>
+<h2>1. Goal</h2><p>Every block edit that changes light enters the light system through one place, and the face path carries explicit face-cell coordinates rather than relying on the home world-coordinate route — removing, structurally, the hazard L1 named as this migration's most likely silent failure.</p>
+<h2>2. The hazard being removed (L1, verbatim in substance)</h2>
+<p>The face re-bake is a <b>compare-and-erase one-shot</b> (world.gd:14967-14976) and <code>on_edit</code> has <b>no face-cell coordinates</b> (12999 is a home world-coordinate path). A naive unification therefore un-settles the WRONG column and the trigger never fires — stale face light after an edit, silent, and only weakly caught (crossface C4 <code>eff&gt;=1</code>, harness.gd:35059). Stage L1 said a face-side FEED arm is owed before the FEED unification (step 4); <b>this step removes the coordinate hazard so that step 4 has something sound to build on.</b></p>
 <h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td>the home drain (6177-6318), the face drain (14935-14976), <code>star_for</code> (14938), <code>_star_settled_drain</code>, and the call sites that invoke each</td><td>Edit: one drain entry point; both policies preserved inside it.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the home <code>on_edit</code> path (12999), the face reseed-per-edit (15985), <code>_star_drain_pass</code> (6179), <code>star_for</code> (14938), and every caller that reports an edit to the light system</td><td>Edit: one edit entry; explicit face coordinates.</td></tr>
+<tr><td>godot/player/player.gd, godot/world/chunk.gd</td><td>wherever edits are reported today (find the call sites by name — do not guess)</td><td>Edit only the call sites that must pass the new coordinates.</td></tr>
 <tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> either step cadence, the budget values, the reseed rules, the payload/window, the bake, the far/h-only path, generation, the mesher, keys, saves, the warp, residency.</p>
+<p><b>Do not touch:</b> the two-phase home ordering, the whole-column face reseed RULE, the step/drain cadence, the payload window, the bake, the far/h-only path, generation, the mesher, keys, saves, the warp, residency.</p>
 <h2>4. Edit shape</h2>
 <ul>
-<li><b>4.1 One entry, explicit dispatch.</b> A single drain function that both lanes' callers invoke and that dispatches to each lane's existing policy — the residency precedent: one loop, two pacing policies, because the pacing difference exists for measured reasons.</li>
-<li><b>4.2 Same order, same cadence.</b> Interleaving must not change: if both lanes drain in the same frame today, they must still drain in the same order; if one is budgeted and the other is not, that stays.</li>
-<li><b>4.3 <code>_star_settled_drain</code> keeps querying the home engine for face keys</b> — L2 recorded that it must, or it would double-settle. Do not "fix" that as part of unifying.</li>
-<li><b>4.4 If a single entry cannot be reached without moving a cadence, STOP and report which one and why</b> — the residency merge's acceptable landing (one structure, two callers) is available here too.</li>
+<li><b>4.1 One entry.</b> A single function takes the edit and dispatches: home keeps its two-phase <code>on_edit</code> in home world coords; faces keep their whole-column reseed. <b>Neither rule changes</b> — what changes is that the entry knows which lane it is in and the face route receives face-cell coordinates explicitly.</li>
+<li><b>4.2 Coordinates, not inference.</b> The face route must take (face, cx, cz) — or the face chunk key it already has — rather than deriving them from a world position. If a caller does not have them, that is a finding: report it rather than reconstructing them by a projection that might be wrong.</li>
+<li><b>4.3 Same columns re-lit.</b> For a given edit, the set of columns un-settled and the trigger set must be exactly today's. State how you verified that (a counted comparison over a scripted edit sequence is ideal).</li>
+<li><b>4.4 Do not fix the compare-and-erase one-shot.</b> It is the current behaviour; making it a loop is a behaviour change belonging to step 4.</li>
 </ul>
 <h2>5. Gates — light VALUES, not JSON (OPS.md §7)</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Light values identical</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; <code>light</code> field-identical to the L2 run (15/0/14/0/9, pocket [8,120,-50]); <code>lightstate</code>'s <b>light-VALUE fields</b> identical (arr_diff 1 @ [0,141,0], vc_diff 4, demoted 1, leaks 0, wash false) — <b>its pacing fields are known non-deterministic (OPS.md §7) and must NOT be gated.</b></td></tr>
-<tr><td>Nothing else moved</td><td><code>--arms residency,planetwalk</code></td><td>residency leak false / stable at the current plateau (74/93); planetwalk 25/26 with mesh and body.</td></tr>
+<tr><td>Light values identical</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; <code>light</code> field-identical to L3 (15/0/14/0/9, pocket [8,120,-50]); <code>lightstate</code> light-VALUE fields identical (arr_diff 1 @ [0,141,0], vc_diff 4, demoted 1, leaks 0, wash false); pacing fields NOT gated.</td></tr>
+<tr><td>Edits still relight</td><td>the edit-facing arms (<code>interact</code>, and any edit arm that asserts light after a block change — find them by name)</td><td>rc=0 and their own <code>ok</code>. <b>Report their values</b>, and note that <code>interact</code>'s <code>place_ok=false</code> is a long-standing flake documented in earlier tickets — distinguish a known flake from a new failure.</td></tr>
+<tr><td>Nothing else moved</td><td><code>--arms residency,planetwalk</code></td><td>residency leak false / stable at the 74/93 plateau (use a same-tree A/B if a timing field wanders — OPS.md §7); planetwalk 25/26 with mesh and body.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>One drain entry point, both policies intact, every light value identical, nothing else moved.</p>
-<h2>7. Risks</h2><p>Double-draining is the failure to watch: if a key gets stepped twice in a frame the light drifts and every gate goes green for a while before it shows. If you cannot rule that out structurally, STOP — an argument that it "should" be fine is not enough for a lighting change.</p>
+<h2>6. Acceptance</h2><p>One edit entry, explicit face coordinates, the same columns re-lit, every light value identical.</p>
+<h2>7. Risks</h2><p>The failure is silent by construction — a wrong column un-settles and nothing looks wrong until someone notices stale light. If you cannot state which columns a given edit un-settles today, STOP and report that: without the "before" set, there is no way to show the "after" is the same.</p>
 <h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No cadence, budget, window or reseed changes.</li>
+<li>No edits outside §3. No rule, cadence or window changes.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>L1 designed five steps and found the face lane never consumes its light payload; L2 landed <code>star_for</code> with three converted callers. Step 3 is the contained per-face edit path; step 4 (one feed) is the only visible change and needs a face-side FEED arm first; step 5 deletes <code>_star_faces</code>.</p>
+<h2>9. Resume point</h2><p>L1 designed five steps and found the face lane never consumes its light payload. L2 landed <code>star_for</code>, L3 one drain entry with both feeds byte-identical. Step 4 (one feed) is the only visible change and needs a face-side FEED arm first; step 5 deletes <code>_star_faces</code>.</p>
 </body></html>
