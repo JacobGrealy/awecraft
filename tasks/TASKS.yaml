@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-23T09:51
+  updated_at: 2026-10-23T09:52
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -29875,7 +29875,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-20T09:23
-  updated_at: 2026-10-22T15:25
+  updated_at: 2026-10-23T09:52
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30062,7 +30062,30 @@ intake:
     \ value on the planet and regenerates terrain everywhere, so it is a declared rebase, and the user\
     \ has already waived genhash stability for this migration. The first step is a MEASUREMENT, not a\
     \ commit: cost per chunk and resident counts at 1 m cells, taken on a prototype flag rather than by\
-    \ changing the default."
+    \ changing the default.\n\nSTATUS AFTER AC-0469's CLOSURE (round 56) — what of this ticket is already\
+    \ done, and what genuinely remains.\nDONE, and it was done under AC-0469's residency stages rather\
+    \ than here: ONE RESIDENCY MODEL. The user's blocking decision was answered (travel-gated eviction,\
+    \ keep everything loaded while stood still, no cap, no home) and the merge ran as four stages: one\
+    \ `resident_of` predicate with an identity proof on 28,381 comparisons; one resident list and one\
+    \ sweep (which exposed and fixed a latent leak); one creation pass with the three genuinely-geometric\
+    \ face rules preserved as sub-rules and NO edge-crossing stall; and a deletion pass that found nothing\
+    \ left to delete. Also already done here or earlier: one key shape (AC-0459/AC-0465), one canonical\
+    \ placement (AC-0467), one node-creation skeleton (slice 1), one travel gate and one window (slice\
+    \ 2b), and one 1 m cubic grid with no privileged spawn (AC-0469/AC-0471).\nSO THIS TICKET IS NOT BLOCKED\
+    \ ANY MORE, and it is much smaller than its title suggests. What actually remains:\n1. ONE LIGHT OWNERSHIP\
+    \ — the only structural split left. `_star_faces` holds per-face light engines while the home path\
+    \ lights differently. Stage F of AC-0469 ranked this the riskiest slice of the original plan, and\
+    \ it is gated by AC-0358's feed invariant and the lightstate arm. It should be planned on its own\
+    \ with the same measure-first discipline, not bolted onto the residency work.\n2. THE TWELVE-CHART\
+    \ PROOF — AC-0466's lap now covers 25 of 26 derived boundaries with mesh and body at every destination,\
+    \ so the \"prove\" half of this ticket is largely satisfied; what is not proven is the same about\
+    \ a full traversable lap over time (memory over a long walk), which the boundary r24 arm covers only\
+    \ for the home pair.\n3. THE SIX STALE `_face_order` READS in three fenced harness arms (D32) — dead\
+    \ references to a list G2 deleted, confusing rather than harmful, and cheap to remove in the harness-tidy\
+    \ pass.\nRECOMMENDATION: do not reopen this as a big ticket. Plan item 1 (light ownership) as its\
+    \ own measure-first stage under this ticket's ID, then close this ticket on the strength of items\
+    \ 2 and 3 being evidenced, with the honest note that \"remove the legacy split\" was completed incrementally\
+    \ across AC-0459, AC-0465, AC-0467, AC-0469 and this one rather than in a single landing."
   comments: []
 - id: AC-0464
   title: boundary-face-chunk-renders-unlit-black
