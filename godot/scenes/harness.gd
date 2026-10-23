@@ -37689,6 +37689,9 @@ func _planetwalk_test(spawn: Vector3) -> void:
 	# anchor collapses the home pair to face 0 inside the patch, so the
 	# face-1 stands would read face 0 there.
 	var faces_intended := {}
+	# AC-0472 (scenario a): the boundary walk home<->chart face (the lap) —
+	# reset the face-key overlap counters so they count only the walk.
+	world._ac0472_reset()
 	for e in edges:
 		var rep: Dictionary = await _planetwalk_crossing(p, float(pf0.y), float(e[0]), float(e[1]), e[2] as Vector3, str(e[3]), skip_wait, R)
 		crossings.append(rep)
@@ -37809,6 +37812,7 @@ func _planetwalk_test(spawn: Vector3) -> void:
 		ok = face_change_ok and fails.is_empty() and lap_ok
 	Debug.result({"planetwalk": {
 		"ok": ok,
+		"ac0472": world._ac0472_counters(),  # AC-0472 scenario (a): boundary walk home<->chart face
 		"crossings": crossings,
 		"waivers": ["lap: %d of %d derived boundary pairs covered at the 1 m grid — the uncovered pairs are reported with reasons in lap.uncovered (a documented subset, not a silent gap)" % [covered.size(), int(adj["pairs_total"])]],
 		"negctrl": {"ran": skip_wait, "saw_unbuilt": saw_unbuilt},
@@ -39358,11 +39362,15 @@ func _facefeed_test(spawn: Vector3) -> void:
 		{"edge": 1, "cls_lo": 8, "cls_hi": 11, "px": 0.0, "pz": -(hw + 8.0)},
 	]
 	var outs: Array = []
+	# AC-0472 (scenario b): a stationary settle in the overlap region —
+	# reset the face-key overlap counters so they count only the two stands.
+	world._ac0472_reset()
 	for sdd in stands:
 		outs.append(await _facefeed_stand(p, int(sdd["edge"]), int(sdd["cls_lo"]), int(sdd["cls_hi"]), float(sdd["px"]), float(sdd["pz"]), pf0.y, io, H, fails))
 	Debug.result({"facefeed": {
 		"ok": fails.is_empty() and outs.size() == 2,
 		"seed": int(Game.world_seed),
+		"ac0472": world._ac0472_counters(),  # AC-0472 scenario (b): stationary settle in the overlap
 		"stands": outs,
 		"fails": fails,
 		"ms": Time.get_ticks_msec() - t0,

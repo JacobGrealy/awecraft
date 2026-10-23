@@ -1,0 +1,42 @@
+# AC-0472 — deviations & findings
+
+## Measurement (step 2, PRE-GUARD — the deliverable, instrument only)
+- Scenario (a) boundary walk home<->chart face = `planetwalk` (the 12-face lap, the ticket's
+  "the lap"): **face_inspected=753, face_erased=0, face_overwritten=0, face_wrong=0**.
+- Scenario (b) stationary settle in the overlap = `facefeed` (two stationary edge stands):
+  **face_inspected=135, face_erased=0, face_overwritten=0, face_wrong=0**.
+- Reading: the home drain DOES walk face keys (the [0,196]^2 overlap is real — 753 / 135 face
+  keys inspected, including overlap-region resident face keys like `4:0:11`, `5:0:11`, `8:0:8`,
+  `10:0:8`). But it NEVER overwrites, erases, or writes a wrong value for one: every face key is
+  skipped at the `star.column_settled(cx,cz)` check (the home engine has no settled column at the
+  face chunk's index while that face chunk is resident — the player is on the face, so the matching
+  home columns are halo-evicted / never settled). ZERO erasures, ZERO overwrites, ZERO wrong
+  values in BOTH scenarios.
+- **CONCLUSION: the hazard is THEORETICAL (a reachable but untravelled path), not a live bug.**
+  No wrong settled value was ever written, so nothing is overclaimed. This is exactly the
+  "zero in both = a real and useful answer" the ticket anticipates.
+
+## Guard (step 3) — what it is for
+- Added to `_star_settled_drain` (world.gd): `if _isface: continue` — the home drain now skips
+  ONLY keys with a face part (face>=2). It does NOT skip home keys (face 0/1), so the double-settle
+  AC-0463 L3 stays ruled out structurally (face keys still dispatch through `_face_star_pass`'s
+  per-face engine, exactly as before).
+- **Purpose (stated): DEFENCE against a reachable but untravelled path** — the measurement showed
+  the drain genuinely inspects face keys (753 / 135) and the namespaces genuinely collide, so the
+  overwrite/erase is one streaming-policy change away (a face chunk resident in the overlap while
+  a matching home column is settled). It is NOT a live bug fix: no overwrite / erase / wrong value
+  was ever observed in either scenario.
+
+## Notes / choices
+- Counter (iv) "wrong value" = the face engine's own published settled light
+  (`star_for(face).column_light_dict(ccx,ccz)`) is non-empty AND differs from the value the home
+  drain wrote — the literal reading of "different from what the face engine had published."
+- No NEW harness arm was added (a new arm requires a `tasks/harness_data.yaml` row — a registry
+  edit the fences forbid). The four counters ride the two EXISTING arms' RESULT: `planetwalk`
+  (scenario a) and `facefeed` (scenario b). `harness.gd` is otherwise pristine.
+- `lightstate` gated at `AWECRAFT_LS_RADIUS=16` (the arm's standard gate radius per the AC-0463
+  baseline / context note; the arm defaults to 4, drain-only).
+- Post-guard the `planetwalk` / `facefeed` `ac0472` counters read **0/0/0/0** (the guard makes the
+  home drain touch zero face keys) — down from 753 / 135 pre-guard — the tripwire holds.
+- The `facefeed` settle MD5s (a/b/c) are byte-identical pre- vs post-guard — the guard changes no
+  face settle.

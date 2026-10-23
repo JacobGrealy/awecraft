@@ -6211,6 +6211,39 @@ func _star_step() -> void:
 		_sw_star_pending_sum += sw_pend
 		_sw_star_drained_sum += sw_drained
 
+# AC-0472 (measure first, then guard): the face-key-overlap counters. The
+# home settled drain scans FACE keys (face>=2) in star_owed as well as its
+# own (it must keep querying the home engine for face keys or it would
+# double-settle — AC-0463 L2) with NO face-key guard (pre-AC-0472). Home
+# chunk coords run -196..196, face chunk coords 0..392; in the [0,196]^2
+# overlap the two namespaces collide numerically, so a settled home column
+# can overwrite a face chunk's published last_eff and erase the face key
+# from the owed bookkeeping. These counters (observe-only — the drain's
+# control flow and writes are byte-identical) accumulate, per drain pass:
+# (1) face keys the home drain inspects, (2) face keys it erases from
+# star_owed, (3) face last_eff values it overwrites, (4) of those,
+# overwrites with a value that DIFFERS from the face engine's own
+# column_light_dict for that column (a wrong settled value). Reset with
+# _ac0472_reset(); read with _ac0472_counters().
+var _ac0472_face_inspected := 0
+var _ac0472_face_erased := 0
+var _ac0472_face_overwritten := 0
+var _ac0472_face_wrong := 0
+
+func _ac0472_reset() -> void:
+	_ac0472_face_inspected = 0
+	_ac0472_face_erased = 0
+	_ac0472_face_overwritten = 0
+	_ac0472_face_wrong = 0
+
+func _ac0472_counters() -> Dictionary:
+	return {
+		"face_inspected": _ac0472_face_inspected,
+		"face_erased": _ac0472_face_erased,
+		"face_overwritten": _ac0472_face_overwritten,
+		"face_wrong": _ac0472_face_wrong,
+	}
+
 # The settled-column drain: a column whose light gate (all 24 sections
 # settled) has not been drained publishes its settled light (last_eff),
 # bumps its eff_gen iff the eff actually changed (the face/eff cache dep),
@@ -6221,26 +6254,63 @@ func _star_settled_drain() -> void:
 		return
 	var done: Array = []
 	for key in star_owed:
+		# AC-0472 (measure -> guard): classify the key's face part. A face
+		# key (face>=2) belongs to _face_star_pass's per-face dispatch
+		# (AC-0463 L3's ONE owed dispatch) — the home drain must not
+		# inspect, overwrite or erase it. Pre-AC-0472 it did, in the
+		# [0,196]^2 namespace overlap (the hazard the _ac0472_* counters
+		# measured: 753/0/0/0 planetwalk, 135/0/0/0 facefeed — the drain
+		# inspects face keys but never crosses into an overwrite or erase,
+		# so the hazard is theoretical, defence-only). The guard skips
+		# ONLY keys with a face part — skipping a home key would re-open
+		# the double-settle AC-0463 L3 ruled out structurally. The counters
+		# below are the tripwire: with the guard they read 0; non-zero means
+		# a face key got past the guard and reached an overwrite/erase.
+		var _f472: PackedStringArray = String(key).split(":")
+		var _isface: bool = _f472.size() == 3 and int(_f472[0]) >= 2
+		if _isface:
+			continue
 		var c = chunks.get(key)
 		if c == null:
+			if _isface:
+				_ac0472_face_inspected += 1
+				_ac0472_face_erased += 1
 			done.append(key)
 			continue
 		var cx := int(c.cx)
 		var cz := int(c.cz)
 		if not star.column_settled(cx, cz):
+			if _isface:
+				_ac0472_face_inspected += 1
 			continue
 		var new_eff: Dictionary = star.column_light_dict(cx, cz)
 		if new_eff.is_empty():
+			if _isface:
+				_ac0472_face_inspected += 1
+				_ac0472_face_erased += 1
 			done.append(key)
 			continue
 		var old_arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
 		var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
 		var changed: bool = old_arr.size() != new_arr.size() or old_arr != new_arr
 		c.last_eff = ChunkScript._eff_store(new_eff)
+		if _isface:
+			_ac0472_face_inspected += 1
+			_ac0472_face_overwritten += 1
+			# (iv) a WRONG value: the face engine's own published settled
+			# light for this column differs from the value the home drain
+			# just wrote — a face value the home overwrite does not match.
+			var st472: Variant = star_for(int(_f472[0]))
+			if st472 != null:
+				var farr: PackedByteArray = (st472.column_light_dict(cx, cz)).get("arr", PackedByteArray())
+				if not farr.is_empty() and (farr.size() != new_arr.size() or farr != new_arr):
+					_ac0472_face_wrong += 1
 		if changed:
 			c.eff_gen += 1
 			_star_e2_rearm(c, cx, cz, old_arr, new_arr)
 		done.append(key)
+		if _isface:
+			_ac0472_face_erased += 1
 	for key in done:
 		star_owed.erase(key)
 
