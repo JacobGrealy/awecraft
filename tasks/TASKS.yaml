@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-22T22:32
+  updated_at: 2026-10-23T03:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -30311,7 +30311,7 @@ intake:
   status: in-progress
   labels: []
   created_at: 2026-10-22T15:24
-  updated_at: 2026-10-22T18:07
+  updated_at: 2026-10-23T03:12
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30514,7 +30514,46 @@ intake:
     ALSO MEASURED IN THE SAME RUN, worth keeping: at 1 m the warp cost per chunk is 0.224 ms and 0.051
     us/vert over 1,428,528 verts (still trivial), warpcensus builds 326 warped chunks with an AABB delta
     of 0.01 m, and home residency is unchanged at 117 with a 177 peak. So the leak is a FACE-LANE unit
-    bug, not a general cost failure.'
+    bug, not a general cost failure.
+
+
+    THE HOME GRID IS ALREADY GONE — what is left is the home LANE, and unifyng toward the weaker lane
+    would be a regression (round 48, measured).
+
+    THE FACT THAT SETTLES IT: the home patch spans 2*hw = 6,283 m and spans it in 6,283 cells of 1 m.
+    CELLS_PER_FACE is now 6,283. THEY ARE THE SAME NUMBER. So faces 0/1 are no longer a different resolution
+    from anywhere else on the planet; the resolution separation the user objected to was removed by AC-0471
+    (cubic 1 m cells everywhere) and AC-0469 stage A (grid to 1 m), not by anything that still needs doing.
+    Home is not a special patch of ground any more - it is faces 0 and 1 of the same grid.
+
+    WHAT ACTUALLY REMAINS IS THE LANE, NOT THE GRID: two streaming machineries. The home lane carries
+    the sophisticated one - async worker generation, the IO poll, the drain queue, stream_ho_cap, band
+    priorities, column/mesh-instance pooling (93 references to those mechanisms in world.gd). The face
+    lane is the simpler lazy pass, and the twelve-chart lap just showed its prestream is degenerate on
+    six of eight faces (AC-0470), with crossings staying solid only because the player''s per-frame query
+    builds SYNCHRONOUSLY.
+
+    SO "DELETE THE HOME LANE" WOULD BE THE WRONG DIRECTION AS WRITTEN: routing faces 0/1 through the face
+    lane would trade a threaded, pooled, banded streamer for a lazily-built synchronous one, on the ground
+    the player stands on when they arrive. That is a performance and robustness regression dressed as
+    uniformity - and the user''s goal is that the experience be the SAME everywhere, which is satisfied
+    by generality, not by levelling down.
+
+    THE CORRECT SHAPE OF THE LAST STEP, therefore: GENERALISE THE HOME LANE TO ALL TWELVE FACES - the
+    worker handoff, the drain, the pooling and the band policy become the one streaming path, and `_face_stream`''s
+    remaining special cases (edge bands, the prestream) either fold in or disappear. That is the same
+    conclusion AC-0463 slice 2 reached from the residency side (one policy, and the user chose the travel-gated
+    rule for it), and it makes AC-0470 a prerequisite rather than a side quest: the face lane''s prestream
+    must be fixed to understand what the unified lane has to do.
+
+    ORDER: (1) AC-0470 prestream on the face lane, so the generalised lane has a known-good behaviour
+    to preserve; (2) move faces 0/1 onto the generalised lane with the home grid''s role reduced to naming;
+    (3) delete the now-unused face-lane special cases; (4) re-baseline and re-run the lap, the walk and
+    the residency arm.
+
+    THIS IS A REFRAMING, NOT A RETREAT: nothing about the user''s requirement changes - same 1 m blocks
+    everywhere, no privileged region, same experience planet-wide. What changes is the ORDER of the deletion,
+    because deleting the good streamer first would have made the world worse while looking like progress.'
   comments: []
 - id: AC-0470
   title: face prestream is degenerate on 6 of 8 chart faces
