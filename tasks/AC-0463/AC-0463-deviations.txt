@@ -900,3 +900,207 @@ AC-0463 stage L4 (one edit entry, explicit face coordinates) — 2026-10-23
     leak false, keys_same, converged). The plan's 74/93 plateau is a
     recorded value INSIDE the arm's own home variance band, not a gate
     L4 moved.
+
+================================================================================
+AC-0463 stage L5 (the face-side FEED arm — measurement only) — 2026-10-23
+================================================================================
+
+1. WHAT LANDED (no product code — plan §9 fence held)
+   godot/scenes/harness.gd ONLY: one dispatch branch (`logic == "facefeed"`,
+   after the residency branch) + the arm functions at the file tail
+   (_facefeed_test / _facefeed_stand / _facefeed_wait_idle /
+   _facefeed_measure / _facefeed_diff / _facefeed_ref). No world.gd, no
+   gdext, no other arm touched. Plus the arm registry row
+   (tasks/harness_data.yaml `facefeed:`, before `homecensus:`) and the
+   re-rendered godot/HARNESS.md (harness_doc.py --render, --check clean).
+   The arm positions, lands and edits ONLY through the product's own
+   APIs (recenter / _ensure_face_chunk sync / set_block_key — the L4
+   _star_edit_entry lane 1) and reads engine/chunk state; it changes no
+   policy, band, budget, engine, key or the warp. STANDALONE, quits,
+   BATTSKIP (the faceedit/planetwalk shape).
+
+2. WHAT IT REPORTS PER CHUNK — THREE lights, not two (plan §5.1)
+   (a) THE APPLIED LIGHT: the exact call build_mesh_face makes when it
+       has no payload (chunk.gd:1997-1998) — the own-column pull, empty
+       strips — computed on the chunk's current data. a_md5 (full
+       column) + a_win_md5 (over the window).
+   (b) THE SETTLED PAYLOAD: the exact call the face drain makes
+       (world.gd:15034 — si0=0, si1=top>>4) → the payload's eff over
+       its own [w_lo, w_hi] window (the 2-row-overhang window,
+       starlight.cpp:797-803) — b_win_md5 + the window bounds. PLUS
+       b_side_md5: the payload's 4 side + 4 corner neighbour strips
+       (EFF-only margin light, starlight.cpp:838-848) concatenated —
+       the light the payload CARRIES that the face build NEVER feeds
+       (its strips are the empty zero strips, chunk.gd:2000-2003) —
+       the numerical form of the L1 "discarded payload".
+   (c) THE FRESH SAME-INPUT REFERENCE: the brightslab ref_iter
+       structure (harness.gd:11657) verbatim over the same-face 5x5 —
+       the classic pull iterated to convergence (32 rounds), strips =
+       each neighbour's converged boundary block light from the pull's
+       own packed ring (the same input class the engine's
+       boundary_inject consumes). c_md5 + c_win_md5 + c_rounds.
+   Plus the payload flags — payload_ok, payload_has_arr,
+   applied_feed_check (build_mesh_face's own has_payload predicate,
+   chunk.gd:1995, evaluated on the payload) — and the measured deltas
+   as differing-cell counts over the window: d_a_b / d_b_c / d_a_c,
+   plus last_eff_matches_a (the drain's diff store vs (a)). NUMBERS,
+   not a verdict (plan §5.1): a legitimate (a)!=(b) is reported with
+   the counts, never failed on.
+
+3. MEASURED (facefeed r4, log .scratch/AC-0463-gates/facefeed-r4.log;
+   deterministic — r2/r3/r4 byte-identical on all shared non-pacing
+   fields; only ms/waited/pending wander, OPS.md §7)
+   EVERY measured point: payload_ok = true; payload_has_arr = false;
+   applied_feed_check = false; last_eff_matches_a = true.
+   STAND edge 0 — the +x edge, x-face class (face 5, mirror 1, dir
+   [0,-1]); S = 5:392:196 (the player's own column — KNOWN-SETTLED:
+   the engine queue is drained first, mesh_built true, light_settled
+   true), U = 5:392:195 (interior), N = 5:392:194:
+     S   settled: a==c c7fcd099de2d841e5fa9c1cb889bdc47 (full column);
+           a_win == b_win == c_win c3931c88a92288a7498102ab5f72c12b;
+           window [0,193]; d_a_b = d_b_c = d_a_c = 0; c_rounds 2;
+           b_side 80f3e54fae141be3d044928444fc8fc7.
+     U   torch [6280,187,3128] (surface_top+1, id 22):
+       p1 seed state (same-tick read after set_block_key): settled
+           FALSE, pending 158; a == c d42cc5b7f5c3aa62805594822e629c8f
+           (win fa676b8f8458e23969550947b7f64fda); b_win
+           676e5693fc02070d23d7ecfd10641af9; d_a_b = 313, d_b_c = 313,
+           d_a_c = 0 — (a) and (c) are fresh full pulls (they agree);
+           (b) is the engine's post-seed state (glow pre-written at
+           the torch cell only, the in-column flood not yet relaxed).
+       p1s settled (waited 8): d = (0,0,0), b_win fa676b8f... — the
+           fixed point: (a) == (b) == (c).
+       p1b clean (torch removed, waited 8): d = (0,0,0).
+       p2 neighbour (torch in N, waited 3): d = (0,0,0), b_side
+           unchanged (see finding 5).
+     N   torch [6280,182,3112] (contrast chunk): a_win == b_win
+           481c9213213c8243da981ab0889a5597, d_a_b = 0 (N's own
+           in-column torch glow is visible in BOTH (a) and (b));
+           b_side 24d5446a1825adc017bf62a25fdfd955; (c) absent — the
+           arm lands only S's 5x5 and U's 5x5, so N's reference 5x5
+           is not fully landed (deliberate measurement bound, stated
+           in the arm).
+   STAND edge 1 — the -z edge, z-face class (face 11, mirror 0, dir
+   [-1,0]); S = 11:196:392, U = 11:195:392, N = 11:194:392:
+     S   settled: a == c a3fa6267fc91e56cab294c004c175c32; a_win ==
+           b_win == c_win 03cb90e4cef1c28d1a3a5d7323742a0f; window
+           [0,129]; d = (0,0,0); b_side 7600e3aa3046e7c033ff2610dad8b23b.
+     U   torch [3128,116,6280]:
+       p1 seed state: settled FALSE, pending 77; a == c
+           dd7eb7e3fa47fa32e49422280feea893 (win
+           574d109bcb81399cc124987f900fd992); b_win
+           bf6cef77b61b247670904402439dc8d5; d_a_b = 82, d_b_c = 82,
+           d_a_c = 0. p1s / p1b / p2: d = (0,0,0) (waited 8/5/2).
+     N   torch [3112,156,6280]: a_win == b_win
+           3574d533513f832fdac1377a86c37505, d_a_b = 0; b_side
+           e8d1573ad921d7cd013e87394442d816.
+
+4. FINDINGS FOR STEP 4 (numbers, not a verdict — plan §5.1/§8)
+   1. THE PAYLOAD IS OBTAINABLE for face chunks — payload_ok = true at
+      every measured point, including the pre-settle read (only
+      column_seeded is required, not settled). But it is NOT
+      CONSUMABLE: payload_has_arr = false and applied_feed_check =
+      false at every point — slab_light_payload produces "eff" and
+      never "arr" (starlight.cpp:822), so build_mesh_face's
+      has_payload predicate (chunk.gd:1995) is false and the face
+      path discards the payload: the mesh light is ALWAYS the
+      own-column pull. L1's structural fact, now measured per chunk
+      on both chart classes.
+   2. ON SETTLED GLOW-FREE COLUMNS, (a) == (b) == (c) — window md5s
+      equal, deltas 0 on both stands. The face engine's settled
+      column light is numerically identical to the own-column pull
+      (the engine's sky is column-local — spread_test blocks sky
+      across chunk x/z, starlight.cpp:1155 — the pull model's twin;
+      seed-44 terrain has no block light). What the build actually
+      discards is therefore the FEED INPUT, not (on this terrain)
+      the own-column eff: the payload's window + side/corner strips
+      (b_side non-empty — neighbour margin light) vs the build's
+      empty zero strips — AC-0358 C4: the window, not the light,
+      drives the applied mesh.
+   3. IN THE TRANSIENT, (a) == (c) != (b): the engine's payload lags
+      the fresh pull by 313 (x) / 82 (z) cells over the window
+      (measured, not asserted-as-defect) and converges to 0 at
+      settle — the engine settle lag, visible at the light level.
+   4. THE NEIGHBOUR-BLIND CASE (p2): NO visible eff delta on this
+      terrain — d = (0,0,0) and b_side unchanged: every cell of U's
+      boundary rows that N's torch glow can reach is open sky (eff
+      15 — saturated), so the neighbour light is masked; on open
+      terrain the neighbour-blindness at the eff level measures 0.
+      Where step 4's visible change lives on this terrain is the
+      bake margin (the strips/window the payload carries that the
+      build's empty strips lack), not the own-column eff — consistent
+      with AC-0358 C4.
+   5. HOW THE ARM IS PROVEN ABLE TO FAIL (plan §5.4): the p1 sample
+      is CONSTRUCTED unsettled — a torch (id 22, the light arm's own
+      glow source) placed through the game's own set_block_key (the
+      L4 _star_edit_entry lane 1 — the whole-column reseed is
+      SYNCHRONOUS) and read in the SAME TICK (no await between edit
+      and read): the engine column is in its post-seed state — the
+      glow pre-written at the torch cell only (scan_and_seed,
+      starlight.cpp:1132), the in-column flood NOT yet relaxed
+      (pending 158/77 > 0) — a deterministic function of the inputs,
+      not of machine timing. The arm ASSERTS settled == false at
+      that read (else fail p1_settled_at_read) and ASSERTS d_a_b > 0
+      (else fail p1_delta_zero — the pull floods the torch through
+      the solid below the surface, the seed state cannot; a zero
+      means the instrument never looked). BOTH TEETH BIT (313/82).
+      The known-SETTLED half is S (the player's own column, the
+      engine queue drained before any measurement, mesh_built
+      true). A green arm with all-zero deltas and a "settled" U
+      would have tripped the teeth; it cannot pass by never looking.
+      Structural fails, each loud: anchor on the home pair / anchor
+      face outside the stand's class (4-7 / 8-11) / no face engine /
+      sample off chart / chunks missing / S not meshed / settle
+      timeouts 1-4 / torch edit rejected / no air for the torch.
+   6. DETERMINISM (plan §5.3): the RESULT value fields (md5s, deltas,
+      windows, flags, torch cells, keys) are pure functions of
+      (seed 44, terrain, edit sequence) — r2/r3/r4 byte-identical on
+      every shared non-pacing field (r2 predates the b_side field;
+      r3->r4 added N's a/b fields, which r3 lacked). The pacing
+      fields that wander, as designed (OPS.md §7): ms, the
+      settled_waited/waited frame counts, and p1's pending (158/77 —
+      the queue's contents at the same-tick read, which settle to 0
+      within 8/5 frames in every run).
+
+5. DEVIATIONS FROM THE PLAN (all in favour of the plan's intent)
+   - Plan §5.1 lists four report quantities (applied checksum,
+     payload eff checksum over the window, reference-bake checksum,
+     window bounds). ALL FOUR are present; the arm adds the payload
+     flags and b_side_md5 because plan §8 asks exactly "is the
+     payload obtainable — and if the path never carries one, say so"
+     and the side-strip content is the strongest number for "the
+     feed that is discarded".
+   - Plan §5.4 asks for one known-settled and one known-unsettled
+     sample, stating how the arm can fail: the arm delivers both per
+     STAND (S settled; U p1 constructed-unsettled) on BOTH chart
+     classes, plus the neighbour-contrast chunk N — a superset.
+   - N reports (a) and (b) but not (c) (its reference 5x5 is not
+     fully landed — the arm lands S's 5x5 and U's 5x5 only): a
+     deliberate measurement bound, stated in the arm and here; N's
+     role is the contrast chunk for p2, and (a)==(b) there is the
+     measured point.
+
+6. GATES (logs .scratch/AC-0463-gates/; summary-l5.json)
+   SET 1 (plan §6): g0 r19 — rc=0, 0/0 (3 s). facefeed r4 — rc=0,
+     0/0, ok=true (19 s, well inside the ~1-2 min budget), RESULT
+     carrying the per-chunk numbers of §3 (both stands, both chart
+     classes, the constructed-unsettled teeth at 313/82).
+     DETERMINISM: r2, r3, r4 value-identical (see §4.6).
+   SET 2 (plan §6): genhash r12 — 25/25 GENHASH value lines
+     BYTE-IDENTICAL to L4's r11 (diff empty). light r10 —
+     FIELD-IDENTICAL to L4's r9 and the plan's expected values:
+     surface_eff 15, cave_eff 0, torch_level 14, torch_far_before 0,
+     torch_far_after 9, cave_pocket [8,120,-50], cave_census_cands
+     590 (only cave_census_ms 459 -> 462, machine). lightstate r7 —
+     every LIGHT-VALUE field identical to L4's r5/r6 and the plan:
+     ab.arr_diff_cells 1 @ [0,141,0] (chunk 0:0:1, slab 8, arr_size
+     98304), vc_diff 4 (common 287, n0 288, n1 289), demoted 1,
+     stragglers 3, leaks 0, low_on_high 0, double-LOD 0/0. Census
+     COVERAGE (not a light value): 21 -> 23 chunks — the arm
+     censuses whatever is resident+meshed+settled when its
+     built >= 20 wait-loop trips (harness.gd:7400-7421), so the
+     count is streaming-paced; the two extra chunks (-1,-2 / -2,1)
+     are both have=true leaks=0. Same class as the L2 lightstate
+     pacing finding (L2 §6) and the residency home-steady wander —
+     the arm and the product code are untouched by L5, and every
+     light-value field on every censused chunk is unchanged.

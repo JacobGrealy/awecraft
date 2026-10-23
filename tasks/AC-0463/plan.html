@@ -1,36 +1,41 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 L4 one edit entry</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0463 stage L4 — one edit entry, with the face coordinates carried explicitly</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Step 3 of L1's five-step order. <b>Behaviour-preserving:</b> the same columns are re-lit, in the same way, as today.</p>
-<h2>1. Goal</h2><p>Every block edit that changes light enters the light system through one place, and the face path carries explicit face-cell coordinates rather than relying on the home world-coordinate route — removing, structurally, the hazard L1 named as this migration's most likely silent failure.</p>
-<h2>2. The hazard being removed (L1, verbatim in substance)</h2>
-<p>The face re-bake is a <b>compare-and-erase one-shot</b> (world.gd:14967-14976) and <code>on_edit</code> has <b>no face-cell coordinates</b> (12999 is a home world-coordinate path). A naive unification therefore un-settles the WRONG column and the trigger never fires — stale face light after an edit, silent, and only weakly caught (crossface C4 <code>eff&gt;=1</code>, harness.gd:35059). Stage L1 said a face-side FEED arm is owed before the FEED unification (step 4); <b>this step removes the coordinate hazard so that step 4 has something sound to build on.</b></p>
-<h2>3. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0463 L5 face-side FEED arm</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0463 stage L5 — the face-side FEED arm (the instrument step 4 needs)</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>A measurement instrument, not a behaviour change.</b> Stage L1 established that step 4 (one feed) is the only <em>visible</em> change in this migration and that it must not be attempted before a face-side FEED arm exists — because the face path's light is currently unverified against the payload it ignores. This stage builds that arm.</p>
+<h2>1. Goal</h2><p>An arm that answers, for a chart-face chunk: does the light the mesh is built with equal the settled light the payload carries, and does that equal a fresh same-input reference bake — the AC-0358 test, applied to faces.</p>
+<h2>2. What the home side already does (the model to mirror)</h2>
+<p>AC-0358's invariant, recorded in <code>godot/HARNESS.md</code>: <b>applied bake == settled payload == fresh same-input reference</b>, with the payload path authoritative, and the payload's <code>w_lo/w_hi</code> strip window (2-row overhang, starlight.cpp:797-803) plus zero-filled/unseeded-zero strips being exactly what the bake consumes — <b>the window, not the light, drives the applied mesh</b> (AC-0358 C4). Read the home arm's implementation and follow its structure rather than inventing one.</p>
+<h2>3. What stage L1 established about the face path (do not re-derive)</h2>
+<ul>
+<li>The face "re-bake on the payload" <b>discards the payload</b>: <code>build_mesh_face</code> requires an <code>arr</code> key (chunk.gd:1995) while <code>slab_light_payload</code> produces <code>eff</code> (starlight.cpp:822-884) and never sets <code>pl["star"]=true</code>. Face mesh light is therefore always an own-column pull.</li>
+<li>Consequently the arm must be able to distinguish <b>three</b> things, not two: (a) the own-column pull the mesh uses today, (b) the settled payload, (c) a fresh reference bake. If (a) and (b) legitimately differ today, <b>that difference is the finding</b> — the arm should report it, not fail on it.</li>
+<li>The engines live in <code>_star_faces</code> (14915, 14921-14927); <code>star_for(face)</code> (14938) answers ownership; face seeding happens at <code>_face_land</code> (15875).</li>
+</ul>
+<h2>4. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td>the home <code>on_edit</code> path (12999), the face reseed-per-edit (15985), <code>_star_drain_pass</code> (6179), <code>star_for</code> (14938), and every caller that reports an edit to the light system</td><td>Edit: one edit entry; explicit face coordinates.</td></tr>
-<tr><td>godot/player/player.gd, godot/world/chunk.gd</td><td>wherever edits are reported today (find the call sites by name — do not guess)</td><td>Edit only the call sites that must pass the new coordinates.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the existing FEED arm (find it by name — do not guess), the arm dispatch table, an arm shaped like <code>lightstate</code>/<code>crossface</code> to copy the reporting style</td><td>Edit: add ONE arm; change nothing existing.</td></tr>
+<tr><td>tasks/harness_data.yaml</td><td>the arm registry row</td><td>Edit: add the row, then re-render <code>godot/HARNESS.md</code> with <code>python3 tasks/scripts/harness_doc.py --render</code></td></tr>
 <tr><td>tasks/AC-0463/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the two-phase home ordering, the whole-column face reseed RULE, the step/drain cadence, the payload window, the bake, the far/h-only path, generation, the mesher, keys, saves, the warp, residency.</p>
-<h2>4. Edit shape</h2>
+<p><b>Do not touch:</b> any product code. This stage adds an arm and its documentation row and nothing else. No <code>world.gd</code>, no <code>gdext/</code>, no behaviour.</p>
+<h2>5. Edit shape</h2>
 <ul>
-<li><b>4.1 One entry.</b> A single function takes the edit and dispatches: home keeps its two-phase <code>on_edit</code> in home world coords; faces keep their whole-column reseed. <b>Neither rule changes</b> — what changes is that the entry knows which lane it is in and the face route receives face-cell coordinates explicitly.</li>
-<li><b>4.2 Coordinates, not inference.</b> The face route must take (face, cx, cz) — or the face chunk key it already has — rather than deriving them from a world position. If a caller does not have them, that is a finding: report it rather than reconstructing them by a projection that might be wrong.</li>
-<li><b>4.3 Same columns re-lit.</b> For a given edit, the set of columns un-settled and the trigger set must be exactly today's. State how you verified that (a counted comparison over a scripted edit sequence is ideal).</li>
-<li><b>4.4 Do not fix the compare-and-erase one-shot.</b> It is the current behaviour; making it a loop is a behaviour change belonging to step 4.</li>
+<li><b>5.1 Report numbers, not a verdict.</b> For each sampled face chunk: the applied-light checksum, the payload's eff checksum over the window, the reference-bake checksum, and the window bounds used. The arm's <code>ok</code> should assert only what is true today; anything currently divergent gets reported as a measured delta with a flag, so that step 4's change can be judged against a real "before".</li>
+<li><b>5.2 Sample across both chart classes.</b> At least one x face (4-7) and one z face (8-11), because they differ in mirror class and the halved axis — the class where L1's other findings clustered.</li>
+<li><b>5.3 Deterministic.</b> Same inputs, same numbers. If a value wanders between runs, say so and give both runs — OPS.md §7 applies to the arm being built, not just to arms being used.</li>
+<li><b>5.4 The arm must be able to fail.</b> Include one deliberately-chosen chunk whose light is known settled and one that is not, so a green result is not simply "the arm never looked". <b>State how you know it can fail.</b></li>
 </ul>
-<h2>5. Gates — light VALUES, not JSON (OPS.md §7)</h2>
+<h2>6. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>Light values identical</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,lightstate --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; <code>light</code> field-identical to L3 (15/0/14/0/9, pocket [8,120,-50]); <code>lightstate</code> light-VALUE fields identical (arr_diff 1 @ [0,141,0], vc_diff 4, demoted 1, leaks 0, wash false); pacing fields NOT gated.</td></tr>
-<tr><td>Edits still relight</td><td>the edit-facing arms (<code>interact</code>, and any edit arm that asserts light after a block change — find them by name)</td><td>rc=0 and their own <code>ok</code>. <b>Report their values</b>, and note that <code>interact</code>'s <code>place_ok=false</code> is a long-standing flake documented in earlier tickets — distinguish a known flake from a new failure.</td></tr>
-<tr><td>Nothing else moved</td><td><code>--arms residency,planetwalk</code></td><td>residency leak false / stable at the 74/93 plateau (use a same-tree A/B if a timing field wanders — OPS.md §7); planetwalk 25/26 with mesh and body.</td></tr>
+<tr><td>The arm runs and reports</td><td><code>python3 tasks/scripts/gate_run.py AC-0463 --arms g0,facefeed --timeout 900</code> (use your arm's real name)</td><td>rc=0, SCRIPT/SHADER 0/0, and the arm's RESULT carrying the per-chunk numbers from §5.1.</td></tr>
+<tr><td>Nothing else moved</td><td><code>--arms genhash,light,lightstate</code></td><td>genhash 25/25; light field-identical to L4 (15/0/14/0/9, pocket [8,120,-50]); lightstate light-VALUE fields identical (pacing not gated, OPS.md §7).</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>One edit entry, explicit face coordinates, the same columns re-lit, every light value identical.</p>
-<h2>7. Risks</h2><p>The failure is silent by construction — a wrong column un-settles and nothing looks wrong until someone notices stale light. If you cannot state which columns a given edit un-settles today, STOP and report that: without the "before" set, there is no way to show the "after" is the same.</p>
-<h2>8. Fences</h2><div class="stop"><ul>
-<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No rule, cadence or window changes.</li>
+<h2>7. Acceptance</h2><p>A documented arm that reports applied/payload/reference light for face chunks on both chart classes, shows its own numbers and whether they can fail, with no product code changed.</p>
+<h2>8. Risks</h2><p>An arm that only ever reports "ok" is worthless — §5.4 exists because that is the likeliest failure of an instrument built by someone expecting a pass. If the payload cannot be obtained for a face chunk at all (because the face path never carries one), <b>report exactly that</b>: it is the strongest possible evidence for step 4's necessity.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (harness_data.yaml IS in scope); no new tickets.</li>
+<li>No product-code edits at all — <code>godot/scenes/harness.gd</code> and the harness doc row only.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>L1 designed five steps and found the face lane never consumes its light payload. L2 landed <code>star_for</code>, L3 one drain entry with both feeds byte-identical. Step 4 (one feed) is the only visible change and needs a face-side FEED arm first; step 5 deletes <code>_star_faces</code>.</p>
+<h2>10. Resume point</h2><p>L1 designed five steps; L2/L3/L4 unified the accessor, the drain and the edit entry, all behaviour-preserving and all proved. Step 4 is the only visible change and this arm is its prerequisite. Step 5 deletes <code>_star_faces</code>.</p>
 </body></html>

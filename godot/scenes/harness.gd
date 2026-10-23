@@ -423,6 +423,22 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _residency_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "facefeed":
+			# AC-0463 stage L5 (plan.html): the face-side FEED arm — the
+			# AC-0358 test applied to chart faces. For a face chunk: does
+			# the light the mesh is built with (the own-column pull — the
+			# payload never feeds the build, pl.has("arr") is false) equal
+			# the settled engine payload, and does that equal a fresh
+			# same-input reference? REPORTS NUMBERS (checksums + window
+			# bounds + measured deltas), never a verdict. One x-face stand
+			# (4-7) and one z-face stand (8-11), one known-settled and one
+			# provably-known-unsettled sample per stand, the torch placed
+			# through the game's own set_block_key (the L4 face edit
+			# entry). Measurement only — no product change. STANDALONE (it
+			# quits) — BATTSKIP, no main.gd entry (the faceedit shape).
+			await _facefeed_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "voxelcost":
 			# AC-0469 stage 0 (plan.html): the 1 m voxel cost measurement —
 			# the warpcensus boundary stand + the 240-frame settle, then a
@@ -39265,3 +39281,463 @@ func _voxelcost_test(spawn: Vector3) -> void:
 		"fails": fails,
 		"ms": Time.get_ticks_msec() - t0,
 	}})
+
+
+# --- AC-0463 stage L5: the face-side FEED arm (the instrument step 4 needs) ---
+# The AC-0358 invariant (applied bake == settled payload == fresh
+# same-input reference, payload authoritative, the w_lo/w_hi 2-row-overhang
+# window is what the bake consumes) applied to CHART FACES, at the light
+# level. Stage L1 established the face path's shape: the drain fetches the
+# payload (world.gd:15034) and re-bakes "on" it (15053), but
+# build_mesh_face requires an "arr" key (chunk.gd:1995) while
+# slab_light_payload produces "eff" (starlight.cpp:822) and never "arr" —
+# so the face mesh light is ALWAYS the own-column pull (empty strips,
+# chunk.gd:1997-1998) and the payload is discarded. This arm therefore
+# distinguishes THREE things per chunk, not two: (a) the own-column pull
+# the mesh actually uses, (b) the settled engine payload's eff over its
+# window, (c) a fresh same-input classic-pull reference over the same-face
+# 5x5 (the brightslab ref_iter shape, harness.gd:11657). It reports
+# checksums (MD5, the _bs_md5 convention), the window bounds used, and the
+# measured deltas between the three as differing-cell counts — a
+# legitimate (a)!=(b) is the FINDING (flagged with the counts, never failed
+# on), so step 4's change is judged against a real "before".
+#
+# HOW THE ARM CAN FAIL (plan §5.4), stated rather than hoped: (1) the
+# structural preconditions fail loudly — anchor on the home pair, anchor
+# face outside the stand's class range (4-7 / 8-11), sample off chart,
+# chunk missing, S not meshed, the engine queue not draining within the
+# bounded waits, the torch edit rejected, no air cell for the torch. (2)
+# THE TEETH: per stand the arm places a torch (id 22, the light arm's own
+# glow source) in U's own column through the game's own set_block_key (the
+# L4 _star_edit_entry lane 1 — the whole-column reseed is SYNCHRONOUS),
+# then reads U in the SAME TICK (no await between edit and read): the
+# engine column is in its post-seed state — the glow pre-written at the
+# torch cell only (scan_and_seed, starlight.cpp:1132), the in-column flood
+# NOT yet relaxed (pending > 0, queued by enqueue_seeds) — a deterministic
+# function of the inputs, not of machine timing. The arm ASSERTS U is
+# unsettled at that read (a settled read means the seed settled instantly,
+# which the glow cell cannot do) and asserts the (a) vs (b) delta is > 0
+# (the pull floods the torch through the solid below the surface, the seed
+# state cannot — a zero means the instrument never looked). The
+# known-SETTLED sample S (the player's own column, the engine queue drained)
+# anchors the "the arm looked and settled" half. A green arm with all-zero
+# deltas and a "settled" U would have tripped the teeth; it cannot pass by
+# never looking.
+#
+# MEASUREMENT DISCIPLINE: same inputs -> same numbers. The RESULT values
+# (md5s, deltas, windows, flags) are pure functions of (seed, terrain,
+# edit sequence); the frame waits are PACING (OPS.md §7) and are reported,
+# never gated. The arm is run twice and the value fields diffed to state
+# determinism (plan §5.3).
+func _facefeed_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	if R <= 0.0:
+		Debug.result({"facefeed": {"ok": false, "fail": "no_planet_R", "ms": Time.get_ticks_msec() - t0}})
+		return
+	Lighting._tables()
+	var io: Variant = ChunkIO.io_cpp()
+	var H := int(Data.HEIGHT)
+	var fails: Array = []
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	Debug.fly(true)
+	for i in 8:
+		await get_tree().physics_frame
+	var hw: float = SphereMath.face_width(R) * 0.5
+	var pf0: Vector3 = world.flat_of_world_pos(p.position)
+	# THE TWO STANDS — the faceedit positioning, 8 m PAST each edge:
+	# edge 0 = the +x edge (the x-face class 4-7, the mirror class),
+	# edge 1 = the -z edge (the z-face class 8-11, the non-mirror class) —
+	# both chart classes in one run (plan §5.2), because they differ in
+	# mirror class and halved axis.
+	var stands: Array = [
+		{"edge": 0, "cls_lo": 4, "cls_hi": 7, "px": hw + 8.0, "pz": 0.0},
+		{"edge": 1, "cls_lo": 8, "cls_hi": 11, "px": 0.0, "pz": -(hw + 8.0)},
+	]
+	var outs: Array = []
+	for sdd in stands:
+		outs.append(await _facefeed_stand(p, int(sdd["edge"]), int(sdd["cls_lo"]), int(sdd["cls_hi"]), float(sdd["px"]), float(sdd["pz"]), pf0.y, io, H, fails))
+	Debug.result({"facefeed": {
+		"ok": fails.is_empty() and outs.size() == 2,
+		"seed": int(Game.world_seed),
+		"stands": outs,
+		"fails": fails,
+		"ms": Time.get_ticks_msec() - t0,
+	}})
+
+
+func _facefeed_stand(p, edge: int, cls_lo: int, cls_hi: int, px: float, pz: float, py: float, io: Variant, H: int, fails: Array) -> Dictionary:
+	var t0c := Time.get_ticks_msec()
+	var pf: Vector3 = Vector3(px, py, pz)
+	p.position = world.world_pos_of_flat(pf.x, pf.y, pf.z)
+	world.recenter(pf.x, pf.z, true)
+	# the bounded, deterministic frame count — the warpcensus cap (240).
+	for i in 240:
+		await get_tree().process_frame
+	var anch: Dictionary = world.player_anchor(p.position)
+	var face := int(anch.get("face", 0))
+	if face <= 1:
+		fails.append("edge%d: anchor_on_home_pair (face=%d)" % [edge, face])
+		return {"edge": edge, "ok": false, "fail": "anchor_on_home_pair", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	if face < cls_lo or face > cls_hi:
+		fails.append("edge%d: wrong_face_class (face=%d, expected %d-%d)" % [edge, face, cls_lo, cls_hi])
+		return {"edge": edge, "ok": false, "fail": "wrong_face_class", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var st: Variant = world.star_for(face)
+	if st == null:
+		fails.append("edge%d: no_face_engine (face=%d)" % [edge, face])
+		return {"edge": edge, "ok": false, "fail": "no_face_engine", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	# THE player's own column in ABSOLUTE face-grid coords — the faceedit
+	# mirror mapping (the anchor's local x is face_local_x on the mirror
+	# class; the absolute column is what the block/light APIs index).
+	var pa0: Dictionary = p._anchor
+	var mirror := 1 if SphereMath.face_mirror_x(face) else 0
+	var inv0: Transform3D = pa0["inv"]
+	var ocell0: Vector3 = inv0 * p.camera.global_position
+	var scx: int = int(pa0.get("ccx", 0))
+	var scz: int = int(pa0.get("ccz", 0))
+	var kx0: int = int(floorf(ocell0.x))
+	var colx0: int = scx * 16 + (15 - kx0 if mirror else kx0)
+	var colz0: int = scz * 16 + int(floorf(ocell0.z))
+	# S = the player's own chunk (the known-SETTLED sample). The interior
+	# direction = AWAY from the chart border the player stands at (the home
+	# edge is the nearest border — the other three are kilometres out):
+	# U = S + dir, N = U + dir.
+	var cu: int = SphereMath.chunks_u(face)
+	var cv: int = SphereMath.chunks_v(face)
+	var u_max: int = SphereMath.cells_u(face) - 1
+	var v_max: int = SphereMath.cells_v(face) - 1
+	var dirx := 0
+	var dirz := 0
+	if mini(colx0, u_max - colx0) <= mini(colz0, v_max - colz0):
+		dirx = 1 if colx0 <= u_max - colx0 else -1
+	else:
+		dirz = 1 if colz0 <= v_max - colz0 else -1
+	var u_cx: int = scx + dirx
+	var u_cz: int = scz + dirz
+	var n_cx: int = u_cx + dirx
+	var n_cz: int = u_cz + dirz
+	if u_cx < 0 or u_cz < 0 or n_cx < 0 or n_cz < 0 or u_cx >= cu or u_cz >= cv or n_cx >= cu or n_cz >= cv:
+		fails.append("edge%d: sample_off_chart (S=%d,%d U=%d,%d N=%d,%d bounds %dx%d)" % [edge, scx, scz, u_cx, u_cz, n_cx, n_cz, cu, cv])
+		return {"edge": edge, "ok": false, "fail": "sample_off_chart", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	# Land every chunk the measurement reads — the game's own sync path
+	# (the player-column-query fallback of _ensure_face_chunk). A resident
+	# chunk is returned as-is, so this adds nothing the stream has not
+	# already landed and changes no policy; the data is the seed's
+	# deterministic generation either way.
+	var cells: Dictionary = {}
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			cells["%d,%d" % [scx + dx, scz + dz]] = true
+			cells["%d,%d" % [u_cx + dx, u_cz + dz]] = true
+	var landed: Dictionary = {}
+	var miss: Array = []
+	for ck in cells.keys():
+		var parts0: PackedStringArray = ck.split(",")
+		var ccx0: int = int(parts0[0])
+		var ccz0: int = int(parts0[1])
+		var c0: Node3D = world._ensure_face_chunk(face, ccx0 * 16 + 8, ccz0 * 16 + 8, true)
+		if c0 == null or c0.data.is_empty():
+			miss.append(ck)
+			continue
+		landed[ck] = c0
+	if miss.size() > 0:
+		fails.append("edge%d: chunks_missing %s" % [edge, str(miss)])
+		return {"edge": edge, "ok": false, "fail": "chunks_missing", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var cS: Node3D = landed["%d,%d" % [scx, scz]]
+	var cU: Node3D = landed["%d,%d" % [u_cx, u_cz]]
+	var cN: Node3D = landed["%d,%d" % [n_cx, n_cz]]
+	# WAIT 1 — the engine queue drains (every seeded column settles) -> S is
+	# KNOWN SETTLED. Bounded; the wait count is pacing (OPS.md §7), the
+	# settled state is the gate.
+	var w1: Dictionary = await _facefeed_wait_idle(st, 3600)
+	if int(w1["waited"]) >= 3600:
+		fails.append("edge%d: settle_timeout_1 (pending=%d)" % [edge, int(st.pending_cells())])
+		return {"edge": edge, "ok": false, "fail": "settle_timeout_1", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var refS: Dictionary = _facefeed_ref(face, scx, scz, landed, io, H)
+	var mS: Dictionary = _facefeed_measure(face, cS, st, refS, H)
+	if not bool(cS.mesh_built):
+		fails.append("edge%d: S_not_meshed (the player's own column chunk has no mesh — (a) would not be an applied light)" % edge)
+		return {"edge": edge, "ok": false, "fail": "S_not_meshed", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	# PHASE 1 — the KNOWN-UNSETTLED sample (the teeth): a torch in U's own
+	# column through the game's own face edit path, then the SAME-TICK read
+	# (no await between the edit and the read — the post-seed engine state
+	# is deterministic). See the arm header for the assertion logic.
+	var u_colx: int = u_cx * 16 + 8
+	var u_colz: int = u_cz * 16 + 8
+	var u_top: int = world.surface_top_key(face, u_colx, u_colz)
+	var u_ty: int = u_top + 1 if u_top >= 0 else 1
+	if u_ty < 1 or u_ty >= H:
+		fails.append("edge%d: no_air_for_torch (U top=%d)" % [edge, u_top])
+		return {"edge": edge, "ok": false, "fail": "no_air_for_torch", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	if not bool(world.set_block_key(face, u_colx, u_colz, u_ty, 22)):
+		fails.append("edge%d: torch_edit_rejected (U %d,%d y=%d)" % [edge, u_colx, u_colz, u_ty])
+		return {"edge": edge, "ok": false, "fail": "torch_edit_rejected", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var p1_settled: bool = bool(st.column_settled(u_cx, u_cz))
+	var p1_pending: int = int(st.pending_cells())
+	if p1_settled:
+		fails.append("edge%d: p1_settled_at_read (the torch reseed settled instantly — the instrument cannot prove the seed state)" % edge)
+		return {"edge": edge, "ok": false, "fail": "p1_settled_at_read", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var refU1: Dictionary = _facefeed_ref(face, u_cx, u_cz, landed, io, H)
+	var mU1: Dictionary = _facefeed_measure(face, cU, st, refU1, H)
+	if int(mU1["d_a_b"]) <= 0:
+		fails.append("edge%d: p1_delta_zero ((a) vs (b) at the seed state must differ — the pull floods the torch in-column, the seed state pre-writes the torch cell only; a zero means the instrument never looked)" % edge)
+		return {"edge": edge, "ok": false, "fail": "p1_delta_zero", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	# Settle, re-measure: at the fixed point the engine's own-column glow
+	# vs the pull's is the home eng_mism==0 invariant applied to a face
+	# column — REPORTED, not asserted (a difference is a finding for the
+	# coordinator, not an arm failure).
+	var w2: Dictionary = await _facefeed_wait_idle(st, 2400)
+	if int(w2["waited"]) >= 2400:
+		fails.append("edge%d: settle_timeout_2 (pending=%d)" % [edge, int(st.pending_cells())])
+		return {"edge": edge, "ok": false, "fail": "settle_timeout_2", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var mU1s: Dictionary = _facefeed_measure(face, cU, st, refU1, H)
+	# PHASE 1b — remove the torch (the game's own path), settle, measure:
+	# U back to pure terrain — (a) blk-free again.
+	if not bool(world.set_block_key(face, u_colx, u_colz, u_ty, 0)):
+		fails.append("edge%d: torch_remove_rejected" % edge)
+		return {"edge": edge, "ok": false, "fail": "torch_remove_rejected", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var w3: Dictionary = await _facefeed_wait_idle(st, 2400)
+	if int(w3["waited"]) >= 2400:
+		fails.append("edge%d: settle_timeout_3 (pending=%d)" % [edge, int(st.pending_cells())])
+		return {"edge": edge, "ok": false, "fail": "settle_timeout_3", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var refU1b: Dictionary = _facefeed_ref(face, u_cx, u_cz, landed, io, H)
+	var mU1b: Dictionary = _facefeed_measure(face, cU, st, refU1b, H)
+	# PHASE 2 — the NEIGHBOUR-BLIND case: a torch in N (U's interior
+	# neighbour), through the same path. N's glow crosses into U's engine
+	# column (the block light relaxes across chunk x/z boundaries —
+	# spread_test blocks only SKY, starlight.cpp:1170-1172), while U's
+	# mesh stays on its own-column pull (empty strips see no neighbour
+	# light). N's edit does NOT re-owe U (the face edit re-seeds the
+	# edited column only — the L1 staleness), so U's mesh and last_eff
+	# keep the torch-free pull while the settled payload carries the
+	# neighbour glow: the (a) vs (b) delta at settle is the measured,
+	# permanent form of the L1 finding — reported with the counts.
+	var n_colx: int = n_cx * 16 + 8
+	var n_colz: int = n_cz * 16 + 8
+	var n_top: int = world.surface_top_key(face, n_colx, n_colz)
+	var n_ty: int = n_top + 1 if n_top >= 0 else 1
+	if n_ty < 1 or n_ty >= H:
+		fails.append("edge%d: no_air_for_n_torch (N top=%d)" % [edge, n_top])
+		return {"edge": edge, "ok": false, "fail": "no_air_for_n_torch", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	if not bool(world.set_block_key(face, n_colx, n_colz, n_ty, 22)):
+		fails.append("edge%d: n_torch_edit_rejected (N %d,%d y=%d)" % [edge, n_colx, n_colz, n_ty])
+		return {"edge": edge, "ok": false, "fail": "n_torch_edit_rejected", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var w4: Dictionary = await _facefeed_wait_idle(st, 2400)
+	if int(w4["waited"]) >= 2400:
+		fails.append("edge%d: settle_timeout_4 (pending=%d)" % [edge, int(st.pending_cells())])
+		return {"edge": edge, "ok": false, "fail": "settle_timeout_4", "face": face, "ms": Time.get_ticks_msec() - t0c}
+	var refU2: Dictionary = _facefeed_ref(face, u_cx, u_cz, landed, io, H)
+	var mU2: Dictionary = _facefeed_measure(face, cU, st, refU2, H)
+	var refN2: Dictionary = _facefeed_ref(face, n_cx, n_cz, landed, io, H)
+	var mN2: Dictionary = _facefeed_measure(face, cN, st, refN2, H)
+	return {
+		"edge": edge,
+		"cls": "x" if edge == 0 else "z",
+		"face": face,
+		"mirror": mirror,
+		"dir": [dirx, dirz],
+		"S": {"key": world._key_f(face, scx, scz), "mesh_built": bool(cS.mesh_built), "light_settled": bool(cS.light_settled), "settled_waited": int(w1["waited"]), "m": mS},
+		"U": {
+			"key": world._key_f(face, u_cx, u_cz),
+			"torch": [u_colx, u_ty, u_colz],
+			"p1_seed_state": {"settled": p1_settled, "pending": p1_pending, "m": mU1},
+			"p1s_settled": {"waited": int(w2["waited"]), "m": mU1s},
+			"p1b_clean": {"waited": int(w3["waited"]), "m": mU1b},
+			"p2_neighbour": {"waited": int(w4["waited"]), "m": mU2},
+		},
+		"N": {"key": world._key_f(face, n_cx, n_cz), "torch": [n_colx, n_ty, n_colz], "m": mN2},
+		"frames": 240,
+		"ms": Time.get_ticks_msec() - t0c,
+	}
+
+
+# WAIT for the face engine's queue to drain (every seeded column settled).
+# Bounded; returns the pacing fields (reported, never gated — OPS.md §7).
+func _facefeed_wait_idle(st: Variant, max_frames: int) -> Dictionary:
+	var waited := 0
+	while int(st.pending_cells()) > 0 and waited < max_frames:
+		await get_tree().physics_frame
+		waited += 1
+	return {"waited": waited, "pending_left": int(st.pending_cells())}
+
+
+# (a)/(b)/(c) for ONE face chunk — numbers, not a verdict (plan §5.1):
+# the applied-light checksum, the payload eff checksum over the window,
+# the reference checksum, the window bounds used, and the measured deltas
+# as differing-cell counts over that window.
+func _facefeed_measure(face: int, c: Node3D, st: Variant, refc: Dictionary, H: int) -> Dictionary:
+	var out: Dictionary = {
+		"settled": bool(st.column_settled(int(c.cx), int(c.cz))),
+		"payload_ok": false,
+		"payload_has_arr": false,
+		"applied_feed_check": false,
+		"b_side_md5": "",
+		"w_lo": -1,
+		"w_hi": -1,
+		"a_md5": "",
+		"a_win_md5": "",
+		"b_win_md5": "",
+		"c_md5": "",
+		"c_win_md5": "",
+		"d_a_b": -1,
+		"d_b_c": -1,
+		"d_a_c": -1,
+		"c_rounds": -1,
+		"c_converged": false,
+		"last_eff_matches_a": false,
+	}
+	# (a) THE APPLIED LIGHT — the exact call build_mesh_face makes when it
+	# has no payload (chunk.gd:1997-1998): the own-column pull, empty
+	# strips. A pure function of c.data — the mesh's actual light (the
+	# rebuild sites all use this same call on the current data).
+	var ze := PackedByteArray()
+	var a: Dictionary = Lighting.compute_light_flat_chunk_pull(c.data, int(c.cx), int(c.cz), H, ze, ze, ze)
+	var a_arr: PackedByteArray = a.get("arr", PackedByteArray())
+	# (b) THE SETTLED PAYLOAD — the exact call the face drain makes
+	# (world.gd:15034): si0 = 0, si1 = the column's top slab. The payload
+	# carries "eff" over [w_lo, w_hi] (the 2-row-overhang window,
+	# starlight.cpp:797-803) — and never "arr": applied_feed_check is the
+	# build's own has_payload predicate (chunk.gd:1995) evaluated on the
+	# same dict — false is the structural fact the arm exists to record.
+	var pl: Dictionary = st.slab_light_payload(int(c.cx), int(c.cz), 0, maxi(0, int(c.top) >> 4))
+	var ok: bool = bool(pl.get("ok", false))
+	out["payload_ok"] = ok
+	out["payload_has_arr"] = bool(pl.has("arr"))
+	out["applied_feed_check"] = not pl.is_empty() and bool(pl.has("arr"))
+	var w_lo: int = 0
+	var w_hi: int = H - 1
+	var b_full: PackedByteArray = PackedByteArray()
+	if ok:
+		w_lo = maxi(0, int(pl.get("w_lo", 0)))
+		w_hi = mini(H - 1, int(pl.get("w_hi", H - 1)))
+		b_full = pl.get("eff", PackedByteArray())
+		# b_side_md5: the payload's NEIGHBOUR margin light — the 4 axis
+		# side strips + the 4 corner strips (EFF only, over [w_lo, w_hi]),
+		# concatenated. This is the light the payload carries for the
+		# bake's margin ring that the face build NEVER feeds (its strips
+		# are the empty zero strips, chunk.gd:2000-2003) — the numerical
+		# form of the L1 neighbour-blindness. It moves when a neighbour
+		# gains light (the p2 torch) even while the own-column eff (b)
+		# is unchanged, because the margin reads the neighbour, not the
+		# own column.
+		var side_cat := PackedByteArray()
+		var sides: Array = pl.get("side", [])
+		for sidx in range(mini(4, sides.size())):
+			var sp: PackedByteArray = sides[sidx]
+			side_cat.append_array(sp)
+		var corners: Array = pl.get("corner", [])
+		for cidx in range(mini(4, corners.size())):
+			var cp: PackedByteArray = corners[cidx]
+			side_cat.append_array(cp)
+		out["b_side_md5"] = _bs_md5(side_cat)
+	out["w_lo"] = w_lo
+	out["w_hi"] = w_hi
+	# (c) THE FRESH SAME-INPUT REFERENCE — the arm's own classic pull over
+	# the same-face 5x5 (refc), iterated to convergence.
+	var c_arr: PackedByteArray = refc.get("eff", PackedByteArray())
+	out["c_rounds"] = int(refc.get("rounds", -1))
+	out["c_converged"] = bool(refc.get("converged", false))
+	# (a) and (b) are always reported when their arrays are valid — the
+	# reference (c) is an extra, so its absence (the N contrast chunk's
+	# 5x5 is not all landed — the arm lands only S's 5x5 and U's 5x5)
+	# must not hide the two lights the arm exists to compare.
+	if int(a_arr.size()) == 256 * H and int(b_full.size()) == 256 * H:
+		out["a_md5"] = _bs_md5(a_arr)
+		var aw: PackedByteArray = a_arr.slice(w_lo * 256, (w_hi + 1) * 256 - 1)
+		var bw: PackedByteArray = b_full.slice(w_lo * 256, (w_hi + 1) * 256 - 1)
+		out["a_win_md5"] = _bs_md5(aw)
+		out["b_win_md5"] = _bs_md5(bw)
+		out["d_a_b"] = _facefeed_diff(aw, bw)
+		if int(c_arr.size()) == 256 * H:
+			out["c_md5"] = _bs_md5(c_arr)
+			var cw: PackedByteArray = c_arr.slice(w_lo * 256, (w_hi + 1) * 256 - 1)
+			out["c_win_md5"] = _bs_md5(cw)
+			out["d_b_c"] = _facefeed_diff(bw, cw)
+			out["d_a_c"] = _facefeed_diff(aw, cw)
+	# the store the drain diffs against (c.last_eff) — matches (a) while
+	# the mesh and the store agree; after a NEIGHBOUR edit re-lights the
+	# engine column without re-owing this chunk, the store (and the mesh)
+	# are stale against (b) but still agree with (a) — the L1 staleness,
+	# visible as last_eff_matches_a true + d_a_b > 0 together.
+	var le: Variant = c.last_eff
+	if le is Dictionary and le.has("arr"):
+		out["last_eff_matches_a"] = (le["arr"] == a_arr)
+	return out
+
+
+func _facefeed_diff(a: PackedByteArray, b: PackedByteArray) -> int:
+	var n := mini(a.size(), b.size())
+	var d := 0
+	for i in n:
+		if a[i] != b[i]:
+			d += 1
+	return d
+
+
+# THE fresh same-input reference (plan §5.1) — the brightslab ref_iter
+# structure (harness.gd:11657) VERBATIM, applied to the same-face 5x5:
+# the classic pull iterated over the 4 axial neighbour strips until the
+# column effs stop moving (32 rounds). First round: empty (zero) strips —
+# the own-column pull; later rounds: the neighbours' converged boundary
+# BLOCK light as the strip, read from the pull's own packed ring (the
+# AC-0091 19-bit pack side<<17 | (y*16+t)<<4 | level; SD maps each
+# neighbour to the ring side of the row that faces this chunk: E-neighbour
+# reads its W side, etc. — the ring carries the boundary block light, the
+# same input class the engine's boundary_inject consumes, so this is the
+# independent recompute of the settled neighbourhood light). The 5x5 is
+# fully landed (the stand asserts it), so no strip is zero by absence.
+# A pure function of the five columns' data — deterministic.
+func _facefeed_ref(face: int, ccx: int, ccz: int, landed: Dictionary, io: Variant, H: int) -> Dictionary:
+	var SD: Array = [[1, 0, 1], [-1, 0, 0], [0, 1, 3], [0, -1, 2]]
+	var keys: Array = []
+	var flats: Dictionary = {}
+	var tops: Dictionary = {}
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var ck := "%d,%d" % [ccx + dx, ccz + dz]
+			var c: Node3D = landed.get(ck, null)
+			if c == null or c.data.is_empty():
+				return {"eff": PackedByteArray(), "rounds": -1, "converged": false, "missing": ck}
+			var f: PackedByteArray = c.flat_data()
+			flats[ck] = io.palettize_flat(f, 24)
+			tops[ck] = int(io.slabs_top(flats[ck]))
+			keys.append(ck)
+	var effs: Dictionary = {}
+	var rings: Dictionary = {}
+	var rounds := 0
+	var changed := false
+	var first := true
+	while (changed or first) and rounds < 32:
+		changed = false
+		for ck in keys:
+			var parts: PackedStringArray = ck.split(",")
+			var kdx: int = int(parts[0])
+			var kdz: int = int(parts[1])
+			var es: Array = []
+			for sd in SD:
+				var stp := PackedByteArray()
+				stp.resize(2 * 16 * H)
+				var nk := "%d,%d" % [kdx + int(sd[0]), kdz + int(sd[1])]
+				if not first and rings.has(nk):
+					var rg: PackedInt32Array = rings[nk]
+					for v in rg:
+						var vi: int = int(v)
+						if (vi >> 17) & 3 == int(sd[2]):
+							stp[(vi >> 4) & 8191] = vi & 15
+				es.append(stp)
+			var rr: Dictionary = Lighting.compute_light_flat_chunk_pull(flats[ck], kdx, kdz, H, es, es, es, int(tops[ck]))
+			var arr: PackedByteArray = rr["arr"]
+			if effs.has(ck):
+				if arr != effs[ck] or rr["ring"] != rings[ck]:
+					changed = true
+			else:
+				changed = true
+			effs[ck] = arr
+			rings[ck] = rr["ring"]
+		rounds += 1
+		first = false
+	var tk := "%d,%d" % [ccx, ccz]
+	return {"eff": effs.get(tk, PackedByteArray()), "rounds": rounds, "converged": rounds < 32}
