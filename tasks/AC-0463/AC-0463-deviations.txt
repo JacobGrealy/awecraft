@@ -600,3 +600,145 @@ AC-0463 stage L2 — deviations (one engine accessor, pure refactor)
    flat), face evictions 0, both seam crossings ok. planetwalk r5: 25 of 26 boundary pairs
    covered with mesh+body at every destination (the standing lap_0-1 home_pair_midline
    waiver), ok=true.
+
+AC-0463 stage L3 — deviations (one drain loop, two feeds preserved, pure refactor)
+
+1. THE SHAPE
+    world.gd only, 3 edits (plan §3; harness.gd / C++ untouched):
+    - NEW ONE entry _star_drain_pass(): _star_step -> _star_settled_drain ->
+      _star_remesh_drain -> _face_star_pass, with the WP_STAR profile bracket
+      still around _star_step exactly as before. The per-frame block's four
+      calls (old 6120-6124) become the single entry call, in the same
+      `if star != null:` scope. Both lanes' policy functions are preserved
+      verbatim inside the entry (plan §4.1: "both policies preserved inside
+      it").
+    - _face_star_pass restructured: the STEP LANE first (per face, the same
+      fixed-budget st.step(int(STAR_STEP_BUDGET_MS) * 1000) behind the same
+      pending_cells>0 gate, same _star_faces.keys() order), then ONE owed
+      DISPATCH replacing the per-face re-scan (the O(faces x owed) is gone):
+      each owed key dispatches on its face part through star_for (the L2
+      answer site, now the 4th call site) — face 0/1 stays out of the
+      dispatch (the home feed's, L2 §5), face>=2 lands on its owning
+      per-face engine. The per-key policy body is byte-identical: the
+      settled check, the slab_light_payload/column_light_dict reads, the
+      last_eff publish, the compare-and-erase re-bake, the keep-on-retry
+      branches (r21's not-ok / empty-dict retry rules included).
+    - No cadence moved (plan §4.4 not triggered): the home dt-scaled step
+      and its budget (STAR_STEP_BUDGET_MS / LOAD_STAR_STEP_BUDGET_MS, the
+      DRAIN_DT_CLAMP_MS clamp), the 3 ms fixed face step, the remesh pacing
+      (STAR_REMESH_KEYS_PER_FRAME 2 / LOAD 8), the reseed rules, the
+      payload/window (w_lo/w_hi 2-row overhang, starlight.cpp:797-803), the
+      bake, the far/h-only path, generation, the mesher, keys, saves, the
+      warp and residency are all untouched.
+
+2. HOW EACH POLICY WAS PRESERVED
+    HOME feed (what the light IS on the home pair): _star_step,
+    _star_settled_drain and _star_remesh_drain are byte-identical — the
+    entry is a new caller, not a changed body. _star_settled_drain KEEPS
+    querying the home `star` for every owed key, face keys included (L2 §5:
+    "must, or it would double-settle") — the dispatch does NOT route face
+    keys away from it; it only removes the per-face re-scan that ran after
+    it. The E2 frame-diff re-arm, the eff_gen bump rule, the paced remesh
+    lane (one slab per key per frame, 2/8 keys): unchanged.
+    FACE feed (what the light IS on faces 2-11): the fixed-budget step is
+    the same call with the same constant and gate; the settle policy per
+    key is the same body on the same engine (star_for(face) is the same
+    _star_faces.get(face) read for face>=2, the L2 expression diff). The
+    payload is still computed per settled column and still discarded at the
+    bake (build_mesh_face needs "arr", slab_light_payload returns "eff" —
+    L1 §2.1): the feed is untouched, only its scheduling is.
+
+3. DOUBLE-DRAIN RULED OUT, STRUCTURALLY (plan §7 — the failure to watch)
+    (a) FEED EXCLUSION (a key settled by two engines in one frame): the
+        home settled drain runs BEFORE the face dispatch inside the entry —
+        the same order as the old 6122 -> 6124. The face dispatch takes its
+        star_owed.keys() snapshot AFTER the home drain has finished and
+        erased every key it claimed, so a key the home drain published
+        through the home engine cannot be published again by the face
+        dispatch in the same frame. The exclusion is the same one-liner as
+        today (home first, snapshot after, face>=2 filter in the dispatch)
+        — nothing in this change touches it. A key is settled by the home
+        drain, or by the face dispatch, or by neither, in exactly the same
+        disjunction as before.
+    (b) ONE VISIT PER KEY: the dispatch is a single loop over one keys()
+        copy — each key is visited once and dispatched to exactly ONE
+        engine (its face part through star_for; the face>=2 guard makes the
+        home engine unreachable in this dispatch). No second loop over the
+        owed queue exists on the face side.
+    (c) THE STEP IS THE ONLY ENGINE MUTATION IN THE FRAME: within the face
+        pass, the only engine mutation is st.step() — one call per face
+        engine per frame, same budget, same pending gate, same face order.
+        The dispatch's C++ calls are PURE READS, verified in source:
+        column_settled (starlight.cpp:696-701) reads section flags;
+        column_light_dict (707-765) and slab_light_payload (789+) build
+        local arrays and return dictionaries, writing no engine state.
+        Therefore the re-ordering (today: A-step, A-scan, B-step, B-scan;
+        now: A-step, B-step, then the combined scan) cannot perturb any
+        engine: each face's scan still runs after that face's step, and a
+        scan of one face reads only its own engine and its own chunk.
+    (d) CHUNK DISJOINTNESS + SYNC BAKE: a key's body touches only its own
+        chunk (chunks is keyed by the full face:cx:cz key) and its own face
+        engine; build_mesh_face (chunk.gd:1975) is a SYNCHRONOUS inline C++
+        build (no worker queue, no per-frame cap that could defer a re-bake
+        to another frame). So the per-frame SET of (key, engine, light)
+        settlements is identical to today; only the intra-frame ORDER of
+        the synchronous face re-bakes across faces changed (grouped per
+        face -> owed-iteration interleaved) — mesh work, sub-frame, no
+        light value involved.
+    CONCLUSION: no frame exists in which a key is stepped or settled by
+    two engines, and the settle sequence per frame (which key, which
+    engine, which light bytes) is provably the same as before — argued
+    from the code structure above, and backed by the bit-identical gate
+    set in §5.
+
+4. THE ONLY ORDERING CHANGE, STATED (not buried)
+    The intra-frame order of the synchronous face re-bake calls: today they
+    were grouped per face (face A's settled columns, then face B's); now
+    they interleave in star_owed iteration order. Each call has the same
+    arguments on the same chunk (the per-key body and its inputs are
+    unchanged per (a)-(d)), and build_mesh_face is inline — so no light
+    value, no eff_gen, no last_eff, no owed-set differs; the mesh build
+    order across faces within one frame is the only thing that moved, and
+    it moves nothing a gate reads (the arms are home-only for light values;
+    face mesh state at arm sample points is reached through the same
+    settle-waits).
+
+5. GATES (logs .scratch/AC-0463-gates/; merged in l3-merged.json)
+    SET 1 — python3 tasks/scripts/gate_run.py AC-0463 --arms g0,genhash,light,
+    lightstate --timeout 900: all ok, rc=0, script=0 shader=0 (logs r12/r10/r7/r4).
+    g0 r12: 0/0 (3 s). genhash r10: 25 GENHASH value lines BYTE-IDENTICAL to L2
+    (r9; the GENHASH-lines diff is empty) — the only raw-log difference is
+    GENMS 131 vs 133 (machine wall clock, not a gate value). light r7:
+    field-identical to L2 (r6) and the plan's expected values — surface_eff 15,
+    cave_eff 0, torch_level 14, torch_far_before 0, torch_far_after 9,
+    cave_pocket [8,120,-50], cave_census_cands 590 (only cave_census_ms 457,
+    machine timing). lightstate r4: every LIGHT-VALUE field identical to L2
+    (r3): ab.arr_diff_cells 1 @ [0,141,0] (chunk 0:0:1 slab 8, arr_size 98304),
+    ab.vc_diff 4 (vc_common 287, vc_n0 288, vc_n1 289), demoted 1, stragglers 3,
+    leaks 0 (ab before/after + all 22 censused grid chunks), low_on_high 0,
+    double-LOD 0/0, worst null, wash false. PACE fields (known
+    non-deterministic, OPS.md §7, NOT gated): move.hole_slabs_now 106 vs 96,
+    grid census 22 vs 21 — the same drift class L2's own r2/r3 A/B showed with
+    no code moved.
+    SET 2 — --arms residency,planetwalk --timeout 900: all ok. planetwalk r6:
+    25 of 26 boundary pairs covered with mesh+body at every destination (the
+    standing lap_0-1 home_pair_midline waiver), ok=true.
+    RESIDENCY — FINDING, then A/B (plan expected "stable at the current plateau
+    (74/93)"): r5 landed STABLE with steady face 74 / HOME 103 (x_seam crossing
+    125, peak 177, checkouts 462, col_pool_final 82), while the face lane was
+    byte-identical to L2 (74/0/5/12.0, the face sample series identical, steady
+    74 flat 6/6, leak false, keys_same). SAME-TREE A/B r6 (no code moved between
+    r5 and r6): steady face 74 / home 93, crossing 147, peak 197, checkouts 469,
+    col_pool_final 112 — reproducing L2's r4 essentially byte-for-byte (only
+    converge_ms 496 vs 503 and mi_pool_peak 409 vs 417, timing). Two runs of the
+    IDENTICAL tree land at different home steady states (93 vs 103): the
+    residency arm's home-timing fields carry their own run-to-run variance —
+    the mechanism is structural, world.gd:12593 (_recenter_slice is
+    wall-clock-frame budgeted, REC_SLICE_BUDGET_MS, and _face_stream is 12 ms
+    budgeted, so which recenter units / async lands complete by a given sample
+    frame is machine-timing). The plan's 74/93 plateau is REPRODUCED on this
+    tree (r6), both runs pass the arm's own verdict (STABLE, leak false,
+    keys_same), and the lane this change touches (face) is byte-identical
+    across all three runs — so the residency gate is met and the home-field
+    drift is recorded as arm variance, the same class as the lightstate pacing
+    finding (L2 §6), not a change effect.

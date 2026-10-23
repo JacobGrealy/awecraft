@@ -6116,12 +6116,7 @@ func _process(_delta: float) -> void:
 	# dispatches see this frame's settle state.
 	if star != null:
 		_sw_remesh_max = maxi(_sw_remesh_max, star_light_pending_depth())  # AC-0339: the remesh lane's depth (the armed re-bake count), sampled per frame
-		var _wps := Time.get_ticks_usec()
-		_star_step()
-		_wprof_add(WP_STAR, Time.get_ticks_usec() - _wps)
-		_star_settled_drain()
-		_star_remesh_drain()
-		_face_star_pass()  # AC-0309 D4: the per-face AweStarlight instances
+		_star_drain_pass()  # AC-0463 L3: the ONE drain entry — the home feed (the dt-scaled step, the settled drain, the paced remesh lane) then the face feed (the fixed-budget step + the owed dispatch), same per-frame order as before (plan §4.2)
 		_face_stream()  # AC-0309 D5: the boundary-band face-chunk streaming (time-budgeted)
 		for fm in fluid_marks:
 			var cc: Node3D = fm[0]
@@ -6170,6 +6165,24 @@ func star_light_pending_depth() -> int:
 
 # AC-0283 P2: the AweStarlight live-light pass (the replacement for the
 # per-column re-flood + the 1-column/frame flush wave).
+
+# AC-0463 L3: the ONE drain entry (the residency merge's shape — one
+# structure, two pacing policies, both preserved verbatim inside it):
+# the home feed is the dt-scaled budget step + the settled drain + the
+# paced remesh lane, the face feed is the fixed-budget per-face step +
+# the owed dispatch. The pacing difference exists for measured reasons
+# (L1 §2.3(c)) and stays. Per-frame order is unchanged (plan §4.2):
+# step -> settled drain -> remesh drain -> face pass. _star_settled_drain
+# keeps querying the home `star` for EVERY owed key, face keys included
+# (L2 §5: it must — per-key dispatch there would double-settle the face
+# columns against this scan).
+func _star_drain_pass() -> void:
+	var _wps := Time.get_ticks_usec()
+	_star_step()
+	_wprof_add(WP_STAR, Time.get_ticks_usec() - _wps)
+	_star_settled_drain()
+	_star_remesh_drain()
+	_face_star_pass()  # the face feed (AC-0309 D4: the per-face AweStarlight instances)
 
 # The budgeted relaxation step (design: the DRAIN clamp discipline — the
 # wall-clock frame sample, clamped, sizes the budget; the steady state
@@ -14949,45 +14962,59 @@ func star_for(face: int) -> Variant:
 func _face_star_pass() -> void:
 	if _star_faces.is_empty():
 		return
+	# The step lane: every face engine takes its fixed-budget relaxation
+	# step (no dt-scale, no loading window — the measured pacing, L1
+	# §2.3(c), preserved verbatim). Steps run before the owed dispatch,
+	# as before.
 	for face in _star_faces.keys():
 		var st: Variant = star_for(face)  # AC-0463 L2: the one ownership answer (face>=2 here, keys are the per-face instances)
 		if st == null:
 			continue
 		if int(st.pending_cells()) > 0:
 			st.step(int(STAR_STEP_BUDGET_MS) * 1000)
-		for key in star_owed.keys():
-			# all keys are 3-part (face:ccx:ccz); the home keys carry face 0
-			# (AC-0459) and must NOT match a per-face engine (faces 2-11 only)
-			var parts: PackedStringArray = String(key).split(":")
-			if parts.size() != 3 or int(parts[0]) < 2 or int(parts[0]) != int(face):
-				continue
-			var c = chunks.get(key)
-			if c == null:
-				star_owed.erase(key)
-				continue
-			if not bool(st.column_settled(int(c.cx), int(c.cz))):
-				continue
-			var pl: Dictionary = st.slab_light_payload(int(c.cx), int(c.cz), 0, maxi(0, int(c.top) >> 4))
-			if not bool(pl.get("ok", false)):
-				continue  # keep the owed key — retry next frame (r21:
-			# erasing first made the re-bake one-shot — a payload that was
-			# not ok on the first settled pass left the column on the
-			# landing pull light (0) forever: light_face_eff stuck at 0)
-			var new_eff: Dictionary = st.column_light_dict(int(c.cx), int(c.cz))
-			if new_eff.is_empty():
-				continue  # keep the owed key — retry next frame
-			var old_arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
-			var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
-			if old_arr.size() == new_arr.size() and old_arr == new_arr:
-				c.light_settled = true  # the pull light WAS the star light
-				star_owed.erase(key)
-				continue
-			c.last_eff = ChunkScript._eff_store(new_eff)
-			c.light_settled = true
-			# the settled payload differs from the landing light — the
-			# star engine wins (re-bake the column on the payload).
-			c.build_mesh_face(pl)
+	# AC-0463 L3: the ONE owed dispatch (replaces the per-face re-scan,
+	# O(faces x owed)): each owed key dispatches on its face part through
+	# star_for. Home keys (face 0/1) are the home feed's — they stay out
+	# of this dispatch, and _star_settled_drain keeps querying the home
+	# engine for them (L2 §5). A face key lands on its owning per-face
+	# engine with the SAME policy as before: the settled check, the
+	# last_eff publish, the compare-and-erase re-bake.
+	for key in star_owed.keys():
+		# all keys are 3-part (face:ccx:ccz); the home keys carry face 0
+		# (AC-0459) and must NOT match a per-face engine (faces 2-11 only)
+		var parts: PackedStringArray = String(key).split(":")
+		if parts.size() != 3 or int(parts[0]) < 2:
+			continue
+		var st: Variant = star_for(int(parts[0]))
+		if st == null:
+			continue
+		var c = chunks.get(key)
+		if c == null:
 			star_owed.erase(key)
+			continue
+		if not bool(st.column_settled(int(c.cx), int(c.cz))):
+			continue
+		var pl: Dictionary = st.slab_light_payload(int(c.cx), int(c.cz), 0, maxi(0, int(c.top) >> 4))
+		if not bool(pl.get("ok", false)):
+			continue  # keep the owed key — retry next frame (r21:
+		# erasing first made the re-bake one-shot — a payload that was
+		# not ok on the first settled pass left the column on the
+		# landing pull light (0) forever: light_face_eff stuck at 0)
+		var new_eff: Dictionary = st.column_light_dict(int(c.cx), int(c.cz))
+		if new_eff.is_empty():
+			continue  # keep the owed key — retry next frame
+		var old_arr: PackedByteArray = c.last_eff.get("arr", PackedByteArray())
+		var new_arr: PackedByteArray = new_eff.get("arr", PackedByteArray())
+		if old_arr.size() == new_arr.size() and old_arr == new_arr:
+			c.light_settled = true  # the pull light WAS the star light
+			star_owed.erase(key)
+			continue
+		c.last_eff = ChunkScript._eff_store(new_eff)
+		c.light_settled = true
+		# the settled payload differs from the landing light — the
+		# star engine wins (re-bake the column on the payload).
+		c.build_mesh_face(pl)
+		star_owed.erase(key)
 
 # D2: a home chunk position fully past the home patch (face territory —
 # the home grid ENDS at the patch edge; such chunks never carry data).
