@@ -40,7 +40,7 @@ class_name SatelliteBakeWorker
 #   mesh_step    float     the live grid step (the _ready env override)
 #   pay_total    int       HOME_CHUNKS + 10 * FACE_CHUNKS
 #   cache_dir    String    user://satellite/... (the node's _cache_dir())
-#   npix/face_grid/home_n/home_half/home_chunks/face_chunks/shard_len
+#   npix/face_grid/face_cells/home_n/home_half/home_chunks/face_chunks/shard_len
 #                          the node's consts, carried as values
 #   fcc/lx/ly/lz the node's consts, carried as values
 #   pay          PackedByteArray  merged payload (the face tasks' read-only input)
@@ -198,7 +198,7 @@ static func single_task(st: Dictionary, g: Variant) -> void:
 		# separate; step_face accrues the png time per face).
 		st["color_ms"] = float(Time.get_ticks_msec() - t_face) - png_sum
 		st["png_ms"] = png_sum
-		st["pay"] = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
+		st["pay"] = PackedByteArray()  # 1.74 GB no longer needed (the faces are coloured + on disk)
 		st["geom"] = geoms
 		ship_msg = ship_faces(st)
 	if err == "":
@@ -273,10 +273,15 @@ static func start_face(st: Dictionary, f: int) -> Dictionary:
 	fs["hgrid"].resize(npix * npix)
 	fs["png_ms"] = 0.0
 	if f > 1:
+		# AC-0469 stage D: H2/T2 live in the chart's CELL space - the
+		# chunk-space span face_grid*16 = 6,288 cells per axis (2.6
+		# texels/chunk against the npix texture), not the old 1:1
+		# texel:cell grid.
+		var fcells: int = int(st["face_cells"])
 		fs["h2"] = PackedInt32Array()
-		fs["h2"].resize(npix * npix)
+		fs["h2"].resize(fcells * fcells)
 		fs["t2"] = PackedByteArray()
-		fs["t2"].resize(npix * npix)
+		fs["t2"].resize(fcells * fcells)
 		fs["bld_row"] = 0
 	else:
 		fs["ch_cx"] = -999
@@ -323,6 +328,7 @@ static func face_build_block(st: Dictionary, f: int, fs: Dictionary, b: int) -> 
 	var h2: PackedInt32Array = fs["h2"]
 	var t2: PackedByteArray = fs["t2"]
 	var pay: PackedByteArray = st["pay"]
+	var fcells: int = int(st["face_cells"])  # AC-0469 stage D: the H2/T2 cell-space width
 	for lz in 16:
 		var iv: int = b * 16 + lz
 		for ccx in int(st["face_grid"]):
@@ -330,9 +336,19 @@ static func face_build_block(st: Dictionary, f: int, fs: Dictionary, b: int) -> 
 			for lx in 16:
 				var slot := lz * 16 + lx
 				var iu: int = ccx * 16 + (15 - lx if mirrored else lx)
-				var pidx: int = iv * int(st["npix"]) + iu
+				var pidx: int = iv * fcells + iu
 				h2[pidx] = int(pay[o + 2 * slot]) | (int(pay[o + 2 * slot + 1]) << 8)
 				t2[pidx] = int(pay[o + 768 + slot])
+
+
+# AC-0469 stage D: pixel row/column k's CENTRE CELL on an axis of
+# cells_axis chart cells spread over the npix-pixel texture (2.6
+# texels/chunk). Texel centres sit at (k+0.5)/npix - the same lattice the
+# hgrid_sample + PNG texels use. The axis count is the chart's OWN (the
+# chunk-space span carries 5 padding cells past it), so the centre cell
+# always lands in the chart.
+static func _sat_cell_of(k: int, cells_axis: int, npix: int) -> int:
+	return int(floorf((float(k) + 0.5) * float(cells_axis) / float(npix)))
 
 
 # The row machine on the per-face state. Returns true when the face's
@@ -340,23 +356,24 @@ static func face_build_block(st: Dictionary, f: int, fs: Dictionary, b: int) -> 
 static func step_face(st: Dictionary, f: int, fs: Dictionary, t0: int, budget_ms: float) -> bool:
 	var npix: int = int(st["npix"])
 	var R: float = float(st["R"])
-	var s_cell: float = SphereMath.face_cell_size(R)
-	var du_m: float
-	var dv_m: float
-	if f >= 4 and f <= 7:
-		du_m = s_cell
-		dv_m = s_cell * 0.5
-	else:
-		du_m = s_cell * 0.5
-		dv_m = s_cell
+	# AC-0469 stage D: per-axis chart counts + the per-axis cell metres
+	# (the gradient denominators, the AC-0471 grid: the halved axis is
+	# 3,141 cells of 1.00019 m - the old 0.5 m factor is gone).
+	var cells_u_f: int = SphereMath.cells_u(f)
+	var cells_v_f: int = SphereMath.cells_v(f)
+	var du_m: float = SphereMath.face_axis_span(f, R, true) / float(cells_u_f)
+	var dv_m: float = SphereMath.face_axis_span(f, R, false) / float(cells_v_f)
+	var fcells: int = int(st["face_cells"])  # the H2/T2 cell-space width
 	var hw: float = SphereMath.face_width(R) * 0.5
 	var hgrid: PackedInt32Array = fs["hgrid"]
 	while int(fs["row"]) < npix:
 		var j: int = int(fs["row"])
 		if f > 1:
-			# build every H2 block row j can touch (rows j-1..j+1 span at
-			# most blocks (j-1)/16..(j+1)/16; blocks are built in order)
-			var need_hi: int = mini(int(st["face_grid"]) - 1, (j + 1) / 16)
+			# AC-0469 stage D: build every H2 block row j can touch (row j
+			# reads its centre cell + the j+1 row's gradient neighbour one
+			# cell on; blocks are built in order).
+			var cv_hi: int = mini(cells_v_f - 1, _sat_cell_of(j + 1, cells_v_f, npix) + 1)
+			var need_hi: int = mini(int(st["face_grid"]) - 1, cv_hi / 16)
 			while int(fs["bld_row"]) <= need_hi:
 				face_build_block(st, f, fs, int(fs["bld_row"]))
 				fs["bld_row"] = int(fs["bld_row"]) + 1
@@ -389,13 +406,19 @@ static func step_face(st: Dictionary, f: int, fs: Dictionary, t0: int, budget_ms
 				gx = gx16[slot]
 				gz = gz16[slot]
 			else:
+				# AC-0469 stage D: the pixel's CENTRE CELL in chart cell
+				# space (2.6 texels/chunk; the lattice the hgrid_sample +
+				# PNG texels use, texel centres at (k+0.5)/npix). The
+				# gradient is the clamped central difference AT the sample
+				# cell, in cell metres.
 				var h2: PackedInt32Array = fs["h2"]
 				var t2: PackedByteArray = fs["t2"]
-				var pidx: int = j * npix + i
-				hv = h2[pidx]
-				tv = int(t2[pidx])
-				gx = (float(h2[j * npix + mini(i + 1, npix - 1)]) - float(h2[j * npix + maxi(i - 1, 0)])) / (2.0 * du_m)
-				gz = (float(h2[mini(j + 1, npix - 1) * npix + i]) - float(h2[maxi(j - 1, 0) * npix + i])) / (2.0 * dv_m)
+				var cu: int = _sat_cell_of(i, cells_u_f, npix)
+				var cv: int = _sat_cell_of(j, cells_v_f, npix)
+				hv = h2[cv * fcells + cu]
+				tv = int(t2[cv * fcells + cu])
+				gx = (float(h2[cv * fcells + mini(cu + 1, cells_u_f - 1)]) - float(h2[cv * fcells + maxi(cu - 1, 0)])) / (2.0 * du_m)
+				gz = (float(h2[mini(cv + 1, cells_v_f - 1) * fcells + cu]) - float(h2[maxi(cv - 1, 0) * fcells + cu])) / (2.0 * dv_m)
 			hgrid[j * npix + i] = hv  # the height channel (the geometry + PNG alpha source)
 			pixel_write(st, fs, (j * npix + i) * 3, hv, tv, gx, gz)
 		fs["row"] = j + 1

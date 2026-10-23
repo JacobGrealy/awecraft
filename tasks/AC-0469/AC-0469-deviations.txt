@@ -510,3 +510,122 @@ C8. WALL: arm ms ~28.5 s (final normal run, 26 crossings incl. the
     only waits — src_wait_ms 0.7-3.8 s; every chart src is -1).
     Negative control ~19 s. Gate run (g0+genhash+planetwalk) ~2 min
     including boot.
+
+================================================================================
+AC-0469 stage D (2026-10-23) — the far tier rebase: a chart face is 393
+chunks wide, not 64.
+================================================================================
+
+D9. THE FIX, single-sourced. FACE_GRID (satellite_body.gd) is now
+    SphereMath.CHUNKS_PER_FACE (393) — the grid's own chunk count, never a
+    literal; face_cells = FACE_GRID*16 (6,288) rides the bake state dict.
+    The old 64 was the OLD grid's whole face (1,024 cells / 16); at 1 m
+    cells it covered 64/393 = 16% of a face — AND, worse than the plan's
+    statement of the defect, since stage A the C++ decodes the linear
+    index with stride 393 (gen.cpp sp_col_index), so the old bake's
+    f*64+ccx records charted columns (ccx - 329f) PAST the face: the
+    in-process far tier showed a 1,024 m x 1,024 m patch ~10.5 km off-
+    face stretched across the whole 6,283 m face (measured A/B: the
+    before/after nadir pair differs on 54.3% of pixels, the strong-diff
+    fraction rising 0% -> 28% with radius from the pole — the home pair
+    (faces 0/1, the disc centre) is bit-identical, the chart-face annulus
+    moved). gen_one's f*FACE_GRID+ccx now equals the C++ linearization
+    exactly (the same stride world.gd / generator.gd use). The worker's
+    H2/T2 grids are now in chart CELL space (6,288^2, 158 MB per face)
+    and each texture pixel reads its CENTRE CELL at 2.6 texels/chunk
+    (_sat_cell_of, texel centres at (k+0.5)/npix — the lattice
+    hgrid_sample and the PNG already use). The gradient denominators
+    move to the per-axis cell metres (face_axis_span / cells_u|v:
+    1.0000 m full axis, 1.00019 m halved — the AC-0469-era 0.5 m factor
+    is gone).
+
+D10. The shard constants followed the payload. BAKE_SHARDS x
+    BAKE_SHARD_LEN must equal pay_total EXACTLY (the merge checks every
+    shard is full); the old 98 x 2,002 satisfied the old total 196,196
+    and would have merged only 11.5% of the new 1,699,726 (hard bake
+    fail). New pair: 1169 x 1454 (= 2 x 7 x 167 x 727); 1454 is the
+    factor near the old 2,002 that divides the new total, so a shard
+    slice stays ~5.6 s on this box and the bounded-release property
+    (in-flight shards finish within one 42 s hold slice) holds.
+    PAY_TOTAL is the derived one source of truth (pay_total = PAY_TOTAL
+    in configure). [Plan §2 named the FACE_GRID anchors; the shard pair
+    is a mechanical consequence of the exact-factorization invariant,
+    not a design choice — recorded, not PLAN-INSUFFICIENT.]
+
+D11. NPIX = 1024 STAYS (plan §3.3, the stated reasoning): 1024 / 393
+    = 2.6 texels/chunk on the chart faces, 1024 / 394 = 2.6 on the home
+    grid — the same texel density the near field quotes. And in METRES
+    the density is UNCHANGED by the fix: the old bake was 16 texels per
+    98 m chunk = 6.136 m/texel; the new bake is 2.6 texels per 16 m
+    chunk = 6.136 m/texel. What moved is the address space and the
+    terrain's discrete structure (1 m, not 6.136 m): the texture is now
+    a centre-cell downsample of the true 1 m terrain, at the same
+    per-metre resolution as before. WHAT THE FAR FIELD LOOKS LIKE AT THE
+    NEW DENSITY (the render, gate d): a 1 m terrain map at 6.1 m texels
+    — per-chunk detail in the far tier coarsened (16 -> 2.6 texels) at
+    constant per-metre resolution; the relief/colour read is unchanged,
+    the detail below 6 m is LOD by design (the near field owns it).
+
+D12. COST OF COVERAGE (gate b) — measured on this box (6 cores), seed
+    45, sharded bake (sat_preload ON), 8 GB cap, RSS sampled every 10 s
+    (logs bake-before-r1.log + bake-before-rss.log, bake-after-r1.log +
+    bake-after-rss.log):
+    BEFORE (old code):  bake wall 182.8 s (gen wall 152.9 s + face wall
+                        27.9 s), 196,196 records (200,904,704 B payload),
+                        peak RSS 1,829,208 KB (1.744 GiB), trajectory
+                        0.92 -> 1.72 GiB.
+    AFTER  (new code):  bake wall 1,269.0 s = 21.2 min (gen wall
+                        1,228.7 s + face wall 27.3 s), 1,699,726 records
+                        (1,740,519,424 B payload, 8.66x), peak RSS
+                        4,823,572 KB (4.603 GiB — the merge spike, shard
+                        buffers 1.74 GB + merged pay 1.74 GB + base),
+                        trajectory 0.91 -> 2.84 GiB, spike 4.59 GiB,
+                        settle 2.5-2.6 GiB.
+    WALL RATIO 6.94x (not 37.7x: the 37.7x is the record count per face;
+    the wall scales with total records / 6 threads). THE FACE STAGE IS
+    FLAT (27.3 s vs 27.9 s wall): the 37.7x cell-fill is a small part of
+    per-face cost (PNG + read-back + guard + geometry dominate); the
+    payload generation is the whole cost story.
+    A FULL BAKE IS PRACTICAL: it completed, one-time per seed (the
+    user:// cache keyed (planet,R,seed) is untouched — subsequent loads
+    read the 12 PNGs, no bake). 21.2 min on this 6-core box; the shard-
+    slice scaling (this box ~5.6 s/shard-slice vs ~0.15 s desktop-class,
+    the AC-0414 comment) projects ~12 min on a desktop. THE TRADE (if a
+    one-time 21 min is unacceptable): the payload needs only chunks_u x
+    chunks_v (77,421) of the 154,449 slots per face — a halved axis'
+    surplus columns chart the gapless continuation the texture never
+    samples — a 2x record cut the indexing already supports (record_
+    offset unchanged, gen_one would skip the surplus); NOT implemented
+    this stage (the plan's fence: nothing else moves).
+
+D13. COVERAGE (gate a): 154,449 / 154,449 = 100% of the 393^2 chunk
+    slots have a far record on EVERY chart face (x10 faces, 1,544,490
+    far records total + 155,236 home = 1,699,726). Proven by the merge
+    check (the log line "bake: payload done - 1699726 records merged" -
+    the merge FAILS the bake if the payload is short) and the face
+    tasks consuming their full square (12/12 faces OK, all 12 variance
+    guards pass). No missing region. Note for the record: on the 6
+    halved-axis faces, half the square (the ccx or ccz >= 197 columns of
+    the halved axis) charts the continuation PAST the face — present in
+    the payload, never sampled by the texture (the uv spans the face's
+    own cells_u/cells_v only).
+
+D14. RENDER (gate d): tasks/AC-0469/ac0469d_far_nadir.png — the planet
+    nadir preset at the user's vantage (2,000 m altitude, straight down
+    the local radial), 1280x720, drain 600, seed 45 (a non-canonical
+    seed: seed 44 would load the stale shipped assets and prove nothing
+    about this fix). The far field REACHES THE HORIZON on the chart
+    faces — terrain runs continuously to the disc's limb, which fades in
+    the limb haze at the grazing angle; there is NO visible edge, seam
+    ring or empty region anywhere in the disc. The A/B pair (bake-
+    before-r1.png vs bake-after-r1.png, drain 60, same vantage/seed):
+    54.3% of pixels differ, strong-diff (delta>60) 10.2% overall, rising
+    0.0% (centre, home pair - bit-identical) to 28.3% (the chart-face
+    limb annulus) with radius — the fix's footprint is exactly the
+    chart-face far tier. The centre disc (home pair + the near field
+    under it) is the same in both.
+
+D15. GENHASH: 25/25 byte-identical to the standing reference — the
+    generation is untouched (this is a far-tier indexing fix; the 5x5
+    window sits on the home pair, grid-independent by construction, and
+    the bake lane shares the C++ fields but writes no world state).

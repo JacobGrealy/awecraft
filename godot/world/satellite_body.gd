@@ -44,8 +44,8 @@
 #      bake, tasks/AC-0310/);
 #  (3) the runtime bake: far column payloads ([H u16x256][biome x256]
 #      [top x256] per chunk - the same call the demotion path makes)
-#      for all 196,196 chunks (home pair cx,cz in [-197,196]^2, then
-#      faces 2-11 as 64x64 at (face*64+ccx, face*64+ccz) - the piece-1
+#      for all PAY_TOTAL chunks (home pair cx,cz in [-197,196]^2, then
+#      faces 2-11 as FACE_GRID^2 at (face*FACE_GRID+ccx, face*FACE_GRID+ccz) - the piece-1
 #      keying minus the per-face seed salt, dropped at AC-0311 piece 3:
 #      the sphere-domain field is one pure f(world, seed), so the bake
 #      and the streamed face chunks read the same terrain; the (face, R)
@@ -54,12 +54,12 @@
 #      lambert, stored sRGB).
 #
 # BAKE MODE (AC-0382 a) - OFF-THREAD, (AC-0414) MULTITHREADED. The whole
-# bake pipeline (generate_far x 196,196, the piece-1 colour, the 12 PNG
+# bake pipeline (generate_far x PAY_TOTAL, the piece-1 colour, the 12 PNG
 # writes - the ~tens-of-ms deflate spike lives here - the read-back +
 # variance guard, and the 12 face geometries) runs off the main thread.
 # AC-0414 (Settings "sat_preload", default ON): the pipeline is SHARDED
-# across the pool - 98 payload shards (196,196 = 98 x 2,002 records,
-# exact) streamed at the core-count width as HIGH-priority tasks, then
+# across the pool - BAKE_SHARDS payload shards (PAY_TOTAL = BAKE_SHARDS x
+# BAKE_SHARD_LEN records, exact) streamed at the core-count width as HIGH-priority tasks, then
 # 12 per-face tasks (colour + PNG + read-back + guard + geometry), HIGH
 # under the loading-window hold (the pre-AC-0414 single LOW task was the
 # defect: the low lane runs on ONE thread - world.gd:6216 measured - and
@@ -128,8 +128,17 @@ var mesh_step := MESH_STEP
 const HOME_HALF := 197  # home chunks per axis: cx, cz in [-197, 196]
 const HOME_N := HOME_HALF * 2  # 394
 const HOME_CHUNKS := HOME_N * HOME_N  # 155,236
-const FACE_GRID := 64  # faces 2-11: face chunks per axis
-const FACE_CHUNKS := FACE_GRID * FACE_GRID  # 4,096
+# AC-0469 stage D: the chart-face chunk grid is the grid's OWN chunk count -
+# SphereMath.CHUNKS_PER_FACE (393 at 6,283 cells / 16), one source of truth,
+# never a literal. The old 64 was the OLD grid's whole face (1,024 cells /
+# 16); at 1 m cells it covered 64/393 = 16% of a face. The stride is
+# load-bearing: gen_one's f*FACE_GRID + ccx must equal the C++
+# linearization (awesm::SM_CHUNKS_PER_FACE, gen.cpp sp_col_index) or the far
+# records chart the wrong columns. The square spans the chunk-space axis
+# (6,288 cells); a halved axis' surplus chunks chart the gapless
+# continuation past the face.
+const FACE_GRID := SphereMath.CHUNKS_PER_FACE  # faces 2-11: face chunks per axis
+const FACE_CHUNKS := FACE_GRID * FACE_GRID  # 154,449
 const CANONICAL_SEED := 44  # the shipped res:// textures are this seed's bake
 # AC-0382: the bake no longer slices the main thread (it runs on a pool
 # thread); the 6 ms budget is the pre-AC-0382 constant, kept for the
@@ -217,11 +226,14 @@ var _worker_images: Array = []  # 12 decoded Images (the read-back the guard ran
 var _geom: Array = []  # 12 precomputed face geometries {v,u,n,i}
 var _hgrid_load: Array = []  # AC-0384 r2: face -> height grid derived from the PNG alpha (load path); an empty entry = a legacy image -> constant R + SEA
 # AC-0414: the multithreaded bake state (Settings "sat_preload" ON).
-# BAKE_SHARDS x BAKE_SHARD_LEN == pay_total EXACTLY (196,196 =
-# 2^2 x 7^3 x 11 x 13 = 98 x 2,002), so every shard buffer is the same
-# size and the merge is one deterministic concat in shard order. 98 (not
-# the 14 that first shipped): a shard's worker slice is ~7.7 s on this
-# box / ~0.2 s on desktop-class hardware, so when the 42 s hold budget
+# AC-0469 stage D: PAY_TOTAL (below) is the derived one source of truth -
+# the old grid's 196,196 lived only in the factor pair. BAKE_SHARDS x
+# BAKE_SHARD_LEN == PAY_TOTAL EXACTLY (1,699,726 = 2 x 7 x 167 x 727 =
+# 1169 x 1454), so every shard buffer is the same size and the merge is
+# one deterministic concat in shard order. 1454 (not a round number): the
+# factor near the old 2,002 that divides the new total - a shard's worker
+# slice is ~5.6 s on this box / ~0.15 s on desktop-class hardware, so when
+# the 42 s hold budget
 # expires the in-flight shards finish within ONE slice and the ground
 # build (HIGH) takes the pool - the bounded release the ticket names:
 # the player lands at budget + at most one shard slice (the pre-yield
@@ -232,8 +244,9 @@ var _hgrid_load: Array = []  # AC-0384 r2: face -> height grid derived from the 
 # priority (HIGH under the hold, LOW after the late release until the
 # player lands). _mt_shard_inflight_cap is set from the real core count
 # at bake start (full utilisation on any machine).
-const BAKE_SHARDS := 98
-const BAKE_SHARD_LEN := 2002
+const PAY_TOTAL := HOME_CHUNKS + 10 * FACE_CHUNKS  # 1,699,726
+const BAKE_SHARDS := 1169
+const BAKE_SHARD_LEN := 1454
 var bake_mt := false  # this bake used the sharded path (bake_stats field)
 var tail_inflight_cap := 12  # world.gd sets 4 after the hold releases late (streaming keeps its workers)
 # AC-0414: world.gd sets this true when the hold releases LATE and false
@@ -415,7 +428,7 @@ func configure(pid: int, p_seed: int, p_R: float, p_hmax: int, p_sea: int) -> vo
 	R = p_R
 	HMAX = p_hmax
 	SEA = p_sea
-	pay_total = HOME_CHUNKS + 10 * FACE_CHUNKS
+	pay_total = PAY_TOTAL
 	position = Vector3(0.0, -R, 0.0)  # the planet-frame centre in the global frame
 	if _cache_paths_exist():
 		# (1) user:// runtime cache: raw files the engine wrote ->
@@ -546,6 +559,7 @@ func _bake_state() -> Dictionary:
 	st["cache_dir"] = _cache_dir()
 	st["npix"] = NPIX
 	st["face_grid"] = FACE_GRID
+	st["face_cells"] = FACE_GRID * 16  # AC-0469 stage D: the chunk-space span (6,288 cells - the H2/T2 grid width)
 	st["home_n"] = HOME_N
 	st["home_half"] = HOME_HALF
 	st["home_chunks"] = HOME_CHUNKS
@@ -681,7 +695,7 @@ func _start_bake_mt() -> void:
 # AC-0414: the main-thread half of the sharded bake (the single writer).
 # Stage 1: poll the shards; when all are done, verify and merge them
 # into pay (one pre-sized concat in shard order - byte-identical to the
-# single worker's append order; the ~201 MB copy is the only added
+# single worker's append order; the ~1.74 GB copy is the only added
 # main-thread cost, visible in step_ms_max), then open stage 2.
 # Stage 2: poll the 12 face tasks, enqueue more up to tail_inflight_cap
 # (12 while the loading-window hold is active; 4 after it releases late,
@@ -785,7 +799,7 @@ func _bake_main_step_mt() -> void:
 			_png_ms += float(st["face_png_ms"][i])
 			_load_ms += float(st["face_load_ms"][i])
 			color_face += 1
-		st["pay"] = PackedByteArray()  # 201 MB no longer needed (the faces are coloured + on disk)
+		st["pay"] = PackedByteArray()  # 1.74 GB no longer needed (the faces are coloured + on disk)
 		bake_worker_ms = int(Time.get_ticks_msec() - _bake_wall_t0)
 		bake_result = {"ok": true, "why": "", "ship": ship_msg}
 		bake_done = true

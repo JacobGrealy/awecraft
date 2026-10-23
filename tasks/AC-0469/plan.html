@@ -1,38 +1,38 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sC twelve-chart lap</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage C — the twelve-chart lap</h1>
-<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Measurement only: extend the traversal arm, change no game behaviour. AC-0466 covered <b>2 of 12</b> boundaries and waived the rest; the user's requirement — "the experience has to be the same around the entire planet", now at a 1 m grid — cannot be evidenced on two seams.</p>
-<h2>1. Goal</h2><p>Every one of the twelve chart faces is visited and every crossing between neighbours is measured for mesh presence, collision body, and crossing latency at the 1 m grid.</p>
-<h2>2. What exists to build on</h2>
-<p><code>planetwalk</code> (harness.gd, AC-0466) already stands on a chart, walks until <code>player_anchor()["face"]</code> changes, and reports <code>mesh_built</code>, <code>body_present</code> and <code>frame_ms</code> per crossing, plus a negative control (<code>AWECRAFT_PWN_SKIP_WAIT=1</code>) that proves it can fail. It covers the x_seam 4→5 and z_seam 10→11 boundaries and records the other ten as a waiver.</p>
-<h2>3. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 sD far tier rebase</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage D — the far tier still thinks a face is 64 chunks wide</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The far tier is what draws everything past the near field, and at 1 m cells the near field reaches only ~200 m — so this is not cosmetic. Measured: it covers about a sixth of each chart face.</p>
+<h2>1. The defect (measured by the coordinator, round 47)</h2>
+<p><code>godot/world/satellite_body.gd:131</code> — <code>const FACE_GRID := 64  # faces 2-11: face chunks per axis</code>. A chart face is 6,283 m across and a chunk is 16 cells × 1.000 m = 16 m, so a face is <b>393</b> chunks per axis (<code>CHUNKS_PER_FACE</code>, already a constant since AC-0469 stage A). At the OLD grid 1,024 cells / 16 = 64 chunks, so 64 was the whole face; at the new grid it is <b>64/393 ≈ 16%</b> of it. The bake worker indexes far records as <code>f * face_grid + ccx</code> over a <code>face_grid × face_grid</code> square (<code>satellite_bake_worker.gd:236-248, 328, 359</code>), so chunk indices above 63 have no far record at all.</p>
+<p><code>HOME_N := 394</code> is <b>correct</b> and must not move: the home grid is unchanged at 1 m (6,283 cells / 16 = 392.9 → 393-394).</p>
+<h2>2. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/scenes/harness.gd</td><td>the <code>planetwalk</code> arm and its crossing helper (find by name)</td><td>Edit: extend coverage; keep every existing field and the negative control.</td></tr>
-<tr><td>godot/core/sphere_math.gd</td><td><code>world_to_face</code>, <code>uv_to_world</code>, the cube-map adjacency — derive neighbour pairs from the maths</td><td>READ ONLY. Do not hardcode a guess at which faces adjoin.</td></tr>
-<tr><td>tasks/harness_data.yaml</td><td>the <code>planetwalk</code> row</td><td>Update the notes; <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td><code>NPIX := 1024</code> (111), <code>HOME_HALF</code>/<code>HOME_N</code> (129), <code>FACE_GRID := 64</code> (131), the state dict fill (~547-549)</td><td>Edit: derive the chart-face grid from the real chunk count instead of a literal.</td></tr>
+<tr><td>godot/world/satellite_bake_worker.gd</td><td>the record indexing (<code>236-252</code>), the bake loops (<code>328, 354-371</code>), the payload size checks (<code>81-82, 166-172</code>)</td><td>Edit only where 64/1024-as-a-grid is assumed.</td></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>the H-grid sampling (the 1024² bilinear comment ~554)</td><td>READ ONLY unless a grid constant is baked in.</td></tr>
 <tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> placement, streaming, residency, keys, light, the warp, the mesher. The arm only observes.</p>
-<h2>4. Edit shape</h2>
+<p><b>Do not touch:</b> the 1,024-<b>byte</b> payload record contract, <code>CHUNK_WIDTH</code> 16, the near-field streaming, residency, keys, the warp, the seam apparatus.</p>
+<h2>3. Edit shape</h2>
 <ul>
-<li><b>4.1 Derive adjacency, do not assume it.</b> For each face 0–11, find at least one neighbour by probing the cube map (walk along +u/−u/+v/−v and see which face <code>world_to_face</code> reports). Record the derived adjacency table in the deviations — it is a deliverable, and it also cross-checks the seam pairs the earlier tickets assumed.</li>
-<li><b>4.2 Cross every boundary</b> the derived table gives (up to 24 directed pairs; deduplicate to undirected). If the 600 s budget cannot hold a full lap, cover as many as fit, <b>report exactly which were covered and which were not</b>, and state the wall time — a documented subset is acceptable, a silent one is not.</li>
-<li><b>4.3 Per crossing, report</b>: from_face, to_face, steps, frame_ms, mesh_built, body_present, dest_chunk. Keep the standing fields unchanged so old and new runs are comparable.</li>
-<li><b>4.4 The negative control must still fire</b> — the arm's teeth survive the extension, or the extension is worthless.</li>
-<li><b>4.5 Also assert all 12 faces are REACHABLE</b>: a short report of which faces were actually stood on. If a face cannot be reached within the step budget that is a finding, not a silent gap.</li>
+<li><b>3.1 One source of truth.</b> <code>FACE_GRID</code> must come from the grid (<code>SphereMath.CHUNKS_PER_FACE</code> or the equivalent), never a literal. If the bake worker's state dict needs it, pass it through the same field.</li>
+<li><b>3.2 Budget the rebuild.</b> 393² = 154,449 chunks per face × 8 faces vs 64² = 4,096 × 8 — a 37.7× increase in far records. <b>Measure the bake time and the memory before declaring this shippable</b>; if a full bake is impractical, say so with numbers and propose the LOD/texture-resolution trade rather than silently shipping a partial cover.</li>
+<li><b>3.3 Texture resolution is a separate decision.</b> <code>NPIX = 1024</code> against a 394-chunk home grid is ~2.6 texels/chunk; the same 1,024 against 393 chart chunks is ~2.6 as well, so leaving NPIX alone is coherent — but STATE that reasoning, and report what the far field looks like at the new texel density.</li>
+<li><b>3.4 Nothing else moves.</b> No changes to payload records, near-field streaming, or the shader unless a grid constant is genuinely baked into it.</li>
 </ul>
-<h2>5. Gates</h2>
+<h2>4. Gates</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>The lap</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,planetwalk --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; <b>genhash 25/25</b> (nothing about the world may change); planetwalk ok with crossings whose faces genuinely differ, each destination having mesh AND body; report the covered/total count.</td></tr>
-<tr><td>Negative control</td><td>same arm with <code>--env 'AWECRAFT_PWN_SKIP_WAIT=1'</code></td><td><code>neghtrl.saw_unbuilt</code> true — the arm can still fail.</td></tr>
-<tr><td>Docs</td><td><code>harness_doc.py --check</code></td><td>exit 0.</td></tr>
+<tr><td>Coverage (the point)</td><td>a report of far-record coverage per face — how many of the 393² chunk slots have a far record</td><td><b>100% of each chart face covered</b>, or an explicit statement of what is not and why. Report the number, not an assurance.</td></tr>
+<tr><td>Cost of the change</td><td>bake wall time and resident bytes, before and after</td><td><b>Reported.</b> If the full bake is impractical at 393², say so with numbers — that is a finding, not a failure.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,planetwalk,residency --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; genhash 25/25 (generation unchanged — this is a far-tier indexing fix); planetwalk 25/26 with mesh and body; residency bounded.</td></tr>
+<tr><td>Visual</td><td>one aerial render at the user's vantage, looking down, default settings</td><td>Produced and DESCRIBED by the builder: does the far field now reach the horizon on a chart face, or is there a visible edge? A render without a description is not evidence.</td></tr>
 </table>
-<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>6. Acceptance</h2><p>Every reachable boundary crossed and measured, the derived adjacency table recorded, all 12 faces accounted for, and the negative control still firing.</p>
-<h2>7. Risks</h2><p>A full lap may exceed the budget at the 1 m grid (chunk counts per face rose 37.6×) — shorten the walk per crossing rather than the coverage, and say what was cut. If a crossing shows a missing mesh or body at 1 m, that is a genuine finding about the new grid and outranks completing the lap.</p>
-<h2>8. Fences</h2><div class="stop"><ul>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Render recipe: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s. <code>AWECRAFT_AIM</code> takes FLAT coordinates.</p>
+<h2>5. Acceptance</h2><p>Chart faces are fully covered by the far tier, the cost of that coverage is measured and stated, and nothing else moved.</p>
+<h2>6. Risks</h2><p>The 37.7× record increase may make a full bake impractical; the honest response is to measure it and report the trade (fewer texels, coarser far LOD), not to ship a quarter-covered face and call it done. If a partial cover is unavoidable this stage, say exactly which regions are missing.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §3. No behaviour change.</li>
+<li>No edits outside §2. Never change the 1,024-byte payload record contract.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>9. Resume point</h2><p>The grid is 1 m (f926ab5), its face-lane unit bug is fixed (ee123a3), residency is bounded at 130/117, and the home-pair walk holds its standing latency (da92a60). This proves the rest of the planet.</p>
+<h2>8. Resume point</h2><p>1 m cubic blocks planet-wide (AC-0471), streaming bounded, lap green. This fixes the far tier's stale face grid, which is what makes distance visible at the new resolution.</p>
 </body></html>

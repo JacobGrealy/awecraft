@@ -76,3 +76,61 @@ Extend the planetwalk arm from 2-of-12 boundary coverage to the full lap: derive
 - WHY IT CAUSED THE PRESTREAM SYMPTOM: the window converts flat metres to CELLS using the halved scale, so the derived cell count is twice what the chunk derivation expects, and chunks collapse to a corner (8/10) or blow out across the chart (9/11). Fixing the window arithmetic alone would have papered over a block-size defect with a window tweak — which is why this was filed separately rather than "fixed" in AC-0470.
 - THE REAL FIX IS A PER-AXIS GRID: the halved axis needs half the cells (3,141 not 6,283) for its cells to be 1 m, so CELLS_PER_FACE becomes two numbers threaded through indexing, keys, chunk derivation, generation addressing and the C++ lanes. That is an address-space change, not a constant tweak, and it needs the same GRID/PAYLOAD/OTHER census discipline AC-0469 stage A used - because 6283 now appears exactly where 1024 used to.
 - SCOPE GOOD NEWS: faces 0-3 are already isotropic at 1 m, so the defect is confined to the eight chart faces, and under the "no home" design it is those faces that must become the standard. This is the next real step toward uniformity rather than a detour.
+
+## RUN — Fri Oct 23 01:18:14 EDT 2026 — AC-0469 (stage D)
+Far-tier rebase: FACE_GRID 64 -> SphereMath.CHUNKS_PER_FACE (393), threaded through the bake state dict and indexing; shard consts derived from the new pay_total; bake worker cell-space mapping (2.6 texels/chunk). Measure BEFORE bake (old code, seed 45) before touching code, then AFTER bake + gates g0,genhash,planetwalk,residency + one nadir render at the user vantage.
+
+## GATES — AC-0469 stage D (round 48, 2026-10-23 01:18-03:00 EDT)
+- g0 rc=0, SCRIPT 0 / SHADER 0 (g0-r20.log).
+- genhash 25/25, the 25 GENHASH lines byte-identical to the stage-C reference
+  (diffed genhash-r8 vs genhash-r7) — generation untouched (the far-tier
+  indexing fix writes no world state).
+- planetwalk rc=0, 25/26 crossings ok (the one excluded: lap_0-1
+  home_pair_midline, the stage-C convention); all 25 have mesh_built +
+  body_present + cross_mesh_built + cross_body_present (planetwalk-r14.log).
+- residency rc=0: leak=false, ok=true, verdict STABLE, converged, 6 flat
+  samples (face 55 / home 117), keys_same true — bounded (residency-r6.log).
+- COVERAGE (gate a): 154,449/154,449 (100%) of the 393^2 chunk slots per
+  chart face, x10 faces — the merge check ("bake: payload done - 1699726
+  records merged"; it fails the bake if short) + 12/12 face tasks ok, all
+  12 variance guards pass.
+- COST (gate b), seed 45, sharded bake, 8 GB cap, 10 s RSS sampling:
+  BEFORE bake wall 182.8 s / peak RSS 1,829,208 KB (1.744 GiB) / 196,196
+  records; AFTER bake wall 1,269.0 s (21.2 min) / peak RSS 4,823,572 KB
+  (4.603 GiB, the merge spike: shard bufs 1.74 GB + merged pay 1.74 GB +
+  base) / 1,699,726 records (1,740,519,424 B). Wall ratio 6.94x (the
+  37.7x-per-face is records; the wall scales total records / 6 threads).
+  Face stage FLAT (27.3 s vs 27.9 s wall). A full bake is PRACTICAL:
+  one-time per seed (user:// cache, key untouched), ~21 min on this 6-core
+  box, ~12 min projected desktop (the AC-0414 slice scaling). The offered
+  trade (2x payload cut: bake only chunks_u x chunks_v per face) is noted
+  in D12, not implemented (plan fence).
+- RENDER (gate d): tasks/AC-0469/ac0469d_far_nadir.png — nadir preset at
+  the user's vantage (2,000 m, straight down), 1280x720, drain 600 (fully
+  drained: RESULT body_phase=4, drain=600), seed 45 (non-canonical: seed 44
+  would load the stale shipped assets). The far field REACHES THE HORIZON
+  on the chart faces: terrain runs continuously to the disc's limb, fading
+  in the limb haze at grazing angle; NO visible edge, seam ring or empty
+  region. A/B pair bake-before-r1.png vs bake-after-r1.png (drain 60, same
+  vantage/seed): 54.3% of pixels differ, strong-diff (delta>60) 10.2%
+  overall rising 0.0% (disc centre, the home pair - bit-identical) to
+  28.3% (the chart-face limb annulus) with radius — the fix's footprint is
+  exactly the chart-face far tier.
+- Deviations D9-D15 (AC-0469-deviations.txt): the fix + its provenance
+  (the old bake charted columns ccx-329f PAST the face since stage A), the
+  shard re-factorization 98x2002 -> 1169x1454 (mechanical, required by the
+  exact-factorization invariant), NPIX=1024 stays (2.6 texels/chunk, 6.136
+  m/texel UNCHANGED in metres), the cost numbers, the coverage proof, the
+  render description, genhash 25/25.
+- Engine work via named runners (run_bake_measure.sh, run_gate_render.sh,
+  run_stage_d_gates.sh) — the pgrep -f "[g]odot" slot-test trap; renders
+  serial; 8 GB ulimit + RSS sampling per OPS.md 2.
+
+## Coordinator triage — stage D: the far tier now covers the whole planet, at a measured price (round 47)
+- THE DEFECT WAS WORSE THAN I MEASURED. I reported FACE_GRID := 64 as covering 16% of each chart face. The builder found that since stage A the C++ stride is 393, so the old bake did not merely under-cover — it charted columns ccx - 329f PAST the face, i.e. it was reading the wrong ground entirely. Deriving the constant from SphereMath.CHUNKS_PER_FACE fixes both the coverage and the stride mismatch.
+- COVERAGE IS NOW 100% AND IS PROVEN, not asserted: 154,449/154,449 slots per chart face across 10 faces, enforced by the merge check itself ("bake: payload done - 1699726 records merged", which fails if short) plus 12/12 face tasks and 12/12 guards.
+- THE PRICE OF 1 m EVERYWHERE, stated in full because the user deserves the real number rather than a reassurance: the far-tier bake goes from 182.8 s / 196,196 records / 191.6 MiB / 1.744 GiB peak to **1,269 s (21.2 min) / 1,699,726 records / 1.62 GiB / 4.603 GiB peak RSS**. That is a 6.94x wall increase (not 37.7x — per-face records scale, wall scales with total work over 6 threads). It is a ONE-TIME per-seed cost on this 6-core box, cached in user://; a desktop is projected around 12 minutes. Under the 8 GB cap with headroom.
+- THE VISUAL ANSWER, which is what the user will actually judge: an A/B render at nadir 2,000 m shows the far field reaching the horizon with terrain continuous to the disc's limb and no visible edge, seam ring or empty region; 54.3% of pixels differ from the old bake with 0% strong-diff at centre (the home pair is bit-identical) and 28% in the chart-face annulus. So the change is confined to the chart faces exactly as intended.
+- NOTHING ELSE MOVED: genhash 25/25 byte-identical against the stage-C reference (this is an indexing fix, generation did not move), planetwalk 25/26 with mesh and body everywhere, residency STABLE and bounded.
+- A CHEAPER OPTION EXISTS AND WAS DELIBERATELY NOT TAKEN: baking only chunks_u x chunks_v per face would halve the payload, and it is recorded in D12 rather than implemented because the plan fenced scope. Worth revisiting if the 21-minute bake proves annoying in practice.
+- STATE: at 1 m cubic blocks the planet now has near-field detail, a fully covered far field, bounded residency, a green twelve-chart lap and a green boundary walk. AC-0469's last item is the home-grid deletion.
