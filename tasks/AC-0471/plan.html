@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0471 per-axis grid</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0471 — per-axis cell counts, so every block is 1 m × 1 m × 1 m</h1>
+<p>Coordinator contract. High-effort builder applies it with tasks/templates/implement.md. The user's constraint is fixed: blocks are ~1 m cubes. Today faces 4–7 are 1.000 × 1.000 × 0.500 m and faces 8–11 are 0.500 × 1.000 × 1.000 m, because <code>face_cell_scale</code> halves the width of one axis instead of halving that axis's CELL COUNT.</p>
+<h2>1. The fix in one sentence</h2>
+<p>The halved axis must span its half-width with HALF the cells (3,141 not 6,283) rather than the same cells at half the size. Then both axes have 1.000 m cells and the blocks are cubes.</p>
+<h2>2. Measured today (round 45, do not re-derive)</h2>
+<ul>
+<li>Nominal <code>S = face_width / CELLS_PER_FACE = 6283.2 / 6283 = 1.0000 m</code>.</li>
+<li><code>face_cell_scale</code> (sphere_math.gd:450-454): faces 4–7 → <code>(s, s*0.5)</code>; every other chart face → <code>(s*0.5, s)</code>; faces 0–3 → <code>(s, s)</code> (already correct).</li>
+<li>Each chart face covers HALF a cube face along its halved axis — that is why the halving exists at all, and it stays: only the MECHANISM changes, from half-size cells to half-count cells.</li>
+<li>Consequence to be removed: the z-face u chart currently satisfies <code>6,283 cells × 0.500 m = 3,141.6 m = hw</code>, so the geometry is consistent and only the block shape is wrong.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>CELLS_PER_FACE</code> (58), <code>face_cell_size</code> (425), <code>face_cell_scale</code> (450), <code>world_to_face</code> (110), <code>uv_to_world</code> (90), <code>face_local_x</code> (454), and every place that indexes <code>0..CELLS_PER_FACE-1</code></td><td>Edit: introduce per-axis counts (<code>cells_u(face)</code>, <code>cells_v(face)</code>) as the single source of truth and make the existing helpers read them.</td></tr>
+<tr><td>gdext/src/sphere_math_cpp.h, gen.cpp, mesh.cpp</td><td><code>SM_CELLS_PER_FACE</code> (42) and its 9 grid-class users</td><td>Edit: mirror the per-axis rule; the C++ and GDScript counts must agree exactly (genhash is the check).</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_stream</code>'s window/rows/clamps (the AC-0469 stage-B/C area), <code>_ensure_face_chunk</code>, the <code>&amp; 15</code> local slots and <code>&gt;&gt; 4</code> chunk derivations</td><td>Edit only where a CELL INDEX or a clamp depends on the count.</td></tr>
+<tr><td>tasks/</td><td>journal, deviations, results</td><td>Create for AC-0471.</td></tr>
+</table>
+<p><b>Do not touch:</b> payload/save sizes (the 1024-byte section contract), <code>CHUNK_WIDTH</code> 16, the streaming policy, residency, the warp maths, the seam apparatus, light.</p>
+<h2>4. Edit shape</h2>
+<ul>
+<li><b>4.1 Census first, by class.</b> Reuse the AC-0469 stage-A discipline: list every <code>CELLS_PER_FACE</code>/<code>6283</code> site as GRID (cell count / index / clamp), PAYLOAD (bytes — untouched), or OTHER. The list is the deliverable that proves the formats did not move.</li>
+<li><b>4.2 One source of truth per language.</b> GDScript: <code>cells_u(face)</code>/<code>cells_v(face)</code> returning 6,283 or 3,141 by the existing halving rule; everything else derives from them. C++: the same two functions. <b>No second copy of the numbers.</b></li>
+<li><b>4.3 Keep the chart geometry identical.</b> The halved axis still spans <code>hw</code>; what changes is that it does so in 3,141 cells of 1.000 m instead of 6,283 of 0.500 m. A point's world position must be unchanged for the same (u,v) — verify with the existing probes rather than by eye.</li>
+<li><b>4.4 Rebuild both binaries</b> (Linux .so; report the Windows .dll status — the working SCons recipe is in the AC-0469 deviations).</li>
+</ul>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>BLOCKS ARE CUBIC (the point)</td><td>a measured cell-size report per face — extend <code>warpcensus</code> or add a tiny probe that prints, for faces 4,5,8,11, the u-cell and v-cell in metres</td><td><b>1.000 × 1.000</b> on every face, reported as numbers. Anything else is a failed fix.</td></tr>
+<tr><td>World still works</td><td><code>python3 tasks/scripts/gate_run.py AC-0471 --arms g0,player,light,planetwalk,residency,seamcensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; planetwalk still crosses every covered boundary with mesh AND body; <b>residency bounded (leak false, stable true)</b>; seamcensus clean.</td></tr>
+<tr><td>Formats untouched</td><td><code>--arms save,load</code></td><td><code>ok</code> true; payload constants unchanged; report <code>simband_ms</code>.</td></tr>
+<tr><td>Declared rebase</td><td><code>--arms genhash</code></td><td><b>genhash WILL MOVE on the chart faces</b> (their cell counts changed). Report the new hashes, state plainly that the world regenerated on those faces, and confirm the home pair's window is unchanged if it is. Do not chase byte-identity.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>Every face reports 1.000 m on both axes, the world runs and stays bounded, the formats are provably untouched, and the rebase is declared rather than hidden.</p>
+<h2>7. Risks</h2><p>Index arithmetic that assumed one count for both axes will silently wrap or clamp at the wrong bound — the GRID census and the cubic-cell report are the guards. The prestream window (AC-0470) may partly fix itself as a side effect; if it does, say so and leave AC-0470's remaining work explicit rather than claiming that ticket done.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. <b>Never change a payload/save size.</b></li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>The grid is 1 m nominal (AC-0469 sA), its face-lane unit bug is fixed (sB), residency is bounded, the walk holds its standing latency, and the twelve-chart lap is green (sC). This makes the blocks actually cubic, which is the user's fixed constraint.</p>
+</body></html>

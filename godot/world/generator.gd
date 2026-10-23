@@ -243,8 +243,11 @@ static func generate_face(face: int, cx: int, cz: int, seed: int, R: float = 0.0
 	# exist was the salt's seam).
 	var r: float = R if R > 0.0 else 4000.0
 	# AC-0469: the chunk-space linearization uses the per-face CHUNK count
-	# (CELLS_PER_FACE/16, 393 at 6283 cells) — C++'s sp_col_index runs the
-	# same inverse, the two must stay in lockstep.
+	# (CELLS_PER_FACE/16, 393 at 6283 cells). AC-0471: that is the FULL
+	# axis's chunk count — the MAX of the per-axis chunks_u/chunks_v, and
+	# the stride that keeps face*stride + ccx collision-free across faces
+	# with different ccx ranges; C++'s sp_col_index runs the same inverse,
+	# the two must stay in lockstep.
 	return generate_args(face * SphereMath.CHUNKS_PER_FACE + cx, face * SphereMath.CHUNKS_PER_FACE + cz, seed, Data.HEIGHT, Data.SEA, face, r)
 
 

@@ -29642,10 +29642,15 @@ func _sphere_test(spawn: Vector3) -> void:
 	out["wtf_samples"] = n2
 	out["wtf_max_d"] = max_d2
 	# --- (3) neighbor_key: 12-edge walks + 8 corner walks ---
+	# AC-0471: the walk cells and the range/on-line checks run through the
+	# per-axis counts (cells_u/cells_v — 6,283 or 3,141) of the SOURCE and
+	# TARGET faces; the quarter-point samples are PER ALONG-AXIS COUNT
+	# (the legacy [1,256,511,768,1022] was the 1024-cell chart heritage).
 	var n3 := 0
 	var max_rt := 0
-	var ec: Array = [1, 256, 511, 768, 1022]
 	for f in 12:
+		var Nfu: int = SphereMath.cells_u(f)
+		var Nfv: int = SphereMath.cells_v(f)
 		for e in 4:
 			var dirA: Vector2i
 			if e == 0:
@@ -29656,18 +29661,20 @@ func _sphere_test(spawn: Vector3) -> void:
 				dirA = Vector2i(0, 1)
 			else:
 				dirA = Vector2i(0, -1)
+			var m3: int = Nfv if e < 2 else Nfu
+			var ec: Array = [1, m3 / 4, m3 / 2, (3 * m3) / 4, m3 - 1]
 			for c in ec:
 				var cx: int
 				var cz: int
 				if e == 0:
-					cx = N - 1
+					cx = Nfu - 1
 					cz = c
 				elif e == 1:
 					cx = 0
 					cz = c
 				elif e == 2:
 					cx = c
-					cz = N - 1
+					cz = Nfv - 1
 				else:
 					cx = c
 					cz = 0
@@ -29680,11 +29687,13 @@ func _sphere_test(spawn: Vector3) -> void:
 				var B: int = int(r1["face"])
 				var cxB: int = int(r1["cx"])
 				var czB: int = int(r1["cz"])
-				if B < 0 or B > 11 or cxB < 0 or cxB >= N or czB < 0 or czB >= N:
+				var Bnu: int = SphereMath.cells_u(B)
+				var Bnv: int = SphereMath.cells_v(B)
+				if B < 0 or B > 11 or cxB < 0 or cxB >= Bnu or czB < 0 or czB >= Bnv:
 					ok = false
 					out["nk_range"] = [f, e, c, r1]
 				# expected landing from the table (same lookup as neighbor_key).
-				var t: float = (cz + 0.5) / float(N) if e < 2 else (cx + 0.5) / float(N)
+				var t: float = (cz + 0.5) / float(Nfv) if e < 2 else (cx + 0.5) / float(Nfu)
 				var segs3: Array = SphereMath._EDGES[f][e]
 				var seg3: Array = segs3[segs3.size() - 1]
 				for sg in segs3:
@@ -29697,11 +29706,11 @@ func _sphere_test(spawn: Vector3) -> void:
 					out["nk_face"] = [f, e, c, B, int(seg3[2])]
 				var on_line: bool
 				if eB == 0:
-					on_line = cxB == N - 1
+					on_line = cxB == Bnu - 1
 				elif eB == 1:
 					on_line = cxB == 0
 				elif eB == 2:
-					on_line = czB == N - 1
+					on_line = czB == Bnv - 1
 				else:
 					on_line = czB == 0
 				if not on_line:
@@ -29725,7 +29734,9 @@ func _sphere_test(spawn: Vector3) -> void:
 					ok = false
 					out["nk_rt"] = [f, e, c, r1, r2]
 	# 8 cube corners: owner cell from world_to_face; every step must land
-	# within +/-1 cell of the same physical corner.
+	# within +/-1 cell of the same physical corner. AC-0471: the corner
+	# cell is the TARGET face's edge-adjacent cell PER AXIS (0 or the
+	# axis count - 1), and the chart divide is per-axis too.
 	var n4 := 0
 	var min_dot := 2.0
 	for sx in [-1, 1]:
@@ -29736,8 +29747,10 @@ func _sphere_test(spawn: Vector3) -> void:
 				var fc: int = int(rc["face"])
 				var uc: float = float(rc["u"])
 				var vc: float = float(rc["v"])
-				var cxc: int = 0 if uc < 0.5 else N - 1
-				var czc: int = 0 if vc < 0.5 else N - 1
+				var fcu: int = SphereMath.cells_u(fc)
+				var fcv: int = SphereMath.cells_v(fc)
+				var cxc: int = 0 if uc < 0.5 else fcu - 1
+				var czc: int = 0 if vc < 0.5 else fcv - 1
 				var dirs4: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 				for dir5 in dirs4:
 					var rr: Dictionary = SphereMath.neighbor_key(fc, cxc, czc, dir5)
@@ -29745,10 +29758,12 @@ func _sphere_test(spawn: Vector3) -> void:
 					var fr: int = int(rr["face"])
 					var crx: int = int(rr["cx"])
 					var crz: int = int(rr["cz"])
-					if fr < 0 or fr > 11 or crx < 0 or crx >= N or crz < 0 or crz >= N:
+					var frnu: int = SphereMath.cells_u(fr)
+					var frnv: int = SphereMath.cells_v(fr)
+					if fr < 0 or fr > 11 or crx < 0 or crx >= frnu or crz < 0 or crz >= frnv:
 						ok = false
 						out["corner_range"] = [sx, sy, sz, [dir5.x, dir5.y], rr]
-					var wc: Vector3 = SphereMath.uv_to_world(fr, (float(crx) + 0.5) / float(N), (float(crz) + 0.5) / float(N), R)
+					var wc: Vector3 = SphereMath.uv_to_world(fr, (float(crx) + 0.5) / float(frnu), (float(crz) + 0.5) / float(frnv), R)
 					var dot: float = wc.normalized().dot(pc.normalized())
 					if dot < min_dot:
 						min_dot = dot
@@ -29819,31 +29834,38 @@ func _sphere_test(spawn: Vector3) -> void:
 	out["home_spawn_solid"] = bool(Data.block(sb).solid)
 	out["home_spawn_above_air"] = sab == 0
 	# --- (5) world keying (M3): (face,cx,cz) resolver + storage round-trip ---
+	# AC-0471: the samples and the range checks run through the per-axis
+	# counts (cells_u/cells_v) — the quarter-point cells are PER ALONG-
+	# AXIS COUNT (the legacy [1,256,511,768,1022] was the 1024-cell chart
+	# heritage).
 	var n5 := 0
 	var bad5 := 0
 	var max_cx5 := 0
 	var max_cz5 := 0
-	var cells5: Array = [1, 256, 511, 768, 1022]
 	for face5 in 12:
+		var Nfu5: int = SphereMath.cells_u(face5)
+		var Nfv5: int = SphereMath.cells_v(face5)
 		for edge5 in 4:
+			var m5: int = Nfv5 if edge5 < 2 else Nfu5
+			var cells5: Array = [1, m5 / 4, m5 / 2, (3 * m5) / 4, m5 - 2]
 			for cell5 in cells5:
 				# cell adjacent to the edge: edge axis fixed at its boundary
-				# cell center, other axis at (cell5+0.5)/N.
+				# cell center, other axis at (cell5+0.5)/m5.
 				var ua5: float = 0.5
 				var va5: float = 0.5
-				var t5: float = (float(cell5) + 0.5) / float(N)
+				var t5: float = (float(cell5) + 0.5) / float(m5)
 				if edge5 == 0:
-					ua5 = (float(N) - 0.5) / float(N)
+					ua5 = (float(Nfu5) - 0.5) / float(Nfu5)
 					va5 = t5
 				elif edge5 == 1:
-					ua5 = 0.5 / float(N)
+					ua5 = 0.5 / float(Nfu5)
 					va5 = t5
 				elif edge5 == 2:
 					ua5 = t5
-					va5 = (float(N) - 0.5) / float(N)
+					va5 = (float(Nfv5) - 0.5) / float(Nfv5)
 				else:
 					ua5 = t5
-					va5 = 0.5 / float(N)
+					va5 = 0.5 / float(Nfv5)
 				var P5: Vector3 = SphereMath.uv_to_world(face5, ua5, va5, R)
 				var k5: Dictionary = world.key_for_sphere_pos(P5, R)
 				var k5b: Dictionary = world.key_for_sphere_pos(P5, R)
@@ -29860,7 +29882,9 @@ func _sphere_test(spawn: Vector3) -> void:
 						var hwb: int = int(SphereMath.face_width(R) * 0.5) + 1
 						inrange5 = absi(ax5) <= hwb and absi(az5) <= hwb
 					else:
-						inrange5 = ax5 >= 0 and ax5 < N and az5 >= 0 and az5 < N
+						# AC-0471: the per-axis range of the RESOLVED face
+						# (the halved axis is 3,141 cells).
+						inrange5 = ax5 >= 0 and ax5 < SphereMath.cells_u(f5) and az5 >= 0 and az5 < SphereMath.cells_v(f5)
 				if not inrange5:
 					bad5 += 1
 					n5 += 1
@@ -36193,11 +36217,11 @@ func _warpcensus_test(spawn: Vector3) -> void:
 		var ac: Vector3 = m.get_aabb().get_center()
 		aabb_center = [roundf(ac.x * 100.0) / 100.0, roundf(ac.y * 100.0) / 100.0, roundf(ac.z * 100.0) / 100.0]
 		# the chunk's canonical surface point at its middle: the
-		# chunk-centre cell (u, v) on the 1024-cell chart, at radius R,
-		# minus the (0, R, 0) global-frame shift (the same shift the
-		# warp itself applies to every warped vertex).
-		var uu: float = (float(int(first.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
-		var vv: float = (float(int(first.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+		# chunk-centre cell (u, v) on the per-axis-count chart (AC-0471),
+		# at radius R, minus the (0, R, 0) global-frame shift (the same
+		# shift the warp itself applies to every warped vertex).
+		var uu: float = (float(int(first.cx)) * 16.0 + 8.0) / float(SphereMath.cells_u(int(first.face)))
+		var vv: float = (float(int(first.cz)) * 16.0 + 8.0) / float(SphereMath.cells_v(int(first.face)))
 		var ec: Vector3 = SphereMath.uv_to_world(int(first.face), uu, vv, R) - Vector3(0.0, R, 0.0)
 		expected_center = [roundf(ec.x * 100.0) / 100.0, roundf(ec.y * 100.0) / 100.0, roundf(ec.z * 100.0) / 100.0]
 		aabb_delta_m = roundf((ec - ac).length() * 100.0) / 100.0
@@ -36213,6 +36237,53 @@ func _warpcensus_test(spawn: Vector3) -> void:
 			for s in c.slabs:
 				if s.occluder != null:
 					occluders += 1
+	# AC-0471 gate (a) + the declared-rebase A/B: the MEASURED per-face
+	# cell sizes (u, v in flat metres, from the single-sourced
+	# face_cell_scale) + the resident face chunks' data hashes (run the
+	# arm pre-fix and post-fix: the cell sizes must read 1.000 x 1.000 on
+	# every chart face and the chart-face hashes must MOVE — the world
+	# regenerated there; the home pair is never hashed here, genhash owns
+	# it). cubic_ok is the negative control: false on the pre-fix tree.
+	var cell_sizes: Dictionary = {}
+	var cubic_ok := true
+	for f in 12:
+		var sc6: Vector2 = SphereMath.face_cell_scale(f, R)
+		cell_sizes[f] = [roundf(sc6.x * 1e6) / 1e6, roundf(sc6.y * 1e6) / 1e6]
+		if f >= 2 and (sc6.x < 0.999 or sc6.x > 1.001 or sc6.y < 0.999 or sc6.y > 1.001):
+			cubic_ok = false
+	var face_hashes: Dictionary = {}
+	for k in world._face_order:
+		var ch: Node3D = world.chunks.get(k)
+		if ch != null and not ch.data.is_empty():
+			var hh: HashingContext = HashingContext.new()
+			hh.start(HashingContext.HASH_MD5)
+			hh.update(ch.data)
+			var md5h: PackedByteArray = hh.finish()
+			var hxh := ""
+			for i in range(16):
+				hxh += "%02x" % md5h[i]
+			face_hashes[k] = hxh
+	# AC-0471: the FIXED-SAMPLE face data hashes — the pure C++
+	# generation of three x-by-three z chunks (corner / middle / the
+	# last full-or-partial chunk, index 196 = the halved axis' last
+	# chunk post-AC-0471 and a plain interior chunk pre-fix) on every
+	# chart face, independent of what the stream built. The A/B (pre-fix
+	# vs post-fix runs, same keys) is the declared-rebase proof: a moved
+	# hash is a regenerated chunk; an identical one is a chunk whose
+	# terrain happens to be uniform under both charts.
+	var fixed_hashes: Dictionary = {}
+	for f in range(2, 12):
+		for a in [0, 98, 196]:
+			for b in [0, 98, 196]:
+				var fd: PackedByteArray = WorldGen.generate_face(f, a, b, Game.world_seed, R)
+				var hf2: HashingContext = HashingContext.new()
+				hf2.start(HashingContext.HASH_MD5)
+				hf2.update(fd)
+				var md5f: PackedByteArray = hf2.finish()
+				var hxf := ""
+				for i in range(16):
+					hxf += "%02x" % md5f[i]
+				fixed_hashes["%d:%d:%d" % [f, a, b]] = hxf
 	var ok: bool
 	if warp == 0:
 		# the control: the flag-off path never touches the counter.
@@ -36228,7 +36299,7 @@ func _warpcensus_test(spawn: Vector3) -> void:
 	var warp_ms_total := int(roundf(float(warp_us) / 1000.0))
 	var warp_us_per_vert := roundf(float(warp_us) / float(maxi(1, warp_verts)) * 1000.0) / 1000.0
 	var warp_ms_per_chunk := roundf(float(warp_ms_total) / float(maxi(1, warped)) * 1000.0) / 1000.0
-	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "warp_ms_total": warp_ms_total, "warp_verts": warp_verts, "warp_us_per_vert": warp_us_per_vert, "warp_ms_per_chunk": warp_ms_per_chunk, "ms": Time.get_ticks_msec() - t0}})
+	Debug.result({"warpcensus": {"ok": ok, "warp": warp, "face_chunks": face_chunks, "warped_chunks": warped, "aabb_center": aabb_center, "expected_center": expected_center, "aabb_delta_m": aabb_delta_m, "frames": frames, "first_chunk": first_key, "occluders": occluders, "warp_ms_total": warp_ms_total, "warp_verts": warp_verts, "warp_us_per_vert": warp_us_per_vert, "warp_ms_per_chunk": warp_ms_per_chunk, "cell_sizes": cell_sizes, "cubic_ok": cubic_ok, "face_hashes": face_hashes, "fixed_hashes": fixed_hashes, "ms": Time.get_ticks_msec() - t0}})
 
 
 # ============================================================================
@@ -37905,8 +37976,10 @@ func _planetwalk_crossing(p, stand_y: float, sx: float, sz: float, edir: Vector3
 			dest_key = world.chunk_key_face(int(c4.face), int(c4.cx), int(c4.cz))
 			var msh: ArrayMesh = c4.first_opaque_mesh()
 			var ac: Vector3 = msh.get_aabb().get_center()
-			var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
-			var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+			# AC-0471: the chunk-centre cell charts through the per-axis
+			# counts (the halved axis is 3,141 cells of ~1 m).
+			var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.cells_u(int(c4.face)))
+			var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.cells_v(int(c4.face)))
 			var ec: Vector3 = SphereMath.uv_to_world(int(c4.face), uu, vv, R) - Vector3(0.0, R, 0.0)
 			aabb_delta = roundf((ec - ac).length() * 100.0) / 100.0
 	# THE assertions: the face changed to the SphereMath-derived
@@ -38067,8 +38140,11 @@ func _planetwalk_derive_adjacency(R: float) -> Dictionary:
 	var matches := true
 	for f in range(12):
 		var sc: Vector2 = SphereMath.face_cell_scale(f, R)
-		var du: float = 8.0 / (float(sc.x) * float(SphereMath.CELLS_PER_FACE))
-		var dv: float = 8.0 / (float(sc.y) * float(SphereMath.CELLS_PER_FACE))
+		# AC-0471: 8 m past the edge, in uv units — the axis span is
+		# cell-size x per-axis COUNT (sc.x*CELLS_PER_FACE was the
+		# single-count heritage; the span value is unchanged).
+		var du: float = 8.0 / (float(sc.x) * float(SphereMath.cells_u(f)))
+		var dv: float = 8.0 / (float(sc.y) * float(SphereMath.cells_v(f)))
 		var edges: Array = []
 		for edge in range(4):
 			var nbrs: Array = []
@@ -38122,17 +38198,21 @@ func _planetwalk_lap_pair(p, stand_y: float, R: float, a: int, b: int, edge: int
 	var t0c := Time.get_ticks_msec()
 	var wf := 0
 	var sc: Vector2 = SphereMath.face_cell_scale(a, R)
-	var span_u: float = float(sc.x) * float(SphereMath.CELLS_PER_FACE)
-	var span_v: float = float(sc.y) * float(SphereMath.CELLS_PER_FACE)
+	# AC-0471: the axis spans are cell-size x per-axis COUNT (the span
+	# values are unchanged — S*6283 = W on the full axis, S*0.5*6283 = hw
+	# on the halved one; post-fix 1.00003*6283 and 1.00019*3141).
+	var span_u: float = float(sc.x) * float(SphereMath.cells_u(a))
+	var span_v: float = float(sc.y) * float(SphereMath.cells_v(a))
 	var along_span: float = span_v if edge <= 1 else span_u
-	# THE stand is 9 m inside the edge, not 8: on the 0.5 m/cell axis 8 m
-	# is EXACTLY 16 cells = exactly one chunk, so the stand sits on a
-	# chunk column boundary and the anchor's ccx flips across it on float
-	# noise between the lift's read and the src check's read (the lift
-	# then builds the adjacent column — measured: key_match false on
-	# 2-3/3-6/3-7, src_settle_timeout). 9 m is off every cell and chunk
-	# boundary on both axis scales; the 8 m walk steps land 1 m inside /
-	# 7 m past (also off-boundary).
+	# THE stand is 9 m inside the edge, not 8: at the 0.5 m/cell axis
+	# (pre-AC-0471) 8 m was EXACTLY 16 cells = exactly one chunk, so the
+	# stand sat on a chunk column boundary and the anchor's ccx flipped
+	# across it on float noise between the lift's read and the src
+	# check's read (the lift then builds the adjacent column — measured:
+	# key_match false on 2-3/3-6/3-7, src_settle_timeout). At the AC-0471
+	# ~1 m/cell axis 9 m is off every cell and chunk boundary on both
+	# scales (9/1.00019 = 8.998 cells); the 8 m walk steps land 1 m
+	# inside / 7 m past (also off-boundary).
 	var perp_uv: float = 9.0 / (span_u if edge <= 1 else span_v)
 	var kept: Array = []
 	for t in [0.5, 1.0 - 40.0 / along_span, 40.0 / along_span]:
@@ -38393,8 +38473,10 @@ func _planetwalk_lap_pair(p, stand_y: float, R: float, a: int, b: int, edge: int
 			if int(c4.face) > 1:
 				var msh: ArrayMesh = c4.first_opaque_mesh()
 				var ac: Vector3 = msh.get_aabb().get_center()
-				var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
-				var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.CELLS_PER_FACE)
+				# AC-0471: the chunk-centre cell charts through the
+				# per-axis counts (the halved axis is 3,141 cells of ~1 m).
+				var uu: float = (float(int(c4.cx)) * 16.0 + 8.0) / float(SphereMath.cells_u(int(c4.face)))
+				var vv: float = (float(int(c4.cz)) * 16.0 + 8.0) / float(SphereMath.cells_v(int(c4.face)))
 				var ec: Vector3 = SphereMath.uv_to_world(int(c4.face), uu, vv, R) - Vector3(0.0, R, 0.0)
 				aabb_delta = roundf((ec - ac).length() * 100.0) / 100.0
 	var okc := to_face == exp_to and mesh_built and body_present
@@ -38524,10 +38606,17 @@ func _residency_test(spawn: Vector3) -> void:
 			"evict_margin_m": float(world.FACE_STREAM_EVICT_MARGIN),
 			"win_m": sd * 16,
 			"cell_m": roundf(S * 100.0) / 100.0,
-			"edge_rows_x": mini(64, int(ceili(float(sd * 16) / S)) + 1),
-			"edge_rows_z": mini(64, int(ceili(float(sd * 16) / (S * 0.5))) + 1),
+			# AC-0471: the LIVE code's window rule, read from the same
+			# helpers it reads — the edge-normal (in-band) axis is the
+			# FULL axis on both face classes (cell S; the stage-B S*0.5
+			# on the z faces was the halved axis' size misapplied), the
+			# row cap is the per-face edge-axis chunk count (393), and
+			# the ONE metres->chunks conversion is _chunks_across
+			# (16-cell chunks): rows = min(393, ceil(win/(16*S)) + 1).
+			"edge_rows_x": mini(SphereMath.chunks_u(4), int(ceili(float(sd * 16) / (16.0 * S)) + 1)),
+			"edge_rows_z": mini(SphereMath.chunks_v(8), int(ceili(float(sd * 16) / (16.0 * S)) + 1)),
 			"hw_m": roundf(hw * 10.0) / 10.0,
-			"window_rule": "win = sim_dist * 16 flat m (world.gd:15019); edge-band rows = min(64, ceil(win/cell)+1), the z faces halve the cell (world.gd:15025); the edge-normal gate skips a face farther than win from its edge (world.gd:15069); eviction past win + evict_margin_m, re-checked only after >16 m of travel (world.gd:15108-15123)",
+			"window_rule": "win = sim_dist * 16 flat m; edge-band rows = min(edge-axis chunk count, _chunks_across(win, the edge-axis cell size S — full axis on both classes, AC-0471)), the along-edge window indexes the halved axis' 3,141-cell chart at its 1.00019 m cell stride (world.gd _face_stream); the edge-normal gate skips a face farther than win from its edge; eviction past win + evict_margin_m, re-checked only after >16 m of travel",
 		},
 	}
 	# THE BASELINE sample (before any traverse).

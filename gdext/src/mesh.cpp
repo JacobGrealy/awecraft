@@ -4195,9 +4195,11 @@ public:
 			const Vector3 p = verts[i];
 			const double u1024 = bx + (mirrored ? 16.0 - (double)p.x : (double)p.x);
 			const double v1024 = bz + (double)p.z;
+			// AC-0471: the chart divide is the per-axis count (sm_cells_u/v
+			// — the halved axis is 3,141 cells of ~1 m, not 6,283 of 0.5 m).
 			const awesm::SmV3 dir = awesm::sm_uv_to_world(face,
-					u1024 / (double)awesm::SM_CELLS_PER_FACE,
-					v1024 / (double)awesm::SM_CELLS_PER_FACE, R);
+					u1024 / (double)awesm::sm_cells_u(face),
+					v1024 / (double)awesm::sm_cells_v(face), R);
 			const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
 			const double s = (R + (double)p.y) / len;
 			out[i] = Vector3(dir.x * s, dir.y * s - R, dir.z * s);

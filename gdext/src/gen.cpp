@@ -709,8 +709,9 @@ static inline int floordiv(int a, int b);
 // AC-0311 piece 2 (finishing-run fix): for faces 2-11 the LINEARIZED flat
 // index is face*SM_CHUNKS_PER_FACE*16 + the face's OWN cell index (the
 // chunk-space span — 6288 cells at AC-0469, 5 past the 6283 chart cells),
-// so the face offset must come off before the /SM_CELLS_PER_FACE chart
-// divide (cell i <-> uv i/6283); the mirror class additionally
+// so the face offset must come off before the per-axis chart divide
+// (AC-0471: cell i <-> uv i/sm_cells_u(v) — 6,283 or 3,141); the mirror
+// class additionally
 // un-runs the per-chunk x data layout (face_local_x: k -> 15-k) so the
 // sample charts at the cell's TRUE planet position. Charting the raw
 // linearized index is only accidentally right for faces 4 and 8 (the tan
@@ -726,13 +727,16 @@ static inline void sm_chart_dir(int face, double fx, double fz, double R,
 	if (face <= 1) {
 		p = sm_home_point(fx, fz, R);
 	} else {
+		// AC-0471: the per-axis counts divide the cell indices into chart
+		// uv (sm_cells_u/v — the halved axis is 3,141 cells; the
+		// SM_CHUNKS_PER_FACE*16 stride above stays the MAX-axis span).
 		double fx2 = fx - (double)face * (double)(SM_CHUNKS_PER_FACE * 16);
 		double fz2 = fz - (double)face * (double)(SM_CHUNKS_PER_FACE * 16);
 		if (sm_face_mirror_x(face)) {
 			double c0 = std::floor(fx2 / 16.0);
 			fx2 = c0 * 16.0 + (15.0 - (fx2 - c0 * 16.0));
 		}
-		p = sm_uv_to_world(face, fx2 / (double)SM_CELLS_PER_FACE, fz2 / (double)SM_CELLS_PER_FACE, R);
+		p = sm_uv_to_world(face, fx2 / (double)sm_cells_u(face), fz2 / (double)sm_cells_v(face), R);
 	}
 	SmV3 n = sm_norm(p);
 	*dx = n.x;
@@ -783,7 +787,10 @@ static inline void sp_table_build(int face, int ccx, int ccz, double R,
 // The C++ flat chunk index -> the placed column index (the home pair keeps
 // the real flat index, which may be negative; faces 2-11 carry
 // face*SM_CHUNKS_PER_FACE + ccx — the generate_face convention; the
-// per-face chunk count is AC-0469-derived, 393 at 6283 cells / 16).
+// stride is the FULL axis's chunk count (AC-0469-derived, 393 at 6283
+// cells / 16; AC-0471: the MAX of the per-axis sm_chunks_u/v — the
+// halved axis is 197 — which is what keeps the linearization
+// collision-free across faces).
 static inline int sp_col_index(int face, int c) {
 	return (face <= 1) ? c : c - face * (int)SM_CHUNKS_PER_FACE;
 }

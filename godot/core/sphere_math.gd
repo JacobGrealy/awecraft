@@ -56,10 +56,43 @@ class_name SphereMath
 # pre-AC-0469 value was 1024 cells = 6.136 m cells; the face WIDTH was
 # always W — only the cell count moved.)
 const CELLS_PER_FACE := 6283
+# AC-0471: the halved axis's cell count. Every face but the home pair
+# spans HALF a cube face along one axis (the pair member splits it); at
+# AC-0469 that axis still charted 6,283 cells over hw = 3,141.59 m —
+# 0.500 m cells. AC-0471 halves the COUNT instead of the SIZE: 3,141
+# cells of hw/3141 = 1.00019 m, so every block is ~1 m on both axes.
+# (6,283 is odd: the half axis cannot be exactly W/6283 — 3,141.5 cells
+# would be needed; the 1.89e-4 m/cell residual is the price of integer
+# cells. 3,142 would give 0.99987 m — the floor is the plan's number.)
+const CELLS_HALF := CELLS_PER_FACE / 2  # 3141
+
+# AC-0471: the per-axis cell counts — the ONE grid source of truth (the
+# C++ twins are awesm::sm_cells_u / sm_cells_v, keep in lockstep). The
+# existing AC-0309 halving rule, moved from face_cell_scale's sizes to
+# counts: the x faces (4-7) run the full axis on u (y, W wide) and the
+# halved axis on v (z, one sector half — the 4/5 pair splits the edge);
+# every other face runs the halved axis on u (the -Y and -Z halves and
+# the z faces' x halves) and the full axis on v.
+static func cells_u(face: int) -> int:
+	return CELLS_PER_FACE if face >= 4 and face <= 7 else CELLS_HALF
+static func cells_v(face: int) -> int:
+	return CELLS_HALF if face >= 4 and face <= 7 else CELLS_PER_FACE
+# AC-0471: the per-axis chunk counts (ceil — a 3,141-cell axis is 197
+# chunks: 196 full + 5 cells). The chunk-SPACE linearization stride is
+# the MAX axis (CHUNKS_PER_FACE, below) so face*stride + ccx stays
+# collision-free across faces with different ccx ranges.
+static func chunks_u(face: int) -> int:
+	return (cells_u(face) + 15) / 16
+static func chunks_v(face: int) -> int:
+	return (cells_v(face) + 15) / 16
+
 # AC-0469: face chunks per axis (ceil(6283/16) — the last row/column of
-# chunks is partial: 392 full + 11 cells of the 393rd). The chunk-space
-# linearization face*CHUNKS_PER_FACE + ccx spans CHUNKS_PER_FACE*16 =
-# 6288 cells per face (5 padding cells past the 6283 chart cells).
+# chunks is partial: 392 full + 11 cells of the 393rd). AC-0471: this is
+# the FULL axis's count = the max of the per-axis chunks_u/chunks_v —
+# the chunk-space linearization face*CHUNKS_PER_FACE + ccx spans
+# CHUNKS_PER_FACE*16 = 6288 cells per face (5 padding cells past the
+# 6283 chart cells), collision-free for the halved axes' shorter
+# ranges.
 const CHUNKS_PER_FACE := (CELLS_PER_FACE + 15) / 16  # 393
 
 # AC-0362: the seam grout (see the column_transform section header) — the
@@ -162,7 +195,8 @@ static func world_to_face(pos: Vector3, R: float) -> Dictionary:
 # [tlo, thi) the crossing lands on face B's edge edgeB at coordinate
 # s = a + b*t along that edge (t = the cell-center coordinate along the
 # source edge, in [0,1]). Landed cell = B's edge-adjacent cell
-# floor(s*CELLS_PER_FACE) (2:1 segments = "sector edge resolution mismatch"
+# floor(s * the target edge's along-axis count) (AC-0471: cells_u/cells_v;
+# the 2:1 segments are a CHART ratio — "sector edge resolution mismatch"
 # across cube edges; round-trip within +/-1 cell; midlines are exact 1:1).
 const _EDGES: Array = [
 	[ # face 0 (home, +Y even)
@@ -243,10 +277,15 @@ const _EDGES: Array = [
 static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictionary:
 	# One cell step in dir (Vector2i, single axis) from (cx, cz). Interior ->
 	# same face. Edge -> _EDGES table: deterministic; 2:1 cell ratio across
-	# cube edges (documented "sector edge resolution mismatch"); corner cells
-	# resolved by the face_for_dir tie order.
-	var u1: float = (cx + 0.5) / float(CELLS_PER_FACE) + float(dir.x) / float(CELLS_PER_FACE)
-	var v1: float = (cz + 0.5) / float(CELLS_PER_FACE) + float(dir.y) / float(CELLS_PER_FACE)
+	# cube edges (documented "sector edge resolution mismatch" — a CHART
+	# ratio, independent of the cell counts); corner cells resolved by the
+	# face_for_dir tie order. AC-0471: the cell steps and the landed-cell
+	# chart run through the per-axis counts of the source and target faces
+	# (the target edge's along-axis count is the target's cells_u/cells_v).
+	var Nu: int = cells_u(face)
+	var Nv: int = cells_v(face)
+	var u1: float = (cx + 0.5) / float(Nu) + float(dir.x) / float(Nu)
+	var v1: float = (cz + 0.5) / float(Nv) + float(dir.y) / float(Nv)
 	if u1 > 0.0 and u1 < 1.0 and v1 > 0.0 and v1 < 1.0:
 		return { "face": face, "cx": cx + dir.x, "cz": cz + dir.y }
 	var e: int
@@ -258,24 +297,27 @@ static func neighbor_key(face: int, cx: int, cz: int, dir: Vector2i) -> Dictiona
 		e = 2
 	else:
 		e = 3
-	var t: float = (cz + 0.5) / float(CELLS_PER_FACE) if e < 2 else (cx + 0.5) / float(CELLS_PER_FACE)
+	var t: float = (cz + 0.5) / float(Nv) if e < 2 else (cx + 0.5) / float(Nu)
 	var segs: Array = _EDGES[face][e]
 	var seg: Array = segs[segs.size() - 1]
 	for s_ in segs:
 		if t < float(s_[1]):
 			seg = s_
 			break
+	var B: int = int(seg[2])
+	var Bu: int = cells_u(B)
+	var Bv: int = cells_v(B)
 	var s: float = float(seg[4]) + float(seg[5]) * t
-	var along: int = clampi(int(floor(s * float(CELLS_PER_FACE))), 0, CELLS_PER_FACE - 1)
+	var along: int = clampi(int(floor(s * float(Bv))), 0, Bv - 1) if int(seg[3]) < 2 else clampi(int(floor(s * float(Bu))), 0, Bu - 1)
 	var cxB: int
 	var czB: int
 	if int(seg[3]) < 2:
-		cxB = CELLS_PER_FACE - 1 if int(seg[3]) == 0 else 0
+		cxB = Bu - 1 if int(seg[3]) == 0 else 0
 		czB = along
 	else:
 		cxB = along
-		czB = CELLS_PER_FACE - 1 if int(seg[3]) == 2 else 0
-	return { "face": int(seg[2]), "cx": cxB, "cz": czB }
+		czB = Bv - 1 if int(seg[3]) == 2 else 0
+	return { "face": B, "cx": cxB, "cz": czB }
 
 # --- AC-0307: rigid per-column placement (P2 of AC-0144) ---
 # The home pair (faces 0,1 = the flat world) is bent onto the planet by ONE
@@ -431,27 +473,35 @@ static func world_to_flat(p: Vector3, R: float) -> Vector3:
 # The home pair (faces 0,1) keeps its exact AC-0306/AC-0307 geometry and
 # keying; the helpers below extend the net to faces 2-11 so a player can
 # cross a home edge onto the neighbouring face's grid. Faces 2-11 are
-# CELLS_PER_FACE-cell grids (one local unit of a face chunk = one cell =
-# W/CELLS_PER_FACE m — 1.000 m at R = 4000, AC-0469); the height stays 1 m.
+# per-axis-count grids (cells_u/cells_v, AC-0471: 6,283 or 3,141 — the
+# halved axis charted 3,141 cells of 1.00019 m instead of 6,283 of 0.500
+# m, so every block is ~1 m on both axes); one local unit of a face chunk
+# = one cell; the height stays 1 m.
 
-# AC-0309: one face cell in flat metres (W/CELLS_PER_FACE = 1.000 m at
-# R = 4000, AC-0469 — was 6.135 m at the pre-AC-0469 1024 cells).
+# AC-0309: the FULL axis's cell in flat metres (W/CELLS_PER_FACE =
+# 1.000 m at R = 4000, AC-0469 — was 6.135 m at the pre-AC-0469 1024
+# cells). AC-0471: the per-axis sizes are face_cell_scale (below) —
+# this stays the full-axis nominal S that the streaming strides quote.
 static func face_cell_size(R: float) -> float:
 	return face_width(R) / float(CELLS_PER_FACE)
 
-# AC-0309: the (u, v) cell widths in flat metres — ANISOTROPIC. The u
-# axis spans the full cube-face width W (CELLS_PER_FACE cells -> S per
-# cell) and the v axis spans the half-face W/2 (CELLS_PER_FACE cells ->
-# S/2 per cell) on the
-# x faces (4-7, v along a home edge); the z faces (8-11) swap the roles
-# (u = the half axis, v = the full axis). A face chunk's 16x16 local
-# grid is therefore S x S/2 metres in-plane on the x faces (S/2 x S on
-# the z faces).
+# AC-0471: a face axis's flat-metre span — the full axis (CELLS_PER_FACE
+# cells) spans the face width W, the halved axis (CELLS_HALF cells)
+# spans the half-face W/2. The span is a function of the COUNT, which is
+# the one place the two can disagree.
+static func face_axis_span(face: int, R: float, u_axis: bool) -> float:
+	var w: float = face_width(R)
+	var c: int = cells_u(face) if u_axis else cells_v(face)
+	return w if c == CELLS_PER_FACE else w * 0.5
+
+# AC-0309: the (u, v) cell widths in flat metres — AC-0471: DERIVED from
+# the per-axis counts (cells_u/cells_v) and the axis spans: the full
+# axis is W/6283 = 1.00003 m, the halved axis is (W/2)/3141 = 1.00019 m
+# — every block ~1 m on both axes (pre-AC-0471 the halved axis kept
+# 6,283 cells over W/2: 0.500 m, the 1x1x0.5 block).
 static func face_cell_scale(face: int, R: float) -> Vector2:
-	var s: float = face_cell_size(R)
-	if face >= 4 and face <= 7:
-		return Vector2(s, s * 0.5)
-	return Vector2(s * 0.5, s)
+	return Vector2(face_axis_span(face, R, true) / float(cells_u(face)),
+			face_axis_span(face, R, false) / float(cells_v(face)))
 
 # AC-0309: the folded net has two chart orientation classes. For these
 # faces the (u,v) chart is LEFT-handed relative to the outward radial, so
@@ -486,8 +536,8 @@ static func _face_chart_dir(face: int, u0: float, v0: float, d: Vector2, R: floa
 # (2-11), GLOBAL (home) frame (planet frame shifted by (0, -R, 0)).
 # A per-chunk least-squares AFFINE fit of the 256 cell centres to their
 # chart positions (uv_to_world): local (lx, lz) -> world, one local unit
-# = one cell (face_cell_scale — anisotropic), local +Y = the radial at
-# the chunk centre (the height stays 1 m). The chart is not
+# = one cell (face_cell_scale — AC-0471: ~1 m on both axes), local +Y =
+# the radial at the chunk centre (the height stays 1 m). The chart is not
 # affine-developable, so no facet/rigid construction can place every cell
 # close over the full 49-98 m chunk: the tangent-plane-at-centre form
 # left far-edge cells 3-4 m off the chart and — worse — adjacent chunks'
@@ -525,8 +575,12 @@ static func face_chunk_transform(face: int, ccx: int, ccz: int, R: float) -> Tra
 		_fit_build_gram()
 	var inv: Array = _fit_inv
 	var mirrored: bool = face_mirror_x(face)
-	var u0: float = (float(ccx) * 16.0 + 8.0) / float(CELLS_PER_FACE)
-	var v0: float = (float(ccz) * 16.0 + 8.0) / float(CELLS_PER_FACE)
+	# AC-0471: the chunk-centre cell and every sampled cell centre chart
+	# through the per-axis counts (cell i <-> uv i/cells_u(v) — the
+	# halved axis' 3,141-cell span is what makes the chart geometry the
+	# same with cubic cells).
+	var u0: float = (float(ccx) * 16.0 + 8.0) / float(cells_u(face))
+	var v0: float = (float(ccz) * 16.0 + 8.0) / float(cells_v(face))
 	var n: Vector3 = uv_to_world(face, u0, v0, R) / R
 	# s[world_coord][0..2] = (sum lx*w, sum lz*w, sum w) over the 256
 	# cell centres in the HOME frame (uv_to_world minus (0, R, 0)) — the
@@ -541,7 +595,7 @@ static func face_chunk_transform(face: int, ccx: int, ccz: int, R: float) -> Tra
 		var x: float = float(lx) + 0.5
 		for lz in range(16):
 			var iv: int = ccz * 16 + lz
-			var w: Vector3 = uv_to_world(face, (float(iu) + 0.5) / float(CELLS_PER_FACE), (float(iv) + 0.5) / float(CELLS_PER_FACE), R) - Vector3(0.0, R, 0.0)
+			var w: Vector3 = uv_to_world(face, (float(iu) + 0.5) / float(cells_u(face)), (float(iv) + 0.5) / float(cells_v(face)), R) - Vector3(0.0, R, 0.0)
 			var y: float = float(lz) + 0.5
 			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x
 			s[1][0] += x * w.y; s[1][1] += y * w.y; s[1][2] += w.y
@@ -596,8 +650,9 @@ static func home_flat_ext(p: Vector3, R: float) -> Vector2:
 static func face_cell_band(face: int, ccx: int, ccz: int, R: float) -> Vector3:
 	if face < 4:
 		return Vector3(INF, INF, INF)
-	var u: float = (float(ccx) + 0.5) / float(CELLS_PER_FACE)
-	var v: float = (float(ccz) + 0.5) / float(CELLS_PER_FACE)
+	# AC-0471: the chunk-centre cell charts through the per-axis counts.
+	var u: float = (float(ccx) + 0.5) / float(cells_u(face))
+	var v: float = (float(ccz) + 0.5) / float(cells_v(face))
 	var P: Vector3 = uv_to_world(face, u, v, R)
 	var f: Vector2 = home_flat_ext(P, R)
 	if is_inf(f.x):

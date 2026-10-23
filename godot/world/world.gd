@@ -191,7 +191,8 @@ const FRUSTUM_CULL_MARGIN := 32.0
 #     face_width(R) — one flat metre is one metre of arc; pre-AC-0306 it
 #     covered |x|,|z| <= R). Face 0 = x >= 0, face 1 = x < 0.
 #   faces 2-11 = sparse on-demand data chunks: key "%d:%d:%d" (face,cx,cz)
-#     over the 6283-cell SphereMath grid (chunk = 16x16 cells, AC-0469);
+#     over the per-axis-count SphereMath grid (cells_u/cells_v: 6,283 or
+#     3,141, AC-0471; chunk = 16x16 cells, AC-0469);
 #     data level
 #     only in P1a (no meshing/lighting, AC-0144+).
 # Position->key single resolver: key_for_sphere_pos() (world_to_face).
@@ -12079,7 +12080,8 @@ func recenter(wx: float, wz: float, mesh_now := true, wy: float = -1.0) -> void:
 		var dz := int(ent[3])
 		var odx := int(ent[4])
 		var odz := int(ent[5])
-		# AC-0143 face 2-11 chunks live in the 6283-cell sphere grid — the
+		# AC-0143 face 2-11 chunks live in the per-axis-count sphere grid
+		# (6,283 or 3,141 cells, AC-0471) — the
 		# home streaming set has no claim on them. (The old Chebyshev walk
 		# swept them by accident; AC-0152 scopes it to home chunks.)
 		if int(c.face) > 1:
@@ -14706,8 +14708,9 @@ func _fluid_near(x: int, y: int, z: int) -> bool:
 # never meshed or lit in P1a (AC-0144+). Faces 0,1 (+Y halves) stay the
 # flat home grid (legacy "%d,%d" key, flat grid, streaming unchanged).
 # AC-0469: the FACE_CELLS mirror constant is deleted — the grid count
-# lives in ONE home (SphereMath.CELLS_PER_FACE, 6283 at AC-0469); the
-# former users read it through SphereMath now.
+# lives in ONE home (SphereMath.CELLS_PER_FACE, 6283 at AC-0469; AC-0471:
+# the per-axis counts cells_u/cells_v — 6,283 or 3,141 — derive from it);
+# the former users read them through SphereMath now.
 const FACE_CHUNK_CAP := 512  # max resident non-home chunks (FIFO)
 var _face_order: Array = []  # FIFO of non-home chunk keys (eviction)
 var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac0433probe natural-vs-forced discriminator)
@@ -14715,7 +14718,8 @@ var face_rebake_n := 0  # AC-0433 P0.5: edge-row re-bakes actually run (the ac04
 # --- AC-0309: cross-face movement (P4 of AC-0144) — the face-side runtime ---
 # The home pair (faces 0,1) keeps its flat 1 m grid UNTOUCHED (D1: genhash
 # 25/25 stays byte-identical — the home terrain never changes). Faces 4-11
-# carry the 6283-cell grid (AC-0469); the player walks/flies from the home patch
+# carry the per-axis-count grid (6,283 or 3,141 cells, AC-0471; was the
+# 6283-cell grid, AC-0469); the player walks/flies from the home patch
 # across a shared cube edge onto the far side. The boundary is
 # continuous by the field's OWN (d, δ) continuity (AC-0311: the C1
 # interim BLEND BAND was deleted — it existed only to hide the seam the
@@ -14868,12 +14872,12 @@ func _solid_ring() -> PackedByteArray:
 # along-edge position's sign picks the face half (z >= 0 vs < 0 on x
 # edges, x >= 0 vs < 0 on z edges); the -half faces (5,7,9,11) use the
 # v-1/u-1 cube form, shifting the raw coordinate by +1. The home edge is
-# u = 1 (x edges) / v = 1 (z edges) -> iu = CELLS_PER_FACE-1 / iv =
-# CELLS_PER_FACE-1 (6282 at AC-0469).
+# u = 1 (x edges) / v = 1 (z edges) -> iu = cells_u(f)-1 / iv =
+# cells_v(f)-1 (the edge axis is the FULL axis on both classes — 6282 at
+# AC-0469, unchanged by AC-0471).
 func _face_edge_cells(dx: int, dz: int, along: float, ex: int, ez: int) -> Array:
 	var R: float = Game.planet_R
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var N: int = SphereMath.CELLS_PER_FACE
 	if dx != 0:
 		var pos_half: bool = along >= 0.0
 		var f: int
@@ -14881,16 +14885,22 @@ func _face_edge_cells(dx: int, dz: int, along: float, ex: int, ez: int) -> Array
 			f = 4 if pos_half else 5
 		else:
 			f = 6 if pos_half else 7
+		# AC-0471: the edge row is the u axis (full on the x faces); the
+		# along-edge cell charts the v axis (the halved one — 3,141).
+		var Nv: int = SphereMath.cells_v(f)
 		var vr: float = along / hw + (0.0 if (f == 4 or f == 6) else 1.0)
-		return [f, N - 1, clampi(int(floorf(vr * float(N))), 0, N - 1)]
+		return [f, SphereMath.cells_u(f) - 1, clampi(int(floorf(vr * float(Nv))), 0, Nv - 1)]
 	var pos_half: bool = along >= 0.0
 	var f: int
 	if ez > 0:
 		f = 8 if pos_half else 9
 	else:
 		f = 10 if pos_half else 11
+	# AC-0471: the edge row is the v axis (full on the z faces); the
+	# along-edge cell charts the u axis (the halved one — 3,141).
+	var Nu: int = SphereMath.cells_u(f)
 	var ur: float = along / hw + (0.0 if (f == 8 or f == 10) else 1.0)
-	return [f, clampi(int(floorf(ur * float(N))), 0, N - 1), N - 1]
+	return [f, clampi(int(floorf(ur * float(Nu))), 0, Nu - 1), SphereMath.cells_v(f) - 1]
 
 # C3: the home boundary chunk's cross-face ring — the LIVE face cells
 # adjacent to the edge at each ring position (a per-chunk solid test;
@@ -14940,8 +14950,11 @@ func _face_home_ring(face: int, ccx: int, ccz: int, dx: int, dz: int) -> PackedB
 	var cols: Array = []
 	for t in range(16):
 		# the edge-adjacent face cell at this ring position
-		var iu: int = (SphereMath.CELLS_PER_FACE - 1) if is_x else ccx * 16 + t
-		var iv: int = (ccz * 16 + t) if is_x else (SphereMath.CELLS_PER_FACE - 1)
+		# AC-0471: the edge row is the FULL axis on both classes (u on the
+		# x faces, v on the z faces); the cc*16 + t cells are local-slot
+		# derived and grid-independent.
+		var iu: int = (SphereMath.cells_u(face) - 1) if is_x else ccx * 16 + t
+		var iv: int = (ccz * 16 + t) if is_x else (SphereMath.cells_v(face) - 1)
 		var b: Vector3 = SphereMath.face_cell_band(face, iu, iv, R)
 		# the home edge of faces 4/5 is the patch's +x edge, of 6/7 the
 		# -x edge — face-based, not direction-based (the mirror x faces
@@ -14983,21 +14996,25 @@ func _face_edge_kind(face: int, ccx: int, ccz: int, dx: int, dz: int) -> Array:
 	# of the chunk's u range (up to 15 cells away — the shared-edge
 	# mismatch no transform can repair). The home edge sits on the
 	# local WEST of chunk 63 on the mirror x faces (the seam cell
-	# iu = CELLS_PER_FACE-1 is local slot 0 there) and on the local EAST
+	# iu = cells_u(face)-1 is local slot 0 there) and on the local EAST
 	# on the plain x faces; the z faces' home edge (local NORTH of
-	# ccz = (CELLS_PER_FACE-1)>>4, AC-0469) is untouched (the z slot is
+	# ccz = (cells_v(face)-1)>>4, AC-0469/AC-0471) is untouched (the z slot is
 	# never mirrored).
 	var mirrored: bool = SphereMath.face_mirror_x(face)
 	# AC-0469: the home edge sits on the LAST edge-axis chunk (392 at
-	# 6283 cells; was 63 at 1024).
-	var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
+	# 6283 cells; was 63 at 1024). AC-0471: the edge axis is the FULL
+	# axis on both classes (u on the x faces, v on the z faces) — read
+	# through the per-axis chunk counts.
+	var edge_last: int = ((SphereMath.cells_u(face) - 1) >> 4) if is_x_face else ((SphereMath.cells_v(face) - 1) >> 4)
 	var is_home_edge: bool = (dz == 0 and is_x_face and ccx == edge_last and ((dx == -1 and mirrored) or (dx == 1 and not mirrored))) \
 			or (dx == 0 and not is_x_face and ccz == edge_last and dz == 1)
 	if is_home_edge:
 		return [1, 0, 0]
 	var nccx: int = ccx - dx if (mirrored and dx != 0) else ccx + dx
 	var nccz: int = ccz + dz
-	if nccx < 0 or nccx > SphereMath.CHUNKS_PER_FACE - 1 or nccz < 0 or nccz > SphereMath.CHUNKS_PER_FACE - 1:
+	# AC-0471: the per-axis chunk bounds (the halved axis is 197 chunks;
+	# the old 392 cap was a loose bound that the chunk lookup resolved).
+	if nccx < 0 or nccx >= SphereMath.chunks_u(face) or nccz < 0 or nccz >= SphereMath.chunks_v(face):
 		return [0, 0, 0]
 	var nc: Node3D = chunks.get(_key_f(face, nccx, nccz))
 	if nc == null or nc.data.is_empty():
@@ -15122,7 +15139,6 @@ func _face_stream() -> void:
 	if R <= 0.0:
 		return
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var S: float = SphereMath.face_cell_size(R)
 	var p: Vector2 = _face_player_flat()
 	# AC-0463 slice 2b: the ONE stream window (shared with the home lane) —
 	# the sim band in flat metres + the evict radius past its margin.
@@ -15131,14 +15147,16 @@ func _face_stream() -> void:
 	var t0: int = Time.get_ticks_msec()
 	for face in range(4, 12):
 		var is_x_face: bool = face <= 7
-		# the in-band (edge-normal) axis: full-width (S) on the x faces,
-		# half-width (S/2) on the z faces (face_cell_scale)
-		# AC-0469: the row cap is the per-face chunk count (393 at 6283
-		# cells), not the old 64 = 1024/16.
+		# AC-0471: the in-band (edge-normal) axis is the FULL axis on both
+		# classes (u on the x faces, v on the z faces) — the per-axis
+		# scale reads the true cell size (S on the full axis; the stage-B
+		# S*0.5 on the z faces was the HALVED axis' size misapplied to the
+		# edge-normal axis).
 		# AC-0469 stage B: the window is flat metres and rows indexes
-		# CHUNKS — the ONE conversion is _chunks_across (the z faces'
-		# in-band axis keeps its half-width stride S*0.5).
-		var rows: int = mini(SphereMath.CHUNKS_PER_FACE, _chunks_across(win, S)) if is_x_face else mini(SphereMath.CHUNKS_PER_FACE, _chunks_across(win, S * 0.5))
+		# CHUNKS — the ONE conversion is _chunks_across; the cap is the
+		# per-face edge-axis chunk count (393 on the full axis).
+		var sc: Vector2 = SphereMath.face_cell_scale(face, R)
+		var rows: int = mini(SphereMath.chunks_u(face) if is_x_face else SphereMath.chunks_v(face), _chunks_across(win, sc.x if is_x_face else sc.y))
 		# the along-edge extent of this face's half of the edge
 		# the along-edge clamp must match the face's HALF of the edge:
 		# the first face of each pair (4/6, 8/10) covers the + half
@@ -15184,27 +15202,38 @@ func _face_stream() -> void:
 			edge_dist = (hw - p.y) if (face == 8 or face == 9) else (p.y + hw)
 		if edge_dist > win:
 			continue
-		# the along-edge axis is the half-width axis (S/2 per cell). The flat
-		# window must be mapped through the SECTOR's chart formula (the face
-		# coordinate scales the flat coordinate only in the z>=0 sectors; the
-		# mirror sectors (5/7) and the z faces (8-11) run their chart from the
-		# -hw end — the raw flat index streamed the far corner of the mirror
+		# the along-edge axis is the half-width axis — AC-0471: 3,141 cells
+		# of (W/2)/3141 = 1.00019 m (pre-fix 6,283 of S*0.5 = 0.500 m). The
+		# flat window must be mapped through the SECTOR's chart formula (the
+		# face coordinate scales the flat coordinate only in the z>=0
+		# sectors; the mirror x sectors (5/7) run their chart from the -hw
+		# end — the raw flat index streamed the far corner of the mirror
 		# faces, 3000 m from the seam, and left the crossing row unbuilt):
 		#   x faces 4/6 (z>=0):  face v =  z/hw
 		#   x faces 5/7 (z<0):   face v = (z+hw)/hw
-		#   z faces 8-11:        face u = (x+hw)/2hw
+		#   z faces 8/10 (x>=0): face u =  x/hw        (raw — see below)
+		#   z faces 9/11 (x<0):  face u = (x+hw)/hw
+		# AC-0470 OPEN (measured in its stage C, C5(b)): the raw_idx flag
+		# below covers only the x faces, so faces 8/10 take the +hw form
+		# and their window clamps to the chart's far corner (1-column
+		# band). AC-0471 moves the STRIDE to the true cell size, which
+		# self-fixes the mirror z faces (9/11) — the 8/10 direction fix
+		# stays AC-0470's work.
 		# (+-1 chunk padding for the pre-warp curvature at the outer rows)
-		var stride: float = S * 0.5
+		var stride: float = sc.y if is_x_face else sc.x
 		var raw_idx: bool = face == 4 or face == 6  # the z>=0 x-faces scale from 0
 		var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
 		var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
-		# AC-0469: the clamp is the grid's cell range (6282 at 6283 cells),
-		# not the old 1023 — the >> 4 chunk derivation is grid-independent.
-		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, SphereMath.CELLS_PER_FACE - 1) >> 4
-		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, SphereMath.CELLS_PER_FACE - 1) >> 4
+		# AC-0469: the clamp is the grid's cell range, not the old 1023.
+		# AC-0471: the per-axis range (3,140 on the halved axis — the
+		# along-edge axis on every streamed face); the >> 4 chunk
+		# derivation is grid-independent.
+		var along_max: int = (SphereMath.cells_v(face) if is_x_face else SphereMath.cells_u(face)) - 1
+		var cc0: int = clampi(int(floorf(idx_lo)) - 16, 0, along_max) >> 4
+		var cc1: int = clampi(int(ceilf(idx_hi)) + 16, 0, along_max) >> 4
 		# AC-0469: the home-edge chunk is the LAST chunk on the edge axis
-		# ((CELLS_PER_FACE - 1) >> 4 = 392 at 6283 cells; was 63 at 1024).
-		var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
+		# (the full axis on both classes — 392 at 6283 cells).
+		var edge_last: int = ((SphereMath.cells_u(face) - 1) >> 4) if is_x_face else ((SphereMath.cells_v(face) - 1) >> 4)
 		for r in range(rows):
 			if Time.get_ticks_msec() - int(t0) > int(FACE_STREAM_BUDGET_MS):
 				break
@@ -15269,17 +15298,19 @@ func _face_free_chunk(key: String) -> void:
 func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
 	var R: float = Game.planet_R
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var S: float = SphereMath.face_cell_size(R)
 	var is_x_face: bool = face <= 7
 	var edge_col: int = int(floorf((hw - 0.5) / 16.0)) if (face == 4 or face == 5 or face == 8 or face == 9) else int(floorf((-hw + 0.5) / 16.0))
-	# the along-edge flat extent of this chunk's row (the half-width axis:
-	# S/2 per cell; the v-1/u-1 form faces (5,7,9,11) sit on the -half of
-	# the axis, shifted by -hw)
+	# the along-edge flat extent of this chunk's row (the half-width axis
+	# — AC-0471: 3,141 cells of 1.00019 m, per the per-axis scale: the v
+	# axis on the x faces, the u axis on the z faces; pre-fix S*0.5 =
+	# 0.500 m). The v-1/u-1 form faces (5,7,9,11) sit on the -half of
+	# the axis, shifted by -hw.
 	var neg: bool = face == 5 or face == 7 or face == 9 or face == 11
 	var off: float = hw if neg else 0.0
+	var aesc: float = SphereMath.face_cell_scale(face, R).y if is_x_face else SphereMath.face_cell_scale(face, R).x
 	var cell0: int = ccz * 16 if is_x_face else ccx * 16
-	var lo: float = float(cell0) * S * 0.5 - off
-	var hi: float = float(cell0 + 16) * S * 0.5 - off
+	var lo: float = float(cell0) * aesc - off
+	var hi: float = float(cell0 + 16) * aesc - off
 	var i0: int = int(floorf(lo / 16.0))
 	var i1: int = int(floorf(hi / 16.0))
 	for i in range(i0, i1 + 1):
@@ -15298,8 +15329,9 @@ func _face_rearm_home_neighbors(face: int, ccx: int, ccz: int) -> void:
 # data LANDING itself (AC-0433 P0.5, the home-landing hook — a face edge
 # chunk built against an air home ring extends nothing there and carries
 # a full-height seam wall until the straddler's data arrives). Only edge-
-# row face chunks (ccx == (CELLS_PER_FACE-1)>>4 on the x faces / ccz ==
-# (CELLS_PER_FACE-1)>>4 on the z faces — 392 at AC-0469)
+# row face chunks (ccx == (cells_u-1)>>4 on the x faces / ccz ==
+# (cells_v-1)>>4 on the z faces — the edge axis is the full axis, 392 at
+# AC-0469/AC-0471)
 # read the home side at all, and only along the edge row's overlap range
 # — a handful of chunks per boundary-column landing. face_rebake_n counts
 # the actual re-bakes (the ac0433probe natural-vs-forced discriminator).
@@ -15308,7 +15340,6 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 		return
 	var R: float = Game.planet_R
 	var hw: float = SphereMath.face_width(R) * 0.5
-	var S: float = SphereMath.face_cell_size(R)
 	var bx: int = int(floorf(hw - 0.5))  # the +hw straddling home column
 	var bxn: int = int(floorf(-hw + 0.5))  # the -hw straddling home column
 	var x0: float = float(cx) * 16.0
@@ -15320,39 +15351,46 @@ func _face_rebake_boundary(cx: int, cz: int) -> void:
 	if not (x_plus or x_minus or z_plus or z_minus):
 		return
 	# AC-0469: edge-row chunks are the LAST edge-axis chunk (392 at 6283
-	# cells; was 63 at 1024).
+	# cells; was 63 at 1024). AC-0471: the edge axis is the FULL axis on
+	# both classes (cx on the x faces, cz on the z faces), so the
+	# full-axis count is the right single source here.
 	var edge_last: int = (SphereMath.CELLS_PER_FACE - 1) >> 4
 	for k in _face_order.duplicate():
 		var c = chunks.get(k)
 		if c == null or not bool(c.mesh_built):
 			continue
 		var f: int = int(c.face)
+		# AC-0471: the chunk's along-edge flat span = 16 cells of the
+		# HALVED axis' cell size (the per-axis scale — 1.00019 m post-fix,
+		# S*0.5 = 0.500 m pre-fix): the v axis on the x faces, the u axis
+		# on the z faces.
+		var aesc: float = SphereMath.face_cell_scale(f, R).y if f <= 7 else SphereMath.face_cell_scale(f, R).x
 		var rebake := false
 		# the +edge faces (4,5,8,9) read the +hw column, the -edge faces
 		# (6,7,10,11) the -hw column
 		if (f == 4 or f == 5) and x_plus and int(c.cx) == edge_last:
 			var neg: bool = f == 5
 			var off: float = hw if neg else 0.0
-			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
-			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
+			var lo: float = float(int(c.cz) * 16) * aesc - off
+			var hi: float = float(int(c.cz) * 16 + 16) * aesc - off
 			rebake = hi >= z0 and lo <= z0 + 16.0
 		elif (f == 6 or f == 7) and x_minus and int(c.cx) == edge_last:
 			var neg: bool = f == 7
 			var off: float = hw if neg else 0.0
-			var lo: float = float(int(c.cz) * 16) * S * 0.5 - off
-			var hi: float = float(int(c.cz) * 16 + 16) * S * 0.5 - off
+			var lo: float = float(int(c.cz) * 16) * aesc - off
+			var hi: float = float(int(c.cz) * 16 + 16) * aesc - off
 			rebake = hi >= z0 and lo <= z0 + 16.0
 		elif (f == 8 or f == 9) and z_plus and int(c.cz) == edge_last:
 			var neg: bool = f == 9
 			var off: float = hw if neg else 0.0
-			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
-			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
+			var lo: float = float(int(c.cx) * 16) * aesc - off
+			var hi: float = float(int(c.cx) * 16 + 16) * aesc - off
 			rebake = hi >= x0 and lo <= x0 + 16.0
 		elif f >= 10 and z_minus and int(c.cz) == edge_last:
 			var neg: bool = f == 11
 			var off: float = hw if neg else 0.0
-			var lo: float = float(int(c.cx) * 16) * S * 0.5 - off
-			var hi: float = float(int(c.cx) * 16 + 16) * S * 0.5 - off
+			var lo: float = float(int(c.cx) * 16) * aesc - off
+			var hi: float = float(int(c.cx) * 16 + 16) * aesc - off
 			rebake = hi >= x0 and lo <= x0 + 16.0
 		if rebake:
 			face_rebake_n += 1  # AC-0433 P0.5: an edge-row re-bake actually ran
@@ -15389,8 +15427,11 @@ func player_anchor(pos: Vector3) -> Dictionary:
 		# face
 		r = SphereMath.world_to_face(SphereMath.home_point(fx, fz, R), R)
 		f = int(r["face"])
-	var iu: int = clampi(int(floorf(float(r["u"]) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
-	var iv: int = clampi(int(floorf(float(r["v"]) * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1)
+	# AC-0471: the cell indices chart through the per-axis counts (the
+	# halved axis is 3,141 cells of ~1 m, not 6,283 of 0.5 m); the >> 4
+	# chunk derivation is grid-independent.
+	var iu: int = clampi(int(floorf(float(r["u"]) * float(SphereMath.cells_u(f)))), 0, SphereMath.cells_u(f) - 1)
+	var iv: int = clampi(int(floorf(float(r["v"]) * float(SphereMath.cells_v(f)))), 0, SphereMath.cells_v(f) - 1)
 	var ccx: int = iu >> 4
 	var ccz: int = iv >> 4
 	var B: Transform3D = SphereMath.face_chunk_transform(f, ccx, ccz, R)
@@ -15441,7 +15482,8 @@ func chunk_key_face(face: int, ccx: int, ccz: int) -> String:
 # x = (pi*R/4)*u (x in [0, pi*R/4]), face 1 x = (pi*R/4)*(u-1)
 # (x in [-pi*R/4, 0]); z = (pi*R/4)*(2v-1). (Pre-AC-0306 this was R, tying the
 # face width to the radius — the 0.72 m-per-block defect.) Faces 2-11 resolve
-# to their 6283-cell grid columns (AC-0469). Deterministic: same position
+# to their per-axis-count grid columns (cells_u/cells_v, AC-0471; was the
+# 6283-cell grid, AC-0469). Deterministic: same position
 # + R => same key.
 func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 	var r: Dictionary = SphereMath.world_to_face(pos, R)
@@ -15452,10 +15494,12 @@ func key_for_sphere_pos(pos: Vector3, R: float) -> Dictionary:
 		var hw: float = SphereMath.face_width(R) * 0.5  # AC-0306: pi*R/4 per half
 		var fx: float = hw * u if face == 0 else hw * (u - 1.0)
 		return {"face": face, "cx": int(roundf(fx)), "cz": int(roundf(hw * (2.0 * v - 1.0)))}
+	# AC-0471: per-axis cell counts (cells_u/cells_v — the halved axis is
+	# 3,141 cells; the clamps are that axis' range).
 	return {
 		"face": face,
-		"cx": clampi(int(floorf(u * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1),
-		"cz": clampi(int(floorf(v * float(SphereMath.CELLS_PER_FACE))), 0, SphereMath.CELLS_PER_FACE - 1),
+		"cx": clampi(int(floorf(u * float(SphereMath.cells_u(face)))), 0, SphereMath.cells_u(face) - 1),
+		"cz": clampi(int(floorf(v * float(SphereMath.cells_v(face)))), 0, SphereMath.cells_v(face) - 1),
 	}
 
 # --- AC-0307: rigid per-column sphere placement (P2 of AC-0144) ---
@@ -15539,8 +15583,9 @@ func _ensure_face_chunk(face: int, colx: int, colz: int) -> Node3D:
 	return c
 
 # Storage-level block access, any face. Face 0 (colx,colz) = flat 1m world
-# columns (routes to the flat API); faces 1-11 (colx,colz) = 6283-cell grid
-# columns (chunk = 16x16 cells, AC-0469). Non-home reads generate on first access
+# columns (routes to the flat API); faces 1-11 (colx,colz) = per-axis-count
+# grid columns (cells_u/cells_v: 6,283 or 3,141, AC-0471; chunk = 16x16
+# cells, AC-0469). Non-home reads generate on first access
 # (data level; AC-0119's never-generate rule covers the flat read path).
 func get_block_key(face: int, colx: int, colz: int, y: int) -> int:
 	if y < 0 or y >= Data.HEIGHT:

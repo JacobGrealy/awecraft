@@ -32,15 +32,45 @@ constexpr double SM_PI = 3.141592653589793238462643383279502884;
 // shipped R = 4000, W = 6283.19 m, so 6283 cells span the face and one
 // cell is W/6283 = 1.000 m — the user-fixed ~1 m x 1 m x 1 m block.
 // (The pre-AC-0469 value was 1024 cells = 6.136 m cells.)
-// SM_CHUNKS_PER_FACE: face chunks per axis (ceil — the last row/column of
-// chunks is partial: 392*16 = 6272 full cells + 11 more = 393 chunks).
-// The chunk-SPACE linearization (face*SM_CHUNKS_PER_FACE + ccx, gen.cpp's
-// sp_col_index / generator.gd's generate_face) therefore spans
-// SM_CHUNKS_PER_FACE*16 = 6288 cells per face — 5 padding cells past the
-// 6283 chart cells; sm_chart_dir strips THAT span and divides by
-// SM_CELLS_PER_FACE (cell i <-> uv i/6283, the grid definition).
+// SM_CHUNKS_PER_FACE: face chunks on the FULL axis (ceil — the last
+// row/column of chunks is partial: 392*16 = 6272 full cells + 11 more =
+// 393 chunks). AC-0471: this is the MAX of the per-axis counts
+// (sm_chunks_u/v — the halved axis is 197 chunks); the chunk-space
+// linearization (face*SM_CHUNKS_PER_FACE + ccx, gen.cpp's sp_col_index /
+// generator.gd's generate_face) therefore spans SM_CHUNKS_PER_FACE*16 =
+// 6288 cells per face — 5 padding cells past the 6283 chart cells — and
+// stays collision-free for the halved axes' shorter ranges; sm_chart_dir
+// strips THAT span and divides by the per-axis count (cell i <-> uv
+// i/cells, the grid definition).
 constexpr int64_t SM_CELLS_PER_FACE = 6283;
 constexpr int64_t SM_CHUNKS_PER_FACE = (SM_CELLS_PER_FACE + 15) / 16; // 393
+// AC-0471: the halved axis's cell count (the GD twin is SphereMath.CELLS_HALF
+// — keep in lockstep). Every face but the home pair spans HALF a cube face
+// along one axis; at AC-0469 that axis still charted 6,283 cells over hw
+// (0.500 m cells). AC-0471 halves the COUNT instead of the size: 3,141
+// cells of (W/2)/3141 = 1.00019 m, so every block is ~1 m on both axes.
+constexpr int64_t SM_CELLS_HALF = SM_CELLS_PER_FACE / 2; // 3141
+// AC-0471: the per-axis cell counts — the ONE grid source of truth (the
+// GDScript twins are SphereMath.cells_u/cells_v). The AC-0309 halving
+// rule, moved from sizes to counts: the x faces (4-7) run the full axis
+// on u (y, W wide) and the halved axis on v (z); every other face runs
+// the halved axis on u and the full axis on v.
+static inline int64_t sm_cells_u(int face) {
+	return (face >= 4 && face <= 7) ? SM_CELLS_PER_FACE : SM_CELLS_HALF;
+}
+static inline int64_t sm_cells_v(int face) {
+	return (face >= 4 && face <= 7) ? SM_CELLS_HALF : SM_CELLS_PER_FACE;
+}
+// AC-0471: the per-axis chunk counts (ceil). The chunk-space
+// linearization stride stays the MAX axis (SM_CHUNKS_PER_FACE) so
+// face*stride + ccx stays collision-free across faces with different
+// ccx ranges (sm_chart_dir / sp_col_index).
+static inline int64_t sm_chunks_u(int face) {
+	return (sm_cells_u(face) + 15) / 16;
+}
+static inline int64_t sm_chunks_v(int face) {
+	return (sm_cells_v(face) + 15) / 16;
+}
 
 struct SmV3 {
 	double x, y, z;
@@ -195,15 +225,21 @@ static inline bool sm_face_mirror_x(int face) {
 // AS-IS — the 256 cell centres of the chunk (home frame, minus (0, R, 0))
 // fit the local (cell) grid by least squares; the local +Y is the radial at
 // the chunk centre; the mirror class enters through the data layout only.
-// NOTE for the mesh lane: the in-plane basis columns are SCALED (|col| ≈ S
-// or S/2, one face cell per local unit — the home transform is 1 m/unit),
+// NOTE for the mesh lane: the in-plane basis columns are SCALED (|col| ≈
+// the face-cell size, ~1 m on both axes at AC-0471 — one face cell per
+// local unit; pre-AC-0471 the halved axis was S/2 = 0.5 m; the home
+// transform is 1 m/unit),
 // and at the home edge the local x-axis is NOT world-x (it runs along the
 // cube edge ≈ world-y/z) — consumers must work in dot products, not [0]/[2]
 // components (the home-lane K formulas are the degenerate x̂=(1,0,0) case).
 static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) {
 	bool mirrored = sm_face_mirror_x(face);
-	double u0 = ((double)ccx * 16.0 + 8.0) / (double)SM_CELLS_PER_FACE;
-	double v0 = ((double)ccz * 16.0 + 8.0) / (double)SM_CELLS_PER_FACE;
+	// AC-0471: the chunk-centre cell and every sampled cell centre chart
+	// through the per-axis counts (sm_cells_u/v — the halved axis' 3,141-
+	// cell span is what keeps the chart geometry the same with cubic
+	// cells).
+	double u0 = ((double)ccx * 16.0 + 8.0) / (double)sm_cells_u(face);
+	double v0 = ((double)ccz * 16.0 + 8.0) / (double)sm_cells_v(face);
 	SmV3 Pc = sm_uv_to_world(face, u0, v0, R);
 	SmV3 n = {Pc.x / R, Pc.y / R, Pc.z / R};
 	double s[3][3];
@@ -216,8 +252,8 @@ static inline SmT sm_face_chunk_transform(int face, int ccx, int ccz, double R) 
 		for (int lz = 0; lz < 16; lz++) {
 			int iv = ccz * 16 + lz;
 			SmV3 w = sm_uv_to_world(face,
-					((double)iu + 0.5) / (double)SM_CELLS_PER_FACE,
-					((double)iv + 0.5) / (double)SM_CELLS_PER_FACE, R);
+					((double)iu + 0.5) / (double)sm_cells_u(face),
+					((double)iv + 0.5) / (double)sm_cells_v(face), R);
 			w.y -= R;
 			double y = (double)lz + 0.5;
 			s[0][0] += x * w.x; s[0][1] += y * w.x; s[0][2] += w.x;
