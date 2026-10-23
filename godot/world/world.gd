@@ -15211,17 +15211,19 @@ func _face_stream() -> void:
 		# faces, 3000 m from the seam, and left the crossing row unbuilt):
 		#   x faces 4/6 (z>=0):  face v =  z/hw
 		#   x faces 5/7 (z<0):   face v = (z+hw)/hw
-		#   z faces 8/10 (x>=0): face u =  x/hw        (raw — see below)
+		#   z faces 8/10 (x>=0): face u =  x/hw        (raw)
 		#   z faces 9/11 (x<0):  face u = (x+hw)/hw
-		# AC-0470 OPEN (measured in its stage C, C5(b)): the raw_idx flag
-		# below covers only the x faces, so faces 8/10 take the +hw form
-		# and their window clamps to the chart's far corner (1-column
-		# band). AC-0471 moves the STRIDE to the true cell size, which
-		# self-fixes the mirror z faces (9/11) — the 8/10 direction fix
-		# stays AC-0470's work.
+		# AC-0470 (landed): the flag now covers the first member of BOTH
+		# pairs — the + half (4/6/8/10) scales from 0, the mirror members
+		# (5/7/9/11) run their chart from the -hw end. Pre-fix the z pair
+		# split was never applied: faces 8/10 took the +hw form and their
+		# window clamped to the chart's far corner (cc 196 of 197, 1
+		# column — measured in this ticket's diag, the crossing row was
+		# never prestreamed there). AC-0471's true stride self-fixed the
+		# mirror members 9/11, leaving 8/10 to this flag.
 		# (+-1 chunk padding for the pre-warp curvature at the outer rows)
 		var stride: float = sc.y if is_x_face else sc.x
-		var raw_idx: bool = face == 4 or face == 6  # the z>=0 x-faces scale from 0
+		var raw_idx: bool = face == 4 or face == 6 or face == 8 or face == 10  # the + half of each pair scales from 0
 		var idx_lo: float = lo / stride if raw_idx else (lo + hw) / stride
 		var idx_hi: float = hi / stride if raw_idx else (hi + hw) / stride
 		# AC-0469: the clamp is the grid's cell range, not the old 1023.

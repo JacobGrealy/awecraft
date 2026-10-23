@@ -1,0 +1,36 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0470 prestream</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0470 — every chart face prestreams a sane window</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. The lap proved the world is never missing; this proves it is not arriving late. It is the prerequisite for generalising the home lane (AC-0469), because a unified lane has to do what this lane does <em>correctly</em>.</p>
+<h2>1. The defect, as measured</h2>
+<p>At 1 m cells the face lane's prestream window is degenerate on the z faces: faces <b>8/10</b> collapse to a far-corner clamp around chunk <b>195-196</b> of 393, and faces <b>9/11</b> were over-streaming the whole chart. AC-0471's per-axis cell counts fixed 9/11 as a side effect and left <b>8/10 degenerate</b> — the remaining work is the direction/clamp arithmetic for the <code>-Y</code>/<code>+Y</code> pair members. Nothing shows as a hole only because the player's per-frame column query builds synchronously (<code>get_block_key → _ensure_face_chunk</code>, the is_inf-sentinel sync mesh build), i.e. the cost arrives as a hitch instead of a gap.</p>
+<h2>2. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_stream</code> (find by name, ~15120): the along-edge index block — <code>stride</code>, <code>raw_idx</code> (<code>face == 4 or face == 6</code>), <code>idx_lo/idx_hi</code>, the <code>cc0/cc1</code> clamps, <code>edge_last</code>, and the per-class chunk emission</td><td>Edit the index/direction arithmetic only.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>face_cell_scale</code> (450), <code>cells_u/cells_v</code> (added AC-0471), <code>world_to_face</code>, <code>face_cell_band</code></td><td>READ ONLY unless the fix genuinely belongs in a helper.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td><code>residency</code> (policy reporting) and <code>planetwalk</code></td><td>READ ONLY — add no arm; use what exists.</td></tr>
+<tr><td>tasks/AC-0470/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the eviction sweep, the travel gate, residency policy, the window VALUE in metres, <code>CHUNK_WIDTH</code> 16, generation, the mesher, the warp, keys, saves, light.</p>
+<h2>3. Edit shape</h2>
+<ul>
+<li><b>3.1 Diagnose before editing.</b> For each of faces 4-11, compute and record what the current arithmetic derives for <code>cc0</code>, <code>cc1</code> and the <code>rows</code> count, given a player standing at a known flat position. The expected along-edge span for a player at the patch centre is roughly <b>±win</b> in chunk terms — so a span that collapses to one chunk, or covers the entire 393-chunk face, is wrong. Put that table in the deviations; it is the evidence the fix worked.</li>
+<li><b>3.2 Fix the direction rule.</b> The sector rule in the code comment is explicit: x faces 4/6 scale from 0, x faces 5/7 from <code>-hw</code>, z faces 8-11 from <code>-hw</code>. Faces 8/10 clamping to the middle suggests the pair-half split (each face covers HALF the edge) is not being applied on that pair. State what the correct rule is per face before changing it.</li>
+<li><b>3.3 Use the per-axis helpers</b> from AC-0471 (<code>cells_u/cells_v</code>, and the chunk counts) rather than re-deriving a stride inline — the metres→chunks conversion must go through the ONE helper (AC-0469 stage B's <code>_chunks_across</code>) so this cannot desynchronise again.</li>
+<li><b>3.4 Do not simply widen the window.</b> A face that prestreams all 393 chunks is as wrong as one that prestreams one — the point is a bounded window matching <code>win</code>, per face, in the face's own direction.</li>
+</ul>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Per-face window sanity (the point)</td><td>the derived table from §3.1, on the FIXED code</td><td>Every face 4-11 derives a span on the order of <code>±win/16</code> chunks around the player, not 1 chunk and not 393. <b>Report the numbers per face.</b></td></tr>
+<tr><td>Nothing regressed</td><td><code>python3 tasks/scripts/gate_run.py AC-0470 --arms g0,genhash,planetwalk,residency,seamcensus --timeout 900</code></td><td>All rc=0, SCRIPT/SHADER 0/0; genhash 25/25; planetwalk 25/26 with mesh AND body; <b>residency leak false / stable true</b> (a wider prestream must not reintroduce the leak); seamcensus clean.</td></tr>
+<tr><td>It actually helps</td><td>the boundary walk (<code>--arms boundary</code>)</td><td>Crossing latency must not regress against the recorded p50 31 / p95 38 ms at the 1 m grid. Report the numbers; an improvement is welcome but not required.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>5. Acceptance</h2><p>Every chart face prestreams a bounded, correctly-directed window, the per-face numbers are on the record, and nothing regressed.</p>
+<h2>6. Risks</h2><p>If the correct direction rule cannot be determined from the code, STOP and report with the per-face table — an honest PLAN-INSUFFICIENT beats a guessed rule that happens to make a number look right. And if fixing the prestream makes some other arm slower, that is data, not a reason to revert.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §2. Do not change the window value, the eviction sweep or the travel gate.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>1 m cubic blocks planet-wide, far tier at 100% coverage, lap green, residency bounded. This fixes the last known streaming defect and unblocks the generalised lane.</p>
+</body></html>
