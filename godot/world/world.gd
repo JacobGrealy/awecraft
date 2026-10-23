@@ -6929,8 +6929,10 @@ func band_of(dx: int, dz: int) -> int:
 #  - face >= 2 (the extended-flat chart space): the face distance rule —
 #    _face_chunk_min_dist to the patch-clamped player flat position,
 #    within the shared window's evict radius (the sim band in metres +
-#    FACE_STREAM_EVICT_MARGIN, through _stream_window), exactly the
-#    _face_stream window test. The is_inf sentinel (the far hemisphere)
+#    FACE_STREAM_EVICT_MARGIN, through _stream_window) — the window test
+#    _face_stream ran inline before G1 folded it into this predicate
+#    (the G2 sweep's face branch consults it directly). The is_inf
+#    sentinel (the far hemisphere)
 #    reads 0.0 there, i.e. resident — the same answer the eviction test
 #    always got.
 # Membership only: no radius, margin or cadence moves; band_of (the band

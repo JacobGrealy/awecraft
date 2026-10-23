@@ -349,3 +349,69 @@ Step 3 of the 4-step residency merge: ONE creation pass that consults the same r
 - NOTHING ELSE MOVED: genhash 25/25 byte-identical to G2, residency leak false / stable at face 74 / home 93 (the G2 plateau, so the latent-leak fix from last round stayed fixed), planetwalk 25/26 with mesh and body at every destination, simband in the normal class.
 - THE HONEST NOTE ON THE LATENCY: p50 has now read 21 (G2) and 26 (mine) for the same code, and 14 in the builder's run - this arm's p50 wanders by more than the change it is being asked to detect, which is why p95 (stable at 37-38 across G2, G3 and this run) is the number I judge the stage on. Recorded so nobody later reads a p50 delta as a regression or an improvement.
 - STATE: three of four merge steps done, and the last one is now a deletion: `_face_stream` is a thin face-side entry (pass + travel-gated sweep), so G4 removes the remaining constants and any dead path.
+
+## RUN — 2026-10-23 13:13 UTC — AC-0469 (stage G4: deletion of what G1-G3 made dead)
+- Deletion-only stage. Contract: plan.html §4.1-4.3. Gates: g0,genhash,residency,planetwalk,boundary (p95 <= 38) + save,load (simband ~6.6s class). Deletion list may legitimately be empty.
+
+## LANDED — AC-0469 stage G4
+- DELETION LIST: EMPTY (plan §7's legitimate outcome). G1-G3 consumed the
+  dead code: _face_order is already gone (G2), the face sweep loop is
+  _resident_sweep's face branch (G2), the creation code is _create_pass
+  (G3). Every candidate has a live reference outside its own definition —
+  full per-candidate counts in the deviations (D31, count script
+  .scratch/AC-0469-gates/g4_counts.py). Must-not-delete list intact:
+  FACE_STREAM_BUDGET_MS (def 15427 + 4 checks), sync get_block_key
+  fallback, travel gate (_evict_sweep_due + _face_evict_last at 15545),
+  the three sub-rule helpers, _chunks_across, _stream_window, the AC-0257
+  deferred-free machinery — all still referenced.
+- CHANGED (comments/docs only, 0 executable lines — git diff is the
+  proof, see deviations D33/D34):
+  (1) godot/world/world.gd resident_of header: "exactly the _face_stream
+      window test" -> points at the pre-G1 inline test it was (4 comment
+      lines).
+  (2) godot/ARCHITECTURE.md §6: face-lane bullet rewritten — residency is
+      ONE model (one list / predicate / sweep / travel gate) with TWO
+      pacing policies (home recenter cadence + AC-0257 cap-defer; face
+      per-frame travel-gated windowed free), _face_stream the FACE side
+      of the one creation pass; AC-0350 bullet: one sentence on the free
+      logic moving into _resident_sweep's home pass.
+- FINDING (deviation D32): the six harness.gd world._face_order reads sit
+  in three stale measurement arms (_warpcensus_test 36204/36206/36234/
+  36255, _ac0433probe_test 37449, _voxelcost_test 39051) — none in this
+  gate set; harness.gd fenced, so they stay; follow-up owed to re-point
+  them at _resident_order (same class as D3's stale 1024 arms).
+- Gates: g0/genhash/residency/planetwalk/boundary via
+  .scratch/AC-0469-gates/run_stage_g4_main.sh (all ok); save,load via
+  run_stage_g4_save_load.sh. See the GATES entry below.
+
+## GATES — AC-0469 stage G4 (logs under .scratch/AC-0469-gates/)
+- (a) g0-r33: rc=0, SCRIPT/SHADER 0/0.
+- (b) genhash-r16: rc=0, 25/25 GENHASH lines BYTE-IDENTICAL to the G3
+    reference (genhash-r15; diff empty) — the world is bit-identical
+    under the (comments-only) change.
+- (c) residency-r19: rc=0, leak=FALSE, stable=TRUE, converged TRUE (497
+    ms), keys_same=true, verdict STABLE — steady face 74 EXACT / home 93
+    (the G3 plateau), face evictions 0, 6 flat samples.
+- (d) planetwalk-r21: rc=0, ok=true, 25/26 pairs covered with
+    mesh_built AND body_present at the destination AND cross_mesh_built
+    AND cross_body_present at the crossing frame; uncovered = lap_0-1
+    home_pair_midline (the documented stage-C waiver); faces_stood_on
+    0,2-11.
+- (e) boundary-r6: rc=0, ok=true, marker_ok/remesh_ok true —
+    crossing_frame p50 26 / p95 **39** / max 39, n=40. **p95 ONE MS OVER
+    the plan's 38 line (deviation D34)** — the stage's world.gd change is
+    four COMMENT lines (git diff: no executable line), so this is the
+    arm's single-run wander (the coordinator's G3 triage documented the
+    same-code band: p50 14/21/26, p95 37-38). One-shot boundary rule: no
+    re-run by the builder; the heavy boundary is the coordinator's gate
+    set — a coordinator re-run is the arbiter of the 38 line.
+- (f) save-r8: rc=0, ok=true (blocks 6/6, pos ok). load-r10: rc=0,
+    ok=true, simband_ms 6835 (the ~6.6 s class — this arm's run band on
+    the tree: 6670/6628/6812/6603/6945/6835 across stages).
+
+## Coordinator triage — G4: an empty deletion list, and a threshold I set too tight (round 55)
+- THE DELETION LIST IS EMPTY, WHICH IS THE PLAN'S OWN SANCTIONED OUTCOME: G1-G3 had already consumed the dead code, and the builder proved it per candidate with reference counts (D31) rather than manufacturing deletions to look productive. The must-not-delete list is intact — FACE_STREAM_BUDGET_MS 11 references, _face_evict_last 5, the three sub-rule helpers 3/3/4, _chunks_across 5, _stream_window 7, the sync fallback and the AC-0257 machinery all still referenced. What did change is documentation only: the resident_of header no longer points at a gone window test, and ARCHITECTURE.md §6 now says residency is ONE model with TWO pacing policies.
+- THE BOUNDARY NUMBER, AND I AM THE ARBITER THE BUILDER ASKED FOR: it reported p95 39, one over my ≤38 line, with a comments-only diff, and correctly DECLINED to re-run until green (that would have been the re-run-until-it-passes trap). I re-ran it: **p95 40**. So the sequence across effectively identical code is 37, 38, 39, 40 — and the honest conclusion is that MY THRESHOLD WAS OVER-FITTED to two samples, not that G4 regressed anything. A comments-only change cannot move a frame time; the git diff proving zero executable change is the stronger evidence, and it is the one I should have weighted first.
+- WHAT I WILL NOT DO IS QUIETLY WIDEN THE LINE: instead, the record now says the arm's real spread on this code is ~37-40 at n=36-40, so any future stage judged on p95 needs either more samples or a different statistic before a 1-2 ms delta is treated as signal. The stage is accepted on the diff, not on a threshold I picked from too few runs.
+- ONE FOLLOW-UP OWED (D32): six stale `_face_order` reads remain in three fenced harness arms — arms, not product code, but they reference a list G2 deleted, so they are dead references that will confuse the next reader. Filed as work for the harness-tidy pass rather than done here.
+- STATE: the residency merge is CLOSED as four stages — predicate (identity-proved), one list and one sweep (which exposed and fixed a latent leak), one creation pass with the three geometric rules (no stall), and a deletion pass that found nothing left to delete and a documentation sync that found one over-tight threshold. AC-0469's remaining item is the AC-0463 lane question, which is paused on a product decision the user has already partly answered.

@@ -1194,17 +1194,27 @@ p2b3_probe.gd, p2c1_probe.gd.
   full-height boundary wall (measured at the home/face seam: a 0→186 m side
   wall, 886 wall verts; post-fix the 0–6 m chasm ledge + the top rows extended
   past the nominal footprint).
-  `_face_stream` (per-frame)
-  streams the player's window (sim_dist × 16 m, the per-face half of the
-  edge — the along-edge clamp pairs faces 4/6/8/10 with the + half and
-  5/7/9/11 with the − half; lumping the pair is the r15 hole-to-void bug).
-  The window is ALSO edge-normal gated (r30): a face streams only when the
-  player is within `win` of THAT edge — the along-edge window alone is
-  non-empty for every face mid-patch and would stream all eight edges'
-  bands on an interior walk (boundary r4 resident 93→272, p95 48→97 ms);
-  a player already on the face side has a negative distance and still
-  streams. Within `FACE_STREAM_BUDGET_MS`, evicting face chunks past
-  `_face_chunk_min_dist` every 16 m of travel. **`_face_player_flat` returns
+  **Residency is ONE model with TWO pacing policies (AC-0469 G1–G4):**
+  one resident list (`_resident_order`), one predicate (`resident_of`),
+  one sweep (`_resident_sweep`) and one travel gate (`_evict_sweep_due`)
+  over BOTH lanes. Policy A (home) runs at RECENTER cadence — the r+1/
+  r+2 hysteresis + the AC-0257 capped/deferred free. Policy B (face) runs
+  PER-FRAME when the travel gate passes (16 m of travel) — immediate,
+  uncapped windowed free through `resident_of`. Creation is the ONE pass
+  (`_create_pass`): the home part is the unbudgeted 5×5 recenter pre-warm;
+  the FACE part is `_face_stream` (per-frame), which streams the player's
+  window (sim_dist × 16 m, the per-face half of the edge — the along-edge
+  clamp pairs faces 4/6/8/10 with the + half and 5/7/9/11 with the −
+  half; lumping the pair is the r15 hole-to-void bug) inside
+  `FACE_STREAM_BUDGET_MS`. The window is ALSO edge-normal gated (r30): a
+  face streams only when the player is within `win` of THAT edge — the
+  along-edge window alone is non-empty for every face mid-patch and would
+  stream all eight edges' bands on an interior walk (boundary r4 resident
+  93→272, p95 48→97 ms); a player already on the face side has a negative
+  distance and still streams. The three geometric rules live as
+  `_create_pass`'s named sub-rules (`_face_edge_dist`, `_face_band_rows`,
+  `_face_edge_chart`); the face FIFO cap `FACE_CHUNK_CAP` refines the
+  windowed eviction on landing. **`_face_player_flat` returns
   the recenter coords as-is: they are ALREADY flat** (the recenter contract
   takes flat — `player._recenter` and the main.gd sim_dist recenter convert
   world→flat before calling); re-reading them through `flat_of_world_pos`
@@ -1318,6 +1328,11 @@ p2b3_probe.gd, p2c1_probe.gd.
   scaling is the win) with a BYTE-IDENTICAL per-crossing census (97/97/97/97/97) and
   resident_final 1453 — so the multi-hundred-ms tail frames remain NON-crossing storm
   work (drain/handoff/mesh-attach), which this ring attributes by exclusion.
+  Since AC-0469 G2 the free logic runs in `_resident_sweep`'s home pass
+  over the ONE `_resident_order` list instead of inside that walk — the
+  invariant above (every two_out resident and every live cand_since>0
+  entry is visited by the walk) is exactly what makes the list pass see
+  the walk's set, so the bounded-set proof stands.
 - **Worst-frame capture (AC-0352)**: the wprof ring (p50/p95/max per stage over 180 frames)
   cannot NAME the stage of a single worst frame — the R24 storm's 549–719 ms class shows up
   as one max value and was attributable only by exclusion + the crossing ring. The

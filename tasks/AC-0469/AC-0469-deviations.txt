@@ -1229,3 +1229,154 @@ D30. GATE NUMBERS (stage G3, clean tree; logs under
         combined run's load-r7 was killed mid-boot by the executor's
         600 s command cap (load is a >10 min wall arm; all other arms
         in that run completed — see the GATES entry).
+
+================================================================================
+AC-0469 stage G4 (2026-10-23) — delete what G1-G3 made dead.
+================================================================================
+
+D31. THE DELETION LIST IS EMPTY — a legitimate outcome under plan §7:
+    G1-G3 consumed the dead code, and every G4 candidate has a live
+    reference outside its own definition, so none is dead (plan §4.1).
+    Per-candidate reference counts, live tree (godot/, gdext/, tasks/,
+    docs/, root .md; .scratch/ backups excluded; count script
+    .scratch/AC-0469-gates/g4_counts.py). world.gd line numbers are
+    post-G4-comment-edit:
+
+    _face_order            world.gd 0 / harness.gd 6 — the definition was
+                           consumed by G2 (replaced by _resident_order);
+                           the 6 harness reads sit in three stale
+                           measurement arms (see D32). Nothing left to
+                           delete in world.gd.
+    _face_evict_last       world.gd 5 (def 14916; 15545/15546 the face
+                           sweep's travel gate; 236/11981 comments) —
+                           ALIVE, on the must-not-delete list (the face
+                           sweep still consults it).
+    FACE_STREAM_BUDGET_MS  world.gd 11 (def 15427; 4 per-call-site checks
+                           15509/15516/15526/15529; comments) + harness.gd
+                           3, chunk.gd 1 — ALIVE, must-not-delete.
+    FACE_STREAM_EVICT_MARGIN world.gd 6 (def 14917; resident_of 6946;
+                           _create_pass 15478; 3 comments) — ALIVE.
+    FACE_CHUNK_CAP         world.gd 2 (def 14898; the _face_land FIFO cap
+                           15900) — ALIVE (removal would change behaviour:
+                           it is a cap, not dead code).
+    _face_edge_dist        world.gd 3 (def 15313; call 15498; comment) —
+                           ALIVE, sub-rule helper, must-not-delete.
+    _face_band_rows        world.gd 3 (def 15327; call 15487; comment) —
+                           ALIVE, sub-rule helper, must-not-delete.
+    _face_edge_chart       world.gd 4 (def 15367; call 15493; 2 comments)
+                           — ALIVE, sub-rule helper, must-not-delete.
+    _chunks_across         world.gd 5 (def 15300; call 15330; comments) +
+                           harness.gd 2, HARNESS.md 1 — ALIVE,
+                           must-not-delete.
+    _stream_window         world.gd 7 (def 11995; resident_of 6946;
+                           _create_pass 15478; comments) — ALIVE,
+                           must-not-delete.
+    resident_of            world.gd 14 (def 6942; sweep face branch 12060;
+                           drain 12225; band 12301; _create_pass 15450;
+                           comments) — ALIVE.
+    _resident_order        world.gd 13 (def 14899; appends 11669/15810;
+                           erases 11772/15552/15562/12036; sweep 12033;
+                           15544; 15612; 15631; cap scan 15892; comment)
+                           — ALIVE.
+    _resident_sweep        world.gd 7 (def 12031; home caller 12483; face
+                           caller 15547; comments) — ALIVE.
+    _create_pass           world.gd 5 (def 15428; recenter caller 12529;
+                           face caller 15543; comments) — ALIVE.
+    CREATE_PART_HOME       world.gd 4 (def 15425; dispatch 15432; caller
+                           12529; comment) — ALIVE.
+    CREATE_PART_FACE       world.gd 3 (def 15426; caller 15543; comment) —
+                           ALIVE.
+    RES_SWEEP_HOME         world.gd 5 (def 12028; lane checks 12040/12065;
+                           caller 12483; comment) — ALIVE.
+    RES_SWEEP_FACE         world.gd 4 (def 12029; lane checks 12056/12040
+                           class; caller 15547; comment) — ALIVE.
+    _evict_sweep_due       world.gd 4 (def 11984; home 12065; face 15545;
+                           comment 236) — ALIVE, the travel gate,
+                           must-not-delete.
+    _home_evict_last       world.gd 4 (def 241; 12065/12066; comment
+                           11983) — ALIVE.
+    _face_player_flat      world.gd 5 (def 15268; resident_of 6945;
+                           _face_in_mesh_window 15288; 12529; 15542) +
+                           harness.gd 4 — ALIVE.
+    _face_free_chunk       world.gd 4 (def 15549; sweep face branch 12061;
+                           cap 15901; comment) — ALIVE.
+    _face_in_mesh_window   world.gd 2 (def 15283; _face_land 15880) +
+                           harness.gd 2 — ALIVE.
+    _face_chunk_min_dist   world.gd 5 (def 15255; resident_of 6946;
+                           _face_in_mesh_window 15289; comments) +
+                           harness.gd 2 — ALIVE.
+    _face_land             world.gd 5 (def 15851; sync fallback 15842;
+                           handoff 15935; comments) — ALIVE.
+    _face_threadgen_handoff world.gd 5 (def 15906; drain dispatch 7362;
+                           comments) — ALIVE.
+    get_block_key sync fallback (the is_inf path of _ensure_face_chunk,
+                           15821-15842) — ALIVE, must-not-delete (the
+                           player's per-frame column queries call it).
+    AC-0257 deferred-free machinery (_deferred_free def 11810, drain
+                           6071/11812-11820, cap-defer 12067-12072) —
+                           ALIVE, must-not-delete.
+
+    The plan's three §3 anchor classes resolve as: (a) constants
+    _face_stream alone still used — FACE_STREAM_BUDGET_MS /
+    FACE_STREAM_EVICT_MARGIN both still referenced from _create_pass and
+    resident_of; (b) _face_order — already deleted by G2; (c) pre-G1
+    window-test leftovers — the window test IS resident_of now (G1's
+    fold); nothing remains. No branch, variable or constant is left
+    unreferenced in the live tree.
+
+D32. STALE HARNESS ARMS (the only dangling reference found; left in place
+    — fenced). The six world._face_order reads in harness.gd all sit in
+    three MEASUREMENT arms that are not in this stage's gate set
+    (g0/genhash/residency/planetwalk/boundary/save/load): _warpcensus_test
+    (36204, 36206, 36234, 36255), _ac0433probe_test (37449),
+    _voxelcost_test (39051). Since G2 deleted the list, running any of
+    those arms would hit a runtime invalid-get on world._face_order —
+    no gate in this set can observe it. harness.gd is fenced for this
+    stage ("pristine except for the probe arm the plan names"; the plan
+    names none), so the stale reads stay: a FOLLOW-UP is owed — re-point
+    the three arms at _resident_order (the face subset is now
+    int(c.face) >= 2 inside the one list). Same class as D3 (the stale
+    1024-grid arms). No ticket filed by this builder (fence: no new
+    tickets).
+
+D33. COMMENTS/DOCS UPDATED (plan §4.3) — the only code-tree change of the
+    stage (4 comment lines in world.gd, 0 executable; the git diff is the
+    proof, see D34):
+    (1) world.gd resident_of header (6931-6937): "exactly the _face_stream
+        window test" -> "the window test _face_stream ran inline before
+        G1 folded it into this predicate (the G2 sweep's face branch
+        consults it directly)" — the old text pointed at a test that no
+        longer exists inside _face_stream.
+    (2) ARCHITECTURE.md §6 face-lane bullet: rewritten to state that
+        residency is ONE model (one list _resident_order / one predicate
+        resident_of / one sweep _resident_sweep / one travel gate
+        _evict_sweep_due) with TWO pacing policies (home = recenter
+        cadence, r+1/r+2 hysteresis + AC-0257 capped/deferred free; face
+        = per-frame, 16 m travel-gated, windowed free), _face_stream as
+        the FACE side entry of the one creation pass inside
+        FACE_STREAM_BUDGET_MS, the three geometric rules named as
+        sub-rule helpers, and FACE_CHUNK_CAP as the landing-time
+        refinement of the windowed eviction.
+    (3) ARCHITECTURE.md AC-0350 bullet: one sentence — since G2 the free
+        logic runs in _resident_sweep's home pass over the ONE list
+        instead of inside the walk; the walk-set invariant is what makes
+        the list pass see exactly the walk's set, so the bounded-set
+        proof stands.
+
+D34. BOUNDARY p95 = 39 — ONE MS OVER THE PLAN'S LINE (finding, reported
+    honestly). boundary-r6 (the stage's single boundary run, run via the
+    plan's §5 gate set): crossing_frame p50 26 / p95 39 / max 39 over
+    n=40 crossings, marker_ok/remesh_ok true, rc=0, SCRIPT/SHADER 0/0.
+    The plan's gate says p95 at or below 38 — MISMATCH. Context the
+    record owes: (a) this stage's world.gd change is FOUR COMMENT LINES
+    (the git diff shows no executable line) — the number cannot reflect
+    the change, only the arm's single-run wander; (b) the coordinator's
+    G3 triage documented exactly this wander on the SAME code — p50 read
+    21 (G2), 26 (G3 triage), 14 (G3 builder) with p95 37-38 — "this arm's
+    p50 wanders by more than the change it is being asked to detect";
+    (c) implement.md's one-shot boundary rule applies (the plan touches
+    godot/world/*): one boundary probe per builder run, a failed probe is
+    an honest deviation + follow-up, NOT a re-run — so no second
+    boundary was run by this builder. The heavy boundary is the
+    coordinator's gate set anyway; a coordinator re-run is the arbiter of
+    the 38 line.

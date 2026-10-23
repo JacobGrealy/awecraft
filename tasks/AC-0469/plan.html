@@ -1,42 +1,38 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 G3 unified creation</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
-<h1>AC-0469 stage G3 — one creation pass, with the geometric rules as sub-rules</h1>
-<p>Coordinator contract. High-effort builder applies it with tasks/templates/implement.md. Step 3 of four. <b>This is the step where stage F's named failure becomes live</b>, so its gates are written around that failure rather than around tidiness.</p>
-<h2>1. Goal</h2><p>Chunk creation is driven by one pass that consults the same <code>resident_of</code> membership and the same window as the sweep, with the three genuinely geometric face rules preserved as sub-rules — and <b>no edge-crossing frame stall</b>.</p>
-<h2>2. The failure to avoid (stage F, named in advance)</h2>
-<p>Losing the 12 ms budget stalls the edge-crossing frame: the home crossing sweep is one-shot, synchronous, flat-keyed and <b>unbudgeted</b>. Its correctness twin is a crossing-row void if the synchronous fallback is ever dropped. So this stage must keep work PACED where it was paced and keep the sync fallback untouched. <b>A p95 crossing regression here is a failed stage, not variance.</b></p>
-<h2>3. The three rules that must survive (stage F classified them (b) — genuinely geometric)</h2>
-<ol>
-<li><b>The edge-normal gate</b> (~15296-15302): a face farther than <code>win</code> from its edge is skipped entirely.</li>
-<li><b>The per-face edge band rows</b> (~15257): the in-band axis is full-width on x faces and half-width on z faces, and the row count comes from the ONE metres→chunks helper.</li>
-<li><b>The along-edge half-window with its mirror chart</b> (~15270-15285, 15324-15333): each face covers only HALF the edge, the + half of a pair scales from 0 and the mirror half from <code>-hw</code> (the AC-0470 fix), and the z faces index the halved axis' 3,141-cell chart.</li>
-</ol>
-<h2>4. Files and anchors</h2>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0469 G4 deletion</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0469 stage G4 — delete what the merge made dead</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Final step of the residency merge. <b>Deletion only, and only of genuinely dead code</b> — the 12 ms budget and the sync fallback remain load-bearing and must not be touched.</p>
+<h2>1. Goal</h2><p>Remove the face lane's now-unused constants, branches and bookkeeping left behind by G1–G3, so the residency model exists once with no vestigial second copy.</p>
+<h2>2. What the previous three steps established</h2>
+<ul>
+<li><b>G1</b>: one `resident_of(face, cx, cz)` predicate (identity proved on 28,381 comparisons).</li>
+<li><b>G2</b>: one `_resident_order` list and one `_resident_sweep`; pacing kept per-lane deliberately; the unification exposed a latent leak (out-of-set drain stubs never freed) which is now fixed.</li>
+<li><b>G3</b>: one `_create_pass(p, pcx, pcz, part)` with the three geometric rules as named sub-rule helpers (`_face_edge_dist`, `_face_band_rows`, `_face_edge_chart`); both pacings preserved; boundary p95 38 unchanged.</li>
+<li>So `_face_stream` is now a thin face-side entry: the creation pass plus the travel-gated sweep.</li>
+</ul>
+<h2>3. Files and anchors</h2>
 <table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
-<tr><td>godot/world/world.gd</td><td><code>_face_stream</code> (the creation loop and its three rules), the recenter creation/sweep path, <code>resident_of</code>, <code>_resident_sweep</code>, <code>_stream_window</code>, <code>_chunks_across</code>, <code>_face_land</code>, <code>threadgen_enqueue_face</code>, <code>FACE_STREAM_BUDGET_MS</code></td><td>Edit: one creation pass; the three rules become sub-rules of it.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_stream</code> and any constant, variable or branch it alone still used; <code>_face_order</code> if G2's list truly replaced it; leftovers from the pre-G1 window tests</td><td>Edit: DELETE only what is provably unreferenced.</td></tr>
 <tr><td>tasks/AC-0469/</td><td>journal, deviations</td><td>Append.</td></tr>
 </table>
-<p><b>Do not touch:</b> the sync fallback on <code>get_block_key</code>'s is_inf path, the travel gate, the radii/margins, the hysteresis, generation, the mesher, keys, saves, light, the warp.</p>
-<h2>5. Edit shape</h2>
+<p><b>Must NOT be deleted, and their absence from any deletion list is the check:</b> <code>FACE_STREAM_BUDGET_MS</code> and its per-call-site checks; the synchronous <code>get_block_key</code> is_inf fallback; the travel gate; <code>_face_evict_last</code> if the face sweep still consults it; the three sub-rule helpers; <code>_chunks_across</code>; <code>_stream_window</code>; the AC-0257 deferred-free machinery.</p>
+<h2>4. Edit shape</h2>
 <ul>
-<li><b>5.1 One entry point, explicit pacing.</b> A single creation pass taking the player position and asking <code>resident_of</code> what is missing. Pacing must be explicit in its signature or its body: the face-side work stays inside <code>FACE_STREAM_BUDGET_MS</code>; the home one-shot at recenter stays as it is. <b>Do not move home creation into the budgeted pass</b> and do not move face creation out of it — either direction re-opens the stall.</li>
-<li><b>5.2 The three rules as sub-rules.</b> They stay, expressed inside the pass, with their comments retained; each must remain individually checkable (the AC-0470 half-split in particular is one boolean and must not be re-derived).</li>
-<li><b>5.3 Same work, same order.</b> The set of chunks created per pass must be the same as today for the same inputs; if ordering changes, say so and justify it.</li>
-<li><b>5.4 Sync fallback untouched.</b> The is_inf path keeps building synchronously; that is the guarantee the player never stands on nothing.</li>
+<li><b>4.1 Prove death before deleting.</b> For each candidate, grep the whole repo for references and record the count in the deviations. <b>A candidate with any reference outside its own definition is not dead</b> — leave it and say so.</li>
+<li><b>4.2 No functional change.</b> This stage must not alter any behaviour, any pacing, any radius or any order of operations. If removing something would change behaviour, it is not dead code — it is a design decision for a later ticket.</li>
+<li><b>4.3 Update the comments</b> that described the old two-lane arrangement so a future reader is not told about code that no longer exists. <code>ARCHITECTURE.md</code> §6 should reflect that residency is one model with two pacing policies.</li>
 </ul>
-<h2>6. Gates</h2>
+<h2>5. Gates — all must MATCH exactly</h2>
 <table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
-<tr><td>NO STALL (the stage's reason for existing)</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,boundary --timeout 900</code></td><td>Crossing latency against the G2 numbers (p50 21 / p95 38). <b>p95 must stay at or below 38.</b> Report p50, p95, max and the crossing count.</td></tr>
-<tr><td>Nothing vanished</td><td><code>--arms planetwalk,residency,seamcensus</code></td><td>planetwalk 25/26 with mesh AND body at every destination (a void at a crossing row is the correctness twin of the stall); residency leak false / stable true; seamcensus clean.</td></tr>
-<tr><td>World unchanged</td><td><code>--arms genhash</code></td><td>25/25 — scheduling must not change terrain.</td></tr>
+<tr><td>Nothing moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0469 --arms g0,genhash,residency,planetwalk,boundary --timeout 900</code></td><td>rc=0, SCRIPT/SHADER 0/0; genhash 25/25; residency leak false / stable at the G3 plateau (face 74 / home 93); planetwalk 25/26 with mesh and body; <b>boundary p95 at or below 38</b>.</td></tr>
 <tr><td>Start flow</td><td><code>--arms save,load</code></td><td><code>ok</code> true; <code>simband_ms</code> in the ~6.6 s class.</td></tr>
 </table>
 <p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
-<h2>7. Acceptance</h2><p>One creation pass, three geometric rules intact, no crossing-latency regression, nothing missing at any crossing, terrain bit-identical.</p>
-<h2>8. Risks</h2><p>If the pass cannot express both pacings without one of them moving, <b>STOP and report which pacing would have to move and by how much</b> — that is the stage-3 decision, and a forced merge here is exactly the regression stage F warned about. Keeping two paced call sites that share one membership and one rule set is an acceptable landing if that is what the numbers demand; say so.</p>
-<h2>9. Fences</h2><div class="stop"><ul>
+<h2>6. Acceptance</h2><p>Provably-dead code removed, the must-not-delete list intact, comments and ARCHITECTURE.md updated, and every gate number identical.</p>
+<h2>7. Risks</h2><p>The failure mode is deleting something whose only reference was itself in a rarely-taken branch — so §4.1's per-candidate grep is the guard, and <b>an empty deletion list is a legitimate outcome</b>: if G1–G3 already consumed the dead code, report that and change nothing rather than manufacturing deletions to look productive.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
 <li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
-<li>No edits outside §4. Do not touch the sync fallback, the travel gate, radii or margins.</li>
+<li>No edits outside §3. No behaviour change of any kind.</li>
 <li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
 </ul></div>
-<h2>10. Resume point</h2><p>G1 predicate (28,381-comparison identity) and G2 one list/one sweep (which exposed a latent leak) are landed. G4 deletes <code>_face_stream</code> and its constants once creation is unified.</p>
+<h2>9. Resume point</h2><p>G1-G3 unified the predicate, the list and the sweep, and creation. This removes what they left dead and closes the residency merge. Remaining after it: the AC-0463 lane question (paused on a product decision) and the rest of the queue.</p>
 </body></html>
