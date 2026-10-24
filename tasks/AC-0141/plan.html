@@ -1,0 +1,43 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0141 blocks+items to JSON</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0141 — blocks and items defined in JSON, loaded by the same lookups</h1>
+<p>Coordinator contract. High-effort builder applies it with tasks/templates/implement.md. <b>Behaviour-preserving data move:</b> every lookup must return exactly what it returns today, and the proof is a before/after table dump, not "the game still runs".</p>
+<h2>1. Goal</h2><p>The block and item tables live in <code>godot/data/blocks.json</code> and <code>items.json</code>; <code>autoload/data.gd</code> keeps the constants, the loaders and every lookup (<code>block()</code>, <code>item()</code>, <code>block_drops</code>, <code>block_tool</code>, the rect/tint/frames helpers, <code>match_shapeless</code>/<code>match_shaped</code>) so callers are unchanged.</p>
+<h2>2. What the tables look like (measured, so the plan is concrete)</h2>
+<ul>
+<li><code>autoload/data.gd</code> is <b>500 lines</b>. The item table starts at <code>:64</code> (<code>100: {"name": "Stick", "icon": Color(0.72, 0.55, 0.35), "stack": 64}</code>) and runs to at least <code>:110</code> (<code>147: {"name": "Cooked Chicken", …, "food": 5}</code>).</li>
+<li>Entries are <b>integer-keyed dicts</b> whose values include <b><code>Color(r,g,b)</code> objects</b>, nested dicts, arrays of dicts, and in the recipe tables keys that are integer item ids (<code>{105: 3, 100: 2}</code>).</li>
+<li>Also present in the same file: <code>mobs</code>, <code>recipes</code> (~120-150), <code>tiles</code>, and colour constants (<code>C_GRASS_TOP</code>…). <b>The ticket says blocks + items, and recipes/tiles "if clean" — so blocks and items are the required scope and the rest is optional.</b></li>
+</ul>
+<h2>3. The round-trip is the risk, and it is what the gates test</h2>
+<ul>
+<li><b>3.1 Integer keys.</b> JSON object keys are strings, so the loaded dict must convert them back to ints — or every lookup (<code>blocks[8]</code>) silently misses.</li>
+<li><b>3.2 Colours.</b> <code>Color(0.416, 0.667, 0.251)</code> must round-trip <b>exactly</b>. Choose a representation and state it (hex <code>"#rrggbb"</code> loses the alpha and the float path; <code>[r,g,b,a]</code> floats are safer). Godot's JSON keeps doubles; the values are float32 in <code>Color</code>, so a decimal round-trip should be exact — <b>prove it, do not assume it</b>.</li>
+<li><b>3.3 Anything that is not JSON-shaped.</b> If a table holds a value JSON cannot express faithfully, <b>say so and leave that table hardcoded</b> rather than approximating it. An approximation here changes the game's colours and drops.</li>
+</ul>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/autoload/data.gd</td><td>the <code>blocks</code> table, the <code>items</code> table (:64-:110+), the lookups at :361-:495</td><td>Edit: tables become loads; lookups untouched.</td></tr>
+<tr><td>godot/data/</td><td>new directory</td><td>Create: <code>blocks.json</code>, <code>items.json</code>.</td></tr>
+<tr><td>tasks/scripts/spec_template.py, the gate/battery scripts</td><td>anywhere that greps <code>data.gd</code> for the tables, and any genhash/battery expectation that assumed the tables were code</td><td>Edit only what the move actually breaks — and say what you changed and why.</td></tr>
+<tr><td>godot/ARCHITECTURE.md</td><td>the data/format section</td><td>Edit: this is a data-format change and invariant 2 applies.</td></tr>
+<tr><td>tasks/AC-0141/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the lookup function bodies, the constants (<code>CHUNK</code>, <code>HEIGHT</code>, <code>SEA</code>), generation, the mesher, saves, keys, streaming.</p>
+<h2>5. The proof — a before/after dump, not a smoke test</h2>
+<p>Before changing anything, dump the in-memory <code>blocks</code> and <code>items</code> to a canonical string (<code>var_to_str</code> over the dict, sorted, or a stable JSON with sorted keys). After the change, dump again and <b>diff</b>. <b>The diff must be empty.</b> Report the dump sizes so it is clear the comparison had substance — and note that <code>var_to_str</code> is the right tool for this comparison precisely because it preserves Godot types (<code>Color</code>, ints) that a JSON dump would flatten.</p>
+<h2>6. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>THE DATA IS IDENTICAL (the point)</td><td>the §5 dump diff</td><td><b>Empty.</b> Report both dump sizes and the number of blocks/items covered.</td></tr>
+<tr><td>Lookups unchanged</td><td><code>python3 tasks/scripts/gate_run.py AC-0141 --arms g0,genhash,save,load</code></td><td>g0 0/0 (a JSON parse error would show here); <b>genhash 25/25</b> — generation reads block ids, so this is the real "the world is the same" check; save/load <code>ok</code> with <code>simband_ms</code> reported (an item id shift would show as a load failure or wrong inventory).</td></tr>
+<tr><td>Nothing else broke</td><td><code>--arms interact,lightstate</code></td><td>interact rc=0 (its <code>place_ok=false</code> is the documented arm-timing flake with a measured mechanism — <code>~0.583 s</code> of sim dt inside a 3 s window vs dirt's 0.6 s need); lightstate INVARIANTS (leaks 0, wash false).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>7. Acceptance</h2><p>Tables in JSON, lookups untouched, an empty dump diff with reported sizes, genhash 25/25, save/load clean, and ARCHITECTURE.md updated.</p>
+<h2>8. Risks</h2><p>(1) Integer keys becoming strings is the classic silent failure here — it would make lookups return null everywhere, which g0 might not catch but genhash and save/load would. (2) Colour precision: if the dump diff shows float drift, revert the JSON for that table and say so rather than adjusting the game's colours to match the file. (3) Do not reformat or "tidy" the tables while moving them — a data move plus a data edit makes the diff unusable as proof.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. Do not change any block/item VALUE.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>10. Resume point</h2><p>The migration is closed (one 1 m cubic grid, one of everything), the fill rate is accepted by user ruling and deferred, and the queue is back on product-facing work. This is the first data-format ticket in a while, so invariant 2 (ARCHITECTURE.md in the same task) applies.</p>
+</body></html>

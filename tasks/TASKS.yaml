@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T09:36
+  updated_at: 2026-10-24T10:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0141
 - AC-0142
 - AC-0176
 - AC-0295
@@ -6407,11 +6406,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-29T09:39
-  updated_at: 2026-08-31T17:21
-  completed_at: null
+  updated_at: 2026-10-24T10:59
+  completed_at: 2026-10-24T10:59
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a developer or modder I want blocks and items defined in JSON data files so
@@ -6422,7 +6421,43 @@ intake:
     items 100..147) into godot/data/blocks.json + items.json (and recipes.json/tiles.json if clean). Keep
     data.gd as loader + lookups (block(), item(), match_shapeless/shaped) so callers unchanged. Update
     spec_template grep and genhash/battery gates to account for data file move. Verify all lookups unchanged,
-    battery green.'
+    battery green.
+
+
+    CLOSED (round 71). WHAT LANDED: blocks and items moved out of autoload/data.gd into godot/data/blocks.json
+    and godot/data/items.json; data.gd keeps the constants, the loaders and every lookup, so callers are
+    unchanged. mobs/recipes/tiles deliberately left in code (the ticket made them optional and they carry
+    the same int-key risk — carried to AC-0142).
+
+    THE ENCODING PROBLEM WAS THE WHOLE TICKET AND IT WAS SOLVED WITH PROBE EVIDENCE, not a guess: Godot
+    4.7''s JSON parser yields a FLOAT for every bare number (probe-proven), and the tables mix int and
+    float per value (a mob speed of 2/4/6/7 beside 1.5), so bare numbers would have silently turned block
+    ids and int stats into floats. Encoding: ints tagged {"i": n}, colours tagged {"c": [r,g,b,a]} with
+    the source spelling verbatim, bare number = float, and top-level id keys converted back to int in
+    the loader with a deliberate script error on a non-int key so G0 SEES a bad file rather than the game
+    quietly missing blocks.
+
+    THE PROOF IS THE DUMP DIFF: before/after canonical var_to_str dumps, 12,070 bytes each, 84 lines covering
+    34 blocks and 48 items, DIFF EMPTY. var_to_str rather than a JSON dump precisely because it preserves
+    Godot types. Negative tests included: a missing or corrupt JSON produces a SCRIPT ERROR the G0 census
+    catches, so the loader cannot fail silently.
+
+    GATES: g0 rc=0 census 0/0; genhash 25/25 byte-identical (the real the-world-is-the-same check, since
+    generation reads block ids); save ok with inv_match and blocks 6/6; load ok with simband_ms 6785;
+    interact rc=0 with place_ok TRUE this run; lightstate invariants leaks 0 / wash false with the demoted/stragglers/vc_diff
+    figures identical to AC-0474''s run.
+
+    TOOLING DEBT AVOIDED RATHER THAN INCURRED: no script needed changing — spec_template.py scrapes only
+    ^const lines (all constants stayed) and nothing reads the tables from source, which the builder verified
+    rather than assumed.
+
+    I CLOSED THE ONE LOOSE END MYSELF (coordinator work, outside the builder''s file list): godot/autoload/AGENTS.md
+    still said "the JSON split is still open (AC-0141/AC-0142), never assume a data file exists". It now
+    says which tables are JSON, which are still code, and states the encoding contract, because a future
+    reader following the old line would have edited data.gd for a block change and silently reverted nothing
+    while breaking the load.
+
+    ARCHITECTURE.md §2/§5 updated with the full encoding contract (invariant 2).'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549846'

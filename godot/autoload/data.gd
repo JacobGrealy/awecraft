@@ -60,58 +60,11 @@ const TOOL_BLOCKS := {
 	"axe": [6, 7, 8],
 	"shovel": [1, 2, 4, 12, 13, 34],
 }
-var items := {
-	100: {"name": "Stick", "icon": Color(0.72, 0.55, 0.35), "stack": 64},
-	101: {"name": "Raw Meat", "icon": Color(0.8, 0.47, 0.43), "stack": 64, "food": 2},
-	102: {"name": "Cooked Meat", "icon": Color(0.55, 0.35, 0.2), "stack": 64, "food": 5},
-	103: {"name": "Wool", "icon": Color(0.94, 0.94, 0.91), "stack": 64},
-	104: {"name": "Leather", "icon": Color(0.72, 0.5, 0.33), "stack": 64},
-	105: {"name": "Iron Ingot", "icon": Color(0.75, 0.75, 0.78), "stack": 64},
-	106: {"name": "Coal", "icon": Color(0.15, 0.15, 0.16), "stack": 64},
-	107: {"name": "Diamond", "icon": Color(0.3, 0.72, 0.7), "stack": 64},
-	108: {"name": "Seeds", "icon": Color(0.7, 0.6, 0.25), "stack": 64},
-	109: {"name": "Iron Sword", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "dmg": 4, "tool": "sword", "tier": 3, "speed": 1.5},
-	110: {"name": "Raw Iron", "icon": Color(0.75, 0.75, 0.78), "stack": 64},
-	111: {"name": "Wooden Pickaxe", "icon": Color(0.55, 0.38, 0.2), "stack": 1, "dmg": 1, "tool": "pick", "tier": 1, "speed": 2},
-	112: {"name": "Stone Pickaxe", "icon": Color(0.46, 0.46, 0.47), "stack": 1, "dmg": 1, "tool": "pick", "tier": 2, "speed": 4},
-	113: {"name": "Iron Pickaxe", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "dmg": 2, "tool": "pick", "tier": 3, "speed": 6},
-	114: {"name": "Diamond Pickaxe", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "dmg": 3, "tool": "pick", "tier": 4, "speed": 7},
-	115: {"name": "Wooden Axe", "icon": Color(0.55, 0.38, 0.2), "stack": 1, "dmg": 3, "tool": "axe", "tier": 1, "speed": 2},
-	116: {"name": "Stone Axe", "icon": Color(0.46, 0.46, 0.47), "stack": 1, "dmg": 4, "tool": "axe", "tier": 2, "speed": 4},
-	117: {"name": "Iron Axe", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "dmg": 5, "tool": "axe", "tier": 3, "speed": 6},
-	118: {"name": "Diamond Axe", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "dmg": 6, "tool": "axe", "tier": 4, "speed": 7},
-	119: {"name": "Wooden Shovel", "icon": Color(0.55, 0.38, 0.2), "stack": 1, "dmg": 2, "tool": "shovel", "tier": 1, "speed": 2},
-	120: {"name": "Stone Shovel", "icon": Color(0.46, 0.46, 0.47), "stack": 1, "dmg": 2, "tool": "shovel", "tier": 2, "speed": 4},
-	121: {"name": "Iron Shovel", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "dmg": 3, "tool": "shovel", "tier": 3, "speed": 6},
-	122: {"name": "Diamond Shovel", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "dmg": 3, "tool": "shovel", "tier": 4, "speed": 7},
-	123: {"name": "Wooden Sword", "icon": Color(0.55, 0.38, 0.2), "stack": 1, "dmg": 3, "tool": "sword", "tier": 1, "speed": 1.5},
-	124: {"name": "Stone Sword", "icon": Color(0.46, 0.46, 0.47), "stack": 1, "dmg": 4, "tool": "sword", "tier": 2, "speed": 1.5},
-	125: {"name": "Diamond Sword", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "dmg": 6, "tool": "sword", "tier": 4, "speed": 1.5},
-	127: {"name": "Leather Helmet", "icon": Color(0.72, 0.5, 0.33), "stack": 1, "armor": "head", "dr": 1, "mat": "leather"},
-	128: {"name": "Leather Chestplate", "icon": Color(0.72, 0.5, 0.33), "stack": 1, "armor": "chest", "dr": 3, "mat": "leather"},
-	129: {"name": "Leather Leggings", "icon": Color(0.72, 0.5, 0.33), "stack": 1, "armor": "legs", "dr": 2, "mat": "leather"},
-	130: {"name": "Leather Boots", "icon": Color(0.72, 0.5, 0.33), "stack": 1, "armor": "boots", "dr": 1, "mat": "leather"},
-	131: {"name": "Iron Helmet", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "armor": "head", "dr": 2, "mat": "iron"},
-	132: {"name": "Iron Chestplate", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "armor": "chest", "dr": 6, "mat": "iron"},
-	133: {"name": "Iron Leggings", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "armor": "legs", "dr": 5, "mat": "iron"},
-	134: {"name": "Iron Boots", "icon": Color(0.75, 0.75, 0.78), "stack": 1, "armor": "boots", "dr": 2, "mat": "iron"},
-	135: {"name": "Diamond Helmet", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "armor": "head", "dr": 3, "mat": "diamond"},
-	136: {"name": "Diamond Chestplate", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "armor": "chest", "dr": 8, "mat": "diamond"},
-	137: {"name": "Diamond Leggings", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "armor": "legs", "dr": 6, "mat": "diamond"},
-	138: {"name": "Diamond Boots", "icon": Color(0.3, 0.72, 0.7), "stack": 1, "armor": "boots", "dr": 3, "mat": "diamond"},
-	139: {"name": "Bucket", "icon": Color(0.204, 0.204, 0.227), "stack": 1, "bucket": 0},
-	140: {"name": "Water Bucket", "icon": Color(0.157, 0.431, 0.863), "stack": 1, "bucket": 5},
-	141: {"name": "Lava Bucket", "icon": Color(0.976, 0.431, 0.118), "stack": 1, "bucket": 24},
-	142: {"name": "Bow", "icon": Color(0.55, 0.4, 0.25), "stack": 1, "dmg": 1, "tool": "bow"},
-	143: {"name": "Arrow", "icon": Color(0.55, 0.4, 0.25), "stack": 64},
-	144: {"name": "Bone", "icon": Color(0.93, 0.93, 0.88), "stack": 64},
-	145: {"name": "String", "icon": Color(0.85, 0.82, 0.75), "stack": 64},
-	146: {"name": "Raw Chicken", "icon": Color(0.98, 0.78, 0.65), "stack": 64, "food": 2},
-	147: {"name": "Cooked Chicken", "icon": Color(0.72, 0.45, 0.25), "stack": 64, "food": 5},
-	# AC-0040: bouncy-banana — eating restores health+hunger (stamina) and
-	# plays the gorilla SFX (Audio.play("gorilla"); the AC-0039 sound lane).
-	126: {"name": "Banana", "icon": C_BANANA, "stack": 64, "food": 4, "sfx": "gorilla"},
-}
+# AC-0040: bouncy-banana — eating restores health+hunger (stamina) and
+# plays the gorilla SFX (Audio.play("gorilla"); the AC-0039 sound lane).
+# AC-0141: the item table moved to res://data/items.json (same entries and
+# types — the dump-diff in tasks/AC-0141/ is the proof). Loaded in _init.
+var items := {}
 # grid: 2 = craftable in the E-inventory 2x2 grid; grid: 3 = crafting-table 3x3 only
 var shapeless := [
 	{"in": {6: 1}, "grid": 2, "out": {"id": 8, "n": 4}},
@@ -172,6 +125,59 @@ var mobs := {
 var tiles := {}
 
 
+# AC-0141: the blocks/items tables live in res://data/{blocks,items}.json.
+# The loader converts the JSON encoding back to the EXACT GDScript types the
+# lookups below expect (the before/after dump-diff in tasks/AC-0141/ is the
+# proof the round-trip is bit-identical). Encoding rules:
+#   - top-level keys are the int ids, written as strings (JSON object keys
+#     are strings) and converted back to int here;
+#   - {"i": n} -> int n. Godot's JSON parser yields a FLOAT for every bare
+#     number, and these tables mix int and float per value (speed is int
+#     2/4/6/7 on tools but 1.5 on swords), so ints are tagged, never guessed
+#     from value (hard 1.0 / 2.0 / 50.0 stay floats);
+#   - {"c": [r,g,b,a]} -> Color(r,g,b,a). Floats; the source spelling was
+#     transcribed verbatim and the JSON doubles were proven == the literal
+#     doubles (tasks/AC-0141 probe), so the float32 channels are identical;
+#   - a bare JSON number -> float (as in the source: hard 0.6 / 1.0 / 1e9);
+#   - strings/bools/objects/arrays -> String/Bool/Dictionary/Array.
+func _load_table(path: String):
+	var f := FileAccess.open(path, FileAccess.READ)
+	# Deliberately no null-guards: a missing file (null call below) or a
+	# corrupt parse (null iteration) is a SCRIPT ERROR, so G0's census sees
+	# a broken table instead of the game silently running on empty data.
+	var j = JSON.parse_string(f.get_as_text())
+	f.close()
+	var out := {}
+	for k in j:
+		if not k.is_valid_int():
+			push_error("data: %s has a non-int top-level key %s (ids are quoted ints)" % [path, k])
+			# The null call below is a runtime SCRIPT ERROR on purpose —
+			# the tables are mandatory and G0's census must see the break.
+			var broken = null
+			return broken.size()
+		out[int(k)] = _decode_table_value(j[k])
+	return out
+
+
+func _decode_table_value(v):
+	if v is Dictionary:
+		if v.size() == 1 and v.has("i"):
+			return int(v["i"])
+		if v.size() == 1 and v.has("c"):
+			var c: Array = v["c"]
+			return Color(c[0], c[1], c[2], c[3])
+		var d := {}
+		for k in v:
+			d[k] = _decode_table_value(v[k])
+		return d
+	if v is Array:
+		var a: Array = []
+		for e in v:
+			a.append(_decode_table_value(e))
+		return a
+	return v
+
+
 func _init() -> void:
 	# AC-0205: "ramp" marks the GROUND materials that smooth into sloped
 	# quads across a one-block step (the smooth-ground-ramps toggle —
@@ -180,63 +186,33 @@ func _init() -> void:
 	# every other block stays a full cube (a ramp needs BOTH column tops
 	# in this set). Generated terrain AND player-placed blocks of these
 	# types ramp (the rule is id-based, not source-based).
-	blocks = {
-		1: {"name": "Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_GRASS_TOP, "side": C_GRASS_SIDE, "bottom": C_DIRT}},
-		2: {"name": "Dirt", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_DIRT, "side": C_DIRT, "bottom": C_DIRT}},
-		3: {"name": "Stone", "solid": true, "cross": false, "hard": 1.5, "light": 0, "drop": 9, "color": {"top": C_STONE, "side": C_STONE, "bottom": C_STONE}},
-		4: {"name": "Sand", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 4, "ramp": true, "color": {"top": C_SAND, "side": C_SAND, "bottom": C_SAND}},
-		5: {"name": "Water", "solid": false, "cross": true, "hard": 1e9, "light": 0, "color": {"top": C_WATER, "side": C_WATER, "bottom": C_WATER}},
-		6: {"name": "Oak Log", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 6, "color": {"top": Color(0.55, 0.42, 0.24), "side": Color(0.42, 0.3, 0.18), "bottom": Color(0.55, 0.42, 0.24)}},
-		7: {"name": "Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
-		# AC-0270: player-placed leaves (the shears/Silk-Touch equivalent -
-		# there are no shears yet, so ANY placed leaf writes id 30). Same
-		# rendering as 7 (the block_rect alias below), but NEVER decays.
-		# "drop": 30 so breaking one gives it back.
-		30: {"name": "Persistent Leaves", "solid": false, "cross": false, "cutout": true, "hard": 0.2, "light": 0, "drop": 30, "color": {"top": C_LEAVES, "side": C_LEAVES, "bottom": C_LEAVES}},
-		# AC-0271: the wooden door, state by ID variant (the block grid is
-		# a pure id byte - there is no per-cell state, so open/closed lives
-		# in the id). 26/27 = CLOSED (solid 2-high box: mesh + collision
-		# come free from the solid path); 29/31 = OPEN (cross panels at the
-		# hinge - walk-through, no collision, passes light like every cross
-		# block). All four drop the DOOR ITEM (26) - breaking either half
-		# reclaims one door; the player.gd break path clears the PAIR. The
-		# open panel is rendered symmetric (the cross X reads as a door
-		# panel from every direction), so no per-door hinge side is stored
-		# (see the _door_pair comment in player.gd).
-		26: {"name": "Door", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
-		27: {"name": "Door", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
-		29: {"name": "Door", "solid": false, "cross": true, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
-		31: {"name": "Door", "solid": false, "cross": true, "hard": 1.0, "light": 0, "drop": 26, "color": {"top": Color(0.6, 0.46, 0.28), "side": Color(0.57, 0.43, 0.26), "bottom": Color(0.6, 0.46, 0.28)}},
-		8: {"name": "Planks", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 8, "color": {"top": Color(0.72, 0.56, 0.34), "side": Color(0.72, 0.56, 0.34), "bottom": Color(0.72, 0.56, 0.34)}},
-		9: {"name": "Cobblestone", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 9, "color": {"top": C_COBBLE, "side": C_COBBLE, "bottom": C_COBBLE}},
-		17: {"name": "Bricks", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 17, "color": {"top": Color(0.6, 0.3, 0.25), "side": Color(0.6, 0.3, 0.25), "bottom": Color(0.6, 0.3, 0.25)}},
-		18: {"name": "Rose", "solid": false, "cross": true, "hard": 0.1, "light": 0, "drop": 18, "color": {"top": C_ROSE, "side": C_ROSE, "bottom": C_ROSE}},
-		19: {"name": "Dandelion", "solid": false, "cross": true, "hard": 0.1, "light": 0, "drop": 19, "color": {"top": C_DANDELION, "side": C_DANDELION, "bottom": C_DANDELION}},
-		20: {"name": "Crafting Table", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 20, "color": {"top": Color(0.62, 0.47, 0.26), "side": Color(0.55, 0.4, 0.22), "bottom": Color(0.72, 0.56, 0.34)}},
-		21: {"name": "Furnace", "solid": true, "cross": false, "hard": 2.0, "light": 0, "drop": 21, "color": {"top": Color(0.5, 0.46, 0.46), "side": Color(0.45, 0.4, 0.4), "bottom": Color(0.5, 0.46, 0.46)}},
-		11: {"name": "Bedrock", "solid": true, "cross": false, "hard": 1e9, "light": 0, "color": {"top": C_BEDROCK, "side": C_BEDROCK, "bottom": C_BEDROCK}},
-		12: {"name": "Snowy Grass", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 2, "ramp": true, "color": {"top": C_SNOW, "side": C_SNOW_SIDE, "bottom": C_DIRT}},
-		14: {"name": "Coal Ore", "solid": true, "cross": false, "hard": 2.0, "light": 0, "color": {"top": C_COAL_ORE, "side": C_COAL_ORE, "bottom": C_COAL_ORE}},
-		15: {"name": "Iron Ore", "solid": true, "cross": false, "hard": 2.5, "light": 0, "color": {"top": C_IRON_ORE, "side": C_IRON_ORE, "bottom": C_IRON_ORE}},
-		16: {"name": "Diamond Ore", "solid": true, "cross": false, "hard": 3.0, "light": 0, "color": {"top": C_DIAMOND_ORE, "side": C_DIAMOND_ORE, "bottom": C_DIAMOND_ORE}},
-		22: {"name": "Torch", "solid": false, "cross": true, "thin": true, "hard": 0.1, "light": 14, "drop": 22, "color": {"top": C_TORCH, "side": C_TORCH, "bottom": C_TORCH}},
-		23: {"name": "Glowstone", "solid": true, "cross": false, "hard": 0.3, "light": 12, "drop": 23, "color": {"top": C_GLOWSTONE, "side": C_GLOWSTONE, "bottom": C_GLOWSTONE}},
-		24: {"name": "Lava", "solid": false, "cross": true, "hard": 1e9, "light": 15, "color": {"top": C_LAVA, "side": C_LAVA, "bottom": C_LAVA}},
-		25: {"name": "Obsidian", "solid": true, "cross": false, "hard": 50.0, "light": 0, "drop": 25, "color": {"top": C_OBSIDIAN, "side": C_OBSIDIAN, "bottom": C_OBSIDIAN}},
-		# AC-0292: the cave-feature block family (32-36). All solid,
-		# drop themselves, atlas tiles at [64..192, 32] (the pack tiles
-		# pasted in by this ticket's one-shot probe).
-		32: {"name": "Deepslate", "solid": true, "cross": false, "hard": 1.5, "light": 0, "drop": 32, "color": {"top": C_DEEPSLATE, "side": C_DEEPSLATE, "bottom": C_DEEPSLATE}},
-		33: {"name": "Dripstone", "solid": true, "cross": false, "hard": 1.2, "light": 0, "drop": 33, "color": {"top": C_DRIPSTONE, "side": C_DRIPSTONE, "bottom": C_DRIPSTONE}},
-		34: {"name": "Clay", "solid": true, "cross": false, "hard": 0.6, "light": 0, "drop": 34, "color": {"top": C_CLAY, "side": C_CLAY, "bottom": C_CLAY}},
-		35: {"name": "Sculk", "solid": true, "cross": false, "hard": 1.2, "light": 0, "drop": 35, "color": {"top": C_SCULK, "side": C_SCULK, "bottom": C_SCULK}},
-		36: {"name": "Moss Block", "solid": true, "cross": false, "hard": 1.0, "light": 0, "drop": 36, "color": {"top": C_MOSS, "side": C_MOSS, "bottom": C_MOSS}},
-		# AC-0040: hanging banana fruit — cross (non-solid, light-passing,
-		# cutout quad like the flowers); lighting.gd already pre-wires id 28
-		# as a cross block (passes_light / _att[28]) and blocks_atlas.json
-		# reserves its tile at [32,32]. Mined with the hand -> item 126.
-		28: {"name": "Banana", "solid": false, "cross": true, "hard": 0.1, "light": 0, "drop": 126, "color": {"top": C_BANANA, "side": C_BANANA, "bottom": C_BANANA}},
-	}
+	# AC-0141: the table itself moved to res://data/blocks.json (same
+	# entries and types — the dump-diff in tasks/AC-0141/ is the proof).
+	# The provenance notes that used to sit between the entries move here
+	# with them:
+	# AC-0270: player-placed leaves (the shears/Silk-Touch equivalent -
+	# there are no shears yet, so ANY placed leaf writes id 30). Same
+	# rendering as 7 (the block_rect alias below), but NEVER decays.
+	# "drop": 30 so breaking one gives it back.
+	# AC-0271: the wooden door, state by ID variant (the block grid is
+	# a pure id byte - there is no per-cell state, so open/closed lives
+	# in the id). 26/27 = CLOSED (solid 2-high box: mesh + collision
+	# come free from the solid path); 29/31 = OPEN (cross panels at the
+	# hinge - walk-through, no collision, passes light like every cross
+	# block). All four drop the DOOR ITEM (26) - breaking either half
+	# reclaims one door; the player.gd break path clears the PAIR. The
+	# open panel is rendered symmetric (the cross X reads as a door
+	# panel from every direction), so no per-door hinge side is stored
+	# (see the _door_pair comment in player.gd).
+	# AC-0292: the cave-feature block family (32-36). All solid,
+	# drop themselves, atlas tiles at [64..192, 32] (the pack tiles
+	# pasted in by this ticket's one-shot probe).
+	# AC-0040: hanging banana fruit — cross (non-solid, light-passing,
+	# cutout quad like the flowers); lighting.gd already pre-wires id 28
+	# as a cross block (passes_light / _att[28]) and blocks_atlas.json
+	# reserves its tile at [32,32]. Mined with the hand -> item 126.
+	blocks = _load_table("res://data/blocks.json")
+	items = _load_table("res://data/items.json")
 
 
 func _ready() -> void:

@@ -6,9 +6,13 @@ touching any of them. This file owns the rules that table does not carry.
 - **Load order is behaviour.** `project.godot` registers them in a fixed order, and `Data` and
   `Debug` are used by everything downstream. Adding, removing or renaming an autoload edits
   `project.godot` **and** the §2 table in the same task (invariant 2, `../AGENTS.md`).
-- **`data.gd` is the table home** — blocks, items, mobs, recipes, atlas rects, world constants. The
-  JSON split is still open (AC-0141/AC-0142), so never assume a data file exists. It is also the
-  generation input: a change here owes the gates in `../world/AGENTS.md`.
+- **`data.gd` is the table LOADER and lookup home** — blocks and items now live in
+  `../data/blocks.json` and `../data/items.json` (AC-0141); mobs, recipes, atlas rects and world
+  constants are still code here, and their split is AC-0142. So a block or item change is a JSON
+  edit and anything else is a code edit; the encoding contract (ints tagged `{"i": n}`, colours
+  `{"c": [r,g,b,a]}`, because Godot 4.7's JSON parser yields a float for every bare number) is in
+  `../ARCHITECTURE.md` §2/§5. It is also the generation input: a change here owes the gates in
+  `../world/AGENTS.md`.
 - **`audio.gd`** is a procedural synth, and headless has no audio device: an arm can assert that the
   *trigger* fired, never the sound.
 - **`settings.gd`** owns one clamp chain (sim → render, window apply, chunk meshes per frame).

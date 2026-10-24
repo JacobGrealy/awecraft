@@ -1,0 +1,60 @@
+AC-0141 deviations (plan: tasks/AC-0141/plan.html)
+
+1. Colour representation: the plan suggested "[r,g,b,a] floats are safer" and left the
+   choice open ("choose a representation and state it"). Chosen: a TAGGED object
+   {"c": [r, g, b, a]} rather than a bare 4-float array, so a colour can never be
+   confused with some future non-colour array and the type is explicit in the file.
+   Values are the source spelling transcribed verbatim (0.416, 0.60, 1e9, ...).
+   Proven, not assumed: a probe run compared JSON.parse_string(X) == the GDScript
+   literal for all 88 distinct decimals used by the tables (0 mismatches), and the
+   before/after var_to_str dump diff (the gate) is empty, so the float32 channels are
+   bit-identical. All alphas in these tables are 1.0 (every source colour is 3-arg
+   Color(r,g,b)); the 4th slot is written explicitly, never defaulted.
+
+2. Integer representation (extends the plan's risk 1): the plan covered int KEYS
+   (string -> int on load; implemented: _load_table converts top-level keys, and a
+   non-int key is a deliberate script error so G0's census sees it). The probe found
+   a second, quieter half of the same risk: Godot 4.7's JSON parser yields a FLOAT
+   for EVERY bare JSON number ("64" -> 64.0), while the tables mix int and float per
+   value (speed is int 2/4/6/7 on tools but 1.5 on swords; hard 1.0/2.0/50.0 are
+   floats that must NOT become ints). var_to_str is type-sensitive, so a naive move
+   would have made the dump diff non-empty (and would have changed Dictionary-key
+   behaviour anywhere a value is used as a key). Chosen: ints are tagged {"i": n} in
+   the files; the loader restores int exactly, never guesses from value. Stated in
+   godot/ARCHITECTURE.md §5.
+
+3. "A JSON parse error shows here (g0)" — implemented and negative-tested, not just
+   expected: missing items.json / corrupt items.json / missing blocks.json each
+   produce SCRIPT ERROR lines in the run log (null call / null iteration by design,
+   no swallowed errors), so the g0 census (>0 SCRIPT ERROR) fails. Logs:
+   .scratch/AC-0141/dump_neg_*.txt runs via .scratch/AC-0141/run_dump.sh.
+
+4. Tables left in code (per the ticket's scope): shapeless + shaped (recipes), mobs,
+   tiles stay in autoload/data.gd. The ticket requires blocks + items; recipes/tiles
+   were "if clean" only, and they carry the same int-keyed nested dicts
+   ({105: 3, 100: 2}), so moving them without a new proof run is exactly the
+   approximation the plan forbids. Flagged for AC-0142.
+
+5. godot/autoload/AGENTS.md still says of data.gd: "The JSON split is still open
+   (AC-0141/AC-0142), so never assume a data file exists." After this ticket that
+   sentence is half-stale (blocks/items DO exist as data files). It is NOT in the
+   plan's §4 file list, so it was not edited — flagged here for the coordinator
+   (one line, best fixed when AC-0142 closes or now).
+
+6. Temporary instruments (deleted before exit, recorded for reproducibility):
+   godot/probe_ac0141.gd (JSON semantics probe) and godot/dump_ac0141.gd (the
+   canonical dump; run via .scratch/AC-0141/run_dump.sh before|after, env
+   AC0141_DUMP_TAG). The dump is re-runnable only if the script is restored
+   (copy from git history of this session's scratch or rewrite from the results
+   page); the PROOF is the two dump files + empty diff under .scratch/AC-0141/.
+
+7. Item 126 (banana) sits after 147 in source order; the JSON file preserves the
+   source entry order, and Godot 4.7's Dictionary preserves insertion order
+   (probe-verified), so in-memory iteration order is unchanged (the only in-game
+   iteration over the tables, lighting.gd _tables(), fills per-index arrays and is
+   order-independent).
+
+8. No gate expectation had to change: spec_template.py scrapes only `^const` lines
+   from data.gd (all constants stayed), no script or arm reads the tables from the
+   source file, and genhash compares against the standing baseline
+   .scratch/AC-0311-gates/p2_genhash_r1.log — no re-baseline, 25/25 byte-identical.
