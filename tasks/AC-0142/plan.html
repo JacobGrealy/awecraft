@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0142 mobs to JSON</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0142 — the mob table in JSON, using AC-0141's proven contract</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is the same job as AC-0141, which just landed, so <b>apply that ticket's encoding contract and proof method rather than inventing a new one.</b></p>
+<h2>1. Goal</h2><p>The <code>mobs</code> table moves from <code>autoload/data.gd</code> into <code>godot/data/mobs.json</code>; <code>data.gd</code> keeps the loader and every lookup, so callers are unchanged.</p>
+<h2>2. What is known (measured — do not re-derive)</h2>
+<ul>
+<li>The table is <code>var mobs := {</code> at <code>autoload/data.gd:112</code>, with pig/chicken/wolf/spider-class entries. Entries carry nested dicts and arrays of dicts, e.g. <code>"drops": [{"id": 101, "n": 2, "ch": 1.0}, …]</code>, plus <code>Color.html("f2a29c")</code> bodies/heads and mixed int/float stats (<code>"hp": 10</code>, <code>"speed": 1.5</code>).</li>
+<li><b>THE ENCODING CONTRACT IS ALREADY ESTABLISHED AND PROVEN at AC-0141</b> (in <code>ARCHITECTURE.md</code> §2/§5 and <code>godot/autoload/AGENTS.md</code>): Godot 4.7's JSON parser yields a <b>float for every bare number</b> (probe-proven there), so <b>ints are tagged <code>{"i": n}</code></b>, <b>colours tagged <code>{"c": [r,g,b,a]}</code></b> with the source spelling verbatim, a bare number is a float, and top-level id-ish keys are converted back to int in the loader with a deliberate script error on a non-int key.</li>
+<li>The loader helper <code>_load_table</code> from AC-0141 already exists in <code>data.gd</code> — <b>reuse it</b> rather than writing a second decoder.
+<li><b>THE KEY-SHAPE DIFFERENCE, which this plan at first got wrong and the builder correctly refused:</b> the mob table is <b>NAME-keyed</b> (<code>"pig"</code>), and <code>_load_table</code> deliberately script-errors on any non-int top-level key (that is AC-0141's defence for blocks/items). So <b>extend <code>_load_table</code> with an <code>int_keys := true</code> parameter</b>: blocks and items load with <code>int_keys=true</code> and keep the hard non-int-key error and their negative test; <b>mobs load with <code>int_keys=false</code></b> and pass string keys through verbatim. One loader, one encoder, one dump-diff proof — only the key policy differs, and it is explicit at the call site.
+Re-keying <code>mobs.json</code> with integers instead is <b>not</b> an option: the empty-diff proof requires the in-memory dict to keep its name keys.</li>
+<li>Also in the same file and deliberately OUT of scope here (AC-0141 left them): <code>shapeless</code> (:69), <code>shaped</code> (:96), <code>tiles</code> (:125, currently an empty dict). <b>Do not move them in this ticket</b> — say so if you think one should be, and leave it.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/autoload/data.gd</td><td><code>var mobs := {</code> (:112), the <code>_load_table</code> loader from AC-0141 (add its <code>int_keys</code> parameter here), and the <code>blocks</code>/<code>items</code> load lines that must now pass <code>int_keys=true</code></td><td>Edit: the table becomes a load; lookups untouched.</td></tr>
+<tr><td>godot/data/mobs.json</td><td>new</td><td>Create.</td></tr>
+<tr><td>godot/ARCHITECTURE.md</td><td>§2/§5 — the data/format section AC-0141 just extended</td><td>Edit: extend the contract to name mobs.json (invariant 2).</td></tr>
+<tr><td>godot/autoload/AGENTS.md</td><td>the data.gd bullet, which AC-0141 rewrote to say mobs are "still code here, and their split is AC-0142"</td><td>Edit: it becomes wrong the moment this lands.</td></tr>
+<tr><td>tasks/AC-0142/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the lookup function bodies, the constants, <code>shapeless</code>/<code>shaped</code>/<code>tiles</code>, entity/mob behaviour code, generation, saves, keys, streaming.</p>
+<h2>4. The proof — the same dump diff as AC-0141</h2>
+<p>Before the change, dump the in-memory <code>mobs</code> dict to a canonical <code>var_to_str</code> (sorted). After the change, dump again and <b>diff</b>. <b>The diff must be empty.</b> Report both dump sizes and the mob count so it is clear the comparison had substance. Keep the AC-0141 negative test too: a missing or corrupt <code>mobs.json</code> must produce a SCRIPT ERROR the G0 census catches, not a silently empty table.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>THE DATA IS IDENTICAL (the point)</td><td>the §4 dump diff</td><td><b>Empty</b>, with sizes and mob count reported.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0142 --arms g0,genhash,save,load</code></td><td>g0 0/0 (a JSON parse error shows here); <b>genhash 25/25</b>; save/load <code>ok</code> with <code>simband_ms</code> reported.</td></tr>
+<tr><td>Mobs still work</td><td>the mob-facing arms (<code>mobs</code> if it exists, otherwise whatever spawns or exercises a mob — find it by name)</td><td>rc=0 with its own <code>ok</code>. <b>Report its values</b>; a mob table that loads but loses a field would show as a spawn or drop failure rather than a parse error.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>Mobs in JSON via the existing contract and loader, an empty dump diff with sizes, g0/genhash/save/load clean, the mob-facing arm green, and both docs updated.</p>
+<h2>7. Risks</h2><p>The mob table is SMALLER than blocks/items, so the risk is not volume but <b>complacency</b>: the nested <code>drops</code> arrays carry ints (<code>id</code>, <code>n</code>) beside floats (<code>ch</code>), which is exactly the case the tagging exists for. Do not hand-convert those; let the encoder do it and let the dump diff prove it. And do not "improve" any mob value while moving it.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not move <code>shapeless</code>/<code>shaped</code>/<code>tiles</code>.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0141 landed blocks+items with the tagged encoding contract, an empty dump diff, genhash 25/25 and save/load clean. This completes the split for mobs; recipes/tiles remain code by both tickets' scope.</p>
+</body></html>
