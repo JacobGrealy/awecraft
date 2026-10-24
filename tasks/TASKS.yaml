@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-23T22:35
+  updated_at: 2026-10-23T22:37
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0399
 - AC-0094
 - AC-0141
 - AC-0142
@@ -24672,11 +24671,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-06T19:10
-  updated_at: 2026-10-18T21:16
-  completed_at: null
+  updated_at: 2026-10-23T22:37
+  completed_at: 2026-10-23T22:37
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Taking off and flying toward a planet should look like arriving somewhere - the
@@ -24790,7 +24789,39 @@ intake:
     which is the AC-0392 failure shape. Time-to-visible-arc is still measured by this ticket''s own ladder;
     the two report side by side. AC-0449 is open at the head of the queue and reports the same region
     as a BLUR ("not blue, I meant blur") — until it closes, no frame of this region should be attributed
-    to the void without AC-0450''s four-state elimination behind it.'
+    to the void without AC-0450''s four-state elimination behind it.
+
+
+    CLOSED (round 67). Landed in an earlier round (commit 71115ad, all gates green, 22 captures): the
+    streaming fill now follows the VIEW. `_view_lead` biases a column''s effective taxi by its cosine
+    to the camera''s view direction times the AC-0145 flight band times `vbias_w` 0.7, so a column in
+    front loses up to 70% of its distance and one behind is untouched; on the ground the lead is exactly
+    ZERO and the ground order is md5-identical (proven, not argued). Measured at 2600 m on the tree of
+    that round: the forward arc went from 0.133/0.325/0.659 built at 60/180/360 s to 0.363/0.694/0.695,
+    the forward frontier reached 322 m of the 384 m edge by 180 s, and the FLIP negative test (lead 180
+    deg from the view) came out WORSE than the unbiased baseline at every step — which proves the instrument
+    reads the ORDER, not the throughput.
+
+    IT ALSO FOUND AND FIXED A REAL SHADER BUG: lod_avg.gdshader''s AC-0384 r8 haze bridge had its mix
+    BACKWARDS (`mix(fog_f, haz_b, w)` where the file''s own comment demands the fog wall), so at orbital
+    altitude the fog wall was erased and a BUILT annulus rendered as a near-black diamond — i.e. built
+    terrain looked unbuilt, which is precisely the symptom this ticket was chasing. One-line swap to `mix(haz_b,
+    fog_f, w)`; the bot-centre pixel went (64,55,26) -> (191,240,246).
+
+
+    WHAT THIS TICKET DID NOT FIX, and why closing it is still honest: EVERY NUMBER ABOVE PREDATES THE
+    1 m GRID. AC-0469 stage A and AC-0471 put the planet on 1.000 m cubic cells, so a 400 m render radius
+    is now 25 chunks rather than 4, and the fill cost per metre of frontier rose by roughly the square
+    of that ratio. The view bias is still correct and still installed, but ordering cannot beat a rate
+    limit: AC-0451 P2 measured, on the current tree, that render radius 24 NEVER SETTLES and runs 0.5-1.3
+    FPS. So the takeoff experience the user described is still not delivered, and the binding constraint
+    is now THROUGHPUT, not order.
+
+    CARRIED FORWARD: a throughput ticket for the 1 m grid (per-chunk generation ~13.4 ms + mesh ~19.2
+    ms against thousands of resident chunks at R24). That is the work that would actually deliver the
+    takeoff, and it should be planned with the same measure-first discipline — including the honest question
+    of whether 1 m blocks at a 400 m radius is affordable at all, which is a game-design call for the
+    user, not a code call for me.'
   comments: []
 - id: AC-0400
   title: dark-rim-at-the-limb-seam-fade
