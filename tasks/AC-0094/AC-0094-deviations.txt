@@ -1,0 +1,69 @@
+AC-0094 — deviations and notes (builder MEDIUM, 2026-10-24)
+
+VERDICT: the ticket is ALREADY DELIVERED. AC-0093 (the centre-pivot spin) plus the
+existing velocity code (drop.gd:13, drop.gd:100-120) produce all four behaviours the
+ticket asks for. No game code was changed. No fix was invented (plan §2.2: a
+legitimate close-on-evidence outcome).
+
+1) Four behaviours, observed values (temporary arm AWECRAFT_LOGIC=droptrack, real
+   break of oak log id 6 at cell [8,140,8], 420 physics-frame sample, player
+   teleported 28.5 m away so the 2.5 m magnet could not touch the drop; runs r3 and
+   r5 are independent draws of the random pop velocity and agree; numbers below are
+   r5, log .scratch/AC-0094-gates/droptrack-r5.log):
+
+   a. SPAWNS AT THE BLOCK: spawn_off_world_m = 0.024 m from the broken cell centre in
+      the placed (warp) frame — first-observed position [8.785, 140.504, 8.789] vs
+      cell centre in the placed frame [8.781, 140.482, 8.781]; the residual 0.024 m
+      is 1-2 frames of post-spawn pop motion (the first sample lands a frame or two
+      after the spawn). Note: against the raw FLAT cell centre the offset reads
+      0.406 m — that is the sphere-warp frame bend (warp shifts this cell's centre
+      +0.281 in xz), not a spawn defect; the comparison must be frame-matched.
+   b. LATERAL WHILE FALLING: initial lateral velocity [0.507, 1.172] m/s (r3:
+      [1.338, 1.367]) — inside the ±1.5/axis design of drop.gd:13; pop apex
+      +0.355 m (y_apex 140.855 vs spawn 140.504), then gravity: vy decays
+      3.031 → -2.515 m/s at ≈13 m/s² (design 26.0*0.5, drop.gd:101); xz drifts to
+      max_lateral_disp_m = 1.008 m while falling (settle xz [9.197, 9.75] vs spawn
+      xz [8.785, 8.789] placed frame).
+   c. STOPS AT GROUND CONTACT: at settle frame 54 velocity = [0,0,0] exactly; the
+      drop node position is then FROZEN for the remaining 366 frames —
+      post_settle_xz_range_m = 0.0 and final120_xz_drift_m = 0.0; bounces = 0
+      (first contact |vr| < 2.5 → direct settle, no residual lateral hop). Landed in
+      the adjacent column (8,9) via the lateral drift, feet exactly
+      top_face + 0.16 m (settle_flat y 140.16, top 139 → 0.16; the snap constant
+      drop.gd:109).
+   d. SPINS IN PLACE: pivot rate 1.995 rad/s (design 2.0, drop.gd:149); the BOX
+      GEOMETRY CENTRE xz is frozen over the 120-frame spin window — orbit_xz_max_m =
+      0.0000 (the pre-AC-0093 bug measured r≈0.212 m orbit); box centre sits exactly
+      on the pivot (box_center_vs_pivot_xz_m = 0.0000); the drop node itself does not
+      move while the box rotates (rows 61/201/420 identical position); the only
+      residual motion is the documented bob (box_y_range_m = 0.12 = ±0.06,
+      drop.gd:148 sin(_age*3.0)*0.06).
+
+2) INSTRUMENT (temporary, REMOVED in this task — scenes pristine convention):
+   no existing arm samples a drop over time (interact checks spawn+pickup only,
+   dropshot is one still, breakspike measures frame cost), so a temporary
+   droptrack arm was added to godot/scenes/harness.gd (dispatch branch + body)
+   and removed before the final gate set; git diff on harness.gd is now empty.
+   The measurement itself is the deliverable; it lives in the logs, not in code.
+   Wood is id 6 (Oak Log, hard 1.0, drops itself ch 1.0) — interact's id 2 is
+   DIRT, which is why the arm broke id 6 (the ticket's wood).
+
+3) INSTRUMENT TIMING (finding, not a game defect): at cold boot the sim runs far
+   under real time (the streaming drain eats the frame budget): interact's 3 s
+   mine window accumulated only ≈0.583 s of dt (mine_diag prog_max 0.9722 for
+   dirt, hard 0.6 → short of 1.0), so in THIS interact run the block never
+   cleared (after_mine_cell=2, drop_spawned=false) and the place failed
+   (after_place_cell=0 → place_ok=false). This is the documented long-standing
+   place_ok=false flake — now with a measured mechanism: it is a coin flip on
+   machine load (0.583 s vs the 0.6 s need). The game path itself is proven fine:
+   the same break sequence with a 10 s window (droptrack r3/r5) clears the block,
+   spawns the drop and shows all four behaviours. Not a new failure.
+
+4) GENHASH reference note: the current tip reference is the AC-0311 P2 set
+   (.scratch/AC-0311-gates/p2_genhash_r1.log, chunk (0,0) 46c20b07… — the value
+   quoted in HARNESS.md §3); .scratch/AC-0367-gates/genhash_pristine_r1.log is a
+   pre-sphere-flip BASELINE (chunk (0,0) a4d0cab2…) and does NOT match the
+   current tree (25/25 differ). This run matches the P2 set byte-identically.
+
+5) No changes to: magnet/pickup radius, drop cap 80, meshes, generation,
+   streaming, light, or the fenced files. drop.gd and world.gd untouched.

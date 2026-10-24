@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0094 verify the drop</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0094 — do drops pop, fall, land and spin in place today?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Verify first, fix only what is measured.</b> The ticket was filed before two things landed that may already have delivered it, so re-measuring is cheaper than re-building.</p>
+<h2>1. Why this is a verification job first</h2>
+<ul>
+<li>The ticket (filed 2026-09-01) says drops "spawn/hover/spin-orbit" and asks for: spawn at the broken block, slight sideways velocity, gravity, then in-place spin on landing.</li>
+<li><b>AC-0093 already fixed the orbit</b>: <code>entities/drop.gd:25-35</code> explains the pivot was the bug (the mesh origin was the box's corner, so a local Y-spin orbited the geometry at r≈0.212) and reparents the mesh under a centre pivot so the spin is truly in place.</li>
+<li><b>The pop and gravity appear to already be there</b>: <code>drop.gd:16</code> sets <code>_vel = Vector3((randf()-0.5)*3.0, 3.0 + randf()*2.0, (randf()-0.5)*3.0)</code> — lateral ±1.5 plus an upward 3–5 — and <code>drop.gd:102-110</code> integrates <code>position += _vel * dt</code> and snaps to the ground top on contact before settling.</li>
+<li><b>The world has changed enormously since either was written</b> (1 m cubic grid, the warp, the sphere-aware <code>_ground_frame</code> path at <code>drop.gd:47-73</code>), so "the code looks right" is not evidence that it behaves right in game.</li>
+</ul>
+<h2>2. What to establish</h2>
+<ul>
+<li><b>2.1 Does it actually happen?</b> Break a wood block in a running game and observe: does the drop spawn at the block, move sideways while falling, stop lateral motion at ground contact, and then spin without orbiting? <b>A render sequence is the evidence</b> — a still cannot show motion, so use several frames or an arm that samples positions over time.</li>
+<li><b>2.2 If it is correct already</b>, close this ticket on that evidence and say plainly that AC-0093 plus the existing velocity code delivered it. <b>That is a legitimate and useful outcome</b> — do not invent a fix to look busy.</li>
+<li><b>2.3 If it is NOT correct</b>, say precisely which of the four behaviours fails (spawn position, lateral pop, gravity/land, in-place spin) and fix only that.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/entities/drop.gd</td><td><code>_ready</code> (16 the initial velocity), <code>_process</code> (82-130 the integration, ground snap, settle, the magnet), the AC-0093 pivot block (25-35), the sphere-aware <code>_ground_frame</code>/<code>_frame_to_world</code> (47-80)</td><td>Read first; edit only what 2.3 names.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>spawn_drop</code> (14219) — currently sets only <code>position</code>, no velocity</td><td>Read first; edit only if the spawn is wrong.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>an existing arm or render preset that can break a block and sample drops; <b>do not add an arm</b> unless nothing existing can observe a drop</td><td>Read/prefer existing.</td></tr>
+<tr><td>tasks/AC-0094/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the magnet/pickup radius, the drop cap of 80, the meshes, generation, streaming, light, or anything in the fenced files listed in the AC-0399 plan (<code>main.gd</code>, <code>autoload/game.gd</code>, <code>entities/banana.gd</code>).</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0094 --arms g0,genhash,interact</code></td><td>g0 0/0; genhash 25/25; <code>interact</code> rc=0 — and note that its <code>place_ok=false</code> is a documented long-standing flake, so distinguish a known flake from a new failure.</td></tr>
+<tr><td>The behaviour (the point)</td><td>a sampled observation of a real break-and-drop, over time</td><td>Four behaviours reported individually: spawns at the block, moves laterally while falling, lateral motion stops at ground contact, spins in place without orbiting. <b>Report the observed values, not "looks fine".</b></td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code> with <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s, SERIAL. <code>AWECRAFT_AIM</code> takes FLAT coordinates.</p>
+<h2>5. Acceptance</h2><p>The four behaviours each reported with observed evidence, a fix only where one fails, and no regressions.</p>
+<h2>6. Risks</h2><p>The main risk is fixing something that already works because the ticket says it is broken — <b>the ticket is five weeks old and two relevant changes have landed since</b>. The second is claiming success from a single still frame, which cannot show motion at all.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not change the magnet radius, the drop cap, or the meshes.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>The migration is closed and the planet runs on one 1 m cubic grid; fill rate is accepted by user ruling and deferred. This is the queue returning to gameplay-visible defects.</p>
+</body></html>

@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T08:41
+  updated_at: 2026-10-24T09:36
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0094
 - AC-0141
 - AC-0142
 - AC-0176
@@ -4404,11 +4403,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-23T23:26
-  updated_at: 2026-09-01T21:59
-  completed_at: null
+  updated_at: 2026-10-24T09:36
+  completed_at: 2026-10-24T09:36
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player breaking wood I want the drop to pop sideways a little then fall
@@ -4419,7 +4418,39 @@ intake:
     position with slight sideways velocity until they hit ground, then spin in place (see AC-0093). Currently
     drops spawn/hover/spin-orbit. Update world/world.gd spawn_drop + entities/drop.gd physics: initial
     lateral impulse + gravity, ground contact -> zero lateral velocity + in-place spin. Verify drop lands
-    then spins.'
+    then spins.
+
+
+    CLOSED (round 70) AS ALREADY-DELIVERED — no fix was earned and none was applied.
+
+    WHY THAT IS THE RIGHT OUTCOME: the ticket was filed five weeks before AC-0093 landed. AC-0093 fixed
+    the orbit (the mesh origin was the box''s corner, so a local Y-spin orbited the geometry at r~=0.212;
+    the mesh is now under a centre pivot that rotates), and the pop-plus-gravity was already in drop.gd:16
+    and :102-110. The ticket described a world that no longer exists.
+
+    MEASURED, not assumed — a real break of an oak log sampled every physics frame over 420 frames, player
+    28.5 m away so the magnet could not interfere, two independent runs agreeing:
+
+    1. Spawns at the block: 0.024 m from the cell centre in the placed (warp) frame.
+
+    2. Moves laterally while falling: 0.507-1.172 m/s lateral against a design of +/-1.5, pop +0.355 m,
+    gravity ~13 m/s^2 measured, xz drift 1.008 m.
+
+    3. Stops at ground contact: velocity exactly [0,0,0] at the settle frame, node frozen for 366 frames
+    with post-settle xz drift 0.0, landed feet at top_face + 0.16 m.
+
+    4. Spins in place: 1.995 rad/s against a design of 2.0, box-geometry-centre xz FROZEN with orbit 0.0000
+    m — the pre-AC-0093 bug was 0.212 m — with only the documented +/-0.06 m bob left.
+
+    BONUS FINDING, worth the ticket on its own: the long-standing `interact` place_ok=false flake now
+    has a MEASURED MECHANISM — the cold-boot sim delivers ~0.583 s of dt inside the arm''s 3 s mine window,
+    which is short of dirt''s 0.6 s requirement (prog_max 0.9722), while the real game path is fine. So
+    it is an arm-timing artefact rather than a gameplay bug, which is exactly the sort of thing that gets
+    mis-filed as a broken interaction later.
+
+    GATES: g0 rc=0 0/0; genhash 25/25 byte-identical to the current tip reference; interact rc=0. The
+    temporary droptrack arm was REMOVED after use (harness.gd git-diff empty), so the tree carries no
+    instrumentation debt from this ticket.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549833'
