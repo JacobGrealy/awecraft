@@ -1,0 +1,66 @@
+# AC-0295 deviations
+
+0. **The measurement (the point of the ticket).** R16 → R4 at runtime
+   (plan §2.1): BEFORE the fix — STANDING still: **596** home orphans,
+   flat over the whole 25 s window (`.scratch/AC-0295-gates/ac0295-r1.log`);
+   TRAVELLING (128 m walk after the shrink): **13** of the 596 (`ac0295-r1.log`).
+   AFTER the fix — STANDING: **0** (drain series [144, 0, 0, …, 0], i.e.
+   144 still pacing through the 3/frame cap at the 1.7 s sample, 0 by the
+   3.4 s sample, 0 for the rest of the window — `ac0295-r2.log`, re-run
+   `ac0295-r3.log`); TRAVELLING: **7** (the walking hysteresis trailing
+   ring — see item 4). Face lane: 0/0 in every phase (its window is
+   sim_dist-based, untouched by a render-radius change). The bug
+   reproduces; the fix zeroes the standing case.
+
+1. **Radii: R16 → R4, not the ticket's R50 → R10.** The ticket's verify
+   recipe predates the 1 m cubic grid migration (flagged stale by the
+   coordinator note). The plan fixes the shape (large → small), not the
+   values; R16 → R4 exercises the same mechanism (596 orphans at R16 is a
+   large-enough population to make the standing-vs-travelling diagnosis
+   unambiguous) and keeps the settle waits short.
+
+2. **Orphan definition.** Orphan = a resident chunk (present in
+   `world.chunks`) that the world's OWN eviction test would free right
+   now: the `_resident_sweep` home pass's `two_out` against the CURRENT
+   window (not in the circle ring AND taxi·16 m > the evict window, read
+   live from the same helpers the recenter reads), plus the face lane's
+   `resident_of` negative set. This is NOT "outside the render circle":
+   post-migration, home residency is windowed by the SIM band (the
+   (b1_eff+2)·16 m evict window), so chunks between the new render circle
+   and that window are kept BY DESIGN (the sim band + the standing keep
+   policy). The ticket's "outside the new smaller radius" reads as
+   "beyond what the world would still keep" under the current residency
+   model — the ticket text itself is flagged pre-migration.
+
+3. **Temporary probe arm `ac0295` in harness.gd** (dispatch branch +
+   `_ac0295_test`/`_ac0295_settle`/`_ac0295_orphans` at the file tail).
+   Added because NO existing arm changes the radius at runtime after a
+   settle and reports the resident census against the new window
+   (residency: no radius change; boundary: radius fixed at boot). It
+   mirrors the production apply order (set radius → recenter → the
+   note_render_distance hook, which carries the forced sweep after the
+   fix) and reads only with the world's own predicates. Per
+   godot/scenes/AGENTS.md it is a temporary measurement arm: it goes in
+   and comes out in this task (removed at close, re-verified with g0).
+   Deliberately rowless in tasks/harness_data.yaml (gate_run.py:
+   "ticket probes are deliberately rowless").
+
+4. **The travelling-case residual is not a radius-change orphan.** It is
+   the pre-existing walking hysteresis trailing ring: chunks at the
+   two_out edge (taxi 7–8 against the 96 m window) that hold
+   `cand_since` = 1 after the final recenter of the walk — the AC-0080
+   two-stage candidate band, which exists at constant radius too and is
+   freed by the next 2 recenter events (a few more steps). Measured 13
+   (before, r1) vs 7 (after, r2/r3) — same class, run-to-run variance at
+   the hysteresis edge (max taxi 8 vs 7). The plan's gate requires 0 only
+   for the STANDING case; the travelling number is reported as a number
+   per the gate table.
+
+5. **The temporary probe arm was REMOVED before exit** (probe-in and
+   probe-out in the same task, per godot/scenes/AGENTS.md): harness.gd is
+   byte back at 39,937 lines with zero `ac0295` references, and the FINAL
+   g0 after the removal reads 0/0 (`.scratch/AC-0295-gates/g0-r4.log`).
+   The consolidated gate run (g0, ac0295, residency, genhash, planetwalk,
+   boundary — all in `.scratch/AC-0295-gates/*-r3.log`) ran with the probe
+   present; the probe is inert (dispatched only under
+   `AWECRAFT_LOGIC=ac0295`), so those results hold for the final tree.

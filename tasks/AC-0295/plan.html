@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0295 radius decrease eviction</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0295 — lowering render distance must free what is now out of range</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Reproduce first</b> — this ticket predates the migration and may have been fixed by it — then fix only the eviction, not the standing policy.</p>
+<h2>1. The likely mechanism, from the code (a hypothesis to test, not a finding)</h2>
+<ul>
+<li><code>note_render_distance(prev)</code> (world.gd:6901) only starts a loading screen when the value changed: <code>start_loading("Loading render distance %d")</code>. It does not itself evict anything.</li>
+<li>Eviction is done by the ONE resident sweep — <code>_resident_sweep</code> (world.gd:12244), driven from <code>recenter</code> (12296) — which consults <code>resident_of</code> against the CURRENT window. So a shrunk radius WOULD be honoured <b>the next time a sweep runs</b>.</li>
+<li><b>The gap is whether a sweep runs at all.</b> The sweep is travel-gated, and the user's ruling is explicit: <i>"keep everything loaded while you stand still"</i>. So a player who opens Settings, lowers render distance while standing at the same spot, and closes it, may trigger NO sweep — leaving everything beyond the new radius resident forever. That is a direct interaction between a policy the user chose and a settings change nobody wired to it.</li>
+<li>Also worth checking: the ticket's own update says slider changes should be staged while the menu is open and applied on close (recenter + chunk work), so there may be a deliberate deferral to test.</li>
+</ul>
+<h2>2. Verify first</h2>
+<ul>
+<li><b>2.1 Reproduce on the CURRENT tree</b> (1 m cubic grid, unified residency): load at a large radius, let it settle, lower the radius while STANDING STILL, and count how many chunks beyond the new radius remain resident. Then do the same while travelling. The two numbers together are the whole diagnosis.</li>
+<li><b>2.2 If nothing is orphaned in either case</b> — the migration already fixed it — <b>cancel this ticket with those measurements</b>. Do not fix what is not broken.</li>
+<li><b>2.3 If orphans remain only when standing still</b>, the cause is the travel-gated sweep and the fix is small: a render-distance change is an EXPLICIT EVENT and must force a resident sweep immediately, regardless of the travel gate. <b>The standing-still "keep everything loaded" policy must NOT be weakened</b> — the user asked for it, and it is about normal play, not about a settings change that has just redefined what "in range" means.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td><code>note_render_distance</code> (6901), <code>_resident_sweep</code> (12244), <code>recenter</code> (12296) and the travel gate that guards it</td><td>Edit: force a sweep on a radius change.</td></tr>
+<tr><td>godot/autoload/settings.gd</td><td>the render-distance setter and the staged-apply path the ticket mentions</td><td>Read first; edit only if the apply never reaches the world.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td><code>residency</code> (reports resident counts and a converge series); any arm that changes radius at runtime (<code>world.render_radius = N</code> appears in several)</td><td>Read; prefer an existing arm. <b>Do not add an arm</b> unless nothing can observe this.</td></tr>
+<tr><td>tasks/AC-0295/</td><td>journal, deviations, results</td><td>Create/append.</td></tr>
+</table>
+<p><b>Do not touch:</b> the travel gate's threshold, the standing-still keep policy, generation, the mesher, light, keys, saves, the data JSON files.</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>The eviction (the point)</td><td>the §2.1 measurement, before and after any fix</td><td>Orphan count beyond the new radius reported as a NUMBER for both cases (standing and travelling). After the fix it must be <b>0 when standing still too</b>.</td></tr>
+<tr><td>The standing policy survives</td><td>the residency arm at a fixed position with no radius change</td><td><code>leak false</code> / <code>stable true</code> at the usual plateau — <b>a fix that evicts while the player simply stands still would be a regression against the user's explicit ruling</b>.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0295 --arms g0,genhash,planetwalk,boundary</code></td><td>g0 0/0; genhash 25/25; planetwalk 25/26 with mesh and body; boundary p95 at or below its recent band.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>5. Acceptance</h2><p>The two orphan counts measured, a fix only if one is non-zero, the standing-still policy provably intact, and no regressions — or a cancellation backed by measurements showing the migration already fixed it.</p>
+<h2>6. Risks</h2><p>The tempting wrong fix is to make the sweep unconditional, which would evict during ordinary standing and directly contradict the user's chosen behaviour. The second is to trust my §1 mechanism: it is a hypothesis read from the code, and §2.1 exists to test it rather than assume it.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not weaken the travel gate or the stand-still keep rule.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>The migration is closed (one 1 m cubic grid, one placement, key shape, node path, landing, queue, drain, residency model and light path); blocks/items/mobs are JSON data; fill rate accepted by user ruling. This ticket was filed pre-migration and is flagged verify-first.</p>
+</body></html>

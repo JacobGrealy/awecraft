@@ -6901,6 +6901,17 @@ func _ac0414_hold_active() -> bool:
 func note_render_distance(prev: int) -> void:
 	if _load_done_once and int(prev) != render_radius:
 		start_loading("Loading render distance %d" % render_radius)
+	# AC-0295: a radius change is an EXPLICIT EVENT — force the resident
+	# sweep now. The caller's recenter (Settings.apply_render_distance
+	# runs it first) was sweep event #1 (the two-stage hysteresis: cand
+	# 0->1); the forced pass is event #2 (cand -> 2 = free) with the
+	# travel gate bypassed for that call only. The standing keep policy
+	# ("keep everything loaded while you stand still") governs normal
+	# play — a settings change that just redefined what "in range" means
+	# is not normal play, and without this a standing player's shrunken
+	# radius is never honoured (the travel gate never passes).
+	if int(prev) != render_radius:
+		force_resident_sweep()
 
 func circle_count() -> int:
 	var n := 0
@@ -12241,7 +12252,7 @@ func _stream_window(sim_dist: int, evict_margin_m: float) -> Vector2:
 const RES_SWEEP_HOME := 0
 const RES_SWEEP_FACE := 1
 
-func _resident_sweep(lane: int, p: Vector2, pcx: int, pcz: int, home_win: Vector2) -> void:
+func _resident_sweep(lane: int, p: Vector2, pcx: int, pcz: int, home_win: Vector2, bypass_travel_gate: bool = false) -> void:
 	var to_free: Array[String] = []
 	for key in _resident_order.duplicate():
 		var c = chunks.get(key)
@@ -12275,7 +12286,7 @@ func _resident_sweep(lane: int, p: Vector2, pcx: int, pcz: int, home_win: Vector
 	# the home PACING (AC-0257 + AC-0463 slice 2b, unchanged): the travel
 	# gate (the recenter's crossing is the home lane's movement), the
 	# cap-defer and the identity-guarded checkin.
-	if lane == RES_SWEEP_HOME and _evict_sweep_due(_home_evict_last, p, 16.0):
+	if lane == RES_SWEEP_HOME and (bypass_travel_gate or _evict_sweep_due(_home_evict_last, p, 16.0)):
 		_home_evict_last = p
 		var free_n := 0
 		for key in to_free:
@@ -12285,6 +12296,22 @@ func _resident_sweep(lane: int, p: Vector2, pcx: int, pcz: int, home_win: Vector
 				continue
 			_free_chunk_key(key)
 			free_n += 1
+
+# AC-0295: a render-distance change is an EXPLICIT EVENT — the radius just
+# redefined what "in range" means, so the resident sweep must run for it
+# immediately, even though the travel gate (the 16 m in _evict_sweep_due)
+# has not passed. The standing keep policy ("keep everything loaded while
+# you stand still") governs NORMAL PLAY — no sweep while the player simply
+# stands; a settings change is not normal play. The caller's recenter
+# (Settings.apply_render_distance runs it first) was sweep event #1 (the
+# two-stage hysteresis: cand 0->1); this pass is event #2 (cand -> 2 =
+# free) with the gate bypassed for THIS call only. The cap and the
+# deferred drain are unchanged — a big shrink still paces out at
+# stream_ho_cap/frame. Home lane only: the face window is sim_dist-based
+# and a render-distance change never redefines it.
+func force_resident_sweep() -> void:
+	var hw: Vector2 = _stream_window(band0_r, (b1_eff() + 2 - band0_r) * 16.0)
+	_resident_sweep(RES_SWEEP_HOME, Vector2(_rec_player_wx, _rec_player_wz), last_pcx, last_pcz, hw, true)
 
 # AC-0445: recenter is an X/Z-ONLY crossing event. The AC-0234 vertical
 # (Y) trigger in the player is deleted — a pure vertical flight no longer

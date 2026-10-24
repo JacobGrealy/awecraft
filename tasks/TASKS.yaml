@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T12:18
+  updated_at: 2026-10-24T12:59
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0295
 - AC-0316
 - AC-0317
 - AC-0318
@@ -13648,11 +13647,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-16T09:37
-  updated_at: 2026-10-24T12:18
-  completed_at: null
+  updated_at: 2026-10-24T12:59
+  completed_at: 2026-10-24T12:59
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player, when I lower the render distance slider while in-game, chunks outside
@@ -13696,7 +13695,43 @@ intake:
     cancel this ticket with the measurement that shows it gone — do not "fix" something that is already
     fixed, and do not close it as done when no work was done. If it still reproduces, update the ticket
     with the current reproduction (the coordinates and commands in the text may be stale: they were written
-    for the pre-1 m grid and pre-warp tree) and plan from that.'
+    for the pre-1 m grid and pre-warp tree) and plan from that.
+
+
+    CLOSED (round 74) — THE BUG WAS REAL, and the verify-first annotation earned its keep: this ticket
+    was filed pre-migration and looked like a likely casualty of the unified residency work, but measured
+    on the current tree it reproduces exactly as reported.
+
+    THE DIAGNOSIS, MEASURED (R16 -> R4 on the 1 m grid): STANDING STILL leaves **596** chunks beyond the
+    new radius resident, flat across the full 25 s window — never freed at all. TRAVELLING leaves 13,
+    and those turn out to be the pre-existing walking hysteresis trailing ring (cand=1 at the two_out
+    edge), not radius-change orphans. Face lane 0/0 in both cases because its window is sim_dist-based.
+
+    THE MECHANISM WAS EXACTLY THE HYPOTHESIS I READ OFF THE CODE: `note_render_distance` (6901) only starts
+    a loading screen; eviction belongs to the one resident sweep, and the radius-change recenter DOES
+    fire (sweep event #1, cand 0->1) — but the free loop is TRAVEL-GATED at 16 m, so a player standing
+    perfectly still never frees anything. That is the collision between the user''s explicit "keep everything
+    loaded while you stand still" ruling and a settings change nobody wired to it: the policy is right
+    for normal play and wrong for the moment the player redefines what "in range" means.
+
+    THE FIX IS SMALL AND DOES NOT WEAKEN THE POLICY (+29/-2, world.gd only): `_resident_sweep` gains `bypass_travel_gate`
+    (default false) and a new `force_resident_sweep()` runs the home pass with the gate bypassed FOR THAT
+    CALL ONLY, invoked by `note_render_distance` on a real value change. Ordinary standing still still
+    runs no sweeps; the 16 m threshold, the cap and the deferred drain are untouched.
+
+    AFTER: STANDING = **0** (drain series 144 then zero by 3.4 s, held at 0 for the rest of the window),
+    TRAVELLING = 7 (the same pre-existing hysteresis ring). RESIDENCY ARM at a fixed position with no
+    radius change: leak false / stable true at the usual plateau (92/74) — so the standing policy is provably
+    intact, which was the gate this fix could most easily have broken.
+
+    GATES: g0 0/0; genhash 25/25; planetwalk 25/26 with mesh and body; boundary p95 38 (in its 34-42 band)
+    with p50 13. The temporary probe arm was added and REMOVED in-task (harness.gd pristine at 39,937
+    lines), so no instrumentation debt is left behind.
+
+    WORTH KEEPING AS A PATTERN: this is the second time this session that "verify first" paid off in opposite
+    directions — AC-0094 dissolved because two later changes had already delivered it, while AC-0295 reproduced
+    exactly. The annotation said to test rather than to assume obsolescence, and both outcomes were only
+    knowable by measuring.'
   comments: []
 - id: AC-0296
   title: chiseled-greedy-meshing-separated
