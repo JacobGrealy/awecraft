@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T11:41
+  updated_at: 2026-10-24T12:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0176
 - AC-0295
 - AC-0316
 - AC-0317
@@ -7917,18 +7916,48 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-31T12:45
-  updated_at: 2026-08-31T12:45
-  completed_at: null
+  updated_at: 2026-10-24T12:16
+  completed_at: 2026-10-24T12:16
   waiting_on: null
   parent_id: null
   notes: 'Exported exe currently writes to %APPDATA%/Godot/app_userdata/AweCraft (default user:// at docs.godotengine.org/en/stable/tutorials/io/data_paths.html).
     Enable application/config/use_custom_user_dir=true in project.godot so user:// goes to %APPDATA%/AweCraft.
     When enabled: Windows %APPDATA%/AweCraft, macOS ~/Library/Application Support/AweCraft, Linux ~/.local/share/AweCraft.
     Set custom_user_dir_name="AweCraft". Verify exported Windows exe writes to correct dir. Follows saves
-    tasks AC-0155/0175.'
+    tasks AC-0155/0175.
+
+
+    CLOSED (round 73). WHAT LANDED: `application/config/use_custom_user_dir=true` and `custom_user_dir_name="AweCraft"`
+    in godot/project.godot, so user:// no longer resolves into a folder called Godot.
+
+    MEASURED, NOT INFERRED FROM THE DOCS: the user-data dir went `/tmp/dsh_home/.local/share/godot/app_userdata/AweCraft`
+    -> `/tmp/dsh_home/.local/share/AweCraft` — the new path contains AweCraft and no Godot. Both strings
+    are SANDBOX paths (every engine call runs with HOME=/tmp/dsh_home), reported as such rather than presented
+    as the user''s real Linux path.
+
+    SAVES PROVEN FROM A CLEAN INSTALL, which is the check that matters: g0 0/0; save ok with blocks 6/6
+    and the inv/iso/pos checks plus an R-4000 round-trip; load ok with simband_ms 6755 and — importantly
+    — `disk=0` / `gen=5509`, which is what makes it a GENUINE fresh install rather than a pass that found
+    an old file in the old location.
+
+    NOTHING ORPHANED: zero hardcoded `app_userdata`/`user_data_dir` anywhere in godot/ or gdext/ — every
+    path is a relative `user://` (save.gd''s BASE) — and the only `dsh_home` references in tasks/scripts
+    are the sandbox HOME itself. So the change is a pure relocation with no code depending on the old
+    spelling.
+
+    MIGRATION DECISION, STATED RATHER THAN ASSUMED: none. The product is unshipped, the pre-AC-0176 folder
+    is dead and unreferenced, and ARCHITECTURE.md §5 already owns the compatibility policy for this class
+    of change. Nobody loses a save that exists.
+
+    THE WINDOWS CLAIM IS LABELLED A CLAIM: `%APPDATA%/AweCraft` is DOCUMENTED, NOT VERIFIED — this box
+    is Linux and cannot exercise it. The measured path is the Linux sandbox one. A future Windows run
+    should confirm it rather than trusting the ticket text.
+
+    ARCHITECTURE.md §5''s saves bullet updated (invariant 2). The save FORMAT was not touched — this moved
+    a directory, not data. genhash 25/25, planetwalk 25/26 with mesh and body.'
   comments: []
 - id: AC-0177
   title: coarse-lod-horizontal-and-vertical-distant-chunks

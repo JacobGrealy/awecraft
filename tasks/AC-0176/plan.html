@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0176 custom user dir</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0176 — saves live in an <code>AweCraft</code> folder, not <code>Godot/app_userdata</code></h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Small, but it moves where saved data lives, so the risk is orphaning saves rather than breaking code.</p>
+<h2>1. The change</h2>
+<p>Two project settings, both currently absent (<code>project.godot</code> has only <code>config/name="AweCraft"</code> at :5):</p>
+<ul>
+<li><code>application/config/use_custom_user_dir=true</code></li>
+<li><code>application/config/custom_user_dir_name="AweCraft"</code></li>
+</ul>
+<p>Effect per the ticket: Windows <code>%APPDATA%/AweCraft</code>, macOS <code>~/Library/Application Support/AweCraft</code>, Linux <code>~/.local/share/AweCraft</code> — instead of <code>%APPDATA%/Godot/app_userdata/AweCraft</code>.</p>
+<h2>2. What to verify, in this order</h2>
+<ul>
+<li><b>2.1 The path actually moves.</b> Print <code>OS.get_user_data_dir()</code> (or equivalent) before and after in a headless run, and report both strings. <b>Do not infer the path from the docs</b> — the same setting behaves differently across platforms and this box is Linux while the product is Windows.</li>
+<li><b>2.2 Saves still work end to end</b> through the real save/load arms, in the NEW location, from a clean state: <code>save</code> ok with its inventory/block checks, <code>load</code> ok with <code>simband_ms</code> in the usual class.</li>
+<li><b>2.3 Nothing was orphaned silently.</b> If code anywhere hardcodes the old path, or a test asserts on <code>Godot/app_userdata</code>, it must be found by grep and reported. <b>If a migration of existing saves is needed, say so — but for a product that has not shipped, deleting the old folder is likely correct and must be an explicit, stated decision, not an oversight.</b></li>
+<li><b>2.4 The Windows claim stays a claim.</b> This box cannot verify <code>%APPDATA%</code>. Report the Linux path as measured and <b>state plainly that the Windows path is documented, not verified</b> — unless the Windows build can actually be exercised, in which case say how.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/project.godot</td><td><code>[application]</code>, the <code>config/name</code> line (:5)</td><td>Edit: add the two settings.</td></tr>
+<tr><td>godot/autoload/save.gd</td><td>the save path construction, any <code>user://</code> literal or <code>application/config</code> read</td><td>Read first; edit only if it hardcodes something the change breaks.</td></tr>
+<tr><td>godot/scenes/harness.gd, tasks/scripts/</td><td>anything that asserts on the user-data path (grep for <code>app_userdata</code>, <code>user_data_dir</code>, <code>dsh_home</code>)</td><td>Read first; edit only what the change breaks.</td></tr>
+<tr><td>godot/ARCHITECTURE.md</td><td>§5 (saves/format section — it states where saves live)</td><td>Edit: invariant 2 applies, and this file currently says <code>user://</code> which is now resolved differently.</td></tr>
+<tr><td>tasks/AC-0176/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>The path moved</td><td>a headless print of the user-data dir before and after</td><td>Both strings reported; the new one contains <code>AweCraft</code> and does not contain <code>Godot</code>.</td></tr>
+<tr><td>Saves work in the new location</td><td><code>python3 tasks/scripts/gate_run.py AC-0176 --arms g0,save,load</code></td><td>g0 0/0; <code>save</code> ok with its checks; <code>load</code> ok with <code>simband_ms</code> in the usual class. <b>Run from a clean user dir</b> so this proves a fresh install works, not that an old save happened to be found.</td></tr>
+<tr><td>Nothing else broke</td><td><code>--arms genhash,planetwalk</code></td><td>genhash 25/25; planetwalk 25/26 with mesh and body.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Remember every engine call needs <code>HOME=/tmp/dsh_home</code> in the same bash command.</p>
+<h2>5. Acceptance</h2><p>Both settings in place, the measured Linux path reported before and after, saves and loads green from a clean user dir, no silently orphaned path, the Windows claim labelled as documented rather than verified, and ARCHITECTURE.md §5 updated.</p>
+<h2>6. Risks</h2><p>(1) Changing this quietly relocates every save, so a "successful" load that found an OLD file would be a false pass — hence the clean-user-dir requirement. (2) The sandbox's <code>HOME=/tmp/dsh_home</code> means the measured path is a sandbox path; report it as such rather than presenting it as the user's real Linux path. (3) Do not add a migration unless something real would be lost — state the decision either way.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not change the save FORMAT — this ticket moves a directory, not data.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>The migration is closed, blocks/items/mobs are JSON data with a proven encoding contract, and the queue is on small product-facing items. This follows the saves work in AC-0155/AC-0175.</p>
+</body></html>

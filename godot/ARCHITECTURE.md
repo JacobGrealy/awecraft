@@ -964,7 +964,16 @@ Build and loading:
   4000 m plane clips the body's far limb) is owned by the tier, not the camera; the far
    bound uses the displaced surface's max radius R + HMAX (AC-0384 r2).
 - **Saves**: slot-based (`Save` autoload + `core/chunk_io.gd` + `gdext/chunk_io.cpp`), column
-  blob format **v6**, per-slot chunk directories under `user://` — which in this sandbox is
+  blob format **v6**, per-slot chunk directories under `user://`. **AC-0176: `user://` now
+  resolves to a plain `AweCraft` folder** (`application/config/use_custom_user_dir=true` +
+  `custom_user_dir_name="AweCraft"` in `project.godot`): Windows `%APPDATA%/AweCraft`, Linux
+  `~/.local/share/AweCraft` (MEASURED in this sandbox: `/tmp/dsh_home/.local/share/AweCraft`),
+  macOS `~/Library/Application Support/AweCraft` — replacing `…/godot/app_userdata/AweCraft`.
+  The measured value is the Linux/sandbox path only; the Windows path is documented from the
+  setting's semantics, not verified on this box. The pre-AC-0176 folder is NOT migrated — the
+  product has not shipped and the compatibility policy below already owns this class of
+  decision, so the old folder is simply dead (a stated decision, not an oversight). The save
+  FORMAT is unchanged (no `SAVE_VERSION` bump). As before, in this sandbox `user://` is
   `/tmp/dsh_home/...`, so saves do not survive a reboot (see `godot/OPS.md`). v6 = v5
   (the 24-bit generated mask) + one flag byte in the MD5-hashed head: **bit 0 = no-caves**
   (AC-0284a, solid 0..H slab-skip) / **bit 1 = far h-only** (AC-0284b — the column stores
