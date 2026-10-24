@@ -1899,6 +1899,66 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 	if snapshot_path != "":
 		await main._snapshot_finish(cam)
 
+# AC-0317: the two arms whose standalone dispatch used to be private
+# reach-ins from main.gd (the _ready mainmenuexit intercept + the
+# _run_game settings early-dispatch) fold onto the harness here —
+# main.gd keeps only the decision to call. Both dispatch BEFORE the game
+# nodes exist (dispatch order is load order) and the battery keeps that
+# shape: settings early-returns in _batt_run_mode, and mainmenuexit stays
+# BATTSKIP there (the Exit press quits the process — it must never run in
+# the battery loop).
+func run_mainmenuexit() -> void:
+	await _mainmenuexit_test()
+
+
+func run_settings() -> void:
+	_settings_test()
+	get_tree().quit()
+
+
+# AC-0317: the AWECRAFT_INV shot fixture — moved from main.gd's
+# _snapshot_finish (it is an arm fixture: env-gated, shots only). The
+# public-model writes are the container-whole writes the AC-0316 boundary
+# left sanctioned; the move changes the home of the code, never what it
+# writes.
+func run_inv_fixture(inv_env: String) -> void:
+	for i in player.inv.size():
+		player.inv[i] = {"id": 0, "n": 0}
+	if inv_env == "1":
+		Debug.give_item(6, 5)
+		Debug.give_item(8, 12)
+		Debug.give_item(100, 6)
+		Debug.give_item(111, 1)
+		Debug.give_item(127, 1)
+		player.inv_slot_click(player.find_slot(127), "hotbar", 0, false)
+		player.armor_slot_click(0, 0, false)
+		Debug.give_item(132, 1)
+		player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
+		player.armor_slot_click(1, 0, false)
+		for i in range(13, 36):
+			player.inv[i] = {"id": 140 + (i % 8), "n": (i % 7) + 1}
+	elif inv_env == "table":
+		Debug.give_item(8, 12)
+		Debug.give_item(100, 8)
+		Debug.give_item(105, 8)
+		for i in range(13, 36):
+			player.inv[i] = {"id": 105, "n": (i % 8) + 1}
+		player.table_grid[0] = {"id": 8, "n": 1}
+		player.table_grid[1] = {"id": 8, "n": 1}
+		player.table_grid[2] = {"id": 8, "n": 1}
+		player.table_grid[4] = {"id": 100, "n": 1}
+		player.table_grid[7] = {"id": 100, "n": 1}
+	player.open_inventory("table" if inv_env == "table" else "inv")
+	if inv_env == "1":
+		inventory_ui.autofill_first()
+		inventory_ui.hover_item(111)
+		player.held = {"id": 111, "n": 1}
+		var mid: Vector2 = get_viewport().get_visible_rect().size * 0.5
+		var mmv := InputEventMouseMotion.new()
+		mmv.position = mid - Vector2(120, 60)
+		mmv.global_position = mid - Vector2(120, 60)
+		Input.parse_input_event(mmv)
+
 func run_battery(seed_env: String, battery_env: String) -> void:
 	await _run_battery(seed_env, battery_env)
 

@@ -201,7 +201,10 @@ func _ready() -> void:
 		await harness.run_battery(seed_env, battery_env)
 		return
 	if logic == "mainmenuexit":
-		await harness._mainmenuexit_test()
+		# AC-0317: the dispatch moved to the harness (run_mainmenuexit) —
+		# menu-first boot, before the game nodes; BATTSKIP in the battery
+		# (the Exit press quits the process).
+		await harness.run_mainmenuexit()
 		return
 	if logic != "":
 		await _run_game(seed_env, logic, cam, snapshot_path)
@@ -836,8 +839,9 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		return
 	Game.new_world(44 if seed_env == "" else seed_env.to_int())
 	if logic == "settings":
-		harness._settings_test()
-		get_tree().quit()
+		# AC-0317: the dispatch (and the quit) moved to the harness —
+		# still BEFORE the game nodes exist, standalone AND in the battery.
+		harness.run_settings()
 		return
 	if logic == "controls":
 		# AC-0088: the controls remap arm (dispatched like settings -
@@ -942,42 +946,9 @@ func _snapshot_finish(cam: String) -> void:
 				aimed = true
 	var inv_env := OS.get_environment("AWECRAFT_INV")
 	if inv_env != "" and player != null:
-		for i in player.inv.size():
-			player.inv[i] = {"id": 0, "n": 0}
-		if inv_env == "1":
-			Debug.give_item(6, 5)
-			Debug.give_item(8, 12)
-			Debug.give_item(100, 6)
-			Debug.give_item(111, 1)
-			Debug.give_item(127, 1)
-			player.inv_slot_click(player.find_slot(127), "hotbar", 0, false)
-			player.armor_slot_click(0, 0, false)
-			Debug.give_item(132, 1)
-			player.inv_slot_click(player.find_slot(132), "hotbar", 0, false)
-			player.armor_slot_click(1, 0, false)
-			for i in range(13, 36):
-				player.inv[i] = {"id": 140 + (i % 8), "n": (i % 7) + 1}
-		elif inv_env == "table":
-			Debug.give_item(8, 12)
-			Debug.give_item(100, 8)
-			Debug.give_item(105, 8)
-			for i in range(13, 36):
-				player.inv[i] = {"id": 105, "n": (i % 8) + 1}
-			player.table_grid[0] = {"id": 8, "n": 1}
-			player.table_grid[1] = {"id": 8, "n": 1}
-			player.table_grid[2] = {"id": 8, "n": 1}
-			player.table_grid[4] = {"id": 100, "n": 1}
-			player.table_grid[7] = {"id": 100, "n": 1}
-		player.open_inventory("table" if inv_env == "table" else "inv")
-		if inv_env == "1":
-			inventory_ui.autofill_first()
-			inventory_ui.hover_item(111)
-			player.held = {"id": 111, "n": 1}
-			var mid: Vector2 = get_viewport().get_visible_rect().size * 0.5
-			var mmv := InputEventMouseMotion.new()
-			mmv.position = mid - Vector2(120, 60)
-			mmv.global_position = mid - Vector2(120, 60)
-			Input.parse_input_event(mmv)
+		# AC-0317: the AWECRAFT_INV shot fixture moved to the harness
+		# (run_inv_fixture) — main keeps only the env check + the call.
+		harness.run_inv_fixture(inv_env)
 	var drain_at := spawn
 	if player != null:
 		drain_at = player.position

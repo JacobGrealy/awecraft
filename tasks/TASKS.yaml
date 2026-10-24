@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T15:26
+  updated_at: 2026-10-24T16:25
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0317
 - AC-0318
 - AC-0320
 - AC-0326
@@ -16299,11 +16298,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T10:20
-  updated_at: 2026-09-18T10:20
-  completed_at: null
+  updated_at: 2026-10-24T16:25
+  completed_at: 2026-10-24T16:25
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a developer, `main.gd` should be the coordinator — to learn how the tree is\
@@ -16324,7 +16323,28 @@ intake:
     \ `tasks/harness_data.yaml`\nplus `python3 tasks/scripts/harness_doc.py --render` — an arm with no\
     \ row is silent drift.\n\nGates: G0 = zero SCRIPT ERROR; battery mode-for-mode identical; re-run the\
     \ `settings`, `mainmenuexit`\nand `AWECRAFT_INV` arms standalone and through the battery; `AWECRAFT_INV=1`\
-    \ / `=table` shots\nunchanged.\n"
+    \ / `=table` shots\nunchanged.\n\n\nCLOSED (round 76). WHAT LANDED: the AWECRAFT_INV fixture and both\
+    \ stray arm dispatches left product code. harness.gd gained `run_inv_fixture(inv_env)` (the body moved\
+    \ VERBATIM — same Debug.give_item calls, same table_grid/held writes, same autofill+hover+mouse-motion\
+    \ for =1), plus `run_mainmenuexit()` and `run_settings()`. main.gd keeps only the env check and one\
+    \ call. This is what AC-0316 explicitly deferred.\nDISPATCH ORDER WAS THE RISK AND IT WAS PRESERVED\
+    \ BY CONSTRUCTION, not by luck: mainmenuexit still runs in `main._ready` BEFORE any game-node work,\
+    \ now via `harness.run_mainmenuexit()`; settings still runs in `_run_game` AFTER `Game.new_world`\
+    \ and BEFORE `_create_game_nodes`, via `harness.run_settings()` (the quit moved with it). So the two\
+    \ constraints scenes/AGENTS.md warns about both hold — the settings arm still runs before the nodes\
+    \ exist (standalone AND in the battery), and THE QUIT ARM STAYS BATTSKIP-ed, which the battery run\
+    \ proves: it logged BATTSKIP and the battery completed ok in 58.7 s instead of dying mid-run.\nTHE\
+    \ SHOTS ARE THE POINT AND THEY ARE BYTE-IDENTICAL: `=1` and `=table` both byte-identical after the\
+    \ move. The one outlier — the FIRST post-move run, 355 px / max 30 and 251 px / max 11, entirely outside\
+    \ the panel box with panel+hotbar pixel-identical — sits inside AC-0316's measured 1141-px same-tree\
+    \ jitter band, so it is noise-proofed rather than attributed to the move. That is the discipline the\
+    \ plan asked for and it is why the result is trustworthy.\nARMS: settings RESULT byte-equal across\
+    \ both modes (19 keys); mainmenuexit ready_to_quit=true standalone and BATTSKIP in the battery. Gates:\
+    \ g0 0 SCRIPT ERROR across all six boots, player/craft mode-for-mode identical to the AC-0316 references,\
+    \ genhash 25/25, and guiclick's ok=false is the documented pre-existing red (its 5-field same-tree\
+    \ spread is the arm's own real-mouse jitter).\nSCOPE DISCIPLINE WORTH NOTING: no arm was added and\
+    \ the battery/harness_data.yaml are untouched — this moved code, it did not create a new surface.\
+    \ The other private reach-ins this ticket is not about were left alone."
   comments: []
 - id: AC-0318
   title: harness-out-of-windows-export
