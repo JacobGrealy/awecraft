@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-23T23:18
+  updated_at: 2026-10-24T08:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0474
 - AC-0094
 - AC-0141
 - AC-0142
@@ -30865,11 +30864,11 @@ intake:
   projects:
   - awecraft
   assignee: opencode
-  priority: 1
-  status: blocked
+  priority: 3
+  status: open
   labels: []
   created_at: 2026-10-23T22:38
-  updated_at: 2026-10-23T23:16
+  updated_at: 2026-10-24T08:41
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30918,7 +30917,20 @@ intake:
     and mesh.cpp. Refs: AC-0399 (order, done), AC-0451 (handover, done), AC-0469/AC-0471 (the 1 m grid
     that raised the cost), AC-0399''s measurement method for the frontier.
 
-    '
+
+
+    DEFERRED BY USER RULING (round 69), not blocked by defect. The premise this ticket was filed on -
+    "the constraint is throughput" - turned out to be based on an instrument artefact (AC-0474 found no
+    stall; the true cost is t90 60.5 s / t100 67.7 s at R24, ~18 drawable chunks/s, gen 22.1 ms + mesh
+    7.0 ms per chunk).
+
+    USER, verbatim: "It''s fine for now, optimize after we have moved to the new system."
+
+    SO: keep the measured lever table for when that work starts - radius 24->12/8/4 shrinks the required
+    set 3.4x/6.5x/17.4x; a nearer/coarser far tier shrinks the full-fidelity meshed set 2.6-6.3x; per-chunk
+    cost is gen 22.1 ms + mesh 7.0 ms against ~18 chunks/s sustained. Do NOT start optimisation off the
+    back of this ticket before the migration the user refers to. Status deliberately left open rather
+    than done: the work is deferred, not delivered.'
   comments: []
 - id: AC-0474
   title: 'the fill stalls after the inner ball: 0.0 chunks/s past the taxi-8 ball'
@@ -30927,11 +30939,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-23T23:16
-  updated_at: 2026-10-23T23:18
-  completed_at: null
+  updated_at: 2026-10-24T08:41
+  completed_at: 2026-10-24T08:41
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -30978,5 +30990,31 @@ intake:
     AC-0469 G2/G4 (the removed list and D32), AC-0358 (the feed invariant - do not break light settling
     to win rate).
 
-    '
+
+
+    CLOSED (round 69). WHAT THIS TICKET SET OUT TO DO: find the gate that stopped builds completing after
+    the inner ball, and fix it.
+
+    WHAT THE MEASUREMENT ACTUALLY FOUND: there was no stall. Every gate reads zero holds (hs_settle, hs_payload,
+    hs_sky, hs_cap, hs_nodata, lo_cap, lo_noop, races all 0; drops 0; in-flight 0). The "16,484 dispatch
+    attempts with 145 completions" was an INSTRUMENT ARTEFACT: build_worker_n/mesh_built observes only
+    the HIGH lane, whose R24 set is exactly the taxi-8 diamond (145), while the far tiers draw through
+    low slabs that by design never set mesh_built and landed 16,320. The true census is 16,465 landed,
+    0 dropped, 0 in flight.
+
+    WHAT LANDED, which is the right fix for a false diagnosis: the completion metric is now per-live-tier
+    fill (built_rep/required/t90/t100 plus a pending census) with a per-gate reason table and a true dispatch
+    census, so this class of blindness cannot recur silently. No pipeline change, no cap raised, the light-settling
+    guarantee untouched, world.gd edits counter-only, genhash 25/25 byte-identical.
+
+    ALSO REPAIRED: voxelcost (0 SCRIPT ERROR) which had been reading the removed _face_order since AC-0469
+    G2, and which is what made the cost split measurable at all: gen 22.1 ms / mesh 7.0 ms / build 29.1
+    ms per chunk.
+
+    THE HONEST RATE, on the right instrument: t90 60.5 s, t100 67.7 s at R24, ~16-20 drawable chunks/s.
+
+    USER RULING (round 69), recorded verbatim: "It''s fine for now, optimize after we have moved to the
+    new system." So the fill rate is ACCEPTED as-is and optimisation is deferred until after the migration
+    to the new system — this is not a bug, not a blocker, and not to be re-litigated or optimised opportunistically
+    in the meantime.'
   comments: []
