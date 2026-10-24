@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-24T12:16
+  updated_at: 2026-10-24T12:18
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -19,7 +19,6 @@ queue:
 - AC-0409
 - AC-0412
 - AC-0438
-- AC-0453
 - AC-0464
 intake:
 - id: AC-0278
@@ -13652,7 +13651,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-09-16T09:37
-  updated_at: 2026-09-16T09:38
+  updated_at: 2026-10-24T12:18
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -13673,7 +13672,31 @@ intake:
 
     Update 2026-09-16b: Applies to ALL distance sliders (render_dist, sim_dist, medium_start, low_start)
     — stage value while Options menu is open, defer apply_world / recenter / evict until menu close (not
-    per-drag).'
+    per-drag).
+
+
+    COORDINATOR NOTE (round 73) — VERIFY BEFORE BUILDING: the migration may already have fixed this, and
+    the ticket text predates it.
+
+    What changed since this was filed, which is why it needs re-testing rather than assuming:
+
+    - AC-0459/AC-0465 gave both lanes ONE key shape; AC-0467 put the home pair on the canonical chart
+    placement and deleted the seam extension; AC-0469 (stages A-E) put the planet on ONE 1 m cubic grid
+    with one placement, one node path, one landing path, one generation queue and drain, and ONE RESIDENCY
+    MODEL (a single `resident_of` predicate, one resident list, one sweep — which in G2 also EXPOSED AND
+    FIXED A LATENT LEAK where out-of-set drain stubs were never freed); AC-0471 made the blocks cubic;
+    AC-0463 L2-L6 unified light ownership, drain and edit entry AND made the face build consume its light
+    payload for the first time.
+
+    WHY THAT MATTERS HERE: several symptoms in this queue were side effects of the old split (two lanes,
+    two key shapes, two grids, two residency models, two light paths, a face build that ignored its payload).
+    A symptom that came from the split is very likely gone now.
+
+    SO: reproduce it FIRST, on the current tree, before planning any work. If it no longer reproduces,
+    cancel this ticket with the measurement that shows it gone — do not "fix" something that is already
+    fixed, and do not close it as done when no work was done. If it still reproduces, update the ticket
+    with the current reproduction (the coordinates and commands in the text may be stale: they were written
+    for the pre-1 m grid and pre-warp tree) and plan from that.'
   comments: []
 - id: AC-0296
   title: chiseled-greedy-meshing-separated
@@ -28301,7 +28324,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-16T09:45
+  updated_at: 2026-10-24T12:18
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28355,7 +28378,30 @@ intake:
     EVIDENCE: tasks/AC-0384/AC-0384-results.html section 29 and the nadir frame it names, taken from a
     clean archive of an earlier commit.
 
-    '
+
+
+    COORDINATOR NOTE (round 73) — VERIFY BEFORE BUILDING: the migration may already have fixed this, and
+    the ticket text predates it.
+
+    What changed since this was filed, which is why it needs re-testing rather than assuming:
+
+    - AC-0459/AC-0465 gave both lanes ONE key shape; AC-0467 put the home pair on the canonical chart
+    placement and deleted the seam extension; AC-0469 (stages A-E) put the planet on ONE 1 m cubic grid
+    with one placement, one node path, one landing path, one generation queue and drain, and ONE RESIDENCY
+    MODEL (a single `resident_of` predicate, one resident list, one sweep — which in G2 also EXPOSED AND
+    FIXED A LATENT LEAK where out-of-set drain stubs were never freed); AC-0471 made the blocks cubic;
+    AC-0463 L2-L6 unified light ownership, drain and edit entry AND made the face build consume its light
+    payload for the first time.
+
+    WHY THAT MATTERS HERE: several symptoms in this queue were side effects of the old split (two lanes,
+    two key shapes, two grids, two residency models, two light paths, a face build that ignored its payload).
+    A symptom that came from the split is very likely gone now.
+
+    SO: reproduce it FIRST, on the current tree, before planning any work. If it no longer reproduces,
+    cancel this ticket with the measurement that shows it gone — do not "fix" something that is already
+    fixed, and do not close it as done when no work was done. If it still reproduces, update the ticket
+    with the current reproduction (the coordinates and commands in the text may be stale: they were written
+    for the pre-1 m grid and pre-warp tree) and plan from that.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
@@ -29534,11 +29580,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-10-19T07:51
-  updated_at: 2026-10-19T07:51
-  completed_at: null
+  updated_at: 2026-10-24T12:18
+  completed_at: 2026-10-24T12:18
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A check that is red should mean something is wrong. A seam census has been reporting
@@ -29574,7 +29620,27 @@ intake:
     genuinely moves, and note the user has waived genhash stability so a move is a finding rather than
     a failure.
 
-    '
+
+
+    CANCELLED (round 73) — OBSOLETE, SUPERSEDED BY WORK THAT LANDED SINCE IT WAS FILED.
+
+    WHY: this ticket exists because a seam census reported RED while the thing it measured had already
+    been dealt with, and the ticket''s value was "make the red mean something". Both halves of that have
+    since happened:
+
+    1. THE CENSUS WAS REPAIRED: AC-0468 repaired seamcensus, keeping the original AC-0353 assertion and
+    running the fixture THROUGH the new inverse rather than re-recording it (a repair, not a re-baselining-to-green).
+    It now runs clean at 393,216 rows, and has done so in every gate run since — AC-0470, AC-0474 and
+    this round''s runs all report `seamcensus clean`.
+
+    2. THE SEAM DEFECT ITSELF WAS FIXED AT THE ROOT: AC-0467 put the home pair on the canonical chart
+    placement and DELETED the compensating seam-extension apparatus rather than tuning it. Measured worst
+    gap AND worst overlap 64.0 mm against a 100 mm grout, with renders showing no band where there had
+    been a smeared strip.
+
+    So there is no red to re-baseline and no defect left for the census to be measuring. Cancelling rather
+    than closing as done, because nothing was "delivered" by a task — the need dissolved as the work it
+    depended on landed.'
   comments: []
 - id: AC-0454
   title: builder-economics-plan-first-medium-default
@@ -30307,7 +30373,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-20T12:15
-  updated_at: 2026-10-20T12:15
+  updated_at: 2026-10-24T12:18
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30332,7 +30398,23 @@ intake:
     \ \"sky\" was unlit far-tier\n   faces. Start by identifying WHAT the black object is (project the\
     \ chunk lattice, the AC-0440/AC-0443\n   method) rather than by guessing at the shader.\n   VERIFY:\
     \ after a fix, the same recipe must show the block lit and continuous with its neighbours,\n   and\
-    \ the flag on/off pair must still agree.\n"
+    \ the flag on/off pair must still agree.\n\n\nCOORDINATOR NOTE (round 73) — VERIFY BEFORE BUILDING:\
+    \ the migration may already have fixed this, and the ticket text predates it.\nWhat changed since\
+    \ this was filed, which is why it needs re-testing rather than assuming:\n- AC-0459/AC-0465 gave both\
+    \ lanes ONE key shape; AC-0467 put the home pair on the canonical chart placement and deleted the\
+    \ seam extension; AC-0469 (stages A-E) put the planet on ONE 1 m cubic grid with one placement, one\
+    \ node path, one landing path, one generation queue and drain, and ONE RESIDENCY MODEL (a single `resident_of`\
+    \ predicate, one resident list, one sweep — which in G2 also EXPOSED AND FIXED A LATENT LEAK where\
+    \ out-of-set drain stubs were never freed); AC-0471 made the blocks cubic; AC-0463 L2-L6 unified light\
+    \ ownership, drain and edit entry AND made the face build consume its light payload for the first\
+    \ time.\nWHY THAT MATTERS HERE: several symptoms in this queue were side effects of the old split\
+    \ (two lanes, two key shapes, two grids, two residency models, two light paths, a face build that\
+    \ ignored its payload). A symptom that came from the split is very likely gone now.\nSO: reproduce\
+    \ it FIRST, on the current tree, before planning any work. If it no longer reproduces, cancel this\
+    \ ticket with the measurement that shows it gone — do not \"fix\" something that is already fixed,\
+    \ and do not close it as done when no work was done. If it still reproduces, update the ticket with\
+    \ the current reproduction (the coordinates and commands in the text may be stale: they were written\
+    \ for the pre-1 m grid and pre-warp tree) and plan from that."
   comments: []
 - id: AC-0465
   title: single chunk-key producer (no format change)
