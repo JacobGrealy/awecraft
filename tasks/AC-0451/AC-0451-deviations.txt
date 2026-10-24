@@ -1,0 +1,200 @@
+AC-0451 P1 — deviations from the plan
+
+1. The plan's A/B recipe is nondeterministic; the proof scene was redesigned
+   (evidence-driven, not cosmetic).
+   The plan's recipe (default seed 44, air preset alt 300, first-person
+   spawn, air alt 300 pitch 55, drain 600) cannot carry a byte-identity
+   gate: same-tree re-runs (no-op controls, zero code change between the
+   two runs) do NOT reproduce their own frames. Measured on the unmodified
+   post tree: aerial control 10,689 px (1.16%), ground and edge controls
+   differ as well; at the corrected scene (below) a slanted edge view
+   differs 151,067 px (16.4%) between two runs whose measured camera
+   pose, aim, up-vector and every pushed uniform are BIT-IDENTICAL
+   (the RESULT lines). The POST tree alone yields three different aerial
+   hashes in five runs (10042ff6 x2, 5abe8626 x2, f4b3a5d3) while the
+   PRE tree yields one hash in three runs (5b77ff02) — so even the
+   pre/post aerial delta (242,908 px) is a per-run render state, not a
+   tree effect. Three noise sources were isolated:
+   (a) the TIME-driven animated fluid surface (fluid_anim.gdshader)
+       wherever near-field water is in frame (the spawn pond sits inside
+       the near zone of the plan's aerial view);
+   (b) the shot is a FIXED frame count after body-LOADED (harness.gd
+       air/planet branches) while world streaming is wall-clock budgeted
+       (Time.get_ticks_msec) — the streamed/LOD state at shot time
+       varies per run; the R24 world never reaches the build-drained
+       state inside any sane budget ("SNAPDRAIN not fully drained" hits
+       its cap even at 3000 frames);
+   (c) sub-ulp floating-point state in the body mesh build (threaded,
+       non-associative merges): amplified through UV sampling at slanted
+       incidence into terrain-contour lines on every view that shows the
+       textured body (four experiments fail their own no-op controls:
+       pitch55/drain600, pitch55/drain2400, pitch70/drain600,
+       nadir@325m).
+   The redesigned scene (all views on SEED 45, whose spawn vicinity is
+   flat and water-free within the near zone):
+   - AERIAL (the ticket's mandatory annulus view): air preset
+     AIR_ALT=471, NADIR. NOTE THE ALTITUDE FIX: AIR_ALT is the TRUE
+     RADIAL altitude above the R sphere (harness.gd:1599-1601) and the
+     spawn terrain sits ~142 m above the R sphere, so the plan's
+     "h ~= 300 m" requires AIR_ALT=471, NOT 300 (AIR_ALT=300 is only
+     159 m above surface and the animated pond stays in the near zone).
+     At 471 the near zone is the ~44 m core disc (water-free), the
+     annulus stays wide (44-221 m) and the d=332 wall, the [332,400]
+     fade window and the d=400 render edge are all in-frame.
+   - GROUND: first-person spawn aimed STRAIGHT DOWN (AIM 8.5,143.8,8.5,
+     0,-1.57 — seed-45 spawn [8.5,142,8.5] + 1.8 m eye) so the frame is
+     the core 3x3 chunks only (no water, no streaming ring, no body).
+   - RENDER EDGE: air preset AIR_ALT=471, PITCH=55 (the [332,400]
+     transition band crossed mid-frame). This view is proven
+     nondeterministic (case 1c) and is reported as a noise-floor pair.
+
+2. Byte-identity verdicts (the acceptance gate), seed 45:
+   - GROUND A/B: BYTE-IDENTICAL. pre 021bb03fc6feb95132b0feafd59e71cf ==
+     post 021bb03fc6feb95132b0feafd59e71cf == post control
+     021bb03fc6feb95132b0feafd59e71cf (3/3 across both trees). The
+     near-field-only composition renders identically pre and post.
+   - COVERAGE SWITCH A/B (the ticket's COVERAGE=1 requirement):
+     BYTE-IDENTICAL. post-aerial471-cov1 (AWECRAFT_COVERAGE=1)
+     5abe8626dd3169bf1e4d3b0319e60068 == post-aerial471-c
+     (AWECRAFT_COVERAGE=0, same state) 5abe8626dd3169bf1e4d3b0319e60068
+     — 0 differing pixels; the env-only switch is byte-inert.
+   - AERIAL A/B: differs by 242,908 px (26.4%) — 4,045 px >16, max delta
+     243, 98% sub-16 colour shifts, localized to the body surface (the
+     untouched satellite_body.gdshader's fade window and solid region);
+     the near disc differs by ~230 sub-16 px. NOT a tree effect: the
+     POST tree alone produces three hashes across five runs (case 1),
+     and the predicate is expression-inert (case 3). The plan's
+     "one pixel differs = not inert" rule was written for a
+     deterministic recipe; on this machine the recipe itself is
+     nondeterministic, so the aerial/edge byte-identity sub-gate is
+     reported as unachievable WITH the inertness proof substituted
+     (cases 2 and 3).
+   - RENDER EDGE A/B: the pre tree reproduces a post-tree frame EXACTLY
+     (pre-edge471 db8a6c14fe9fe7dbbb0624f93432834b == s45-edge-b
+     db8a6c14fe9fe7dbbb0624f93432834b); the pre/post-vs-s45-edge-a delta
+     is exactly the no-op floor (151,067 px, 3,170 >16, max 215 —
+     identical to the same-tree control pair's delta, 0 excess).
+
+3. The predicate is inert by construction (expression-level audit).
+   All 12 shader hunks: every removed
+   `if (EXPR >= u_fog_far) { discard; }` was replaced by
+   `float d = EXPR; if (d >= u_fog_far && !ac0451_covered(d))
+   { discard; }` with EXPR byte-identical (distance(v_world_pos,
+   u_cam_pos) in the two fluid shaders; the existing `d = length(V)`
+   in lod_avg; distance(CAMERA_POSITION_WORLD, v_world_pos) in the
+   eight chunk shaders + lod_avg_seam). `ac0451_covered(d)` is a marked
+   stub returning `u_coverage > 0.5 && false` ≡ false, so the discard
+   fires exactly where it fired pre-ticket. world.gd only pushes
+   `u_coverage` (env-only, change-gated, AC-0445 precedent — no Options
+   row) onto the same material sets as u_fog_far plus _lod_avg_material
+   (AC-0443 latch pattern); both lod variants declare the uniform so
+   the AC-0446 material-shader swap keeps the stored parameter valid.
+   The body's own discard (satellite_body.gdshader) is untouched.
+
+4. lod_avg_seam.gdshader was included (12 shaders changed, not 11):
+   the plan's "every u_fog_far discard" rule — it carries the clause.
+
+5. The plan's anchor main.gd:1477-1478 is stale: fog_far is pushed at
+   main.gd:1538 (home: DayNight via daynight.gd) and the render-edge
+   expression at main.gd:1523. The push sites were matched to the
+   current code, not the line numbers.
+
+6. Gate round 1 failed with SHADER ERRORs (light arm: 5 lines,
+   g0: 2): the Godot shading language rejects the C-style
+   `(void) d;` unused-parameter cast ("Void value not allowed in
+   expression"); the casts were removed (unused function parameters are
+   legal as-is). Round 2: all arms ok — g0/genhash/light rc=0,
+   script_errors=0, shader_errors=0; genhash 25/25 byte-identical to
+   the AC-0450 reference (verified by diff, .scratch/AC-0451-gates/
+   genhash-verify.txt).
+
+7. The "SNAPDRAIN not fully drained after N frames" line in the
+   ground-view logs is documented R24 behaviour (the full world build
+   does not settle inside the drain cap at llvmpipe speed); it is inert
+   under the straight-down aim (the still-streaming ring is out of
+   frame) and the ground A/B is byte-identical regardless.
+
+8. Fence compliance: no git add/commit/push, no registry edits, no new
+   tickets. The pre/post A/B was executed by capturing the change as a
+   patch (git diff > p1.patch), `git apply -R` for the pre runs and
+   `git apply` to restore; the working tree was verified byte-identical
+   to the post state after each cycle (diff against the captured patch).
+
+AC-0451 P2 — deviations from the plan (continuing P1's numbering)
+
+9. The plan's file list says "the seven near shaders (the four
+   world/chunk_lit_*.gdshader, core/lod_avg.gdshader, the two fluid
+   shaders)"; P1 landed the ac0451_covered stub in TWELVE near shaders
+   (the eight chunk_lit_*.gdshader INCLUDING the four _fade variants,
+   both lod variants, both fluid variants). The plan's anchor — "each
+   has the ac0451_covered stub and its discard" — matches the 12 files.
+   The predicate truth + the u_render_edge uniform were applied to ALL
+   12: had the five extra tiers (four _fade + lod_avg_seam +
+   fluid_anim_bf) kept the P1 stub, their materials would still discard
+   at fog_far and the ring would not close where they draw (the fade
+   materials are per-column duplicates of the same four tiers, and
+   lod_avg_seam is the AC-0446 ON-path of the band material). No design
+   decision was invented: the predicate body and the uniform are
+   identical in every file, exactly as the plan specifies.
+
+10. The plan's anchor main.gd:1478 (the u_render_edge source) is stale,
+    continuing P1's item 5: the expression lives at main.gd:1523 (the
+    AC-0384 r8 push onto _lod_avg_material) and the body's own copy at
+    satellite_body.gd:945; the body shader's op window is at
+    satellite_body.gdshader:188, not :177-179. Matched to the current
+    code, not the line numbers.
+
+11. One source of truth for the number (plan 2.2): main.gd and world.gd
+    SHARE THE NUMBER'S SOURCE — world.render_radius (main.gd:1523 reads
+    `world.render_radius`, the very member world.gd owns and now
+    derives from in the (1a2) block). No shared helper function exists
+    (DayNight owns the fog side only; adding a render_edge() helper
+    would be a refactor outside the plan's file list), so the
+    (render_radius+1)*16 DERIVATION is copied — it is the third copy
+    (after satellite_body.gd:945 and main.gd:1523) — but no second
+    number exists anywhere: every site derives from the same live
+    render radius, so a radius change moves every site at once. Stated
+    in the world.gd state-var comment as the plan requires.
+
+12. The pre-existing main.gd:1523 push of u_render_edge onto
+    _lod_avg_material was inert before P2 (the material's shader
+    declared no such uniform); with P2's uniform declaration it becomes
+    live. It and world.gd's (1a2) latch push write the same value from
+    the same source to the same material — redundant but harmless;
+    main.gd stays untouched per the plan (READ ONLY).
+
+AC-0451 P2 — render-gate findings
+13. Gate (a) OFF identity, comparisons used (P1's own pixel-diff
+    method, P1's recorded states): the aerial COV0 shot reproduces a
+    P1-recorded per-run state within 587 px (0.06%) and the edge COV0
+    shot within 646 px (0.07%) — both 0.4% of the documented
+    151,067-px no-op floor. The GROUND view no longer byte-matches
+    P1's record (32,512 px, 3.53%, 98% sub-16, max 75 — the per-run
+    class, not a structural change): today's tree crossed a C++
+    rebuild boundary (2026-10-23, the satellite bake went 196,196 ->
+    1,700,726 records) that P1's 5/5 byte-identity predates. The
+    within-tree inertness statement that the scene actually supports:
+    ground COV0 vs COV1 = 0 px (byte-identical), and the change is
+    expression-inert at COV0 by construction (the predicate
+    short-circuits on u_coverage = 0).
+14. Gate (b) altitude: at the recipe's drain 600 (and at 1500) the
+    [332,400] m annulus chunks (3-14) are UNBUILT at shot time — the
+    R24 world never settles in budget (P1's finding, worse today at
+    0.5-1.3 FPS), so the recipe shot cannot show the full ring
+    filling. What the scene can show, and does: the SAME run-state
+    A/B (P2-COV1 vs the P1-recorded pre-state, body-region diff 0 px)
+    measures the switch's effect at 704 px (0.08%, 513 >16, max 67),
+    confined to the BUILT inner annulus (r 33-88 px, d 332-~370 m) —
+    the fogged near tier replacing the body fade. The unbuilt part of
+    the ring is the residency half (AC-0399) that the ticket's spec
+    explicitly does not fix; the drain-1500 steps (600/1200/1500)
+    show the world state byte-stable across that span (the fill
+    follows the build).
+15. FLICKER check (2.4): verified by construction + stills. The
+    body's vertex stage pulls its surface 2 m inward
+    (satellite_body.gdshader:166), so the near tier is strictly
+    closer wherever they overlap and wins the depth test
+    deterministically; no alternating-fragment speckle at the
+    annulus boundary in any of the P2 stills (the boundary is a
+    clean contour). A single snapshot cannot show temporal flicker;
+    the depth-order guarantee is what rules it out.

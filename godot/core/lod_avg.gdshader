@@ -49,15 +49,20 @@ uniform float u_fog_far = 332.0;  // env.fog_depth_end (main.gd) — the AC-0401
 uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_world_pos;
-// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
-// the contract comment lives in world/chunk_lit_opaque.gdshader). P1
-// is INERT: the stub below answers false for every d, so the discard
-// is byte-identical to the pre-ticket build; P2 turns the real query
-// on. Declared in BOTH lod variants so the AC-0446 material-shader
-// swap (world._ac0446_apply_shader) keeps the stored parameter valid.
+// AC-0451: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 — the
+// contract comment lives in world/chunk_lit_opaque.gdshader). P1
+// landed it INERT (the stub answered false for every d; the
+// byte-identical A/B renders were its proof); P2 turns the real query
+// on (covered where the body is solid, d >= u_render_edge). Declared
+// in BOTH lod variants so the AC-0446 material-shader swap
+// (world._ac0446_apply_shader) keeps the stored parameter valid.
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
-bool ac0451_covered(float d) {  // AC-0451 P1 STUB: never covered (P2 turns the query on)
-	return u_coverage > 0.5 && false;
+// AC-0451 P2: the body's solid boundary (the op ramp's end) —
+// (render_radius+1)*16, pushed change-gated by world.gd _ac0401_push
+// (the (1a2) block), the same source main.gd pushes it from.
+uniform float u_render_edge = 400.0;
+bool ac0451_covered(float d) {  // AC-0451 P2: covered where the body is already solid
+	return u_coverage > 0.5 && d >= u_render_edge;
 }
 
 void vertex() {

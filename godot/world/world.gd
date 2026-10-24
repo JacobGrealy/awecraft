@@ -5284,6 +5284,17 @@ var _ac0451_cov_n_mats := -1
 # (lod_avg / lod_avg_seam) declare u_coverage, so the AC-0446
 # material-shader swap keeps the stored parameter valid.
 var _ac0451_lod_cov := -1.0
+# AC-0451 P2: the render-edge push state (u_render_edge — the body's
+# solid boundary). Same source main.gd:1523 uses for the SAME uniform
+# on the SAME _lod_avg_material: world.render_radius (this member) ->
+# (render_radius+1)*16. There is no shared helper function (DayNight
+# owns the fog side only), so the DERIVATION is copied from
+# satellite_body.gd:945 / main.gd:1523 — but the number's source is
+# the same live render radius in all three places; no second number
+# exists.
+var _ac0451_re := -1.0
+var _ac0451_re_n_mats := -1
+var _ac0451_lod_re := -1.0
 # AC-0428: the planetary weather-gate push state (Settings "cloud_gate",
 # default OFF; the shader's vgate short-circuits to 1.0 at u_gate < 0.5).
 var _ac0428_gate := -1.0
@@ -5436,11 +5447,12 @@ func _ac0401_push() -> void:
 	# a correctness rule, not a toggleable look). Pushed to the same
 	# material set as (1) with the same gate shape (value + material-set
 	# size — the chunk materials are lazily built, AC-0420), so the push
-	# stays change-gated and the per-frame cost is the compare. P1 is
-	# INERT: the shader's ac0451_covered() stub answers false for every d
-	# regardless of this value (the byte-identical A/B renders are the
-	# acceptance proof); P2 turns the real coverage query on and the
-	# switch then governs it.
+	# stays change-gated and the per-frame cost is the compare. P1
+	# landed the predicate INERT (a stub answering false for every d;
+	# the byte-identical A/B renders were its acceptance proof). P2
+	# turns the real coverage query ON: the shaders now answer
+	# u_coverage > 0.5 && d >= u_render_edge (the (1a2) block below
+	# pushes that window's edge) — the switch then governs the rule.
 	var cov_v := 1.0 if OS.get_environment("AWECRAFT_COVERAGE") == "1" else 0.0
 	if cov_v != _ac0451_cov or n_mats != _ac0451_cov_n_mats:
 		_ac0451_cov = cov_v
@@ -5460,6 +5472,37 @@ func _ac0401_push() -> void:
 	if _lod_avg_material != null and cov_v != _ac0451_lod_cov:
 		_lod_avg_material.set_shader_parameter("u_coverage", cov_v)
 		_ac0451_lod_cov = cov_v
+	# (1a2) AC-0451 P2: the coverage window's outer edge (u_render_edge)
+	# — the body's solid boundary (satellite_body.gdshader: op =
+	# smoothstep(u_fog_far, u_render_edge, d) is solid at d >=
+	# u_render_edge). The near shaders' ac0451_covered(d) asks "is the
+	# body already drawing here" and answers d >= u_render_edge, so the
+	# near field keeps drawing through the fog_far..render_edge annulus
+	# (fully fogged there — the handover ring becomes fog, not a hole)
+	# and discards only where the body is solid. Same source as the fog
+	# wall in (1) and as main.gd:1523 (see the state-var comment):
+	# world.render_radius -> (render_radius+1)*16. Change-gated the same
+	# shape as (1)/(1a): the value (moves only on a render-radius
+	# change) + the material-set size (lazily built materials, AC-0420).
+	var re := float(render_radius + 1) * 16.0
+	if re != _ac0451_re or n_mats != _ac0451_re_n_mats:
+		_ac0451_re = re
+		_ac0451_re_n_mats = n_mats
+		for k in ChunkScript._mat_cache:
+			var m5 = ChunkScript._mat_cache[k]
+			if m5 is ShaderMaterial:
+				m5.set_shader_parameter("u_render_edge", re)
+		for bid in Data.fluid_anim_mats:
+			var am5 = Data.fluid_anim_mats[bid]
+			if am5 is ShaderMaterial:
+				am5.set_shader_parameter("u_render_edge", re)
+		for bid in Data.fluid_anim_bf_mats:
+			var am6 = Data.fluid_anim_bf_mats[bid]
+			if am6 is ShaderMaterial:
+				am6.set_shader_parameter("u_render_edge", re)
+	if _lod_avg_material != null and re != _ac0451_lod_re:
+		_lod_avg_material.set_shader_parameter("u_render_edge", re)
+		_ac0451_lod_re = re
 	# (1b) AC-0426: the zero-light sky-ambient switch (Settings
 	# "ambient_sky", default ON since AC-0432; AWECRAFT_AMBSKY=<0|1> env
 	# preload at boot). Same gate shape as (1): the value AND the material-set size,

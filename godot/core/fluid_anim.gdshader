@@ -46,8 +46,14 @@ const float TILE_F = 1.0 / 32.0;
 // is byte-identical to the pre-ticket build; P2 turns the real query
 // on.
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
-bool ac0451_covered(float d) {  // AC-0451 P1 STUB: never covered (P2 turns the query on)
-	return u_coverage > 0.5 && false;
+// AC-0451 P2: the body's solid boundary — its op ramp (satellite_body.
+// gdshader: op = smoothstep(u_fog_far, u_render_edge, d)) reaches full
+// opacity at d >= u_render_edge. (render_radius+1)*16, the same source
+// main.gd pushes the same uniform from (world.render_radius); world.gd
+// _ac0401_push (the (1a2) block) pushes it change-gated.
+uniform float u_render_edge = 400.0;
+bool ac0451_covered(float d) {  // AC-0451 P2: covered where the body is already solid
+	return u_coverage > 0.5 && d >= u_render_edge;
 }
 
 void vertex() {

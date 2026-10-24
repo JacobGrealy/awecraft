@@ -46,24 +46,30 @@ uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
 // render state ALPHA is ignored entirely).
 uniform float u_fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 v_world_pos;
-// AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
+// AC-0451: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
 // world.gd _ac0401_push; NO Options row, the AC-0445 precedent: the
 // handover is a correctness rule, not a toggleable look). The
-// near-field discard below is now a RULE — "stop drawing only where
+// near-field discard below is a RULE — "stop drawing only where
 // something else is already drawing" — asked of the layer that would
-// take over. P1 is INERT: ac0451_covered() is a marked STUB answering
-// false for every d, so the discard fires exactly where it fired
-// before the ticket and the render is byte-identical to the pre-change
-// build — that inertness IS the acceptance proof (P1 changes nothing
-// the player can see). P2 (the AC-0451 P2 landing) turns the real
-// coverage query on; the switch is wired now so P2 is a one-line
-// change there.
+// take over. P1 landed it INERT (a marked stub answering false for
+// every d; the byte-identical A/B renders were its acceptance proof).
+// P2 turns the real coverage query ON: the body (satellite_body.
+// gdshader) is solid at d >= u_render_edge (its op ramp =
+// smoothstep(u_fog_far, u_render_edge, d) reaches 1.0 there), so the
+// near field keeps drawing through the fog_far..render_edge annulus —
+// fully fogged there, the handover ring becomes fog rather than a
+// hole — and discards only where the body already owns the view.
+// u_coverage 0.0 (switch OFF) makes the predicate false for every d:
+// the pre-ticket discard, byte-identical.
 uniform float u_coverage : hint_range(0.0, 1.0) = 0.0;
-// AC-0451 P1 STUB — "never covered", unconditionally (u_coverage is
-// read so the gate is live). P2 replaces the `false` with the real
-// coverage query.
+// AC-0451 P2: the body's solid boundary (see above) — (render_radius+1)*16,
+// the same source main.gd pushes the same uniform from (world.render_radius);
+// world.gd _ac0401_push (the (1a2) block) pushes it change-gated. Default
+// 400.0 = the R24 value (the u_fog_far 332.0 pattern).
+uniform float u_render_edge = 400.0;
+// AC-0451 P2 — the coverage query: "the body is already drawing here".
 bool ac0451_covered(float d) {
-	return u_coverage > 0.5 && false; // P1 STUB: never covered
+	return u_coverage > 0.5 && d >= u_render_edge;
 }
 
 

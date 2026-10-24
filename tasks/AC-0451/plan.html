@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0451 P2 the coverage query</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0451 P2 — turn the coverage query on (the look change)</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>P1 is landed and inert; this is the phase that changes what the player sees.</b> The rule was fixed at filing: <em>stop drawing only where something else is already drawing</em>.</p>
+<h2>1. Where P1 left it (read these, do not re-derive)</h2>
+<ul>
+<li>Every near material discards at <code>d &gt;= u_fog_far</code> (AC-0401), and now through the predicate: <code>if (d &gt;= u_fog_far &amp;&amp; !ac0451_covered(d)) { discard; }</code>.</li>
+<li><code>ac0451_covered()</code> is a <b>stub returning false</b> in every near shader: <code>return u_coverage &gt; 0.5 &amp;&amp; false;</code> — so P1 is byte-identical to the pre-ticket build, which was its whole acceptance proof.</li>
+<li>The switch exists and is pushed: <code>AWECRAFT_COVERAGE=0|1</code> → <code>u_coverage</code>, change-gated, to the chunk material cache, the fluid animation materials and <code>_lod_avg_material</code> (world.gd:5444-5462). OFF is today's build.</li>
+<li><b>The body's own coverage</b> (<code>core/satellite_body.gdshader:177-179</code>): <code>op = smoothstep(u_fog_far, u_render_edge, d)</code>, solid only at <code>d &gt;= u_render_edge</code>, where <code>u_render_edge = (render_radius+1)*16</code> (main.gd:1478), 400 m at radius 24 against fog_far 332 m.</li>
+</ul>
+<h2>2. The change</h2>
+<p><b>2.1 The predicate answers the truth:</b> <code>ac0451_covered(d)</code> becomes <code>u_coverage &gt; 0.5 &amp;&amp; d &gt;= u_render_edge</code> — "the body is already drawing here" — so the near field keeps drawing through the <code>fog_far..render_edge</code> annulus instead of leaving it to nobody. Beyond <code>render_edge</code> the body is solid and the near field discards exactly as today.</p>
+<p><b>2.2 <code>u_render_edge</code> must be pushed, not hardcoded.</b> Add the uniform to the same near materials and push it from the same place the fog value is pushed (<code>_ac0401_push</code>), from the same source <code>main.gd:1478</code> uses, change-gated the same way. <b>One source of truth for the number</b> — if <code>main.gd</code> and <code>world.gd</code> cannot share it, say so rather than duplicating a literal.</p>
+<p><b>2.3 Expected appearance, stated before the edit:</b> in that annulus the near fragments are already beyond <code>fog_depth_end</code> (= <code>fog_far</code>), so they render fully fogged. <b>The ring should become fog rather than a hole</b> — not terrain. If you instead see terrain appear there, the fog window moved and that is a bug in your change, not a bonus.</p>
+<p><b>2.4 Deterministic ownership</b> (the ticket's requirement): where both surfaces coexist the finer one must win by GEOMETRY, not draw order — the body already pulls its displaced surface 2 m radially inward for exactly this reason. Overlapping is the intended state; verify no flicker.</p>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>the seven near shaders</td><td>the four <code>world/chunk_lit_*.gdshader</code>, <code>core/lod_avg.gdshader</code>, the two fluid shaders — each has the <code>ac0451_covered</code> stub and its discard</td><td>Edit: the predicate body + the new uniform declaration.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_ac0401_push</code> and the AC-0451 push block (5434-5462)</td><td>Edit: push <code>u_render_edge</code> with the same gating.</td></tr>
+<tr><td>godot/scenes/main.gd</td><td><code>1478</code> (the <code>u_render_edge</code> source) and <code>1477</code> (<code>fog_depth_end</code>)</td><td>READ ONLY unless the shared-source question in 2.2 requires it.</td></tr>
+<tr><td>tasks/AC-0451/</td><td>journal, deviations, results</td><td>Append.</td></tr>
+</table>
+<p><b>Do not touch:</b> the body's own op window (AC-0428 closed "the planet is opaque again"), the far tier's shading (AC-0443/0444/0446), the lane split, the fog distances themselves, generation, residency, light.</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>OFF is still byte-identical</td><td>renders at <code>AWECRAFT_COVERAGE=0</code>, A/B against the P1 records</td><td><b>Identical</b> (or identical within the documented no-op floor — P1's journal records that floor as 151,067 px on body-visible views and notes the scene is nondeterministic; <b>reuse P1's own method and say which comparison you used</b>).</td></tr>
+<tr><td>ON closes the ring (the point)</td><td>the same views at <code>AWECRAFT_COVERAGE=1</code>, plus an <b>altitude view</b> (the defect is downward-from-height)</td><td>At altitude: <b>no see-through to whatever is behind the world</b>. Report the pixel-difference percentage and where it concentrates. <b>Describe what fills the annulus</b> — §2.3 predicts fog.</td></tr>
+<tr><td>Ground view unchanged</td><td>a ground-level view ON vs OFF</td><td>Little or no change — at ground level the annulus is the horizon and fog hides it. A large change here means the fog window moved.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0451 --arms g0,genhash,residency,planetwalk</code></td><td>g0 0/0; genhash 25/25 (this is a shader/discard change, geometry must not move); residency leak false / stable; planetwalk 25/26 with mesh and body.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL. <code>AWECRAFT_AIM</code> takes FLAT coordinates; a downward pitch is needed for the altitude view.</p>
+<h2>5. Acceptance</h2><p>ON removes the see-through at altitude, OFF is unchanged, the ground view barely moves, the annulus is filled with what §2.3 predicted, and nothing else regressed.</p>
+<h2>6. Risks</h2><p>(1) If ON changes the ground view as much as the altitude view, the fog window moved — stop. (2) A coplanar flicker between near and body would mean the 2 m inward pull is not saving you at these distances; report it rather than hiding it behind one frame. (3) The scene is nondeterministic (P1 recorded this), so a byte comparison on body-visible views is not available — <b>do not invent a tighter comparison than the scene supports</b>; say what you could and could not compare.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not move the fog distances, the body's window, or the far tier.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>P1 landed the predicate and switch, inert and byte-identical. This is the look change that fixes the handover gap the user can see from the air.</p>
+</body></html>
