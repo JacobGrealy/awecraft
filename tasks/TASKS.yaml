@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T12:59
+  updated_at: 2026-10-24T15:26
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0316
 - AC-0317
 - AC-0318
 - AC-0320
@@ -16228,11 +16227,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T10:20
-  updated_at: 2026-09-18T10:20
-  completed_at: null
+  updated_at: 2026-10-24T15:26
+  completed_at: 2026-10-24T15:26
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a player, my inventory should behave the same no matter which UI path touches\
@@ -16258,7 +16257,40 @@ intake:
     \ NOT\ntouched — battery fixtures must keep working. Moving the `AWECRAFT_INV` fixture out of `main.gd`\
     \ is a\nseparate ticket.\n\nGates: G0 = zero SCRIPT ERROR; battery mode-for-mode identical for `player`,\
     \ `interact`, `craft`,\n`survival`, `held`; the inventory/crafting UI arms and the `AWECRAFT_INV=1`\
-    \ / `=table` shot hooks must\nstill populate identically.\n"
+    \ / `=table` shot hooks must\nstill populate identically.\n\n\nCLOSED (round 75) — THE MODEL BOUNDARY\
+    \ IS DRAWN WHERE IT CAN BE DRAWN, and the parts left undone are recorded with reasons rather than\
+    \ quietly skipped.\nWHAT LANDED: the view no longer implements model work. `_have`'s 36-slot scan\
+    \ now calls `count_item(id)` and `_take_from_inv`'s removal now calls `remove_item(id, n)`, and THE\
+    \ IN-PLACE MUTATION OF A LIVE `_inv_get` SLOT IS DELETED — that mutation was the load-bearing leak\
+    \ the ticket described (returning a copy would have silently broken consumption everywhere except\
+    \ the `<=0` fallback). Removal semantics were reproduced exactly: forward 0..35 scan so lower slots\
+    \ empty first, matching the view's old order; the builder notes a reverse scan would have drifted\
+    \ per-slot distributions, which is the kind of detail that only shows up in a battery comparison.\n\
+    D2 IS WORTH KEEPING: the contract names ALREADY EXISTED from the port commit — so instead of adding\
+    \ duplicates it re-aligned `remove_item` from a DEAD reverse-order `bool` variant that had ZERO callers.\
+    \ A second function of the same name with different semantics would have been worse than the leak.\n\
+    WHAT WAS NOT DONE, AND WHY THAT IS CORRECT HERE: the containers stay PUBLIC and `_inv_get` stays LIVE.\
+    \ Reasons recorded, and each is a real constraint rather than convenience — D4: fenced harness arms\
+    \ seed the containers wholesale, plus save restore, the AC-0317 fixture and view rendering; D5: the\
+    \ MODEL'S OWN `_slot_click` merges through the returned reference, so the plan's precondition for\
+    \ returning a copy (\"once nothing mutates a returned slot\") is simply not met; D6: every `main.gd`\
+    \ writer is whole-container, so there is no per-slot setter to move them onto. The plan explicitly\
+    \ allowed this outcome — \"if one genuinely needs whole-container access, say so and leave it public\
+    \ with a stated reason\" — and the builder took that door instead of forcing a privatisation that\
+    \ would have broken the harness or the model.\nSO THE HONEST SCOPE STATEMENT: the DESYNC RISK this\
+    \ ticket was filed about is closed (the view can no longer mutate a player slot behind the model's\
+    \ back, and count/remove have one implementation each), while the VISIBILITY tightening is deferred\
+    \ behind a precondition that the model itself does not yet satisfy. That remaining work is now precisely\
+    \ describable rather than vague: make `_slot_click` stop merging through a reference, then the copy\
+    \ becomes possible.\nVERIFICATION WAS BUILT ON A CAPTURED BEFORE, not on g0: the five battery arms\
+    \ are identical with player/craft/survival/held BYTE-EQUAL, interact identical within its own 70/71/72-frame\
+    \ noise (and r4 reproduced the before exactly; the changed code is not on that path), and guiclick's\
+    \ PRE-EXISTING red is mode-for-mode identical with all fields byte-equal. UI and shot hooks: AWECRAFT_INV=table\
+    \ PNGs BYTE-IDENTICAL, =1 panel pixel-identical apart from 520 px of 1-7-level jitter in the recipe-row\
+    \ band, which the builder noise-proofed with a same-tree re-run differing by 1141 px — i.e. the jitter\
+    \ is larger than the change.\nALSO: genhash 25/25, save ok with inv_match true (25-key RESULT byte-equal),\
+    \ load ok. Note for future runs: load needed a 1500 s budget (743/750 s), so the standing timeout\
+    \ is too tight."
   comments: []
 - id: AC-0317
   title: harness-fixtures-out-of-main-gd

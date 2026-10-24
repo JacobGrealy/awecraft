@@ -718,6 +718,30 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (CameraAttributesPractical = camera_attributes/main-camera-attributes.tres)
 │                         movement, look, mine/place/bucket/bow, combat, inventory model,
 │                         held-item viewmodel, swing/bob.
+│                         INVENTORY MODEL CONTRACT (AC-0316): the model owns the
+│                         inventory facts and the view (ui/inventory.gd) reaches
+│                         them only through it — `inv_add` / `count_item` /
+│                         `remove_item` / `find_slot` / `inv_slot_click` /
+│                         `inv_selected` / `inv_consume_selected`.
+│                         `remove_item(id, n) -> int` returns the removed count
+│                         and scans forward 0..35 with the <= 0 slot clear —
+│                         the view's old `_take_from_inv` semantics, which it
+│                         replaced (the view no longer scans the slots for its
+│                         recipe check (`count_item`) or mutates a returned live
+│                         slot in place; that in-place write was the load-
+│                         bearing leak this ticket closes). The containers
+│                         (inv, armor, held, craft_grid, table_grid, craft_out)
+│                         stay public BY EXCEPTION: the sanctioned harness arms
+│                         seed/reset them wholesale (the §7 test-arm access),
+│                         the main.gd AWECRAFT_INV shot fixture (AC-0317 moves
+│                         it) and the save restore (main.gd:704-712) write them
+│                         whole, and the view renders armor / craft_grid /
+│                         table_grid / craft_out directly. `_inv_get` returns
+│                         the LIVE Dictionary by necessity — the model's own
+│                         `_slot_click` merges through the returned reference
+│                         (shift-click / release / right-click split), so a copy
+│                         would break slot-click silently; no cross-module code
+│                         mutates a returned slot anymore.
 │                         HELD-TOOL COLOUR (AC-0098): the 32×32 TOOL_GRIDS voxels
 │                         take their per-cell colour from the item's own icon in
 │                         godot/assets/items_atlas.png — the icons are per-cell

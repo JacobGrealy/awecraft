@@ -3598,21 +3598,30 @@ func find_slot(id: int) -> int:
 	return -1
 
 
-func remove_item(id: int, n: int) -> bool:
-	for i in range(INV_SIZE - 1, -1, -1):
-		if i >= inv.size():
-			continue
+# AC-0316: the model's remove-n contract — the view's old `_take_from_inv`,
+# verbatim: a FORWARD scan 0..35 (when a removal spans several slots the
+# LOWER slots empty first — the original reverse-order draft had zero
+# callers, and its per-slot distribution is not the product behaviour the
+# battery captures), the <= 0 slot clears in place (the view did the same
+# via `_inv_set`), and the REMOVED COUNT is returned (the recipe-click
+# consumer needs the count, not a bool). The count side of the contract is
+# `count_item` above.
+func remove_item(id: int, n: int) -> int:
+	var got := 0
+	for i in range(INV_SIZE):
+		if i >= inv.size() or n <= 0:
+			break
 		var it: Dictionary = inv[i]
-		if int(it["id"]) == id:
-			var take := mini(n, int(it["n"]))
-			it["n"] = int(it["n"]) - take
-			n -= take
-			if int(it["n"]) <= 0:
-				it["id"] = 0
-				it["n"] = 0
-			if n <= 0:
-				return true
-	return false
+		if int(it["id"]) != id:
+			continue
+		var take := mini(n, int(it["n"]))
+		it["n"] = int(it["n"]) - take
+		if int(it["n"]) <= 0:
+			it["id"] = 0
+			it["n"] = 0
+		got += take
+		n -= take
+	return got
 
 
 func armor_points() -> int:

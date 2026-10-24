@@ -793,16 +793,13 @@ func _build_all_recipes() -> void:
 		_all_recipes.append({"shaped": true, "grid": 3, "grid3": r["grid3"], "map": r["map"], "req": req, "out": r["out"], "ok": false})
 
 
+# AC-0316: the count is the model's contract (`count_item`) — the view no
+# longer scans the 36 slots through `_inv_get`.
 func _have(id: int) -> int:
 	var p = Game.player
 	if p == null:
 		return 0
-	var c := 0
-	for i in 36:
-		var it: Dictionary = p._inv_get(i)
-		if int(it["id"]) == id:
-			c += int(it["n"])
-	return c
+	return p.count_item(id)
 
 
 func _refresh_recipe_ok() -> void:
@@ -856,23 +853,6 @@ func _grid_to_inv(p, grid: Array) -> void:
 		c["n"] = 0
 
 
-func _take_from_inv(p, item_id: int, n: int) -> int:
-	var got := 0
-	for i in 36:
-		if n <= 0:
-			break
-		var it: Dictionary = p._inv_get(i)
-		if int(it["id"]) != item_id:
-			continue
-		var t := mini(n, int(it["n"]))
-		it["n"] = int(it["n"]) - t
-		if int(it["n"]) <= 0:
-			p._inv_set(i, {"id": 0, "n": 0})
-		got += t
-		n -= t
-	return got
-
-
 func _recipe_click(r: Dictionary) -> void:
 	var p = Game.player
 	if p == null:
@@ -886,8 +866,13 @@ func _recipe_click(r: Dictionary) -> void:
 		if _have(int(id)) < int(req[id]):
 			p.recompute_craft()
 			return
+	# AC-0316: the removal is the model's contract (remove_item) — the view
+	# no longer reaches into _inv_get and mutates the player's live slot in
+	# place (that in-place write was the load-bearing leak: it only worked
+	# because _inv_get returns the live Dictionary). remove_item reproduces
+	# the old loop exactly (forward scan, mini-take, <= 0 slot clear).
 	for id in req.keys():
-		_take_from_inv(p, int(id), int(req[id]))
+		p.remove_item(int(id), int(req[id]))
 	if bool(r["shaped"]):
 		var g3: Array = r["grid3"]
 		for i in 9:
