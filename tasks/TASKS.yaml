@@ -1,9 +1,10 @@
 meta:
-  updated_at: 2026-10-23T22:37
+  updated_at: 2026-10-23T22:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
+- AC-0473
 - AC-0094
 - AC-0141
 - AC-0142
@@ -30855,6 +30856,67 @@ intake:
 
     FILES: godot/world/world.gd (`_star_settled_drain` ~6223-6245). Refs: AC-0463 (L2, L3, L7), AC-0358
     (feed invariant), godot/OPS.md §7 (arm variance).
+
+    '
+  comments: []
+- id: AC-0473
+  title: 'throughput: R24 on the 1 m grid never settles at 0.5-1.3 FPS'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-23T22:38
+  updated_at: 2026-10-23T22:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Taking off and flying out should look like leaving a real place. Right now the world around you is
+    still being built while you fly, so from the air you can look down and see through where the ground
+    should be, and the frame rate collapses while it tries to catch up. This is the last thing standing
+    between the current build and the takeoff moment feeling right.
+
+
+    ## 2) Technical Details
+
+    MEASURED ON THE CURRENT TREE (rounds 66-67): at render radius 24 the world NEVER SETTLES and runs
+    0.5-1.3 FPS. At 1 m cells a 400 m render radius is 25 chunks per axis rather than 4, so the resident
+    set and the fill work per metre of frontier rose by roughly the square of that ratio. Per-chunk costs
+    already measured in earlier work: generation ~13.4 ms and mesh ~19.2 ms, i.e. ~33 ms of main-thread-equivalent
+    work per chunk.
+
+    ORDERING IS ALREADY FIXED AND IS NOT THE LIMIT: AC-0399 landed the view-biased fill order (71115ad)
+    — a column in front loses up to 70% of its effective taxi, the ground order is md5-identical, and
+    the FLIP negative test came out worse than baseline at every step, which proves the instrument reads
+    order rather than rate. So the remaining defect is THROUGHPUT, and no further priority work will close
+    it.
+
+    AC-0451 P2 also established the handover rule is live (near field draws until the body covers it),
+    so the guaranteed hole is gone; what remains visible at altitude is UNBUILT chunks, not a handover
+    gap.
+
+    TASKS:
+
+    1. MEASURE the rate before optimising: chunks built per second at R24 on the ground and at altitude,
+    and how many chunks R24 actually requires. State whether the required set is reachable at ANY plausible
+    rate — that decides whether this is an optimisation ticket or a scale ticket.
+
+    2. IF it is an optimisation: the known per-chunk costs are generation and mesh, both main-thread-adjacent.
+    The honest options are moving more work to the existing worker path, caching, or reducing per-chunk
+    cost. Each should be measured, not assumed.
+
+    3. IF the required set is not reachable, THE DECISION IS THE USER''S AND MUST BE ASKED, not decided
+    in code: 1 m blocks are a fixed gameplay constraint (user: "It does not matter what it costs 1m is
+    an unchangeable gameplay element"), so the levers are render radius, far-tier handover distance, or
+    LOD — not block size. Do not change any of those without a user ruling.
+
+    FILES: godot/world/world.gd (the drain and the creation pass), the worker path, gdext/src/gen.cpp
+    and mesh.cpp. Refs: AC-0399 (order, done), AC-0451 (handover, done), AC-0469/AC-0471 (the 1 m grid
+    that raised the cost), AC-0399''s measurement method for the frontier.
 
     '
   comments: []
