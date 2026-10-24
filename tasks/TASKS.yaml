@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T10:59
+  updated_at: 2026-10-24T11:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0142
 - AC-0176
 - AC-0295
 - AC-0316
@@ -6470,11 +6469,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-08-29T09:53
-  updated_at: 2026-08-31T17:23
-  completed_at: null
+  updated_at: 2026-10-24T11:41
+  completed_at: 2026-10-24T11:41
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a developer or modder I want mob tables in JSON (like blocks/items) so I can
@@ -6483,7 +6482,42 @@ intake:
 
     2) Technical Details: Extract hardcoded mob tables from autoload/data.gd (mobs 4+ skeleton/chicken/wolf/spider
     entries) into godot/data/mobs.json alongside the blocks/items split (AC-0141). Keep data.gd as loader
-    + lookups so callers unchanged. Verify lookups unchanged, battery green.'
+    + lookups so callers unchanged. Verify lookups unchanged, battery green.
+
+
+    CLOSED (round 72). WHAT LANDED: the mob table moved to godot/data/mobs.json via the SAME loader and
+    encoding contract AC-0141 established — `_load_table(path, int_keys := true)`, where blocks/items
+    keep the hard non-int-key script error and MOBS pass name keys through verbatim with int_keys=false.
+    One loader, one encoder, one dump-diff proof; only the key policy differs, and it is explicit at the
+    call site.
+
+    THE REFUSAL CAME FIRST AND MADE THE LANDING CLEAN: my original plan said "reuse _load_table" and "top-level
+    keys converted back to int" in the same breath, which cannot both hold for a NAME-keyed table whose
+    callers do `Data.mobs.get("pig")`. The builder proved the contradiction from source (`"pig".is_valid_int()`
+    false → the error branch fires → G0 red, mobs null, diff non-empty), ruled out the tempting non-fix
+    (re-keying to integers breaks the empty-diff proof, which needs the original name keys), and proposed
+    the int_keys parameter I then wrote into the plan. THIRD time a PLAN-INSUFFICIENT has saved a bad
+    landing this session.
+
+    PROOF: canonical var_to_str dump 2200 B before == 2200 B after, mobs_count 9, diff file 0 B. NEGATIVE
+    TESTS BOTH FIRE, which is the part that makes the loader trustworthy: a missing mobs.json gives "Cannot
+    call method ''get_as_text'' on a null value" plus a Nil-assign and rc=1; a corrupt one gives "Unable
+    to iterate on object of type ''Nil''" plus Nil-assign and rc=1; the G0 census catches both. The file
+    was restored afterwards.
+
+    GATES: g0 rc=0 census 0/0; genhash 25/25 byte-identical; save ok in 44 s; load ok with simband_ms
+    6739 over 755 s and cols 41; and the MOBS ARM GREEN with real values (rig/bunny/fall/chase/spider/wolf/arrow/tables
+    all true, total 20, ring_ready true, day_passive 2130, night_hostile 1089, fall_watch yland -1.0254,
+    wolf_tamed true) — that arm matters more than the parse gates, because a table that loads but loses
+    a field shows up as a spawn or behaviour failure rather than an error.
+
+    DOCS: ARCHITECTURE.md §2/§5 now name mobs.json, the int_keys distinction and the 2200 B/9-mob proof;
+    autoload/AGENTS.md''s data.gd bullet says blocks, items AND mobs are JSON with the key-policy rule,
+    which closes the line I had to fix by hand at AC-0141.
+
+    STATE OF THE SPLIT: blocks, items and mobs are data. recipes (shapeless/shaped) and tiles remain code
+    by both tickets'' explicit scope — tiles is currently an empty dict — so if a modder-facing data story
+    is wanted later it is one small ticket, not a reopened one.'
   comments:
   - id: 1
     created_at: '2026-09-01T02:12:48.549848'

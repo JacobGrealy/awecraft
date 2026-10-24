@@ -109,19 +109,13 @@ var shaped := [
 	{"grid3": ["M  ", "S  ", "S  "], "grid": 3, "map": {"M": 107, "S": 100}, "out": {"id": 122, "n": 1}},
 	{"grid3": ["S# ", "#S ", "S# "], "grid": 3, "map": {"S": 100, "#": 145}, "out": {"id": 142, "n": 1}},
 ]
-var mobs := {
-	"pig": {"passive": true, "hp": 10, "w": 0.8, "h": 0.9, "speed": 1.5, "drops": [{"id": 101, "n": 2, "ch": 1.0}, {"id": 104, "n": 1, "ch": 0.6}], "body": Color.html("f2a29c"), "head": Color.html("f2a29c")},
-	"sheep": {"passive": true, "hp": 8, "w": 0.8, "h": 0.9, "speed": 1.4, "drops": [{"id": 103, "n": 2, "ch": 1.0}, {"id": 101, "n": 1, "ch": 0.8}], "body": Color.html("f0f0e8"), "head": Color.html("f0f0e8")},
-	"cow": {"passive": true, "hp": 10, "w": 0.9, "h": 1.1, "speed": 1.3, "drops": [{"id": 101, "n": 2, "ch": 1.0}, {"id": 104, "n": 1, "ch": 0.8}], "body": Color.html("8a5a3a"), "head": Color.html("7a4e30")},
-	"zombie": {"passive": false, "hp": 20, "w": 0.6, "h": 1.8, "speed": 2.2, "dmg": 3, "drops": [{"id": 101, "n": 1, "ch": 0.3}], "body": Color.html("3a7a3a"), "head": Color.html("4a9a4a")},
-	"skeleton": {"passive": false, "hp": 20, "w": 0.6, "h": 1.9, "speed": 2.3, "ranged": true, "dmg": 2, "drops": [{"id": 144, "n": 2, "ch": 0.9}, {"id": 145, "n": 1, "ch": 0.3}], "body": Color.html("d6d4ce"), "head": Color.html("e6e4de")},
-	"chicken": {"passive": true, "hp": 4, "w": 0.45, "h": 0.6, "speed": 1.7, "drops": [{"id": 146, "n": 1, "ch": 1.0}], "body": Color.html("f6f3ef"), "head": Color.html("f6f3ef")},
-	"wolf": {"passive": true, "hp": 8, "w": 0.6, "h": 0.9, "speed": 3.0, "drops": [{"id": 104, "n": 2, "ch": 0.8}], "body": Color.html("7c7970"), "head": Color.html("6b685f")},
-	"spider": {"passive": false, "hp": 16, "w": 1.3, "h": 0.95, "speed": 2.5, "dmg": 2, "drops": [{"id": 145, "n": 2, "ch": 0.8}], "body": Color.html("2b2620"), "head": Color.html("211d18")},
-	# AC-0037: the cute bunny (user ask) - chicken-sized, passive, drops
-	# a little leather. The rig adds the long ears (see entities/mob.gd).
-	"bunny": {"passive": true, "hp": 3, "w": 0.5, "h": 0.6, "speed": 2.2, "drops": [{"id": 104, "n": 1, "ch": 0.7}], "body": Color.html("f3e3d7"), "head": Color.html("f6ead9")},
-}
+# AC-0142: the mob table moved to res://data/mobs.json (same entries and
+# types — the dump-diff in tasks/AC-0142/ is the proof). Loaded in _init
+# with int_keys=false: name-keyed, so the string keys ("pig", "sheep", ...)
+# pass through verbatim — unlike the int-id block/item tables.
+# AC-0037: the cute bunny (user ask) - chicken-sized, passive, drops
+# a little leather. The rig adds the long ears (see entities/mob.gd).
+var mobs := {}
 var tiles := {}
 
 
@@ -130,7 +124,9 @@ var tiles := {}
 # lookups below expect (the before/after dump-diff in tasks/AC-0141/ is the
 # proof the round-trip is bit-identical). Encoding rules:
 #   - top-level keys are the int ids, written as strings (JSON object keys
-#     are strings) and converted back to int here;
+#     are strings) and converted back to int here — for the int_keys tables
+#     (blocks/items, the default). AC-0142: name-keyed tables load with
+#     int_keys=false and the string keys pass through verbatim (mobs);
 #   - {"i": n} -> int n. Godot's JSON parser yields a FLOAT for every bare
 #     number, and these tables mix int and float per value (speed is int
 #     2/4/6/7 on tools but 1.5 on swords), so ints are tagged, never guessed
@@ -140,7 +136,7 @@ var tiles := {}
 #     doubles (tasks/AC-0141 probe), so the float32 channels are identical;
 #   - a bare JSON number -> float (as in the source: hard 0.6 / 1.0 / 1e9);
 #   - strings/bools/objects/arrays -> String/Bool/Dictionary/Array.
-func _load_table(path: String):
+func _load_table(path: String, int_keys := true):
 	var f := FileAccess.open(path, FileAccess.READ)
 	# Deliberately no null-guards: a missing file (null call below) or a
 	# corrupt parse (null iteration) is a SCRIPT ERROR, so G0's census sees
@@ -149,13 +145,19 @@ func _load_table(path: String):
 	f.close()
 	var out := {}
 	for k in j:
-		if not k.is_valid_int():
-			push_error("data: %s has a non-int top-level key %s (ids are quoted ints)" % [path, k])
-			# The null call below is a runtime SCRIPT ERROR on purpose —
-			# the tables are mandatory and G0's census must see the break.
-			var broken = null
-			return broken.size()
-		out[int(k)] = _decode_table_value(j[k])
+		if int_keys:
+			if not k.is_valid_int():
+				push_error("data: %s has a non-int top-level key %s (ids are quoted ints)" % [path, k])
+				# The null call below is a runtime SCRIPT ERROR on purpose —
+				# the tables are mandatory and G0's census must see the break.
+				var broken = null
+				return broken.size()
+			out[int(k)] = _decode_table_value(j[k])
+		else:
+			# AC-0142: name-keyed tables (mobs) — the string keys pass
+			# through verbatim; the hard int-key error above is the
+			# int-keyed tables' (blocks/items) defence only.
+			out[k] = _decode_table_value(j[k])
 	return out
 
 
@@ -213,6 +215,9 @@ func _init() -> void:
 	# reserves its tile at [32,32]. Mined with the hand -> item 126.
 	blocks = _load_table("res://data/blocks.json")
 	items = _load_table("res://data/items.json")
+	# AC-0142: the mob table, name-keyed — int_keys=false so the string
+	# names pass through verbatim (see the _load_table note).
+	mobs = _load_table("res://data/mobs.json", false)
 
 
 func _ready() -> void:
