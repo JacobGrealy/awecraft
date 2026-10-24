@@ -1,0 +1,43 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0474 find the stall</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0474 — why do builds stop completing after the inner ball?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. This is the reason the world does not fill, so the order is: <b>instrument, name the reason, fix that reason, prove it with the same measurement.</b></p>
+<h2>1. The measurement that defines this ticket (do not re-derive)</h2>
+<ul>
+<li>Build rate: <b>14.2 chunks/s for 10 s, then 0.0 chunks/s for 194 s</b>. <b>145 completions against 16,484 dispatch attempts.</b></li>
+<li>145 is <b>exactly the taxi-8 ball</b> (<code>medium_start_r 8</code>).</li>
+<li>The <b>data set converges fully</b> (1401/1401 by ~30 s) — generation is not the problem; the <b>build/land half stops</b>.</li>
+<li>The required set is 1401 at spawn / 2503 at a seam; what lands is STABLE (92–93 home / 74 face, <code>leak false</code>, <code>keys_same</code>) — <b>starved, not leaking</b>.</li>
+<li>Lead hypothesis, explicitly a CODE READING not a measurement: the <b>star pending-queue depth / settled-light gate</b> holds dispatched units so they never complete.</li>
+</ul>
+<h2>2. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td>the dispatch path, the drain/landing path, the star pending/settled gate, the per-frame caps (<code>ho_cap</code> and friends), <code>FACE_STREAM_BUDGET_MS</code></td><td>Edit: instrumentation first, then the one gate that proves guilty.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>perf</code> arm (which already reports dispatch attempts and completions); the STALE <code>voxelcost</code> arm at ~39071</td><td>Edit: expose the reason counts; repair the stale arm.</td></tr>
+<tr><td>godot/HARNESS.md</td><td>the arm registry (GENERATED block → edit <code>tasks/harness_data.yaml</code> then <code>harness_doc.py --render</code>)</td><td>Edit only via the generator.</td></tr>
+<tr><td>tasks/AC-0474/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, the mesher, the light engine, residency policy, keys, saves, the warp.</p>
+<h2>3. Edit shape — in this order, and do not skip to the fix</h2>
+<ul>
+<li><b>3.1 INSTRUMENT THE GAP.</b> Per frame, count: units dispatched, units landed, units still pending, and <b>every drop with its REASON</b> (the name of the gate that rejected or held it). Aggregate into a table by reason. Expose it in an arm's RESULT. <b>A total that does not add up (dispatched ≠ landed + still-pending + dropped) is itself the finding</b> — say so and chase the missing ones.</li>
+<li><b>3.2 NAME THE CULPRIT from the counts, not from the hypothesis.</b> If the star pending gate dominates, say so with the count. If the per-frame cap is the limiter, say so. If units are dispatched and simply never revisited, that is a different bug and a more likely one given the 16,484-vs-145 ratio.</li>
+<li><b>3.3 FIX THE ONE THING THE COUNTS NAME.</b> Smallest correct fix. <b>Do not disable the light-settling guarantee</b>: if units wait for settled light, the bug is that light never settles for those chunks, not that waiting is wrong — fix the settling, not the wait.</li>
+<li><b>3.4 REPAIR THE STALE <code>voxelcost</code> ARM</b> (harness.gd ~39071 references <code>world._face_order</code>, removed at AC-0469 G2 — the six stale reads of D32). It throws SCRIPT ERROR and G0 does not catch it because the arm is not in the standing set. Repair it so the cost split is measurable again, and <b>state whether it now runs clean</b>.</li>
+</ul>
+<h2>4. Gates — the same measurement must now tell a different story</h2>
+<table><tr><th>Gate</th><th>Command</th><th>Expected</th></tr>
+<tr><td>THE STALL IS FIXED (the point)</td><td>the rate measurement from M1, re-run</td><td>The rate must stay <b>non-zero past the inner ball</b>, and report <b>time to 90% of the required set</b>. If it still stalls, the fix did not address the real cause — report the new reason table rather than declaring progress.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0474 --arms g0,genhash,residency,planetwalk,boundary</code></td><td>g0 0/0; genhash <b>25/25</b> (this is a scheduling fix, terrain must not move); residency <b>leak false / stable</b> and now with a REAL resident count approaching the required set; planetwalk 25/26 with mesh and body; boundary p95 not regressed.</td></tr>
+<tr><td>Light still settles</td><td><code>--arms light,lightstate</code></td><td><code>light</code> field values unchanged; <code>lightstate</code> INVARIANTS (leaks 0, wash false) hold — pacing fields not gated (OPS.md §7). <b>If the fix makes light settle less reliably, the fix is wrong.</b></td></tr>
+<tr><td>The repaired arm</td><td><code>--arms voxelcost</code></td><td>rc=0 with no SCRIPT ERROR, and it reports per-chunk gen/mesh cost as numbers.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>5. Acceptance</h2><p>The reason table exists and names the culprit, the fix targets it, the rate stays non-zero past the inner ball with a time-to-90%, terrain and light are unchanged, and voxelcost runs clean.</p>
+<h2>6. Risks</h2><p>The likeliest wrong turn is "raise the cap" — if units are never revisited, raising a cap changes nothing and looks like effort. Another is disabling the settled-light wait to win rate: that trades a stall for wrong light, which is worse and would pass the rate gate while failing lightstate. <b>If the instrumentation shows the gate is not the cause, say so plainly and follow the counts instead of the hypothesis — including mine.</b></p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §2. Do not change generation, the mesher, block size (fixed by the user), or any radius/LOD value.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>One 1 m cubic grid with unified placement, keys, node path, landing, queue, drain, residency and light. The handover rule (AC-0451 P2) and view-biased order (AC-0399) are landed and both proven not to be the remaining limit. AC-0473's radius/LOD question is parked until a real rate exists. This ticket is the stall.</p>
+</body></html>

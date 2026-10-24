@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0474 results — the fill stalls after the inner ball</title>
+<style>
+body { font: 14px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; margin: 2em auto; max-width: 1100px; color: #1a1a1a; }
+h1 { font-size: 1.3em; } h2 { font-size: 1.1em; margin-top: 1.6em; border-bottom: 1px solid #999; padding-bottom: 2px; }
+table { border-collapse: collapse; margin: 0.8em 0; } td, th { border: 1px solid #bbb; padding: 3px 8px; text-align: left; }
+th { background: #eee; } code { background: #f2f2f2; padding: 0 3px; }
+.ok { color: #0a7a0a; font-weight: bold; } .bad { color: #b00020; font-weight: bold; } .note { color: #666; }
+.log { color: #06457a; }
+</style>
+</head>
+<body>
+
+<h1>AC-0474 — the fill stalls after the inner ball (HIGH)</h1>
+<p>Builder self-contained evidence page. Every number below is quoted from a log under
+<span class="log">.scratch/AC-0474-gates/</span> (paths in blue). Deviations and findings:
+<code>tasks/AC-0474/AC-0474-deviations.txt</code> (D1–D7). Order per plan: (1) instrument the
+dispatch→land gap with a per-gate reason table, (2) name the culprit from the counts,
+(3) fix the one thing the counts name, (4) repair the stale voxelcost arm, (5) prove with the
+M1 measurement + the gate set.</p>
+
+<h2>1. Verdict (the counts, not the hypothesis)</h2>
+<table>
+<tr><th>Question</th><th>Answer</th><th>Evidence</th></tr>
+<tr><td>Is the star settled-light gate the cause?</td>
+<td class="ok">NO — refuted. Zero holds at every gate.</td>
+<td>reason table <span class="log">perf_r24-r3.log</span>: hs_settle=0, hs_payload=0, hs_sky=0, hs_cap=0,
+hs_nodata=0, hs_nbs=0, hs_race_*=0, lo_cap=0, lo_noop=0. Only transient in-flight dedup is
+non-zero (hs_dedup=198, lo_dedup=14165).</td></tr>
+<tr><td>Does the world fill?</td>
+<td class="ok">YES — 100% of the drawable set at ~68 s; nothing owed.</td>
+<td><span class="log">perf_r24-r3.log</span>: built_rep=1201/required=1201 (band≤2 square set),
+pending_final={build:0, nodata:0}, t90_ms=60492, t100_ms=67659; PERFPROG rep 254→658→981→1201,
+pend 398→540→221→0 (stays 0 to frame 12005).</td></tr>
+<tr><td>Where did M1's "145 vs 16,484, then 0.0 chunks/s" come from?</td>
+<td>Measurement artifact (D2).</td>
+<td>M1's metric (build_worker_n / mesh_built) sees only the HIGH lane — at R24 its set is
+exactly the taxi-8 diamond (145); the far tiers (2/3) draw via low slabs (land_lo=16320) and
+never set mesh_built, by design. "0.0 past 10 s" is the high-lane rate after its finite set
+completes; the far lane keeps landing until 1201/1201.</td></tr>
+<tr><td>Does the total add up?</td>
+<td class="ok">YES, against the true dispatch census.</td>
+<td><span class="log">perf_r24-r3.log</span>: hs_enq=145 + lo_enq=16320 = 16465 dispatches =
+land_hs=145 + land_lo=16320 = 16465 landings; drop_hs=0, drop_lo=0, inflight_final=0.
+The earlier -1388 gap (D3) was a property of <code>perf_build_units</code> (frame-budget
+ITERATIONS, not dispatches: 1,388 frames co-dispatch a build + a gen and the shared slot is
+attributed to the gen by <code>disp = build_units − gen_units</code>).</td></tr>
+</table>
+
+<h2>2. The reason table (per-gate holds — the STEP-1 instrument, run 3)</h2>
+<p>Source <span class="log">.scratch/AC-0474-gates/perf_r24-r3.log</span>, <code>reasons</code> in the RESULT
+(arm window = the whole run; boot work excluded by the arm-start counter snapshot):</p>
+<table>
+<tr><th>gate</th><th>hs_dedup</th><th>hs_cap</th><th>hs_nbs</th><th>hs_nodata</th><th>hs_settle</th><th>hs_sky</th><th>hs_payload</th><th>hs_race_far</th><th>hs_race_done</th><th>lo_dedup</th><th>lo_cap</th><th>lo_noop</th></tr>
+<tr><td>holds</td><td>198</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>14165</td><td>0</td><td>0</td></tr>
+</table>
+<p class="note">The two non-zero cells are in-flight dedup (a slab already owned by a worker task):
+transient by design, clears at handoff. No gate held a single unit. Drops: drop_hs=0, drop_lo=0
+(worker pre-start skips + handoff stale drops). Starvation frames (frame_nodisp /
+frame_owed_nodisp = 19086) over-report after fill (D7): settled far entries stay queued by
+design (AC-0345) — the probe census (pending) is authoritative and reads 0 from ~70 s on.</p>
+
+<h2>3. The M1 measurement re-run (STEP-2 instrumented, gate a)</h2>
+<p>Recipe: the AC-0473 M1 recipe verbatim
+(<span class="log">run_perf_r24.sh</span>: <code>AWECRAFT_LOGIC=perf AWECRAFT_RADIUS=24</code>, headless, 3600 s,
+24 GB ulimit). Runs r1/r2 (trail) and <span class="log">perf_r24-r3.log</span> (census final). The run is
+behavior-identical to M1 (build_units 16481–16484 across runs vs M1 16484; land_hs=145; wall
+204.0 s vs M1 203.92 s) — only the measurement changed.</p>
+<table>
+<tr><th>metric</th><th>value (run 3)</th><th>M1 (for contrast)</th></tr>
+<tr><td>required (band≤2 square set)</td><td>1201</td><td>— (not measured)</td></tr>
+<tr><td>built_rep (per-live-tier fill)</td><td>1201 (100%)</td><td>"145/1401" (mesh_built only)</td></tr>
+<tr><td>high lane (mesh_built / build_worker_n)</td><td>145 (= taxi-8 diamond, structurally complete)</td><td>145</td></tr>
+<tr><td>far lane (low slabs landed)</td><td>16320</td><td>— (not measured)</td></tr>
+<tr><td>pending_final {build, nodata}</td><td>{0, 0}</td><td>— (not measured)</td></tr>
+<tr><td>t90 / t100 of required</td><td>60492 / 67659 ms</td><td>—</td></tr>
+<tr><td>rate past the inner ball (10 s mark)</td><td>254→658→981→1201 (≈16–20 c/s, non-zero throughout)</td><td>"0.0 for 194 s" (high-lane-only rate)</td></tr>
+<tr><td>gen: units / data landings</td><td>1404 units → 1401 resident chunks all with data (nd→0 by 1800 frames)</td><td>converged 1401/1401 (same)</td></tr>
+</table>
+<p><b>Gate (a): PASS</b> — rate non-zero past the inner ball; time-to-90% reported (60.5 s).
+Since the world fills, the plan's fallback ("if it still stalls, report the NEW reason table")
+is moot — the reason table is reported anyway and names nothing.</p>
+
+<h2>4. The fix (STEP 3 — smallest correct fix for what the counts name)</h2>
+<p>The counts name the MEASUREMENT, not a pipeline gate: the arm's completion predicate
+(<code>mesh_built</code> over band≤2 — which "can never be true at R24" for the far tiers, the plan's
+own anchor) and its dispatch metric (the frame-budget counter). The fix = the arm now
+measures the per-live-tier fill (built_rep/required/t90_ms/t100_ms/pending_final), the
+per-gate reason table, and the true dispatch census (hs_enq/lo_enq/per-path units).
+<b>No pipeline change was made or owed</b>: world.gd edits are counter-only (D2), proven by
+genhash 25/25 (§5). Per the plan: the settled-light guarantee is untouched (not disabled),
+no cap raised, generation/mesher/block-size/radius-LOD values untouched.</p>
+
+<h2>5. Gate set (all logs under .scratch/AC-0474-gates/)</h2>
+<table>
+<tr><th>gate</th><th>result</th><th>details</th></tr>
+<tr><td>g0</td><td class="ok">PASS</td><td><span class="log">g0-r1.log</span>: rc=0, 0 SCRIPT ERROR lines (3 s)</td></tr>
+<tr><td>genhash</td><td class="ok">PASS 25/25</td><td><span class="log">genhash-r1.log</span>: all 25 byte-identical to the post-AC-0311-p2 standing set
+(chunk (0,0) <code>46c20b07c95cb03b57772e1531c97f71</code>; reference <code>.scratch/AC-0311-gates/p2_genhash_r1.log</code>), GENMS 132 — terrain unchanged</td></tr>
+<tr><td>residency</td><td class="ok">PASS</td><td><span class="log">residency-r1.log</span>: ok=true, leak=false, steady 93 home / 74 face, keys_same=true, verdict STABLE — identical to the M1-era readings the ticket cites (92–93 / 74)</td></tr>
+<tr><td>planetwalk</td><td class="ok">PASS 25/26</td><td><span class="log">planetwalk-r1.log</span>: ok=true, 25/26 pairs (1 documented waiver: lap_0-1 home_pair_midline); every covered crossing: mesh_built=true AND body_present=true on the crossing chunk (e.g. 4:194:392, 10:0:392)</td></tr>
+<tr><td>boundary r4</td><td class="ok">PASS (p95 not regressed)</td><td><span class="log">boundary-r1.log</span>: ok=true, walk p50=13 / <b>p95=39</b> (standing band 39–42), crossing_frame p95=38 (band 35–55), storm_walk_p99=99, footprint missing=0, col_deferred_in_footprint=0, marker_ok/remesh_ok=true</td></tr>
+<tr><td>light</td><td class="ok">PASS (fields unchanged)</td><td><span class="log">light-r1.log</span>: surface_eff=15, cave_eff=0, torch_level=14, torch_far 0→9 — unchanged. Note (D6a): census-derived pocket [8,120,-50] / 590 cands vs the stale AC-0380-era doc values [64,122,-2]/415 (re-derived every run by design; genhash-identical terrain; doc re-baseline owed at closeout)</td></tr>
+<tr><td>lightstate</td><td class="ok">PASS (invariants hold)</td><td><span class="log">lightstate-r1.log</span>: ok=true, leaks=0 across all 24 grid entries + A/B, wash_detected=false, arr_diff_cells=1. Watch item (D6b): vc_diff=4 vs documented 1–2 settle-timing-tail range (not a gate invariant per the plan's criteria)</td></tr>
+<tr><td>voxelcost (STEP 4)</td><td class="ok">rc=0, 0 SCRIPT ERROR, costs reported</td><td><span class="log">voxelcost-r1.log</span>: re-pointed at <code>world._resident_order</code> + face subset (the D32-prescribed fix). Per-chunk costs: gen_data_ms=22.121, mesh_build_ms=6.976, ms_per_chunk.build=29.097, band_priming_ms=22.548, warp_ms=0.38, warped_in_pass=16; live-tree bytes/chunk=240,338 (60 face chunks, 360 mesh slabs). RESIDUAL (D4): arm-internal ok=false, fails=["fresh_ensure_not_data_only 0/16"] — the arm's face-8-edge-row distance premise is stale (min_dist_m=0.0 sentinel → in-window → mesh build); gate (d) criteria (rc=0 / no SCRIPT ERROR / per-chunk gen+mesh cost numbers) met; gen-path re-baseline is a fenced follow-up</td></tr>
+</table>
+
+<h2>6. Fences honored</h2>
+<ul>
+<li>No git add/commit/push; no tasks/TASKS.yaml mutation; no new tickets.</li>
+<li>Edits: <code>godot/world/world.gd</code> (AC-0474 counter blocks + reason-table increments only — zero behavior change), <code>godot/scenes/harness.gd</code> (perf arm instrumentation + voxelcost re-point, both authorized by plan §2), <code>tasks/harness_data.yaml</code> (perf row result_fields — the two-files rule, then <code>harness_doc.py --render</code> + <code>--check</code> in sync).</li>
+<li>Generation/mesher/block size/radius-LOD values untouched; the light-settling guarantee untouched; no cap raised. The other two stale arms (warpcensus ×4, ac0433probe ×1) stay fenced per D32/D5 — same re-point, follow-up owed.</li>
+<li>Engine discipline: one process at a time, <code>HOME=/tmp/dsh_home</code>, absolute engine path, engine runs invoked by named script files (<code>run_perf_r24.sh</code>) and via <code>gate_run.py</code> (pgrep-safe).</li>
+</ul>
+
+</body>
+</html>

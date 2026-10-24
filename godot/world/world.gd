@@ -2713,7 +2713,9 @@ func _low_build_slab(c: Node3D, si: int) -> void:
 	# flight for this (key, si) (dedupe — nothing to do), 2 = the pool
 	# queue is saturated (the slab stays PENDING — the lane re-picks it
 	# next frame). No main-thread generation on any of them.
-	_low_dispatch_slab(c, si)
+	var _lbv := _low_dispatch_slab(c, si)
+	if _lbv == 1 or _lbv < 0:
+		perf_lo_unit_build += 1  # AC-0474: census — the non-drain full-column drive
 
 # AC-0252 offload: the NULL-SLAB bookkeeping — the dispatch's -1 verdict
 # (an empty column slab: no grid to sample, no emit to run — there is
@@ -2726,6 +2728,7 @@ func _low_air_slab(c: Node3D, si: int) -> void:
 		return
 	_low_drop_slab(c, si)
 	c.low_stamps.erase(si)  # not low anymore (no data — air)
+	perf_land_lo_air += 1  # AC-0474: terminal air bookkeeping (a landed unit)
 
 # AC-0257 (stale-LOD, absorbs AC-0256): the FLIP-BACK attach — the slab
 # holds a cached emit at its LIVE tier (emitted earlier, displaced when
@@ -2857,18 +2860,22 @@ func _low_dispatch_slab(c: Node3D, si: int) -> int:
 	# it (the wave scan skips tier 1; this guards the direct callers).
 	# 0 = handled (no air-slab bookkeeping for a non-air slab).
 	if _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz) == 1:
+		perf_hold_lo_noop += 1  # AC-0474: dispatch no-op guard (tier 1)
 		return 0
 	# AC-0331: the far-tier mesh floor — a far column's slabs entirely
 	# below it are never dispatched (the spec's dispatch pruning; the
 	# probes + _low_pending_sis already drop them — this guards the
 	# direct callers). 0 = handled (nothing to do).
 	if c.far and si * 16 + 15 < _far_floor_y():
+		perf_hold_lo_noop += 1  # AC-0474: dispatch no-op guard (below floor)
 		return 0
 	if _low_tasks.size() >= LOW_TASK_CAP:
+		perf_hold_lo_cap += 1  # AC-0474: the reason table (low queue saturated)
 		return 2
 	var key := _key(int(c.cx), int(c.cz))
 	var lkey: String = key + ":" + str(si)
 	if _low_task_keys.has(lkey):
+		perf_hold_lo_dedup += 1  # AC-0474: the reason table (in-flight dedup)
 		return 0
 	# AC-0284b: a far column carries the payload instead of the slab copy
 	# (the emit reads no slabs — ~1 KB vs ~20 KB on the wire).
@@ -3349,8 +3356,12 @@ func _low_relower_owed_step() -> void:
 		if rsi < 0:
 			_low_relower_owed.erase(key)  # the lows are current — done
 			continue
-		if _low_dispatch_slab(rc, rsi) < 0:
+		var _rlv := _low_dispatch_slab(rc, rsi)
+		if _rlv < 0:
 			_low_air_slab(rc, rsi)
+			perf_lo_unit_relower += 1  # AC-0474: census — the demote re-lower debt
+		elif _rlv == 1:
+			perf_lo_unit_relower += 1  # AC-0474: census — the demote re-lower debt
 		break  # one owed column per frame (the rest retry next frame)
 
 
@@ -3612,6 +3623,32 @@ var hslab_stale_key_n := 0
 # not settled). The promotion burst's stall forensics (a re-seeded /
 # evicted column's settle window is the burst's only legitimate pause).
 var hslab_defer_settle := 0
+# AC-0474 (INSTRUMENTATION ONLY): the dispatch-gap reason table — every
+# gate that holds or drops a build unit counts here (the stall's
+# accounting). The perf arm reports the table + the dispatch/land/
+# pending totals so the counts, not a hypothesis, name the culprit.
+var hslab_defer_nodata := 0  # code 4 — the data lane owns it (no data yet)
+var hslab_defer_payload := 0  # code 6 — the star payload was not ok (never seeded)
+var perf_hold_hs_race_far := 0  # sigo<0 far race — entry stays, deferred for the frame
+var perf_hold_hs_race_done := 0  # sigo<0 tier<=1 — probe race, the entry frees
+var perf_hold_lo_dedup := 0  # low in-flight dedup (a task owns this slab)
+var perf_hold_lo_cap := 0  # LOW_TASK_CAP — the low queue is saturated
+var perf_hold_lo_noop := 0  # dispatch no-op guards (tier 1 / below-floor slabs)
+var perf_land_lo_air := 0  # null-slab air bookkeeping (terminal, inline)
+var perf_gen_units := 0  # data (gen) units dispatched
+var perf_frame_nodisp := 0  # drain frames that dispatched zero build units
+var perf_frame_owed_nodisp := 0  # ...of which the queue was non-empty
+# AC-0474 (INSTRUMENTATION ONLY): the per-path dispatch CENSUS —
+# perf_build_units is a budget/pace counter, not a dispatch census:
+# the low lane also dispatches through _low_build_slab (the full-column
+# drive) and _low_relower_owed_step (the demote re-lower debt), and the
+# high lane re-bakes through _star_remesh_drain — none of those consume
+# a drain unit. The census makes the conservation law (enqueues vs
+# lands) verifiable per path instead of against the budget counter.
+var perf_lo_unit_drain := 0  # low units via the drain's _dispatch_column_work
+var perf_lo_unit_build := 0  # low units via _low_build_slab (full-column drive)
+var perf_lo_unit_relower := 0  # low units via _low_relower_owed_step (demote debt)
+var perf_hslab_enq_remesh := 0  # high enqueues via _star_remesh_drain (light re-bake)
 # AC-0339 STEP 0 (INSTRUMENTATION ONLY): hslab_defer_settle counts
 # DEFERRALS (one per re-pick), not WAITING TIME — a slab can be deferred
 # for hundreds of frames and the counter shows one. The settle-wait
@@ -6436,6 +6473,7 @@ func _star_remesh_drain() -> void:
 			if built >= cap:
 				break  # the budget spent (a deferred key spent nothing — it retries, the healthy keys behind it keep their slots)
 			if _mesh_dispatch_hslab(c, cx, cz, si, {}, true):
+				perf_hslab_enq_remesh += 1  # AC-0474: census — the light re-bake lane
 				star_remesh[key].erase(si)
 				built += 1
 				break  # one slab per key per frame
@@ -9372,6 +9410,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 	c.col_immediate = _col_immediate_for(cx, cz)
 	if c.data.is_empty():
 		_hslab_last_defer = 4
+		hslab_defer_nodata += 1  # AC-0474: the reason table (data lane holds it)
 		return false  # AC-0263: the data lane owns it (the sync gen is gone)
 	if _tm_inflight_keys.has(key):
 		_tm_dedup += 1
@@ -9583,6 +9622,7 @@ func _mesh_dispatch_hslab(c: Node3D, cx: int, cz: int, si: int, eff: Dictionary,
 		var pl: Dictionary = star.slab_light_payload(cx, cz, 0, top_slab)
 		if not bool(pl.get("ok", false)):
 			_hslab_last_defer = 6
+			hslab_defer_payload += 1  # AC-0474: the reason table (payload not ok)
 			return false
 		pl["star"] = true
 		pl["lver"] = star.box_epochs(cx, cz, -1, 24)
@@ -9854,7 +9894,10 @@ func _dispatch_column_work(c: Node3D, si: int) -> int:
 			var d := _low_dispatch_slab(c, si)
 			if d < 0:
 				_low_air_slab(c, si)
+				perf_lo_unit_drain += 1  # AC-0474: census — the air unit
 				return 1
+			if d == 1:
+				perf_lo_unit_drain += 1  # AC-0474: census — the worker/flip-back unit
 			return d
 		_:
 			return 2  # tier 4 — data-only: no work (unreachable in the pool)
@@ -10425,6 +10468,7 @@ func _drain_build_queue() -> void:
 				break
 			_gen_unit(c, cx, cz)
 			units += 1
+			perf_gen_units += 1  # AC-0474: data units in the dispatch total
 			if _io_read_inflight.size() - io_n0 >= LOAD_POOL_CAP:
 				break  # one pool-width of disk reads per frame
 		if units > 0:
@@ -10612,8 +10656,10 @@ func _drain_build_queue() -> void:
 				#     skips it).
 				if tierg <= 1:
 					_remove_entry(best_e)
+					perf_hold_hs_race_done += 1  # AC-0474: probe race, entry frees
 				else:
 					steady_skip[_key(int(best_e["cx"]), int(best_e["cz"]))] = true
+					perf_hold_hs_race_far += 1  # AC-0474: far race, entry stays
 				continue
 			var dv := _dispatch_column_work(best_c, sigo)
 			if dv != 1:
@@ -10695,6 +10741,7 @@ func _drain_build_queue() -> void:
 					var dg := _gen_unit(c, cx, cz)
 					u = 1
 					gen_used_ms += dg
+					perf_gen_units += 1  # AC-0474: data units in the dispatch total
 					if _picklog:
 						print("PICK d %d,%d s=%.6f t=%d" % [cx, cz, dp_s, Time.get_ticks_msec()])
 					# AC-0155: a disk read is a main-thread inflate (~20 ms) —
@@ -10735,6 +10782,10 @@ func _drain_build_queue() -> void:
 	if timing:
 		# AC-0217: the pool/score debounce counters (cumulative).
 		print("POOLCACHE hits=%d misses=%d t=%d" % [perf_pool_hits, perf_pool_misses, Time.get_ticks_msec()])
+	if units == 0:
+		perf_frame_nodisp += 1  # AC-0474: the drain dispatched nothing this frame
+		if queue_size > 0:
+			perf_frame_owed_nodisp += 1  # AC-0474: ...while the queue was non-empty
 	_drain_units_last = units  # AC-0231
 	_col_drain_step()
 

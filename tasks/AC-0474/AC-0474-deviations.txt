@@ -1,0 +1,125 @@
+AC-0474 — deviations + findings
+=======================================================
+Order honored: instrument the dispatch→land gap → name the culprit from the
+counts → fix the one thing the counts name → repair the stale voxelcost arm
+→ prove with the M1 measurement + gates.
+
+D1. THE HYPOTHESIS (star settled-light gate starves the far lane) IS REFUTED
+    BY THE COUNTS. The reason table (the arm's `reasons` dict,
+    .scratch/AC-0474-gates/perf_r24-r3.log) shows ZERO holds at every gate:
+    hs_settle=0, hs_payload=0, hs_sky=0, hs_cap=0, hs_nodata=0, hs_nbs=0,
+    hs_race_far=0, hs_race_done=0, lo_cap=0, lo_noop=0. The only non-zero
+    hold reason is TRANSIENT in-flight dedup (hs_dedup=198, lo_dedup=14165 —
+    the drain re-picking a slab whose emit is still in the worker pool;
+    clears at handoff, by design). Drops: 0 (drop_hs=0, drop_lo=0).
+    In flight at arm end: 0.
+    The star gate is not the cause — "including mine", per the plan.
+
+D2. THE M1 "STALL" (14.2 chunks/s for 10 s, then 0.0 for 194 s; 145 vs
+    16,484) IS A MEASUREMENT ARTIFACT. M1's completion metric
+    (build_worker_n / mesh_built) sees ONLY the high lane. At R24 the high
+    lane's set is exactly the taxi-8 DIAMOND (145 = 2·8·9+1): outside it,
+    the world is drawn by the FAR lane (tiers 2/3 = the 8x8/4x4 avg emits),
+    which stamps low_stamps/low_tiers and NEVER sets mesh_built — by design
+    (_lod_tier_of: bands B/C are the avg draw, "never seeded, never saved").
+    With the per-LIVE-TIER fill predicate the instrumented re-run (same
+    recipe, same 16,484-class dispatch behavior, identical wall 204 s)
+    shows the world FILLING: built_rep 254→658→981→1201 (= required, 100%)
+    between 10 s and 70 s; pending census 398→540→221→0 and stays 0;
+    t90_ms=60492, t100_ms=67659. The rate past the inner ball is non-zero
+    throughout (~16–20 drawable chunks/s); the "0.0 for 194 s" is the
+    high-lane rate AFTER ITS FINITE SET (the 145) COMPLETES — the far lane
+    lands 16,320 slabs in the same run (land_lo) and the drawable set is
+    100% filled at ~68 s, after which the drain is legitimately idle.
+    Gate (a) passes: rate non-zero past the inner ball + time-to-90% =
+    60.5 s. The fix the counts name = the arm's completion metric: it is
+    now the per-live-tier fill (built_rep/required/t90_ms/t100_ms/
+    pending_final) plus the per-gate reason table and the dispatch
+    census — no pipeline change was owed, and none was made (world.gd
+    edits are counter-only; genhash 25/25 proves it).
+
+D3. A TOTAL THAT DID NOT ADD UP — RESOLVED. Against the drain's
+    perf_build_units counter the identity read gap = -1388 (landings
+    exceeded "dispatches"). Per-path census (the run-3 fields
+    lo_unit_drain/build/relower, hslab_enq_remesh) shows ALL 16,320 low
+    units went through the drain (lo_unit_drain=16320; build/relower/
+    remesh all 0), and hs_enq=145 — so the enqueue census (16,465) EQUALS
+    the landing census (16,465) EXACTLY (drops 0, inflight 0). The -1388
+    is a property of perf_build_units, not a leak: it counts the drain's
+    FRAME-BUDGET ITERATIONS, not dispatches — one outer iteration may
+    dispatch a build AND a gen (the data pass runs when the TG pool is
+    empty, u stays 1, units += 1 once), and `disp_build = build_units -
+    gen_units` then attributes the shared slot to the gen, hiding that
+    iteration's build dispatch. 1,388 such co-dispatch frames. No unit is
+    lost: every dispatched work item landed (16,465 = 16,465; gen 1,404
+    units → 1,401 data landings, the rest retries/in-window). The arm now
+    reports both the budget counter and the true census (hs_enq/lo_enq/
+    dispatch_build_total/land_total/gap_unaccounted).
+
+D4. THE STALE VOXELCOST ARM (STEP 4). Re-pointed as the AC-0469 G4 D32
+    follow-up prescribed: the 4.1 census iterates world._resident_order
+    (the ONE resident order list, both lanes) with the face subset
+    int(c.face) >= 2 (the _face_order list G2 removed). The arm now runs
+    CLEAN: rc=0, 0 SCRIPT ERROR (g0-gate semantics), and it reports the
+    per-chunk gen/mesh cost numbers again (gen_data_ms=22.121,
+    mesh_build_ms=6.976, ms_per_chunk.build=29.097, band_priming_ms=
+    22.548, warp_ms=0.38, warped_in_pass=16 — .scratch/AC-0474-gates/
+    voxelcost-r1.log). RESIDUAL FINDING (named, not hidden): the arm's
+    internal ok=false with fails=["fresh_ensure_not_data_only 0/16"] —
+    the arm's documented premise (face 8's edge row sits ~3.1–3.9 km from
+    the stand, far past the 113 m mesh window, so the 16 fresh ensures are
+    data-only) is STALE: under the current home-patch-border semantics
+    _face_chunk_min_dist returns the 0.0 sentinel ("this face does not
+    border the home patch" — the is_inf(b.z) branch) for that row
+    (gen_diag: min_dist_m=0.0, in_window=1, mesh_built=1), so the ensures
+    build the mesh by the window rule. Same class as D32 (measurement arm
+    predating the face-lane rework). FENCE: re-baselining the gen path's
+    measurement site is a FOLLOW-UP (out of this ticket's edit scope —
+    the plan authorizes the re-point repair, not a re-design of the arm's
+    measurement premise); the gate (d) criteria (rc=0, no SCRIPT ERROR,
+    per-chunk gen/mesh cost numbers reported) are met.
+
+D5. THE OTHER TWO STALE ARMS REMAIN STALE (documented, fenced). Per D32
+    the six _face_order reads sit in THREE arms: _warpcensus_test (4),
+    _ac0433probe_test (1), _voxelcost_test (1). This ticket's gate set and
+    file scope cover the voxelcost arm only; the warpcensus (BATTSKIP) and
+    ac0433probe arms are not in the gate set (g0/genhash/residency/
+    planetwalk/boundary/light/lightstate/voxelcost), so they stay fenced
+    with their D32 follow-up owed (the same _resident_order re-point
+    applies verbatim).
+
+D6. STANDING-VALUE NOTES (no regression; follow-ups for doc sync).
+    (a) light: gated fields UNCHANGED (surface_eff=15, cave_eff=0,
+        torch_level=14, torch_far 0→9). The census-derived pocket reads
+        [8,120,-50] with 590 candidates vs the HARNESS.md-documented
+        [64,122,-2]/415 (AC-0380-era values, predating the AC-0311 p2
+        terrain rebase) — the pocket is re-derived from the census every
+        run BY DESIGN ("drift-proof"); genhash 25/25 proves the terrain
+        is bit-identical, so this is documented-value staleness, not a
+        move. HARNESS.md light row needs a re-baseline at closeout.
+    (b) lightstate: INVARIANTS hold (leaks=0 across all 24 grid entries
+        + A/B, wash_detected=false). vc_diff=4 vs the documented 1–2
+        "settle-timing tail" range — WATCH ITEM (drift outside the
+        documented tail; not a gate invariant per the plan's criteria),
+        reported plainly.
+    (c) boundary r4: walk p95=39 (standing band 39–42), crossing_frame
+        p95=38 (drift band 35–55), footprint missing 0,
+        col_deferred_in_footprint 0 — not regressed.
+    (d) residency (R4 default): ok=true, leak=false, steady 93 home / 74
+        face, keys_same=true, STABLE — identical to the M1-era readings
+        the ticket itself cites (92–93 / 74, leak false).
+    (e) planetwalk: ok=true, 25/26 pairs (the 1 uncovered =
+        lap_0-1 "home_pair_midline", a documented subset, not a silent
+        gap); every covered crossing reports mesh_built=true AND
+        body_present=true on the crossing chunk.
+
+D7. frame_owed_nodisp OVER-REPORTS (instrumentation note). The queue-
+    based starved-frame census counts 19,086 frames with a non-empty queue
+    and zero dispatch — because settled FAR entries stay queued by design
+    (AC-0345: the queue entry is what drives re-dispatch on tier flips /
+    edits / recenters; removal would break it). After fill (~68 s) the
+    queue holds ~1,200 settled far entries forever, so every idle frame
+    counts as "owed". The PROBE census (pending_final {build:0, nodata:0},
+    the per-10-frame `pend` in PERFPROG: 398→540→221→0→0) is the
+    authoritative owed signal; both are reported, and the yaml row notes
+    the distinction.

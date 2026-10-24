@@ -24839,6 +24839,21 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 	var mfenv := int(OS.get_environment("AWECRAFT_PERF_FRAMES"))
 	if mfenv > 0:
 		max_frames = mfenv
+	# AC-0474 (M1 re-run + the dispatch-gap accounting): the arm-window
+	# snapshot of the world's reason counters (the RESULT reports the
+	# DELTA, so boot work is excluded), the fill predicate over the
+	# required set (band <= 2 in the render square — the live tier's
+	# representation has landed: tier 0/1 mesh_built, tier 2/3 the low
+	# probe owes nothing on resident data, tier 4 data-only), and
+	# t90/t100 = the first frame at 90%/100% of that set.
+	var cs0 := _ac0474_counters()
+	var required_n := 0
+	var built_rep := 0
+	var t90_ms := -1
+	var t100_ms := -1
+	var pending_now: Dictionary = {"build": 0, "nodata": 0}
+	var last_disp := 0
+	var last_land := 0
 	while frames < max_frames:
 		var fb := Time.get_ticks_msec()
 		await get_tree().physics_frame
@@ -24849,12 +24864,45 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		frames += 1
 		# AC-0197: progress line so a stalled R50 drain is visible
 		# in the log (600 frames = 10 s of real time).
+		if frames % 10 == 0:
+			# AC-0474: the fill predicate (the required set's live-tier
+			# census) at 10-frame resolution — t90/t100 ride on it.
+			required_n = 0
+			built_rep = 0
+			for kk in world.chunks:
+				var cc: Node3D = world.chunks[kk]
+				if int(cc.band) > 2:
+					continue
+				if absi(int(cc.cx) - pcx) <= world.render_radius and absi(int(cc.cz) - pcz) <= world.render_radius:
+					required_n += 1
+					if cc.data.is_empty():
+						continue
+					var tt: int = world._lod_tier_of(int(cc.cx) - world.last_pcx, int(cc.cz) - world.last_pcz)
+					if tt <= 1:
+						if cc.mesh_built:
+							built_rep += 1
+					elif tt <= 3:
+						if world._entry_best_pending_cached(cc) < 0:
+							built_rep += 1
+					else:
+						built_rep += 1  # tier 4 — data only, nothing renders
+			pending_now = _ac0474_owed_census()
+			if t90_ms < 0 and required_n > 0 and built_rep * 10 >= required_n * 9:
+				t90_ms = Time.get_ticks_msec() - t0
+			if t100_ms < 0 and required_n > 0 and built_rep >= required_n:
+				t100_ms = Time.get_ticks_msec() - t0
 		if frames % 600 == 0:
 			var nb := 0
 			for kk in world.chunks:
 				if (world.chunks[kk] as Node3D).mesh_built:
 					nb += 1
-			print("PERFPROG frames=%d chunks=%d built=%d gen=%d all=%s" % [frames, world.chunks.size(), nb, world.gen_count, str(all)])
+			# AC-0474: the dispatch/land 600-frame deltas in the log line
+			# (the rate shape of the stall, straight from the log).
+			var disp_now := int(world.perf_build_units)
+			var land_now := int(world._tm_hslab_n) + int(world.col_atomic_lands) + int(world.low_handoff_n) + int(world.low_cache_hit_n) + int(world.perf_land_lo_air)
+			print("PERFPROG frames=%d chunks=%d built=%d gen=%d rep=%d req=%d pend=%d nd=%d dd=%d ld=%d all=%s" % [frames, world.chunks.size(), nb, world.gen_count, built_rep, required_n, pending_now["build"], pending_now["nodata"], disp_now - last_disp, land_now - last_land, str(all)])
+			last_disp = disp_now
+			last_land = land_now
 		all = true
 		for key in world.chunks:
 			var c: Node3D = world.chunks[key]
@@ -24870,6 +24918,10 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 				first_draw_ms = fe - t0
 		if all:
 			break
+	# AC-0474: the arm-window delta (boot work excluded) for the RESULT.
+	var cs := _ac0474_counters()
+	for k in cs0:
+		cs[k] = int(cs[k]) - int(cs0[k])
 	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
 		for e in world.mesh_info():
 			print("MINFO ", JSON.stringify(e))
@@ -24973,8 +25025,136 @@ func _perf_test(spawn: Vector3, t0: int, recenter_ms: int, mem_before: int) -> v
 		"read_sync_gen_ms": world.perf_read_sync_gen_ms,
 		"create_sync_gen": int(world.perf_create_sync_gen),
 		"staged_pending_final": int(world._col_pending.size()),
+		# AC-0474 (M1 re-run): the dispatch-gap accounting over the ARM
+		# WINDOW (the boot window is subtracted via cs0) — the reason
+		# table (the gate that held or dropped each build unit), the
+		# dispatch/land/pending totals, the fill predicate (t90/t100 of
+		# the required set) and the accounting identity: every dispatched
+		# build unit landed, was dropped-superseded, or is in flight —
+		# a non-zero gap_unaccounted is itself a finding.
+		"gen_units": cs["gen"],
+		"disp_build": cs["disp"] - cs["gen"],
+		"land_hs": cs["land_hs"],
+		"land_lo": cs["land_lo"],
+		"drop_hs": cs["drop_hs"],
+		"drop_lo": cs["drop_lo"],
+		"hs_enq": cs["hs_enq"],
+		"lo_enq": cs["lo_enq"],
+		# the per-path low dispatch census (drain vs the two non-drain
+		# paths) — perf_build_units is the budget/pace counter, NOT the
+		# dispatch census; the conservation law is stated against the
+		# enqueue counters below.
+		"lo_unit_drain": cs["lo_ud"],
+		"lo_unit_build": cs["lo_ub"],
+		"lo_unit_relower": cs["lo_ur"],
+		"hslab_enq_remesh": cs["hs_rm"],
+		"demoted_cols": cs["demoted"],
+		"hslab_stragglers": cs["stragglers"],
+		"inflight_final": int(world.threadmesh_inflight.size()) + int(world._low_tasks.size()),
+		# conservation (the AC-0474 accounting identity): every dispatched
+		# build unit lands, is dropped superseded, or is still in flight.
+		# The dispatch side is the FULL census — the drain's budget units
+		# (disp - gen) PLUS the non-drain paths (the full-column drive,
+		# the demote re-lower debt, the light re-bake lane), which
+		# enqueue without consuming a budget unit. cs carries the window
+		# DELTA (inflight = end - start), so a non-zero gap means a
+		# dispatched unit has no record anywhere.
+		"dispatch_build_total": (cs["disp"] - cs["gen"]) + cs["lo_ub"] + cs["lo_ur"] + cs["hs_rm"],
+		"land_total": cs["land_hs"] + cs["land_lo"],
+		"gap_unaccounted": (cs["disp"] - cs["gen"]) + cs["lo_ub"] + cs["lo_ur"] + cs["hs_rm"] \
+			- cs["land_hs"] - cs["land_lo"] - cs["drop_hs"] - cs["drop_lo"] \
+			- cs["inflight"] - cs["lo_task"],
+		"frame_nodisp": cs["fnodisp"],
+		"frame_owed_nodisp": cs["fowed"],
+		"pending_final": pending_now,
+		"required": required_n,
+		"built_rep": built_rep,
+		"t90_ms": t90_ms,
+		"t100_ms": t100_ms,
+		"reasons": {
+			"hs_dedup": cs["hs_dedup"],
+			"hs_cap": cs["hs_cap"],
+			"hs_nbs": cs["hs_nbs"],
+			"hs_nodata": cs["hs_nodata"],
+			"hs_settle": cs["hs_settle"],
+			"hs_sky": cs["hs_sky"],
+			"hs_payload": cs["hs_payload"],
+			"hs_race_far": cs["hs_race_far"],
+			"hs_race_done": cs["hs_race_done"],
+			"lo_dedup": cs["lo_dedup"],
+			"lo_cap": cs["lo_cap"],
+			"lo_noop": cs["lo_noop"],
+		},
 	})
 	get_tree().quit()
+
+
+# AC-0474: the arm-window counter snapshot (the RESULT reports the delta
+# against the arm-start snapshot — boot work excluded). Keys: disp =
+# perf_build_units (build + data units), land_hs = the high lane's landed
+# entries, land_lo = the low lane's landed slabs (attach + all-air
+# terminal + null-slab air bookkeeping), drop_hs/drop_lo = the
+# superseded (dropped-before-stamp) results, inflight = the tasks in the
+# pool at the snapshot (the conservation law needs BOTH ends: a task
+# in flight at arm start that lands in the window is a window landing
+# with no window dispatch), hs_enq/lo_enq = the per-lane dispatch
+# counts, fnodisp/fowed = the starved-frame census, and the per-gate
+# hold table.
+func _ac0474_counters() -> Dictionary:
+	return {
+		"disp": int(world.perf_build_units),
+		"gen": int(world.perf_gen_units),
+		"land_hs": int(world._tm_hslab_n) + int(world.col_atomic_lands),
+		"land_lo": int(world.low_handoff_n) + int(world.low_cache_hit_n) + int(world.perf_land_lo_air),
+		"drop_hs": int(world._tm_datadrop) + int(world._tm_stale),
+		"drop_lo": int(world.low_drop_stale_n) + int(world.low_skip_stale_n),
+		"inflight": int(world.threadmesh_inflight.size()),
+		"lo_task": int(world._low_tasks.size()),
+		"hs_enq": int(world._tm_enq),
+		"lo_enq": int(world.low_enqueue_n),
+		"lo_ud": int(world.perf_lo_unit_drain),
+		"lo_ub": int(world.perf_lo_unit_build),
+		"lo_ur": int(world.perf_lo_unit_relower),
+		"hs_rm": int(world.perf_hslab_enq_remesh),
+		"demoted": int(world.demoted_cols_n),
+		"stragglers": int(world.hslab_stragglers_n),
+		"fnodisp": int(world.perf_frame_nodisp),
+		"fowed": int(world.perf_frame_owed_nodisp),
+		"hs_dedup": int(world.hslab_defer_dedup),
+		"hs_cap": int(world.hslab_defer_cap),
+		"hs_nbs": int(world.hslab_defer_nbs),
+		"hs_nodata": int(world.hslab_defer_nodata),
+		"hs_settle": int(world.hslab_defer_settle),
+		"hs_sky": int(world.hslab_defer_sky),
+		"hs_payload": int(world.hslab_defer_payload),
+		"hs_race_far": int(world.perf_hold_hs_race_far),
+		"hs_race_done": int(world.perf_hold_hs_race_done),
+		"lo_dedup": int(world.perf_hold_lo_dedup),
+		"lo_cap": int(world.perf_hold_lo_cap),
+		"lo_noop": int(world.perf_hold_lo_noop),
+	}
+
+
+# AC-0474: the pipeline's owed census — the resident chunks whose live
+# tier still owes a build (tier 0/1 the high probe, tier 2/3 the low
+# probe — the cached variants), plus the data-not-landed count (the gen
+# lane's share of the owed work).
+func _ac0474_owed_census() -> Dictionary:
+	var build := 0
+	var nodata := 0
+	for key in world.chunks:
+		var c: Node3D = world.chunks[key]
+		if c.data.is_empty():
+			nodata += 1
+			continue
+		var t: int = world._lod_tier_of(int(c.cx) - world.last_pcx, int(c.cz) - world.last_pcz)
+		if t <= 1:
+			if world._hslab_best_pending_cached(c) >= 0:
+				build += 1
+		elif t <= 3:
+			if world._entry_best_pending_cached(c) >= 0:
+				build += 1
+	return {"build": build, "nodata": nodata}
 
 
 func _percentile(arr: Array, pct: float) -> float:
@@ -39068,10 +39248,16 @@ func _voxelcost_test(spawn: Vector3) -> void:
 	var mesh_slab_n := 0
 	var col_body_n := 0
 	var occluder_n := 0
-	for k in world._face_order:
+	# AC-0474 (the AC-0469 G4 D32 follow-up): the _face_order list was
+	# removed at G2 — the census re-points at the ONE resident order list
+	# (_resident_order, both lanes) with the face subset (int(c.face) >= 2),
+	# exactly as D32 prescribed.
+	for k in world._resident_order:
 		var c: Node3D = world.chunks.get(k)
 		if c == null or c.data.is_empty():
 			continue
+		if int(c.face) < 2:
+			continue  # the home lane — the census is over the face chunks
 		chunk_n += 1
 		for s in c.data:
 			if s != null:
