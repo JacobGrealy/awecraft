@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-23T22:39
+  updated_at: 2026-10-23T23:16
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0473
+- AC-0474
 - AC-0094
 - AC-0141
 - AC-0142
@@ -30866,10 +30866,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: blocked
   labels: []
   created_at: 2026-10-23T22:38
-  updated_at: 2026-10-23T22:39
+  updated_at: 2026-10-23T23:16
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -30917,6 +30917,66 @@ intake:
     FILES: godot/world/world.gd (the drain and the creation pass), the worker path, gdext/src/gen.cpp
     and mesh.cpp. Refs: AC-0399 (order, done), AC-0451 (handover, done), AC-0469/AC-0471 (the 1 m grid
     that raised the cost), AC-0399''s measurement method for the frontier.
+
+    '
+  comments: []
+- id: AC-0474
+  title: 'the fill stalls after the inner ball: 0.0 chunks/s past the taxi-8 ball'
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-23T23:16
+  updated_at: 2026-10-23T23:16
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Fly up or walk out from where you started and the world around you stays half-built forever: the ground
+    near you appears, and everything past it never does. It is not slow - it stops. Waiting longer does
+    not help, and the frame rate is not the problem. This is the reason takeoff still does not look like
+    leaving a real place.
+
+
+    ## 2) Technical Details
+
+    MEASURED (AC-0473 M1, round 68, all on the current 1 m grid at render radius 24): the build rate is
+    **14.2 chunks/s for the first 10 seconds, then 0.0 chunks/s for the next 194 seconds** - **145 completions
+    against 16,484 dispatch attempts**. 145 is EXACTLY the taxi-8 ball (`medium_start_r 8`). The DATA
+    set converges fully (1401/1401 by ~30 s), so generation finishes and the BUILD/LAND half stops. The
+    required set is 1401 chunks standing at spawn and 2503 at a chart seam; the subset that lands is STABLE
+    (92-93 home / 74 face, leak false, keys_same), so residency is not leaking - it is starved.
+
+    THE LEAD HYPOTHESIS (a code reading, NOT yet a measurement): the STAR PENDING-QUEUE DEPTH / settled-light
+    gate holds dispatched units so they never complete. Verify before fixing.
+
+    TASKS:
+
+    1. INSTRUMENT the pipeline gap: count, per frame, units dispatched / units landed / units dropped,
+    and the REASON for every drop (gate name). The settled-light gate and the star pending depth are the
+    first suspects; the drain''s own caps (`ho_cap`, the per-frame budget) are others.
+
+    2. FIX the gate that is blocking, once the reason counts name it. The fix must not disable the light-settling
+    guarantee - if a unit waits for settled light, the bug is that the light never settles for those chunks,
+    not that waiting is wrong.
+
+    3. PROVE it with the same measurement: the rate must stay non-zero past the inner ball, and time-to-90%-of-required-set
+    must be reported. Then re-measure whether R24 fits in a plausible desktop budget - only then does
+    AC-0473''s lever table become a real question for the user.
+
+    BLOCKED-ADJACENT DEBT TO FIX ON THE WAY: the `voxelcost` arm is STALE and throws SCRIPT ERROR at harness.gd:39071
+    because AC-0469 G2 removed `world._face_order` (the same six stale reads recorded in AC-0469 G4 D32).
+    That is why per-chunk gen/mesh costs could not be measured in M1, and G0 does not catch it because
+    the arm is not in the standing set. Repair the arm so the cost split is measurable.
+
+    FILES: godot/world/world.gd (the dispatch/drain/landing path, the star pending gate), godot/scenes/harness.gd
+    (the stale arm repair + any instrumentation). Refs: AC-0473 (M1 measurement, lever table parked),
+    AC-0469 G2/G4 (the removed list and D32), AC-0358 (the feed invariant - do not break light settling
+    to win rate).
 
     '
   comments: []
