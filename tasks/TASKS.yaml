@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-25T05:04
+  updated_at: 2026-10-25T05:06
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -31903,7 +31903,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-25T05:04
-  updated_at: 2026-10-25T05:04
+  updated_at: 2026-10-25T05:06
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -31946,5 +31946,31 @@ intake:
     the bake. Refs: AC-0469 stage D (the rebuild + costs), AC-0412 (the sampler fix + metric), `godot/OPS.md`
     §4 (build/serve).
 
-    '
+
+
+    COORDINATOR FINDING (round 103) — the task-4 question is ANSWERED: the asset is COMMITTED AND LOADED,
+    so this is a REAL ticket and not a non-item.
+
+    - THE ASSET: `godot/assets/satellite/satellite_face00..11.png` — 12 files, ~1 MB each, all dated **Oct
+    4**, i.e. well before AC-0469 stage D rebuilt the far-tier bake.
+
+    - IT IS LOADED BY THE PRODUCT, not merely stored: `godot/world/satellite_body.gd:462` calls `_phase_load("res",
+    "res://assets/satellite/")`, so there is a "res" phase that reads these shipped PNGs. The runtime
+    bake is a SEPARATE phase writing the `user://` cache keyed (planet_id, R, seed) (satellite_body.gd:41).
+    So the product has two sources and the shipped one is the stale one — which is exactly the failure
+    mode this ticket exists to prevent: a fixed sampler reading an old bake, with every gate green.
+
+    - THE FIX IS TO REGENERATE THOSE 12 PNGs from the current bake, not to change any code. Budget it
+    against the measured cost: **1,269 s wall and 4.60 GiB peak RSS per seed** (AC-0469 stage D), run
+    ALONE.
+
+    - VERIFY WITH AC-0412''s METRIC, not by eye: neighbour-diff grain, pixel-column variance, and `streakdir`
+    along the streak axis. The r21-era signature was streakdir ~1.21 with edge bleed; the current sampler
+    on a current bake reads ~0.94/0.86. The shipped-asset orbits should move toward the latter.
+
+    - ALSO STATE, for the record: whether the "res" phase is a fallback that the bake supersedes at runtime
+    or the primary source. If the bake always supersedes it, then the stale PNGs cost load time and disk
+    but are not what the player sees — and THAT distinction decides whether this is a real product defect
+    or dead weight. **Answer it before re-baking**, because the answer may be "delete the stale assets"
+    rather than "regenerate them".'
   comments: []
