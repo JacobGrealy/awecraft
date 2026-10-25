@@ -14,10 +14,14 @@ const MenuRes = preload("res://scenes/menu.tscn")
 const AeroLib = preload("res://core/aero.gd")
 const ChunkIO = preload("res://core/chunk_io.gd")  # AC-0155
 const _ChunkScriptM = preload("res://world/chunk.gd")  # AC-0120 (snapshot material cache)
-const HarnessScript = preload("res://scenes/harness.gd")
+# AC-0318: no const preload of the harness. The SHIPPING export excludes
+# res://scenes/harness.gd from its resource set, and a parse-time preload of
+# an absent file breaks boot before any runtime guard could run. The guarded
+# runtime load() lives in _ready (the "ac_dev" feature tag + "editor"); the
+# var below is null in a shipping build and every harness dispatch checks it.
 const ConsoleScript = preload("res://ui/console.gd")  # AC-0121
 
-var harness: HarnessScript
+var harness  # AC-0318: untyped on purpose — null when the harness is absent
 var console: CanvasLayer  # AC-0121
 var world: Node3D
 var camera: Camera3D
@@ -62,9 +66,18 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 
-	# AC-0140: the test harness (scenes/harness.gd)
-	harness = HarnessScript.new()
-	add_child(harness)
+	# AC-0140: the test harness (scenes/harness.gd) — AC-0318: a guarded
+	# runtime load() behind a FEATURE TAG, not a path: "ac_dev" is carried
+	# only by the dev export preset (export_presets.cfg preset.1), never by
+	# the shipping one, and "editor" covers the in-tree run (an exported
+	# binary never sees "editor"). In the product the gate is false, load()
+	# is never called, and the harness stays null for the whole session
+	# (one conditional at boot — nothing per-frame).
+	if OS.has_feature("ac_dev") or OS.has_feature("editor"):
+		var hs: Script = load("res://scenes/harness.gd")
+		if hs != null:
+			harness = hs.new()
+			add_child(harness)
 
 	sun = DirectionalLight3D.new()
 	sun.shadow_enabled = false
@@ -197,19 +210,22 @@ func _ready() -> void:
 
 	var menu_boot := OS.get_environment("AWECRAFT_MENU_BOOT") == "1"
 	var battery_env := OS.get_environment("AWECRAFT_BATTERY")
-	if battery_env != "":
+	if battery_env != "" and harness != null:  # AC-0318: skip when the harness is absent
 		await harness.run_battery(seed_env, battery_env)
 		return
-	if logic == "mainmenuexit":
+	if logic == "mainmenuexit" and harness != null:  # AC-0318: skip when the harness is absent
 		# AC-0317: the dispatch moved to the harness (run_mainmenuexit) —
 		# menu-first boot, before the game nodes; BATTSKIP in the battery
 		# (the Exit press quits the process).
 		await harness.run_mainmenuexit()
 		return
-	if logic != "":
+	# AC-0318: a bare `logic`/`snapshot` here means a harness arm. Without the
+	# harness present (shipping export) those envs are inert, so fall through
+	# to normal boot instead of dispatching into a null harness.
+	if logic != "" and harness != null:
 		await _run_game(seed_env, logic, cam, snapshot_path)
 		return
-	if (snapshot_path != "" or _harness_env_set()) and not (menu_boot and snapshot_path != ""):
+	if ((snapshot_path != "" and harness != null) or _harness_env_set()) and not (menu_boot and snapshot_path != ""):
 		await _run_game(seed_env, logic, cam, snapshot_path)
 		return
 
@@ -503,6 +519,10 @@ const HARNESS_ENVS := [
 ]
 
 func _harness_env_set() -> bool:
+	# AC-0318: without the harness (shipping export) the arm envs are inert —
+	# no arm can run, so nothing may treat them as set.
+	if harness == null:
+		return false
 	for e in HARNESS_ENVS:
 		if OS.get_environment(e) != "":
 			return true
@@ -835,15 +855,16 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 			OS.set_environment("AWECRAFT_IGNORE_SETTINGS", "")
 		await start_range()
 		var rspawn: Vector3 = world.spawn_point()
-		await harness.run(seed_env, logic, cam, snapshot_path, rspawn)
+		if harness != null:  # AC-0318: skip when the harness is absent
+			await harness.run(seed_env, logic, cam, snapshot_path, rspawn)
 		return
 	Game.new_world(44 if seed_env == "" else seed_env.to_int())
-	if logic == "settings":
+	if logic == "settings" and harness != null:  # AC-0318: skip when absent
 		# AC-0317: the dispatch (and the quit) moved to the harness —
 		# still BEFORE the game nodes exist, standalone AND in the battery.
 		harness.run_settings()
 		return
-	if logic == "controls":
+	if logic == "controls" and harness != null:  # AC-0318: skip when absent
 		# AC-0088: the controls remap arm (dispatched like settings -
 		# before the game nodes exist, standalone AND in the battery;
 		# the InputMap + the Settings layer are the whole test surface).
@@ -867,7 +888,8 @@ func _run_game(seed_env: String, logic: String, cam: String, snapshot_path: Stri
 		Settings.set_value("debug_stats", true)
 	_create_game_nodes()
 	var spawn: Vector3 = world.spawn_point()
-	await harness.run(seed_env, logic, cam, snapshot_path, spawn)
+	if harness != null:  # AC-0318: skip when the harness is absent
+		await harness.run(seed_env, logic, cam, snapshot_path, spawn)
 func _snapshot_finish(cam: String) -> void:
 	var snapshot_path := OS.get_environment("AWECRAFT_SNAPSHOT")
 	var spawn: Vector3 = world.spawn_point()
@@ -945,7 +967,7 @@ func _snapshot_finish(cam: String) -> void:
 				player.look(aim["yaw"], epitch)
 				aimed = true
 	var inv_env := OS.get_environment("AWECRAFT_INV")
-	if inv_env != "" and player != null:
+	if inv_env != "" and player != null and harness != null:  # AC-0318: skip when absent
 		# AC-0317: the AWECRAFT_INV shot fixture moved to the harness
 		# (run_inv_fixture) — main keeps only the env check + the call.
 		harness.run_inv_fixture(inv_env)

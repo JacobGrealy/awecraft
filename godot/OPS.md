@@ -179,6 +179,38 @@ outside the bwrap PID namespace, so it is invisible to `ps` there even though `s
 ./build_windows.sh --no-serve   # export only, leave the daemon alone
 ```
 
+**AC-0318 — which preset carries the harness.** `./build_windows.sh` exports BOTH presets
+(`godot/export_presets.cfg`): the `Windows` preset is the SHIPPING build and the
+`Windows (console debug)` preset is the DEV build. Since AC-0318 the harness lives only in
+the DEV one:
+
+- **Shipping (`Windows`)**: `custom_features=""` (no tag) and
+  `exclude_filter="res://scenes/harness.gd,res://scenes/harness.gd.remap"` — the harness
+  (24.3k lines, ~1.0 MB of `.gdc`) is NOT in the shipped resource set, and `main.gd` never
+  loads it (it loads only under `OS.has_feature("ac_dev") or OS.has_feature("editor")`,
+  a guarded runtime `load()` — no parse-time `preload`, so an absent harness cannot break
+  boot).
+- **Dev (`Windows (console debug)`)**: `custom_features=PackedStringArray("ac_dev")` and an
+  empty `exclude_filter` — the harness is kept, so the arms
+  (`AWECRAFT_LOGIC`/`AWECRAFT_BATTERY`, `HARNESS.md`) run against the exported binary.
+  In-tree runs carry the `editor` feature instead.
+
+Checking the shipped resource set: parse the embedded PCK's file table
+(`.scratch/AC-0318-gates/pck_table.py <file>` prints every `res://` path in the table —
+paths are plain text even though the `.gdc` blobs are binary tokens, which is why a string
+grep of the exe finds nothing). A boot replay of the exact shipped resource set works via
+`--export-pack` + `--main-pack <abs.pck>` with the Linux engine (AC-0384 precedent) — the
+strongest boot proof possible on this box, which has no wine.
+
+**`export_presets.cfg` is a machine file — keep it comment-free.** Godot 4.7.1's `ConfigFile`
+parser mangles `#` comment lines that contain double quotes: the comment text gets merged into
+the FOLLOWING key's name (verified: a comment quoting `"ac_dev"` turned `custom_features=` into
+a garbage merged key like `ac_devtag#isthe…custom_features`), and the editor's `load_presets`
+silently skips the mangled key — so `custom_features`/`exclude_filter` never reach the exported
+`project.binary` and the failure is invisible until you parse the shipped config. If preset
+semantics must be documented, write them in this file (here), never in the cfg. Found 2026-10-24
+(AC-0318); the probe is `.scratch/AC-0318-gates/probe_cfg.gd`.
+
 Artifacts in `exports/windows/` (git-ignored, never committed):
 - `AweCraft-YYYYMMDD-HHMM.exe` — stamped release build, and `_debug_console.exe` (engine logs
   on) plus Godot's `…_debug_console.console.exe` wrapper: **double-click the wrapper on Windows**

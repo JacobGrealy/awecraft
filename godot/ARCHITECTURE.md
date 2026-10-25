@@ -58,7 +58,12 @@ Main                      scenes/main.tscn  →  scenes/main.gd
                           state machine (menu/play/pause), sky + day/night + aero,
                           HUD wiring, star node, stats overlay, snapshot/aim hooks
 ├─ Harness                scenes/harness.gd   all AWECRAFT_LOGIC/AWECRAFT_BATTERY arms;
-│                                             inert during normal play (AC-0140)
+│                                             inert during normal play (AC-0140);
+│                                             AC-0318: a guarded runtime load() behind
+│                                             the "ac_dev"/"editor" feature tags — the
+│                                             SHIPPING export excludes scenes/harness.gd
+│                                             from its resource set, so the node is
+│                                             ABSENT there (the var stays null)
 ├─ DirectionalLight3D     "sun" — modulated by Game.time_of_day
 ├─ WorldEnvironment       the SKY PASS (main.gd `_ready` + per-frame `_update_sky`):
 │                         the Environment's Sky carries core/aero_sky_gradient.gdshader
@@ -733,8 +738,8 @@ Main                      scenes/main.tscn  →  scenes/main.gd
 │                         (inv, armor, held, craft_grid, table_grid, craft_out)
 │                         stay public BY EXCEPTION: the sanctioned harness arms
 │                         seed/reset them wholesale (the §7 test-arm access),
-│                         the main.gd AWECRAFT_INV shot fixture (AC-0317 moves
-│                         it) and the save restore (main.gd:704-712) write them
+│                         the harness.gd AWECRAFT_INV shot fixture (moved by
+│                         AC-0317) and the save restore (main.gd) write them
 │                         whole, and the view renders armor / craft_grid /
 │                         table_grid / craft_out directly. `_inv_get` returns
 │                         the LIVE Dictionary by necessity — the model's own
@@ -2456,7 +2461,13 @@ p2b3_probe.gd, p2c1_probe.gd.
 - **The arms are the one exception.** `scenes/harness.gd` reaches into the system under
   test deliberately — it is inert during normal play (§3) — so those accesses are part of
   the proof, not a defect. Where the arms need state, prefer a declared introspection
-  surface.
+  surface. Since AC-0318 the export differs from the dev tree: the SHIPPING preset
+  excludes `scenes/harness.gd` (and the exporter-derived `harness.gd.remap`) from its
+  resource set, and `main.gd` loads the harness only under
+  `OS.has_feature("ac_dev") or OS.has_feature("editor")` — a guarded runtime `load()`,
+  never a parse-time `preload`. The arms therefore run in dev exports (the `ac_dev`
+  tag) and in the editor (in-tree), never in the product. `OPS.md` §4 owns which preset
+  carries what.
 - Surgical edits. Do not reformat unrelated files; do not restructure a file you were not
   asked to touch.
 - Every change is a ticket. `tasks/TASKS.yaml` is mutated **only** through

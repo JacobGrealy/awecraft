@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T16:25
+  updated_at: 2026-10-24T20:27
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0318
 - AC-0320
 - AC-0326
 - AC-0327
@@ -16353,11 +16352,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T10:20
-  updated_at: 2026-09-18T10:20
-  completed_at: null
+  updated_at: 2026-10-24T20:27
+  completed_at: 2026-10-24T20:27
   waiting_on: null
   parent_id: null
   notes: '1) User Story: As a player, the build I download should not carry the 24,280-line test suite
@@ -16411,7 +16410,47 @@ intake:
 
     measurement only.
 
-    '
+
+
+    CLOSED (round 77) — THE TEST SUITE NO LONGER SHIPS, and the proof covers both directions: the product
+    boots without it AND the dev build still runs it.
+
+    THE MECHANISM, exactly as the ticket specified and with the resolution VERIFIED rather than assumed:
+    the DEV preset ("Windows (console debug)") carries `custom_features=PackedStringArray("ac_dev")` and
+    keeps the harness; the SHIPPING preset carries no tag and sets `exclude_filter="res://scenes/harness.gd,res://scenes/harness.gd.remap"`.
+    main.gd''s const preload is gone, replaced by `OS.has_feature("ac_dev") or OS.has_feature("editor")`
+    around a guarded runtime load(). The builder checked the resolution instead of trusting it — an in-tree
+    probe gives ac_dev=false / editor=true (so in-tree resolves via `editor`), and the shipped exes''
+    own project.binary shows SHIPPING with 39 properties and no ac_dev while DEV has 40 with `_custom_features=[ac_dev]`.
+    That is the difference between a gate and a hope.
+
+    EVERY CALL SITE IS GUARDED, which mattered more after AC-0317 moved three of them into main.gd: TEN
+    sites (load, battery, mainmenuexit, logic, snapshot, _harness_env_set, range, settings, controls,
+    general run, INV fixture), each skipping rather than crashing, proven by running the SHIPPING build
+    with AWECRAFT_LOGIC set — every dispatch skipped, clean menu boot, no crash.
+
+    GATE (a) IS THE TICKET''S OWN METHOD: the PCK v4 file table of the embedded pck shows SHIPPING = 145
+    entries with harness: NONE, DEV = 147 entries WITH scenes/harness.gdc at 1,008,423 B plus its 41 B
+    remap. Deliberately kept and reported rather than silently swept: test_range (an AC-0191 PRODUCT feature),
+    and probe_alpha/zipmini (pre-existing test-only helpers, out of this ticket''s scope).
+
+    GATE (b) — THE ONE THIS TICKET COULD HAVE BROKEN — is a real boot: a non-editor release template with
+    the exported shipping pck and libchunkio staged in the exe layout, AWECRAFT_MENU_BOOT + AWECRAFT_LOADLOG,
+    150 s to menu, Play, new world, LOADLOG 0.0 -> 22.0 -> 95.1 with the player in world (70 SATDIAG lines)
+    and ZERO script errors, zero CANNOT START, zero harness-load errors. Caveat stated honestly: no wine
+    on this box, so the replay pack equals the final exe pck except the build_id stamp.
+
+    GATE (c) — DEV STILL TESTS: both mainmenuexit (ready_to_quit true, self-quit rc=0) and settings (full
+    RESULT rc=0) run from the dev pack.
+
+    GATE (d) — the size delta as numbers: release exe 119,308,168 -> 118,299,640 = MINUS 1,008,528 B (harness.gdc
+    1,008,423 + remap 41 + table 64), release zip 48,971,539 -> 47,977,695 = MINUS 993,844 B; debug unchanged
+    as expected since it keeps the harness.
+
+    GATES: g0 rc=0 script=0 shader=0, player sprint_ok true, genhash 25/25.
+
+    ALSO HARVESTED: the first export attempt was broken by a ConfigFile comment-mangling trap, now a standing
+    rule in OPS.md §4 — a durable finding written where it will be read again rather than left in a journal.'
   comments: []
 - id: AC-0319
   title: world-child-service-injection
