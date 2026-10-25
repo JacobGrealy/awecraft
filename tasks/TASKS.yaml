@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T22:57
+  updated_at: 2026-10-25T00:15
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0328
 - AC-0330
 - AC-0402
 - AC-0406
@@ -17084,11 +17083,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-09-18T23:30
-  updated_at: 2026-10-24T22:57
-  completed_at: null
+  updated_at: 2026-10-25T00:15
+  completed_at: 2026-10-25T00:15
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The game has a rare crash (roughly one run in ten under heavy streaming load)\
@@ -17124,7 +17123,32 @@ intake:
     \ landed in that same window - so the crash correlates with the load/drain phase at R50, i.e. the\
     \ first dispatch wave after the gate, not with steady-state play. START THE CAMPAIGN THERE: one gdb-wrapped\
     \ R50 load run is the cheapest chance of catching a frame, with raw stderr captured for a Rust panic\
-    \ message; keep the lightstate/r16 loop as the long-tail arm of the campaign."
+    \ message; keep the lightstate/r16 loop as the long-tail arm of the campaign.\n\nCLOSED (round 96)\
+    \ — A BOUNDED NEGATIVE RESULT, honestly bounded. The ticket's work is complete; the crash is not explained.\n\
+    (a) THE CAMPAIGN RAN AND CAPTURED NOTHING: 99 gdb-instrumented runs (NOT 106 — an earlier counter\
+    \ of mine matched the wrapper's own 7 round-summary lines; corrected on the results page so the error\
+    \ is not repeated). Every per-run record reads `rc=0 gdb_stopped=1 sig=[] handler=0 result=1`: clean\
+    \ exits, no signal, the crash handler never fired, zero `handle_crash`, zero SIGSEGV/SIGABRT, zero\
+    \ `#0` frames. One run (round 5 B-09, #64) emitted no RESULT line while being clean on every crash\
+    \ field — its per-run gdb log was overwritten because loopB reuses filenames, so only the summary\
+    \ survives; documented rather than papered over.\n(b) NO CAPTURE, SO NO FAULT-ADDRESS TRIAGE — the\
+    \ branch that did not apply.\n(c) THE R50 `load` ARM UNDER GDB IS NOW DONE AND WAS THE PART THAT COULD\
+    \ HAVE FOUND SOMETHING THE LOOP COULD NOT: **NO Rust panic message.** The engine's own stderr is EMPTY\
+    \ (0 bytes — the entire 132-byte stream is gdb's own post-exit output), panic/abort patterns grep\
+    \ to 0 matches in both captures, the run exited rc=0 with no signal in 741 s (`wall_ms 736067`, inside\
+    \ AC-0316's 743-750 s band, arm `ok:true`, 0 script errors), and gdb stopped on the normal exit path\
+    \ (\"The program being debugged is not being run\"). So the SIGABRT-no-message variant is NOT a Rust\
+    \ panic in the pool path on this host state.\nWHAT THIS PROVES AND DOES NOT: with AC-0323's 43 runs\
+    \ this is ~142 clean runs against a fault reported at roughly 1 in 10 under heavy streaming load.\
+    \ That is a BOUNDED NEGATIVE ON THIS HOST STATE, not an exoneration — either the reported rate is\
+    \ lower than believed, or the fault needs a condition none of these runs create.\nWHAT A FUTURE INVESTIGATOR\
+    \ SHOULD TRY (recorded on the results page rather than left to memory): the same R50 load arm under\
+    \ gdb with `RUST_BACKTRACE=1` (a panic that aborts without a message might still emit a backtrace);\
+    \ a BOUNDARY STORM under gdb rather than the loopB shape; a core dump with `ulimit -c unlimited`;\
+    \ the Windows build (the report may be platform-specific); and a loaded host — every run here had\
+    \ 18 GB free, and the surviving suspects (uncapped 25-element burst group task, EditPool raw thread,\
+    \ engine pool internals, scheduler interleaving) are all conditions that RESOURCE PRESSURE would make\
+    \ more likely, not less."
   comments: []
 - id: AC-0329
   title: r16-subflag-lod-uv-reds
