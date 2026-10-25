@@ -28659,6 +28659,28 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		var c: Node3D = world.chunks[key]
 		if c.mesh_built and not c.has_any_slab_body() and absi(int(c.cx) - cx_end) <= r and absi(int(c.cz) - cz_end) <= r:
 			unbodied_final += 1
+	# AC-0409: the AC-0077 G5b "must be zero" is STALE — re-based to a RISE
+	# tripwire (the standing row owns the reasoning). The count window
+	# (Chebyshev r around the walk's end chunk) reaches the taxi-5 collar,
+	# one ring past the render circle; its FORWARD half is exactly 8 cells
+	# {(1,±4),(2,±3),(3,±2),(4,±1)} — the chunks the arm-end AC-0080
+	# retreat teleport recenters as the player leaves them, whose staged
+	# bodies churn (demote/free/re-materialize) before the arm's sample
+	# (the marker-remesh wait break) — the backward half keeps its bodies
+	# (the side being re-occupied, nearest-first drain). AC-0408's tree
+	# sampled all 8 meshed-but-bodiless (8/8 A/B pair); the current tree
+	# samples 0/6/8 (boundary r4, .scratch/AC-0409-gates/boundary-r1..r3)
+	# — a churn snapshot, not a per-build leak. The hazard class (a bodyless
+	# chunk under the player) is fenced independently (col_deferred_in_
+	# footprint, footprint.missing — both 0). Baseline 8 = the ring's size:
+	# a 9th unbodied chunk means the churn spread past the one-ring class.
+	# NEGATIVE CONTROL (arm-side only, no world change): AWECRAFT_AC0409_NEG=1
+	# forces the rise — the run must then report unbodied_built_rise true and
+	# ok false (an instrument that cannot fail is the defect it guards).
+	var unbodied_baseline := 8
+	var unbodied_rise := unbodied_final > unbodied_baseline
+	if OS.get_environment("AWECRAFT_AC0409_NEG") == "1":
+		unbodied_rise = true
 	# AC-0079 v3 pick-order probe: per crossing, the count of forward (dx > 0,
 	# relative to the crossing player chunk) chunks among the FIRST 10
 	# mesh-build dispatches AFTER the crossing (the next 10 dispatches in the
@@ -28692,7 +28714,10 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 	if OS.get_environment("AWECRAFT_MESH_INFO") != "":
 		var mi = _matinfo_counts()
 		print("MATINFO built_chunks=%d distinct_std=%d distinct_all=%d total_allocs=%d" % [mi.built_chunks, mi.distinct_std, mi.distinct_all, mi.total_allocs])
-	var ok := crossings == walk_lines and marker_ok
+	# AC-0409: + not unbodied_rise (the G5b re-base tripwire — false on every
+	# in-class reading, so ok is bit-identical to the standing semantics; a
+	# 9th unbodied chunk, or the NEG control, turns the arm red).
+	var ok := crossings == walk_lines and marker_ok and not unbodied_rise
 	Debug.result({
 		"ok": ok,
 		"radius": r,
@@ -28795,6 +28820,10 @@ func _boundary_test(spawn: Vector3, t0: int) -> void:
 		"create_sync_gen": int(world.perf_create_sync_gen),
 		"staged_pending_final": int(world._col_pending.size()),
 		"unbodied_built_final": unbodied_final,
+		# AC-0409: the G5b re-base (baseline = the forward taxi-5 ring, 8) +
+		# the RISE tripwire (the gate field — must stay false; ok rides it).
+		"unbodied_built_baseline": unbodied_baseline,
+		"unbodied_built_rise": unbodied_rise,
 		# AC-0352: the worst-frame class (the AC-0348 storm tail) — the WALK
 		# frame percentiles (the standing-value fields; the max is
 		# single-sample and NOT the gate) + the worst-N capture entries with

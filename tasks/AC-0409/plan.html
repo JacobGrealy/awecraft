@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0409 unbodied_built_final</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0409 — is <code>unbodied_built_final = 8</code> stale, or a real leak?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Diagnosis first, then one of two changes</b> — and the ticket names both, with the reasoning that decides between them.</p>
+<h2>1. What is known (from AC-0408 — do not re-derive)</h2>
+<ul>
+<li><code>unbodied_built_final</code> reads <b>EIGHT</b>; the requirement that it be zero comes from <b>AC-0077's G5b</b>.</li>
+<li>AC-0408 established the eight is <b>TREE STATE, NOT DAMAGE</b>: a pristine-library A/B pair reads the same eight, and the immediate-footprint fence reads <b>zero</b>. So it is reproducible and not caused by recent work.</li>
+<li><b>What is NOT established:</b> whether the "must be zero" requirement is <b>STALE</b> — written when the world and its lanes were smaller, before the carve work changed the far lane's behaviour by an order of magnitude (the same era that made the staging counter's ceiling stale, see AC-0408) — or whether it is a <b>REAL GAP</b> where eight objects per build are created without a body registered, unnoticed because the requirement was never re-examined.</li>
+</ul>
+<h2>2. The decision this ticket must make, and the standard for making it</h2>
+<ol>
+<li><b>2.1 Find what <code>unbodied_built_final</code> actually counts</b>: which lane creates what, what "unbodied" means for that object, and <b>why exactly eight</b>. <b>Eight is a suspiciously small and specific number</b> — explain it as a mechanism (e.g. "the far lane's 8 surrounding slabs per build"), not as a number that happens to appear.</li>
+<li><b>2.2 Decide with evidence</b>: expected for the current world, or a real gap.</li>
+<li><b>2.3a If EXPECTED</b>: re-base the requirement <b>with the reasoning stated in the gate</b> — and add a <b>TRIPWIRE THAT CATCHES A RISING COUNT rather than any non-zero one</b>. The ticket says why and it is the whole point: <em>"a bare 'must be zero' that is quietly allowed to be eight is exactly how a real leak becomes invisible."</em> A re-based threshold of "eight is fine" would retire the gate's ability to catch a ninth.</li>
+<li><b>2.3b If a REAL GAP</b>: find where the eight come from and say which eight objects per build lack a registered body.</li>
+</ol>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the arm that reports <code>unbodied_built_final</code> (find it by name) and its zero requirement from AC-0077 G5b</td><td>Edit: the requirement/tripwire, once 2.2 decides.</td></tr>
+<tr><td>godot/world/world.gd</td><td>whatever increments the unbodied count — the lane that creates without registering a body</td><td>Read first; edit only if 2.3b.</td></tr>
+<tr><td>tasks/AC-0409/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the carve work's behaviour, generation, streaming, light, the far tier's shading, the data JSON files. <b>Do not simply raise the expected value to eight</b> — that is the outcome the ticket explicitly warns against.</p>
+<h2>4. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The mechanism is named (the point)</td><td>What the count measures, which lane creates the eight, and <b>why eight specifically</b> — reported as a mechanism. A number that reproduces is not an explanation.</td></tr>
+<tr><td>The tripwire can fail</td><td><b>Prove the new check catches a NINTH.</b> Construct or reason a case where the count rises and show the gate would trip; if you cannot construct one, say so and explain exactly how the check is structured to notice. <b>An untested tripwire is the same failure as the bare zero it replaces.</b></td></tr>
+<tr><td>The rest of the arm is unchanged</td><td>The arm's other fields at their recorded values, and <code>python3 tasks/scripts/gate_run.py AC-0409 --arms g0,genhash</code> — g0 zero SCRIPT ERROR, genhash 25/25.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>5. Acceptance</h2><p>The mechanism named (which lane, why eight), the stale-vs-real decision made with evidence, a re-base or a gap fix as that decision requires, and a tripwire proved able to catch an increase.</p>
+<h2>6. Risks</h2><p>(1) Re-basing to eight and calling it done — that converts a gate into decoration. (2) Explaining the eight as "tree state" without saying which eight objects or why that count — reproduction is not explanation. (3) A tripwire that cannot be shown to fail.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not change carve behaviour or raise the expected value without the tripwire.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>AC-0408 flagged this rather than folding it in, and established the eight is reproducible tree state on a pristine library. AC-0327 last round was the same shape of question — a count that was right, read wrongly — so the answer may again be that the expectation, not the code, is what needs to change.</p>
+</body></html>

@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T01:49
+  updated_at: 2026-10-25T02:44
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0409
 - AC-0412
 - AC-0438
 - AC-0464
@@ -26252,11 +26251,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-08T17:37
-  updated_at: 2026-10-08T17:37
-  completed_at: null
+  updated_at: 2026-10-25T02:44
+  completed_at: 2026-10-25T02:44
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Internal bookkeeping to keep the world''s collision and mesh lanes honest. It
@@ -26304,7 +26303,50 @@ intake:
     with reasoning, the tripwire pattern it introduced, and the explicit statement that this one is flagged
     rather than closed.
 
-    '
+
+
+    CLOSED (round 101). THE EIGHT IS A CHURN SNAPSHOT, NOT A LEAK — and the "why eight" is a real mechanism
+    rather than a number that happens to reproduce.
+
+    WHAT THE COUNT MEASURES: chunks in the Chebyshev-r window around the boundary walk''s END chunk that
+    are `mesh_built` but carry NO slab collision body at all.
+
+    WHY EXACTLY EIGHT: the window reaches the TAXI-5 COLLAR, one ring past the R4 render circle, and that
+    collar''s FORWARD HALF IS EXACTLY 8 CELLS — {(1,+-4),(2,+-3),(3,+-2),(4,+-1)}. When the arm-end AC-0080
+    retreat teleports the player 8 chunks back toward the start, the recenter burst churns precisely that
+    ring as the player LEAVES it (demote/free/re-materialise) before the arm samples at the marker-remesh
+    wait break. The backward half — the side being re-occupied — keeps its bodies (nb 5-7, measured).
+    So eight is not "some objects"; it is a named geometric set caught mid-transition.
+
+    STALE, AND THE DECIDING EVIDENCE IS THE VARIANCE: the same recipe reads **0 / 6 / 8 / 8** across four
+    runs, with the probe catching the forward ring in all three states (freed-to-data-only, meshed-bodiless,
+    partial). A REAL gap of eight would be a STABLE per-build count; a value that moves with timing is
+    a snapshot of a transition. The hazard class the gate actually cares about — a bodyless chunk under
+    the PLAYER — is separately fenced and reads clean every run (`col_deferred_in_footprint` 0, `footprint.missing`
+    0).
+
+    THE RE-BASE DID NOT RETIRE THE GATE, WHICH WAS THE TICKET''S REAL DEMAND: the requirement was replaced
+    by a **RISE TRIPWIRE** — `unbodied_built_baseline` 8 with `unbodied_built_rise` = count > baseline,
+    wired into the arm''s `ok` (bit-identical on in-class readings) — plus an `AWECRAFT_AC0409_NEG=1`
+    negative control. A bare "must be zero" quietly allowed to be eight would have been exactly how a
+    real leak becomes invisible; a threshold of "eight is fine" would have retired its ability to catch
+    a ninth. This one catches the ninth.
+
+    THE TRIPWIRE IS PROVEN ABLE TO FAIL: in the NEG run the count read **0** yet the arm reported `rise
+    true` and **`ok` false** — so `ok` demonstrably rides the tripwire rather than the raw count, and
+    the 0/6/8/8 spread shows the count is a LIVE measurement against a fixed baseline (a 9 compares 9
+    > 8 -> red). A genuine 9 could not be constructed without world changes, which are fenced, and that
+    limitation is documented rather than glossed.
+
+    GATES: mechanism named with per-chunk probe evidence; tripwire shown to fail in r6; marker/remesh
+    true with crossings 20/20; other fields at standing; g0 rc=0 with 0 SCRIPT and 0 SHADER ERROR; genhash
+    25/25 byte-identical. The probe was removed and `harness_doc --check` is clean, so no instrumentation
+    debt and no doc drift.
+
+    THE PATTERN IS NOW THREE-FOR-THREE: AC-0326 (the sea parity was dead), AC-0327 (the bedrock "race"
+    was the arm reading too early) and this ticket (the eight is a transition snapshot) were all cases
+    where the CODE was fine and the EXPECTATION was the thing that needed re-examining. That is a useful
+    prior for the remaining count-shaped tickets.'
   comments: []
 - id: AC-0410
   title: harvest-standing-rules-into-their-homes
