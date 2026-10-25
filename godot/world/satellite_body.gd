@@ -123,6 +123,17 @@ const MESH_STEP := 16.0
 # const). It changes the MESH ONLY: the cache key, the textures and the
 # H grid are step-independent (the geometry is rebuilt from the grid).
 var mesh_step := MESH_STEP
+# AC-0412: the texture's mip chain (AC-0384 r5 shipped it, c464433
+# reverted it with the filter line). ON (the default) = the r5 state:
+# every face ImageTexture carries a chain and the sampler is
+# filter_linear_mipmap_anisotropic (the shader line), so orbital views
+# sample the level that matches the on-screen texel pitch instead of
+# level 0 at sub-texel pitch. OFF (AWECRAFT_SAT_MIP=0) = the pre-AC-0412
+# sampling (chainless; the mipmap filter over a chainless texture is a
+# no-op, so the render is the old one). NPIX^2 is power-of-two on every
+# face, so the chain is valid everywhere; it leaves level 0 untouched,
+# so the guard, the height-grid reads and the bake bytes are unaffected.
+var mip_chain := true
 
 
 const HOME_HALF := 197  # home chunks per axis: cx, cz in [-197, 196]
@@ -363,6 +374,10 @@ func _ready() -> void:
 	var mst: String = OS.get_environment("AWECRAFT_SAT_MESH_STEP")
 	if mst != "" and mst.to_float() >= 4.0:
 		mesh_step = clampf(mst.to_float(), 4.0, 256.0)
+	# AC-0412: the mip-chain switch (see the var above). Only "0" turns
+	# the chain off; anything else (unset) keeps it on.
+	if OS.get_environment("AWECRAFT_SAT_MIP") == "0":
+		mip_chain = false
 	# AC-0384 diagnostic: read the env knobs once, open the fallback log
 	# file (the windowed build may not keep a console), print the banner
 	# with the user's trigger instructions.
@@ -869,6 +884,12 @@ func _bake_main_step() -> void:
 		if not gd["ok"]:
 			_fail("variance guard failed on face %d: %s" % [lf, str(gd)])
 			return
+		# AC-0412: the mip chain on the cache/res load path (the r5 site,
+		# env-gated - the import-side chain for the shipped seed-44 assets
+		# is a separate asset decision, so the code path owns the chain
+		# here regardless of the import flag).
+		if mip_chain:
+			img.generate_mipmaps()
 		textures.append(ImageTexture.create_from_image(img))
 		# AC-0384 r2: the height channel (the PNG's alpha) - the grid the
 		# displaced mesh is built from. An image without an alpha channel
@@ -903,6 +924,10 @@ func _bake_main_step() -> void:
 		visible = false  # no un-uniformed flash (the first _tick_view sets it)
 	var lf: int = bake_consume
 	if lf < 12:
+		# AC-0412: the worker image goes through no import at all, so the
+		# code is the only place a chain can come from here (the r5 note).
+		if mip_chain:
+			_worker_images[lf].generate_mipmaps()
 		textures.append(ImageTexture.create_from_image(_worker_images[lf]))
 		_build_face(lf)
 		bake_consume += 1

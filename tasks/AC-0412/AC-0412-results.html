@@ -1,0 +1,50 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0412 results</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.ok{color:#060}.bad{color:#900}</style></head><body>
+<h1>AC-0412 — results (builder evidence)</h1>
+<p>All measured numbers below appear in the log <code>.scratch/AC-0412-gates/metrics-ac0412.log</code> (re-runnable via <code>.scratch/AC-0412/measure.sh</code>); gate output in <code>.scratch/AC-0412-gates/{g0,genhash,residency}-r1.log</code>; render logs in <code>render-r{1,2,2b,3b,4a,4b}.log</code>. Captures: <code>ac0412-r1-baseline-2600.png</code> (nadir, original tree), <code>ac0412-r2-mesh256-2600.png</code> (nadir, mesh 256), <code>ac0412-r2b-limb-baseline-2600.png</code> / <code>ac0412-r3b-limb-mips-2600.png</code> (2600 m limb A/B), <code>ac0412-r4a-limb-baseline-1600.png</code> / <code>ac0412-r4b-limb-mips-1600.png</code> (1600 m limb A/B). All renders: seed 5432 (runtime bake of the CURRENT pipeline), clouds off, time frozen 0.5, 1280×720, fresh bake cache <code>.scratch/AC-0412/home/.local/share/AweCraft/satellite/p0_r4000_s5432_h/</code> (12 × 1024² PNG, wall ~21 min = the 1,269 s baseline reproduced).</p>
+
+<h2>3.1 — the bake's actual resolution (current tree, measured)</h2>
+<table>
+<tr><th>Quantity</th><th>Value</th></tr>
+<tr><td>Texels per face</td><td>1024 × 1024 per axis (NPIX=1024), 12 faces</td></tr>
+<tr><td>m/texel</td><td>6.1359 m on the full axis (W/1024, W=πR/2=6283.19 m); 3.0680 m on the halved axis ((W/2)/1024). Relief grid: 1.000029 m/cell (full, 6283 cells) / 1.000189 m/cell (halved, 3141 cells)</td></tr>
+<tr><td>Texel footprint vs relief</td><td>Chart faces: 6.136 × 3.068 m = 18.82 m² ≈ 18.8 relief cells, of which the centre-cell read samples exactly 1 (5.3 %). Home pair: 3.068² = 9.41 m² ≈ 9.4 cells, 1 sampled (10.6 %)</td></tr>
+<tr><td>Records per face / total</td><td>154,449 chunk slots per chart face (393²; chart span 393 × 197 = 77,421 chunks); total 1,699,726 records (home 155,236 + 10 × 154,449) = 1.62 GiB</td></tr>
+<tr><td>Mesh (the "16 m")</td><td>MESH_STEP=16 m: 15.988 m vertex spacing (full axis) / 7.994 m (halved), 1,707,596 vertices, planar triangles ≈ the 16 m facet</td></tr>
+<tr><td>On-screen at 2600 m nadir</td><td>disc ≈ 743 px; 16 m ≈ 2.2 px; 6.14 m ≈ 0.84 px; 3.07 m ≈ 0.42 px</td></tr>
+</table>
+<p><b>Verdict: 6.1 m is real (the full-axis texel), 16 m is NOT a texel size — it is the mesh step.</b> The ticket's "16 m facet = bake texel" premise is stale (see deviations D1). The bake content itself (fresh faces, measured): H range 0–137 m, σ=12.7 m, per-texel-pitch relief 0.5–1.3 m; profile autocorrelation decays monotonically at every face — <b>no 2.6-texel (16 m) periodic structure</b>; colvar/rowvar 0.66–1.24 — <b>no column/row streak structure</b> (the only anisotropy, face04 = 2.10, matches its 2:1 texel-pitch ratio exactly — geometric, not streaky).</p>
+
+<h2>3.2 — streaks: bake vs which sampling term (isolating experiments)</h2>
+<p><b>Not the bake content</b> (measured isotropic, above). Candidates, isolated one term at a time on the SAME bake (seed 5432) and view:</p>
+<table>
+<tr><th>Candidate</th><th>Dispositive test</th><th>Result</th></tr>
+<tr><td>Mip level</td><td>Inspect the tree, then A/B the chain</td><td>No mip chain exists in the pre-AC-0412 tree (c464433 reverted the AC-0384 r5 fix: no <code>generate_mipmaps</code>, <code>filter_linear</code>, imports generate=false) — only level 0 can be sampled, so "a mip level" is vacuous; the real defect is <b>no chain at sub-texel pitch</b> (0.42–0.84 px texels). A/B (2600 m limb, R2b→R3b): grain_x 0.0077→0.0074 (−3.9 %), streakdir 0.94→0.92 — a small real low-pass, no change to the (already weak) streak signature. Same at 1600 m (R4a→R4b): −0 to −2 %.</td></tr>
+<tr><td>Filter mode</td><td>Same A/B (the r5 fix changes filter <i>and</i> chain together, as shipped)</td><td><code>filter_linear</code> is a low-pass; it cannot create a hard grid or streaks; the A/B above bounds its whole contribution at 2–4 % of the measured grain.</td></tr>
+<tr><td>Coordinate derivation collapsing an axis</td><td>Inspect the UV/derivation path</td><td>UVs are exactly linear (<code>u=i/nu, v=j/nv</code>), <code>uv_to_world</code> is a smooth per-coordinate tan prewarp, the centre-cell read <code>floor((k+0.5)*cells/npix)</code> is monotone in i and j — <b>no axis collapse; candidate dead by inspection</b>. (Provenance correction: the centre-cell read is AC-0469 sD fc1a6ac, not AC-0426 — deviations D2.)</td></tr>
+</table>
+<p><b>Cause named: the residual vertical structure is SAMPLING — sub-texel-pitch level-0 sampling of a chainless texture (the mip/filter class, specifically the missing mip chain).</b> The strong tear-streaks of the AC-0384 r19/r21 frames belong to the <i>old</i> bake (shipped seed-44 asset: streakdir 1.21 in the comparable box, plus the pre-sD bake's 329-chunk-past-edge ground bleed); the current bake no longer carries them (streakdir 0.94 at 2600 m limb, 0.86 at 1600 m; old-bake r21 = 1.21 in the same box).</p>
+
+<h2>3.3 — facets vs streaks: one cause or two</h2>
+<p><b>Two causes in principle, neither a dominant visible artifact on the current bake.</b> The "16 m facets" are the 16 m displacement-mesh grid (relief floor); the streaks are the chainless texture sampling. Isolated at 2600 m nadir: mesh 16 → mesh 256 (R1→R2, same sampling) removes only 1–7 % of the grain (0.0089/0.0095 → 0.0088/0.0093 disc; 0.0113/0.0137 → 0.0107/0.0128 central), and the lag-1..8 scan of R1 is monotonic — <b>no visible 2.2 px 16 m grid at all</b>. The faceted coastline look in the captures is the 6 m texel aliasing the 1 m terrain edges (bake floor) — identical in the mesh256 frame. So the ticket's strong artifacts were an old-bake + old-sampling interaction; the ticket is stale, as §2 warned.</p>
+
+<h2>Fix — cheap option tried first, measured; expensive option costed</h2>
+<p><b>Tried (cheap, landed, switch-gated):</b> re-land the AC-0384 r5 sampling state — <code>filter_linear_mipmap_anisotropic</code> + <code>generate_mipmaps()</code> on both texture-creation sites, behind <code>AWECRAFT_SAT_MIP</code> (default ON; =0 reproduces the pre-AC-0412 sampling exactly). Cost: zero load-time work beyond the one-time chain build at texture load; +≈1.33 MiB/face texture memory (chain above the 4 MiB base) ≈ +16 MiB total. Measured: grain_x −3.9 % at 2600 m limb, −0 to −2 % at 1600 m limb (A/B pairs above, before/after captures r2b/r3b and r4a/r4b); streakdir and colrow unchanged; disc grain (0.0074) is now below its own source face's grain (0.0098) — the correct anti-aliased regime (r5's diagnostic was the disc being grainer than its source).</p>
+<p><b>Costed (expensive, NOT required — the residual is the floor):</b> (a) <b>Finer bake</b> (e.g. 2048/face): the 1,699,726-record payload (the dominant sD cost) is unchanged; the per-face pixel stage quadruples (O(npix²)) → ≥ the measured 1,269 s / 4.60 GiB baseline per seed, ≈1.3–2.3× it in practice, +≈200 MiB load texture memory (16 MiB/face base), and it invalidates every seed's cache. Gain: it only subdivides the same centre-cell undersampling — sub-6 m relief that is 0.42 px on screen and not resolvable from orbit. (b) <b>Better sampling of the existing bake</b> (footprint average instead of centre cell): a full re-bake at the SAME cost baseline (1,269 s / 4.60 GiB, cache invalidated) for a sub-1 m/texel smoothing — below the visual threshold. (c) <b>Finer mesh</b> (4 m): 4× vertices (1.7 M → 6.8 M), a large render-cost hit on a 2–5 FPS box, for the measured 1–7 % of grain. None justified; the measured floor is what it is.</p>
+<p><b>Separate finding (out of fence):</b> the canonical seed-44 ship still ships the pre-AC-0469-sD piece-1 asset (6.136 m 1:1 texel, the old chart with the 329-chunk edge bleed) — it is the only place the ticket's artifacts survive today, and it predates the current pipeline; re-baking/re-shipping it is a coordinator/asset decision. The runtime bake for any non-canonical seed (and the code-side chain, which this fix also applies to the cache/res load path) is current.</p>
+
+<h2>Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th><th>Measured</th></tr>
+<tr><td>g0</td><td>zero SCRIPT/SHADER ERROR</td><td class="ok">rc=0, script=0, shader=0 (3 s) — the shader edit compiles</td></tr>
+<tr><td>genhash</td><td>25/25</td><td class="ok">25 GENHASH lines, ok=true, rc=0</td></tr>
+<tr><td>residency</td><td>leak false / stable</td><td class="ok">leak=false, verdict STABLE, crossings ok (x_seam 511 ms, z_seam 403 ms), rc=0</td></tr>
+</table>
+<p>Command: <code>python3 tasks/scripts/gate_run.py AC-0412 --arms g0,genhash,residency</code> — "all arms ok".</p>
+
+<h2>Files</h2>
+<table><tr><th>File</th><th>Change</th></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>filter line → <code>filter_linear_mipmap_anisotropic</code> + comment (the 3.2 filter candidate)</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td><code>mip_chain</code> var (default true) + <code>AWECRAFT_SAT_MIP</code> env read in _ready + <code>generate_mipmaps()</code> at both texture-creation sites (cache/res load, worker image)</td></tr>
+<tr><td>tasks/AC-0412/</td><td>plan.html (contract), continuity.md (journal), AC-0412-deviations.txt, AC-0412-results.html (this page), 6 render captures</td></tr>
+</table>
+<p>Not touched: satellite_bake_worker.gd (read only — no bake edit named), generation, streaming, light, far-tier shading, handover rule, data JSON, shipped satellite assets. No git operations.</p>
+</body></html>

@@ -86,7 +86,17 @@ shader_type spatial;
 // fragments are discarded by `op` anyway, so no double-fog is possible.
 render_mode cull_back, depth_draw_always, fog_disabled;
 
-uniform sampler2D tex : filter_linear;
+// AC-0412: filter_linear_mipmap_anisotropic (the AC-0384 r5 state,
+// re-landed behind the AWECRAFT_SAT_MIP switch in satellite_body.gd).
+// A mipmap-filtering sampler over a texture WITHOUT a chain is a no-op
+// (the r5 note) - the chain side is the env-gated generate_mipmaps in
+// every texture-creation site, so AWECRAFT_SAT_MIP=0 reproduces the
+// pre-AC-0412 sampling exactly. `filter_linear` filters ONE level: no
+// chain, no anisotropy - a 1024^2 texture bilinear-sampled at sub-texel
+// pitch aliases (the AC-0384 r4 ladder measured it), and at the limb the
+// compressed texel columns smear into the vertical streaks the AC-0384
+// r19/r21 assessment recorded.
+uniform sampler2D tex : filter_linear_mipmap_anisotropic;
 uniform float u_fog_far : hint_range(0.0, 20000.0);
 uniform float u_render_edge : hint_range(0.0, 20000.0);
 uniform vec4 u_air : source_color;

@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0412 bake faceting and streaks</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0412 — where do the orbital faceting and vertical streaks come from?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Establish, then choose between two different fixes.</b> The ticket forbids picking a plausible one.</p>
+<h2>1. What is known</h2>
+<p>From the AC-0384 round-19 and round-21 assessments, re-confirmed by round 22: the satellite body from orbit carries <b>sixteen-metre faceting</b> and <b>vertical streak artifacts</b>. The <b>pastel and low-contrast half was fixed separately</b> (the mesh winding repair), so what remains is these two. The assessment characterises them as <b>bake character</b> — a 16 m facet is the size of the texel the bake produces at the body's scale, and streaks are what a bake produces when its sampling grid is coarser than the relief it carries.</p>
+<h2>2. WHY THIS TICKET MAY BE PARTLY STALE — read before measuring anything</h2>
+<p><b>AC-0469 stage D REBUILT the far-tier bake since this was filed.</b> `FACE_GRID` was a literal 64 (the old grid's whole face, covering ~16% of a chart face and charting 329 chunks past its edge); it now derives from `SphereMath.CHUNKS_PER_FACE` = 393, the bake covers <b>100% of each chart face (154,449 slots, 1,699,726 records)</b>, and its own notes record the texel budget as <b>NPIX 1024 → ~2.6 texels per chunk, 6.136 m/texel — "unchanged in metres"</b>. So the texel may be <b>6.1 m, not 16 m</b>, and the coverage is now complete where it was 16%. <b>Every number in the ticket's framing must be re-measured on the current tree before it is reasoned about.</b> AC-0426 also changed the bake's sampling (the bake worker's per-pixel centre-cell read) — check whether that is the "coordinate derivation" the ticket hypothesised.</p>
+<h2>3. What to establish (the ticket's own list, in its own order)</h2>
+<ol>
+<li><b>3.1 The bake's actual resolution</b> on the current tree: texels per face, metres per texel, records per face, and how a texel's footprint compares with the terrain relief over that same area. Report the numbers.</li>
+<li><b>3.2 Whether the streaks come from THE BAKE or from THE SAMPLING.</b> The ticket names three candidate sampling causes: <b>a mip level</b>, a <b>filter mode</b>, or <b>a coordinate derivation that collapses along one axis</b>. These are different fixes and the evidence must choose. A decisive test is to sample the SAME bake with the filter/mip/coordinate term isolated (as AC-0402 did for the grey planet — isolate one term at a time rather than guessing).</li>
+<li><b>3.3 Which artifact is which</b>: are the facets and the streaks one cause or two? State it.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/satellite_bake_worker.gd</td><td>the bake loop and the per-pixel centre-cell read (AC-0426), <code>npix</code>/<code>face_grid</code>/<code>face_cells</code> as now threaded by AC-0469</td><td>Read first; edit only what 3.1/3.2 names.</td></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>how the body samples the bake — the filter, any mip bias, and the UV/coordinate derivation</td><td>Read first; edit only what 3.2 names.</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td><code>NPIX</code>, <code>FACE_GRID</code>, the texture creation/filtering</td><td>Read; edit only if the fix is there.</td></tr>
+<tr><td>tasks/AC-0412/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, light, the far tier's shading model (AC-0443/0444/0446), the handover rule (AC-0451), the data JSON files.</p>
+<h2>5. Decision and cost, stated honestly</h2>
+<p>The ticket requires the cost to be stated before accepting a fix: <b>a finer bake costs bake time and memory at load</b> — and AC-0469 stage D measured the CURRENT bake at <b>1,269 s and 4.60 GiB peak per seed</b>, so "finer" is expensive in a way this ticket could not have known. <b>A better sampling of the existing bake costs nothing at load and may not help; a different filtering costs almost nothing.</b> So the cheap options must be tried and reported before the expensive one is proposed — and if the expensive one is genuinely required, its cost must be given against the measured 1,269 s / 4.60 GiB baseline, not as "slower".</p>
+<h2>6. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The cause is named (the point)</td><td>Bake resolution reported as numbers; the streak cause localised to bake vs mip vs filter vs coordinate derivation, <b>with the isolating experiment described</b>; facets and streaks said to be one cause or two.</td></tr>
+<tr><td>The fix is visible and measured</td><td>EITHER a fix with before/after captures and a metric that shows the faceting/streak signature reduced (state the metric — a pixel-column variance or a gradient measure along the streak axis is better than "looks smoother"), OR a documented finding that the artifact is the bake's floor and what a finer bake would cost against the 1,269 s / 4.60 GiB baseline.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0412 --arms g0,genhash,residency</code> — g0 zero SCRIPT ERROR (a shader compile error shows here), genhash 25/25, residency leak false / stable.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code> with <code>AWECRAFT_SNAPSHOT</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, <b>~1200 s each, SERIAL</b>. <b>A bake is 1,269 s — do not rebuild the far tier casually.</b></p>
+<h2>7. Acceptance</h2><p>Current bake resolution measured, the artifact cause localised with an isolating experiment, a cheap fix tried first with a stated metric, and any expensive option costed against the measured bake baseline.</p>
+<h2>8. Risks</h2><p>(1) Reasoning from the ticket's 16 m figure when the bake has since been rebuilt — 3.1 exists to prevent that. (2) Jumping to a finer bake because it sounds like the cause, when the ticket explicitly says a better sampling may cost nothing. (3) Reporting "looks smoother" with no metric — the assertions must be measurable, and streaks in particular need a metric along their own axis.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. Do not touch the far tier's shading model or the handover rule.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>10. Resume point</h2><p>AC-0469 stage D made the far tier cover every chart face for the first time; AC-0426 changed how the bake reads its cells; AC-0402 shows the established method for this subsystem (isolate one term at a time, measure pixels). The body's colour half of this finding is already fixed.</p>
+</body></html>

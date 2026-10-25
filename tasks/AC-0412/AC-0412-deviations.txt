@@ -1,0 +1,52 @@
+AC-0412 — deviations from plan.html
+====================================
+
+D1. The ticket's 16 m figure is a MESH number, not a texel number (the stale
+    premise §2 warned about, confirmed by re-measurement).
+    - 16 m = MESH_STEP (the displacement mesh vertex spacing, satellite_body.gd
+      MESH_STEP=16.0): 15.988 m on the full axis, 7.994 m on the halved axis.
+    - The bake's texel is NOT 16 m: it is 6.136 m on the full axis (W/1024) and
+      3.068 m on the halved axis ((W/2)/1024). The "16 m facet" is a 16 m
+      displacement-mesh facet, a different subsystem from the bake's texels.
+    - I re-measured every number on the current tree before reasoning (3.1),
+      exactly as §2 requires, rather than reasoning from the ticket's figure.
+
+D2. The per-pixel centre-cell read came from AC-0469 stage D (fc1a6ac), not
+    AC-0426 (the plan's §2 attribution). AC-0426 was the light-floor clamp.
+    This changes the provenance of the "coordinate derivation" candidate but
+    not its disposition: I inspected it and it is a monotone, per-coordinate
+    linear read (no axis collapse) - not the streak cause.
+
+D3. Render recipe deviation. The plan's recipe assumed ~1200 s renders. On this
+    box:
+    - A cache-hit render finished in ~200-400 s wall (body LOADED ~164 s game
+      time + 600-frame drain), not ~1200 s.
+    - The FIRST bake-inclusive run (seed 5432, AWECRAFT_SNAP_DRAIN=60000) hung:
+      the planet preset waits the body LOADED then drains EXACTLY
+      AWECRAFT_SNAP_DRAIN frames, so a 60000-frame drain at ~2 FPS would never
+      finish in budget. I killed it (the bake cache had already been written,
+      so the 1,269 s bake was preserved) and re-ran with drain 600. All
+      subsequent renders used drain 600 and completed.
+    - HOME was pointed at the workspace (.scratch/AC-0412/home) instead of
+      /tmp/dsh_home because the sandbox gives a fresh /tmp per bash call; the
+      Godot 4.7.1 user:// path here is $HOME/.local/share/<project>/ (not
+      app_userdata), so the bake cache p0_r4000_s5432_h persists across calls.
+
+D4. The bake ran on seed 5432, not canonical 44. Canonical seed 44 loads the
+    SHIPPED pre-AC-0469-sD piece-1 asset (no runtime bake), which is exactly the
+    stale bake that carries the ticket's artifact. Seed 5432 forces the CURRENT
+    bake pipeline to run so 3.1-3.3 are measured on the current tree. The
+    shipped seed-44 asset is a separate (stale-asset) finding, out of my fence
+    (shipped satellite assets are not to be touched).
+
+D5. The shipped fix defaults ON (AWECRAFT_SAT_MIP=1 / chain present), matching
+    the AC-0384 r5 precedent that shipped the fix on by default. AWECRAFT_SAT_MIP=0
+    reproduces the pre-AC-0412 sampling exactly (a mipmap-filtering sampler over
+    a chainless texture is a no-op). If the coordinator prefers a conservative
+    default, it is a one-line flip of the var mip_chain default.
+
+D6. satellite_bake_worker.gd was read but NOT edited. The bake content is
+    measured isotropic (no 16 m periodicity, no streak structure), so no bake
+    edit is named by 3.1/3.2; the residual is a sampling floor, and the cheap
+    fix (the mip chain) lives on the sampler side (shader + texture creation),
+    not the bake.

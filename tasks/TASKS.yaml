@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-25T02:44
+  updated_at: 2026-10-25T05:04
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0412
+- AC-0478
 - AC-0438
 - AC-0464
 - AC-0475
@@ -26536,11 +26536,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-09T18:42
-  updated_at: 2026-10-09T18:42
-  completed_at: null
+  updated_at: 2026-10-25T05:04
+  completed_at: 2026-10-25T05:04
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit and high in the atmosphere the planet''s surface should read as a
@@ -26600,7 +26600,45 @@ intake:
     handover with no limb on the near tiers, the carved-top terrain fill, and above all the body''s mesh
     winding, which was inverted for the entire life of the objective and was fixed in round 22.
 
-    '
+
+
+    CLOSED (round 102). THE TICKET''S PREMISE WAS STALE AND THE MEASUREMENT SAID SO, which is why §2 of
+    the plan existed.
+
+    3.1 THE NUMBERS ON THE CURRENT TREE: 1024 texels per axis per face; **6.136 m per texel on the full
+    axis, 3.068 m on the halved one**; 1,699,726 records (154,449 per chart face + 155,236 home, 1.62
+    GiB). So **6.1 m is real and 16 m IS NOT A TEXEL AT ALL — it is MESH_STEP**, the 15.988 m vertex spacing
+    of the 1.71 M-vertex displacement mesh. The ticket''s framing attributed a mesh-grid artifact to the
+    bake; both are real objects, but they are different objects.
+
+    3.2 THE STREAKS ARE SAMPLING, NOT THE BAKE: sub-texel-pitch LEVEL-0 sampling of a CHAINLESS texture
+    (an earlier commit reverted the r5 mip chain). It is not a mip level, because no chain exists to select;
+    and not a coordinate collapse, because the UVs are linear and the centre-cell reads monotone — dead
+    by inspection rather than by preference. Decisive A/B on the SAME bake at the 2600 m limb: grain_x
+    0.0077 -> 0.0074 (-3.9%), streakdir 0.94 -> 0.92. And the bake itself measured ISOTROPIC — no 16 m
+    periodicity, col/row ratio 0.66-1.24 — which is what rules the bake out.
+
+    3.3 TWO CAUSES, NEITHER DOMINANT NOW: the 16 m displacement-mesh grid and the chainless sampling.
+    A 16->256 mesh step change removes only 1-7% of grain and a lag scan shows no 2.2 px grid periodicity.
+    **The strong artifacts the ticket describes belong to the OLD bake** (r21 measured streakdir 1.21
+    with edge bleed against today''s 0.94/0.86) — i.e. AC-0469 stage D''s rebuild already removed most
+    of what was reported.
+
+    THE FIX WAS THE CHEAP ONE, TRIED FIRST AS THE PLAN REQUIRED: the r5 state re-landed — `filter_linear_mipmap_anisotropic`
+    plus `generate_mipmaps()` at both texture sites — behind `AWECRAFT_SAT_MIP` default ON, with =0 reproducing
+    the old sampling. Measured -0 to -4% grain at 1600/2600 m, +16 MiB, ZERO load work. **A FINER BAKE
+    IS NOT REQUIRED**, and its cost is now recorded rather than waved at: >=1,269 s and 4.60 GiB per seed
+    plus a 4x pixel stage and ~200 MiB, for a sub-6 m gain that is UNRESOLVABLE at 0.42 px on screen.
+
+    THE METRIC IS ONE THE TICKET ASKED FOR: neighbour-diff grain, pixel-column variance, dcol/drow streakdir
+    ALONG THE STREAK AXIS, and a lag 1-8 autocorrelation scan — not "looks smoother".
+
+    GATES: g0 script=0 shader=0, genhash 25/25, residency leak=false / STABLE.
+
+    ONE FINDING LEFT FOR ME RATHER THAN FIXED IN A SHADER TICKET: the SHIPPED seed-44 bake asset is PRE-stage-D
+    and therefore still carries the old artifacts — re-shipping it is a coordinator decision, not a builder''s.
+    Filed as AC-0478 so it is not lost, because a fixed sampler reading a stale asset would make the whole
+    change invisible in the product.'
   comments: []
 - id: AC-0413
   title: cloud-deck-flattens-at-distance
@@ -31854,4 +31892,59 @@ intake:
     (c) a clean pair rc=0 PASS and a same-tree run rc=0 with only standing-red lines; (d) zero complaints
     on the declared arms; (e) g0 rc=0 with 0 SCRIPT ERROR, genhash 25/25, `test_tasks.py` 53/53. No godot/arms/data
     touched — this is a tool, not a behaviour change.'
+  comments: []
+- id: AC-0478
+  title: the shipped seed-44 bake asset predates AC-0469 stage D
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-25T05:04
+  updated_at: 2026-10-25T05:04
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    The orbital view in the build we ship still has the old streaky, faceted look, because the terrain
+    image it reads was baked before the far tier was rebuilt. The fix exists in code but is not in the
+    asset.
+
+
+    ## 2) Technical Details
+
+    FOUND by AC-0412 (round 102) while closing the orbital faceting/streak ticket. That ticket re-landed
+    the r5 sampling state (`filter_linear_mipmap_anisotropic` + `generate_mipmaps()`, behind `AWECRAFT_SAT_MIP`
+    default ON) and measured the artifact down to near zero — BUT THE SHIPPED SEED-44 BAKE ASSET IS PRE-AC-0469-STAGE-D
+    and therefore still carries the old streaky bake the ticket was filed about.
+
+    WHY IT MATTERS: AC-0469 stage D rebuilt the far-tier bake (FACE_GRID derives from CHUNKS_PER_FACE
+    = 393, 100% coverage of every chart face, 1,699,726 records). The pipeline is correct; the asset on
+    disk is not. So the product would keep showing the old artifact while every gate reads green — a fixed
+    sampler reading a stale asset.
+
+    TASKS:
+
+    1. Confirm the shipped asset''s provenance (which stage/seed baked it) and its age relative to AC-0469
+    stage D.
+
+    2. RE-BAKE it. NOTE THE COST is now measured, not guessed: **1,269 s wall and 4.60 GiB peak RSS per
+    seed**, one-time and cached in user:// (AC-0469 stage D). Budget for it and do not run it concurrently
+    with anything else that needs the memory.
+
+    3. Verify by the AC-0412 metric (neighbour-diff grain, colvar, streakdir along the streak axis) that
+    the shipped asset''s orbital view no longer shows the r21-era signature (streakdir ~1.21 with edge
+    bleed) and reads closer to the current 0.94/0.86.
+
+    4. State where the baked asset lives and whether it is committed or generated at first run — if it
+    is generated, say so and close this as a non-item like AC-0327''s row did.
+
+    FILES: the satellite bake assets and whatever ships them; `godot/world/satellite_bake_worker.gd` for
+    the bake. Refs: AC-0469 stage D (the rebuild + costs), AC-0412 (the sampler fix + metric), `godot/OPS.md`
+    §4 (build/serve).
+
+    '
   comments: []
