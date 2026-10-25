@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-10-24T20:27
+  updated_at: 2026-10-24T22:14
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0320
-- AC-0326
 - AC-0327
 - AC-0328
 - AC-0330
@@ -16,6 +14,7 @@ queue:
 - AC-0412
 - AC-0438
 - AC-0464
+- AC-0475
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -16496,11 +16495,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T10:25
-  updated_at: 2026-09-18T10:25
-  completed_at: null
+  updated_at: 2026-10-24T21:32
+  completed_at: 2026-10-24T21:32
   waiting_on: null
   parent_id: null
   notes: "1) User Story: As a developer, the game and the ticket system should not reach into each other's\
@@ -16547,7 +16546,34 @@ intake:
     \nBLOCKS: part (B) is tooling/docs only and can start now. Part (A) edits `scenes/harness.gd`, which\
     \ AC-0312\ncurrently holds dirty — wait for AC-0312 to land. Line numbers above were read on 2026-09-18\
     \ while harness.gd\nwas being edited concurrently, so re-locate sites by function name (`_wallshot_test`,\
-    \ `_trees_test`) rather\nthan by line.\n"
+    \ `_trees_test`) rather\nthan by line.\n\n\nCLOSED (round 78). WHAT LANDED: ONE resolved shot root\
+    \ — `_shot_root()` in harness.gd returns `AWECRAFT_SHOT_DIR` when set, else `globalize_path(\"res://..\"\
+    ) + \"/.scratch/\"` — used by all three previously-wrong sites, with saves still routed through the\
+    \ existing `Debug.snap` helper rather than a new path convention. And `tasks/harness_data.yaml` moved\
+    \ to `godot/harness_data.yaml` by `git mv` (a rename R, so history follows) with all eight script\
+    \ followers and five doc followers updated.\nTHE OVERRIDE IS PROVEN, NOT JUST IMPLEMENTED: wallshot\
+    \ wrote its PNGs to `<repo>/.scratch/` by default and to `/tmp/ac0320-shots-override` when the env\
+    \ was set, with the default root untouched; trees gave a byte-identical RESULT to a pristine-HEAD\
+    \ A/B at the default root, `no_file` when overridden to an EMPTY dir (honouring the override exclusively)\
+    \ and an identical RESULT when that dir held the fixtures. That three-way check is what distinguishes\
+    \ a working override from a variable that happens to be read.\nTHE EXPORT TRAP WAS CLOSED AND THE\
+    \ ANSWER IS BETTER THAN EXPECTED: the PCK v4 table for the re-exported shipping exe shows 145 entries\
+    \ with `harness_data` NONE and `harness` NONE (so AC-0318 is intact), while the dev exe at 147 entries\
+    \ still carries `scenes/harness.gdc` + remap. AND the builder discovered that Godot 4.7 does not export\
+    \ `.yaml` AT ALL from the dev preset (while `blocks.json` at 10,250 B does ship) — so the `exclude_filter`\
+    \ entry I asked for is explicit insurance rather than the load-bearing control. That is worth knowing:\
+    \ it means the absence is proven twice, by mechanism and by declaration.\nGATES: g0 SCRIPT=0/SHADER=0\
+    \ with census ok, player ok, genhash 25/25, `harness_doc.py --render` in sync and `--check` clean,\
+    \ `test_tasks.py` 53/53, and the spec regenerated with the new path in its prose.\nTHE GREP GATE CAME\
+    \ BACK HONESTLY PARTIAL AND THE BUILDER SAID SO: `grep -rn \"/home/angrygiant\" godot/ tasks/scripts/`\
+    \ returns 14 lines, ALL GITIGNORED (1 in the .godot cache, 13 in godot/.scratch legacy logs) with\
+    \ ZERO in tasks/scripts — but TWO TRACKED RESIDUALS remain, both outside my plan's fence: `godot/probe_alpha.gd:5`\
+    \ and `godot/HANDOFF-emergent-queue.archive.md:116`. Filed as a follow-up rather than silently left\
+    \ or silently fixed.\nJOURNALS PRESERVED AS INSTRUCTED: godot/CONTINUITY.md, CONTINUITY.archive.md\
+    \ and tasks/AC-0313/continuity.md were verified untouched by git — they name the old path because\
+    \ that was true when they were written, and rewriting them would have corrupted history.\nALSO HONEST:\
+    \ trees' `ok=false` is PRE-EXISTING stale Aug-19 fixtures (genhash_fail 2,2), not a regression from\
+    \ this change, and `test_builder_tools.py`'s single failure was proven pre-existing at pristine HEAD."
   comments: []
 - id: AC-0321
   title: band-a-texturing
@@ -16904,11 +16930,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T19:08
-  updated_at: 2026-09-18T19:08
-  completed_at: null
+  updated_at: 2026-10-24T22:14
+  completed_at: 2026-10-24T22:14
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The game''s fallback world generator disagrees with the real one about the sea,
@@ -16937,7 +16963,46 @@ intake:
     CONTEXT: surfaced by the AC-0314 closeout; the sibling pre-existing reds are separate tickets (far-chunk
     set_block silent drop, basis bedrock_y0 race).
 
-    '
+
+
+    CLOSED (round 79) VIA THE TICKET''S DOCUMENTED ALTERNATIVE: the stale parity is RETIRED, not fixed,
+    and the argument is measured rather than convenient.
+
+    3.1 THE MIRROR IS NO LONGER A FALLBACK AT ALL. Since AC-0208 `WorldGen.generate`/`generate_face` are
+    pure C++ passthroughs (`gen_cpp().generate_flat`). What is actually live is constants, the 2D `terrain_height`/`biome_at`
+    kernels (main.gd:1118/1125/1592/1597/2069, world.gd:7366, harness oracles) and the banana post-pass.
+    So the ticket''s premise ("the fallback world is built differently") had already stopped being true
+    years before this session; what remained was an arm asserting against a comparison that no longer
+    existed.
+
+    3.2 THE DIVERGENCE, STATED AS A RULE: the mirror''s `terrain_height` is the AC-0091 2D fbm heightmap
+    remap, while the C++ `H` is THE SAME REMAP applied to the AC-0188 coarse 3D sea-slice field — an affine-calibrated,
+    DISTRIBUTIONAL relationship, not cell-wise parity. Both arms happened to sample the spawn anchor (8,8):
+    mirror th 124 (below SEA, so "ocean") against C++ H 140 (land). The census over ±64 shows 99% of cells
+    differ (mean |Δ| 13.4, max 30), the mirror calls 2,921 cells ocean while the C++ generator has ZERO
+    ocean in that window (nearest [8,73], distance 65).
+
+    3.3 WHY RETIRING WAS CORRECT AND FIXING WOULD HAVE BEEN THEATRE: even a PERFECT mirror port could
+    not green these arms, because there is no ocean column in the window for either to agree about; and
+    making the mirror match would have moved live walk-pad and spawn-aim behaviour in order to assert
+    something no player can experience. That is the definition of an arm asserting against a stale parity.
+
+    THE EDIT IS ONE FILE (harness.gd): both pickers now scan the generator''s OWN analytic H (`column_heights16`,
+    the aquifer''s field) over ±8 chunks instead of the mirror, and the live-world invariants are unchanged
+    (water@126, air@127, bedrock@0 in basis).
+
+    GATES: g0 ZERO SCRIPT ERROR; GENHASH 25/25 BYTE-IDENTICAL — the world did not move, which is the proof
+    a mirror edit did not leak into real generation; sphere ok:true with home_sea_ok TRUE (cell 5 at [8,73]);
+    basis sea_ok TRUE (5/0, ocean_bedrock_y0 11); player green.
+
+    TWO REDS EXPLICITLY NOT MINE, and both were already in the queue rather than invented here: basis''
+    overall `ok:false` is the sibling pre-existing BEDROCK_Y0 RACE (AC-0327, identical on pristine-HEAD
+    logs), and the `water` arm is a THIRD VICTIM of the same dead parity (its ±60 mirror-ocean scan finds
+    no live water) — noted as owed rather than swept, since touching it was outside this ticket''s scope.
+
+    THE HONEST CAVEAT: this closes the SEA question, not the arm''s overall redness — `basis` still reports
+    ok:false for AC-0327''s reason, and that distinction is now recorded so nobody reads this closure
+    as a fully green arm.'
   comments: []
 - id: AC-0327
   title: basis-bedrock-y0-race
@@ -31354,4 +31419,53 @@ intake:
     new system." So the fill rate is ACCEPTED as-is and optimisation is deferred until after the migration
     to the new system — this is not a bug, not a blocker, and not to be re-litigated or optimised opportunistically
     in the meantime.'
+  comments: []
+- id: AC-0475
+  title: two tracked files still hardcode the dev box path
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-10-24T21:32
+  updated_at: 2026-10-24T21:32
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Internal housekeeping: two files still hardcode the exact folder this project happens to live in on
+    one developer''s machine, so a clone anywhere else would break them. Nothing the player sees.
+
+
+    ## 2) Technical Details
+
+    FOUND by AC-0320''s grep gate, which was scoped to the harness output paths and therefore left these
+    two alone:
+
+    - `godot/probe_alpha.gd:5` — a tracked script containing `/home/angrygiant/...`.
+
+    - `godot/HANDOFF-emergent-queue.archive.md:116` — an archived handoff doc containing the same path.
+    NOTE: this may be a JOURNAL-style artefact (like the three AC-0320 was told not to touch), in which
+    case leaving it is CORRECT — decide per file rather than sweeping.
+
+    CONTEXT: AC-0320 removed every hardcoded dev path from the harness output paths and from `tasks/scripts/`
+    (zero there), moved `tasks/harness_data.yaml` to `godot/harness_data.yaml`, and established one resolved
+    output root (`AWECRAFT_SHOT_DIR`, else `res://../.scratch/`). The remaining 12 grep hits are all GITIGNORED
+    (a `.godot` cache entry and legacy `godot/.scratch` logs) and need nothing.
+
+    TASKS:
+
+    1. Decide each file on its merits: `probe_alpha.gd` is live test code and should resolve its path
+    the same way the harness now does; the archived handoff is very likely history and should be LEFT,
+    with that stated.
+
+    2. Re-run `grep -rn "/home/angrygiant" godot/ tasks/scripts/` and report the remaining lines with
+    a classification (live code / gitignored / history) rather than a bare count.
+
+    FILES: `godot/probe_alpha.gd`. Refs: AC-0320 (done), `godot/OPS.md` §2 (the machine path) and §5 (git).
+
+    '
   comments: []

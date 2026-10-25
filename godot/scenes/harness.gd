@@ -17494,20 +17494,42 @@ func _basis_test(spawn: Vector3) -> void:
 	out["bedrock_y0"] = bed
 	out["bedrock_ok"] = bed == WorldGen.B_BEDROCK
 	ok = ok and out["bedrock_ok"]
-	# 2. sea surface at Data.SEA in an ocean column: nearest column with
-	#    terrain strictly below the sea, so water occupies y=Data.SEA.
+	# 2. sea surface at Data.SEA in an ocean column: the nearest column whose
+	#    analytic H is strictly below the sea (the generator's own field), so
+	#    the aquifer rule puts water at y=Data.SEA.
+	# AC-0326: the picker retired the mirror 2D field (WorldGen.terrain_height).
+	#    That field is the legacy AC-0091 heightmap; since AC-0188 the C++
+	#    surface is the coarse 3D sea slice (gen.cpp surface_h) — a different
+	#    field, calibrated distributionally only. The mirror called the spawn
+	#    anchor itself ocean (th 124 < SEA) while its C++ column is land
+	#    (H 140), and NO C++ ocean column exists within ±64 of the anchor
+	#    (nearest [8,73], dd 65, seed 44 — probe: .scratch/AC-0326-gates/
+	#    probe1-r1.log / probe2-r1.log). The parity was dead; the picker now
+	#    scans the C++ heightmap (column_heights16 — the field the aquifer
+	#    uses) over a ±8 chunk window.
 	var ox := -1
 	var oz := -1
 	var best := 1 << 30
-	for z2 in range(-64, 65, 4):
-		for x2 in range(-64, 65, 4):
-			if WorldGen.terrain_height(x2, z2, Game.world_seed) < Data.SEA:
-				var dd := absi(x2 - bx) + absi(z2 - bz)
-				if dd < best:
-					best = dd
-					ox = x2
-					oz = z2
+	var sea_h := -1
+	var ghp: Variant = WorldGen.gen_cpp()
+	for cz2 in range(-8, 9):
+		for cx2 in range(-8, 9):
+			var chp: PackedByteArray = ghp.column_heights16(cx2, cz2, Game.world_seed, Data.HEIGHT)
+			for lz2 in 16:
+				for lx2 in 16:
+					var ip := lz2 * 16 + lx2
+					var hp := int(chp[2 * ip]) | (int(chp[2 * ip + 1]) << 8)
+					if hp < Data.SEA:
+						var x2 := cx2 * 16 + lx2
+						var z2 := cz2 * 16 + lz2
+						var dd := absi(x2 - bx) + absi(z2 - bz)
+						if dd < best:
+							best = dd
+							ox = x2
+							oz = z2
+							sea_h = hp
 	out["ocean_at"] = [ox, oz]
+	out["ocean_h"] = sea_h
 	if ox < 0:
 		out["sea_ok"] = false
 		ok = false
@@ -24702,6 +24724,21 @@ func _wallshot_region_count(path: String, pred: Callable, x0: int, x1: int, y0: 
 # Sanity: block_frame_stone is ~90%+ of the frame in both runs (the wall
 # rendered). The region also catches the wall's own bright texture cells
 # (~1k px) - the A/B DELTA is the assertion.
+# AC-0320: the one resolved shot root every harness arm writes its
+# artefacts to — AWECRAFT_SHOT_DIR when set, else <repo root>/.scratch/
+# (checkout-location independent; .scratch/ is git-ignored). Saves still
+# go through the existing Debug.snap helper (image.save_png); this only
+# decides WHERE an arm writes, never HOW.
+func _shot_root() -> String:
+	var root := OS.get_environment("AWECRAFT_SHOT_DIR")
+	if root == "":
+		root = ProjectSettings.globalize_path("res://..") + "/.scratch/"
+	if not root.ends_with("/"):
+		root += "/"
+	DirAccess.make_dir_recursive_absolute(root)
+	return root
+
+
 func _wallshot_test() -> void:
 	var p = Game.player
 	var spawn: Vector3 = world.spawn_point()
@@ -24722,7 +24759,7 @@ func _wallshot_test() -> void:
 	await main._await_world_build(Vector3(float(sx) + 0.5, feet_y, float(sz) + 0.4), 3000)
 	var before := OS.get_environment("AWECRAFT_WALL_BEFORE") == "1"
 	var shots := OS.get_environment("AWECRAFT_WALL_SHOTS")
-	var outdir := ProjectSettings.globalize_path("res://..") + "/tasks/AC-0067/"
+	var outdir := _shot_root()
 	var res: Dictionary = {"before": before, "shots": shots, "wall_face_z": float(sz), "eye_to_wall_face": 0.4, "hand_to_wall_face": -0.3, "block": false, "item": false}
 	var vmx0 := 820
 	var vmx1 := 1240
@@ -29539,7 +29576,7 @@ func _trees_test() -> void:
 				ok = false
 			cz += 1
 		cx += 1
-	var npath := "/home/angrygiant/github_projects/AweCraft/.scratch/trees_expect_%d.json" % seed
+	var npath := _shot_root() + "trees_expect_%d.json" % seed
 	if FileAccess.file_exists(npath):
 		var nf := FileAccess.open(npath, FileAccess.READ)
 		var nj = JSON.parse_string(nf.get_as_text())
@@ -29654,7 +29691,7 @@ func _trees_test() -> void:
 	var a4 := WorldGen.generate(-1, 2, seed)
 	out["determinism"] = (a1 == a2) and (a3 == a4)
 	ok = ok and out["determinism"]
-	var blpath := "/home/angrygiant/github_projects/AweCraft/.scratch/genhash_before_trees.log"
+	var blpath := _shot_root() + "genhash_before_trees.log"
 	var bl := {}
 	if FileAccess.file_exists(blpath):
 		var bf := FileAccess.open(blpath, FileAccess.READ)
@@ -30036,17 +30073,33 @@ func _sphere_test(spawn: Vector3) -> void:
 	var bx := int(WorldGen.SPAWN_X)
 	var bz := int(WorldGen.SPAWN_Z)
 	# sea surface at Data.SEA in the nearest ocean column (basis-probe method).
+	# AC-0326: picker retired to the C++ analytic H (column_heights16, the
+	# aquifer's field) over a ±8 chunk window — the mirror 2D field
+	# (WorldGen.terrain_height) is a stale parity since AC-0188 (it called
+	# the spawn anchor ocean, th 124 < SEA, while C++ H 140 = land, and no
+	# C++ ocean column sits within the old ±64 window — nearest [8,73],
+	# dd 65, seed 44; see .scratch/AC-0326-gates/probe1-r1.log + probe2-r1.log).
 	var ox := -1
 	var oz := -1
 	var best := 1 << 30
-	for z2 in range(-64, 65, 8):
-		for x2 in range(-64, 65, 8):
-			if WorldGen.terrain_height(x2, z2, Game.world_seed) < Data.SEA:
-				var dd := absi(x2 - bx) + absi(z2 - bz)
-				if dd < best:
-					best = dd
-					ox = x2
-					oz = z2
+	var sea_h := -1
+	var ghp: Variant = WorldGen.gen_cpp()
+	for cz2 in range(-8, 9):
+		for cx2 in range(-8, 9):
+			var chp: PackedByteArray = ghp.column_heights16(cx2, cz2, Game.world_seed, Data.HEIGHT)
+			for lz2 in 16:
+				for lx2 in 16:
+					var ip := lz2 * 16 + lx2
+					var hp := int(chp[2 * ip]) | (int(chp[2 * ip + 1]) << 8)
+					if hp < Data.SEA:
+						var x2 := cx2 * 16 + lx2
+						var z2 := cz2 * 16 + lz2
+						var dd := absi(x2 - bx) + absi(z2 - bz)
+						if dd < best:
+							best = dd
+							ox = x2
+							oz = z2
+							sea_h = hp
 	if ox < 0:
 		out["home_sea_ok"] = false
 		ok = false
@@ -30056,6 +30109,7 @@ func _sphere_test(spawn: Vector3) -> void:
 		var sw: int = world.get_block(ox, Data.SEA, oz)
 		var swa: int = world.get_block(ox, Data.SEA + 1, oz)
 		out["home_sea_at"] = [ox, oz]
+		out["home_sea_h"] = sea_h
 		out["home_sea_cell"] = sw
 		out["home_sea_ok"] = sw == WorldGen.B_WATER and swa == 0
 		ok = ok and out["home_sea_ok"]
