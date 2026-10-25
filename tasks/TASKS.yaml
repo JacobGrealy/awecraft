@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-25T06:09
+  updated_at: 2026-10-25T06:11
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28769,7 +28769,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-24T12:18
+  updated_at: 2026-10-25T06:11
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28846,7 +28846,45 @@ intake:
     cancel this ticket with the measurement that shows it gone — do not "fix" something that is already
     fixed, and do not close it as done when no work was done. If it still reproduces, update the ticket
     with the current reproduction (the coordinates and commands in the text may be stale: they were written
-    for the pre-1 m grid and pre-warp tree) and plan from that.'
+    for the pre-1 m grid and pre-warp tree) and plan from that.
+
+
+    COORDINATOR TRIAGE (round 105) — THE REMAINING STEP NEEDS A WINDOWS RUN, WHICH THIS BOX CANNOT DO.
+
+    WHERE THE TICKET ACTUALLY STANDS: an earlier run did the diagnosis properly. It found the line, established
+    the layer rather than assuming the bake, tried a fix, PROVED the fix pixel-inert on the line (it cannot
+    fix a UV-independent artifact), and REVERTED it — leaving shader and satellite_body.gd at HEAD with
+    no diff. Light gates clean, genhash 25/25, >10 clean Forward+ lavapipe renders. That is a correct
+    non-landing: a fix that does not move the measured artifact should not be kept.
+
+    ITS OWN STATED NEXT STEP, quoted from its journal: "confirm on the Windows build whether the artifact
+    is renderer-specific. If absent there -> environmental llvmpipe sub-texel caveat (OPS.md) + close.
+    If present -> follow-up ticket on the coincident seam geometry (shader-only per-face radial offset,
+    or a bake-worker seam-UV nudge that owes a deliberate genhash rebase)."
+
+    WHY THAT BLOCKS HERE: this box is Linux and renders through llvmpipe as a PROXY; the product is Windows-only
+    (AC-0124) and there is no Windows runtime available in this environment (AC-0318 recorded the same
+    limitation when proving the export boots: "no wine on this box"). So the deciding observation — is
+    the line present on the Windows build — cannot be made by the agent. It needs either the user''s Windows
+    machine or a Windows CI runner.
+
+    WHAT I AM NOT DOING: I am not closing the ticket on a guess in either direction. "Probably llvmpipe"
+    would retire a real defect on the strength of a renderer we do not ship, and "probably real" would
+    send a builder into a bake-worker change that owes a genhash rebase on the strength of nothing.
+
+    NEW INFORMATION SINCE THAT RUN, which should be folded in when the ticket resumes: **AC-0469 stage
+    D and AC-0478 have REBUILT AND RE-SHIPPED the far-tier bake since** — FACE_GRID now derives from CHUNKS_PER_FACE
+    (100% coverage of every chart face, previously 16% and charting 329 chunks past each edge), and the
+    shipped PNGs were regenerated with a 23.4% texel difference. A chart-boundary artifact is exactly
+    the kind of thing that rebuild could have removed or moved, so **the line should be re-measured on
+    the CURRENT tree BEFORE the Windows check is requested** — otherwise the user may be asked to look
+    for something that a later change already fixed.
+
+    RECOMMENDED ORDER WHEN IT RESUMES: (1) re-measure the spawn-nadir frame on the current tree with the
+    original method (254 points, step >= 6, mean step 68 at rows 357-358) and say whether the signature
+    is still there; (2) if it is gone, cancel with the measurement; (3) if it is present, THEN ask for
+    the Windows observation, because that is the only way to separate a real seam from an llvmpipe sub-texel
+    artifact.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
