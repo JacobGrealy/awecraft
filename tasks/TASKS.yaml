@@ -31972,5 +31972,30 @@ intake:
     or the primary source. If the bake always supersedes it, then the stale PNGs cost load time and disk
     but are not what the player sees — and THAT distinction decides whether this is a real product defect
     or dead weight. **Answer it before re-baking**, because the answer may be "delete the stale assets"
-    rather than "regenerate them".'
+    rather than "regenerate them".
+
+
+    ANSWERED (round 103) BY READING THE PHASE LOGIC — and it makes this a REAL PRODUCT DEFECT, not dead
+    weight.
+
+    `satellite_body.gd:455-470` shows a THREE-PHASE source: (1) the `user://` cache, (2) **the shipped
+    `res://` textures** — loaded via `_phase_load("res", ...)` and checked with `ResourceLoader.res` because
+    the export PCK ships the IMPORTED `.ctex` rather than the raw `.png` (that detection exists because
+    of the AC-0384 white planet) — and only then (3) the bake, which is the fallback for a NON-canonical
+    seed.
+
+    **SO FOR THE CANONICAL SEED THE PRODUCT READS THE SHIPPED PNGs, and the bake is what runs when they
+    are not loadable.** The shipped textures are dated Oct 4, before AC-0469 stage D rebuilt the far-tier
+    bake — so at the canonical seed the player sees the OLD bake, and AC-0412''s improved sampler is filtering
+    old data.
+
+    THE FIX IS THEREFORE TO REGENERATE `satellite_face00..11.png` FROM THE CURRENT BAKE, not to delete
+    them and not to change code. Cost is measured: **1,269 s wall / 4.60 GiB peak per seed**, run alone.
+    Verify with AC-0412''s metric (neighbour-diff grain, colvar, `streakdir` along the streak axis): the
+    r21-era signature is streakdir ~1.21 with edge bleed, the current sampler on current data reads ~0.94/0.86.
+
+    A RELATED QUESTION THIS RAISES, worth recording rather than acting on: if the canonical seed deliberately
+    ships pre-baked textures to avoid a 21-minute first run, then regeneration is a RELEASE STEP, not
+    a runtime concern — and the pipeline should say so somewhere a future release reads (OPS.md §4), because
+    otherwise the next bake change ships stale again exactly as this one did.'
   comments: []
