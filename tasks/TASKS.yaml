@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T05:06
+  updated_at: 2026-10-25T06:09
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0478
 - AC-0438
 - AC-0464
 - AC-0475
@@ -31900,11 +31899,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T05:04
-  updated_at: 2026-10-25T05:06
-  completed_at: null
+  updated_at: 2026-10-25T06:09
+  completed_at: 2026-10-25T06:09
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -31997,5 +31996,46 @@ intake:
     A RELATED QUESTION THIS RAISES, worth recording rather than acting on: if the canonical seed deliberately
     ships pre-baked textures to avoid a 21-minute first run, then regeneration is a RELEASE STEP, not
     a runtime concern — and the pipeline should say so somewhere a future release reads (OPS.md §4), because
-    otherwise the next bake change ships stale again exactly as this one did.'
+    otherwise the next bake change ships stale again exactly as this one did.
+
+
+    CLOSED (round 104). THE SHIPPED ASSET IS REGENERATED, AND THE STALENESS IS PROVEN BOTH WAYS.
+
+    PROVENANCE FIRST, because a subtly different reprojection would be worse than a stale asset: the Oct
+    4 PNGs were the engine''s OWN BAKE re-shipped through the harness path `AWECRAFT_SATELLITE_REBAKE=1`
+    + `AWECRAFT_SATELLITE_SHIP` (AC-0384 r2). **That path still exists unchanged**, so the regeneration
+    used the original production route rather than an approximation.
+
+    THE STALENESS IS NOW A NUMBER, not an inference: `rebuild_vs_shipped` differed by **138,220 of 589,824
+    texels (23.4%), max_abs_diff 233** — so the shipped asset really was a different world from the current
+    bake, which is what the player was seeing at the canonical seed.
+
+    THE FIX, MEASURED ON THE SHIPPED ASSET ACROSS ALL 12 FACES (AC-0412''s tools, not adjectives): near-flat
+    rows'' runH-fraction **0.924-0.964 -> 0.804-0.871**, max constant runs **769/777 -> 308/372 px**,
+    per-face streakdir e.g. face09 **2.93 -> 0.99** and face08 2.15 -> 1.21, and the old H-field autocorrelation
+    at lag 10 **0.67-0.80 -> <=0.22** (decaying to ~0 by lag 8). The render''s r21 box reads **streakdir
+    1.21 -> 0.99 with grain down 28%**.
+
+    THE FOOTPRINT IS EXACTLY WHAT STAGE D IMPLIED: 10 of the 12 PNGs changed; **faces 00 and 01 are BYTE-IDENTICAL**
+    because they are the home pair, which stage D did not touch. That is a strong correctness signal —
+    a reprojection error would have moved all twelve.
+
+    THE .import SIDE NEEDED NOTHING: `--import` rewrote the 10 changed .ctex in place under their stable
+    hash names with the .md5 sidecars tracking the new source (rc=0). No build output was hand-edited.
+
+    GATES: g0 rc=0 with **0 script and 0 shader errors**; genhash **25/25 byte-identical** to the AC-0412
+    reference; the post-ship satellite arm reads `ok=true` with `src=res` and **`height_decode 12/12 BYTE-EXACT`**
+    — which is the check that the shipped textures decode to the current bake''s heights rather than merely
+    looking plausible.
+
+    BAKE COST, stated honestly: **1,198 s wall** (bake block 1,179.5 s: gen 1,146.4 + face 26.0 + png
+    ~7 s, 1,699,726 records, rc=0), inside the 1,269 s stage-D figure. **Peak RSS was NOT sampled this
+    run** — the 8 GiB cap held with no OOM, and the builder recorded that gap rather than claiming a number
+    it did not measure.
+
+    THE DURABLE LESSON, which is the part that stops this recurring: the bug was never the shader and
+    never the asset — it was that **the asset-production step has no owner in the release process**. A
+    bake change ships stale by default unless someone remembers to re-run the ship path. Recorded on the
+    ticket as a follow-up observation: regeneration should be a stated RELEASE STEP in OPS.md §4, or the
+    next bake change will ship stale exactly as this one did.'
   comments: []

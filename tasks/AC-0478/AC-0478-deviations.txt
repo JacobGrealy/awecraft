@@ -1,0 +1,45 @@
+AC-0478 — deviations from the ticket's stated steps
+
+D1 (tooling, no impact): the first bake launch died rc=127 in 0 s. The runner script exported
+HOME=/tmp/dsh_home BEFORE the engine call and used the tilde form ~/tools/godot/godot, so the
+tilde expanded to the sandboxed HOME (/tmp/dsh_home/tools/godot/godot — does not exist). Fixed by
+the absolute engine path /home/angrygiant/tools/godot/godot in all four runner scripts (the ticket
+itself specifies the absolute path). No engine time was consumed by the failed launch.
+
+D2 (expected, not a defect): the pre-ship bake run (satellite arm + AWECRAFT_SATELLITE_REBAKE=1)
+reports RESULT ok=false because its rebuild_vs_shipped block compares the freshly baked faces
+against the STALE shipped res:// PNGs — a >1% diff is exactly the staleness this ticket fixes, and
+the arm's reproducibility check turns it into a fail by design. All other arm fields are green
+(ladder, res_export_ok 12/12, height_decode, guard 12/12, ac0390). The post-ship plain-arm run
+(no REBAKE) proves the res path end to end on the NEW asset; the byte-identity of shipped PNGs
+with the bake's own cache output is proven by md5 (the ship step is a byte copy,
+satellite_bake_worker.gd:645-663), so a second full bake to re-run the in-engine compare would
+cost 21 min to re-prove what the md5 already proves.
+
+D3 (metric scope): the ticket's render-level reference (streakdir 1.21 old vs 0.94/0.86 current)
+was measured on RENDER FRAMES (2600 m limb box 420,350,980,560 / 1600 m box 420,350,980,560) of
+seed 5432 (current bake, AC-0412) and seed 44 (old asset, AC-0384 r21). The before/after numbers
+for this ticket are therefore given at BOTH levels: (a) the shipped asset itself — all 12 faces,
+full-frame, with AC-0412's own pngmetrics.py/rendermetrics.py (grain, runs, colvar, streakdir);
+(b) the 2600 m limb render at seed 44 (the res path = the shipped asset) in the same box as the
+r21 frame, when the render budget allowed it. Face-level absolute values for seed 44 differ from
+AC-0412's seed-5432 face numbers (different terrain); the SIGNATURE is the comparison (long
+near-constant runs, flat-row fraction, streakdir >> 1 pre-fix).
+
+D4 (render budget): per the ticket, the bake + numeric verification is the landing; the 2600 m
+orbital render (~1200 s) runs only if time allows after the gates. STATUS: DONE — the bake finished
+1,198 s (under the 1,269 s budget), gates finished with ample margin, and the render ran: wall 220 s
+(the ~1200 s figure assumed a slower settle; the r4 world + 600-frame drain completed faster),
+Forward+/lavapipe boot line present, drain 600 fully drained, 0 error lines, PNG written (356,413 B).
+
+D5 (tooling, no impact): the first re-import launch was refused by the runner script's own slot
+guard — my OUTER verification command line contained the string "godot" inside a path
+(godot/.godot/imported/), the same pgrep -f self-match the ticket warned about; the import had not
+started. Relaunched with a clean invocation (no "godot" in the caller's command line): rc=0.
+
+D6 (measurement scope): peak RSS was NOT sampled during this bake run (no external 10 s RSS sampler
+was attached; AC-0469 stage D's 4.603 GiB figure comes from exactly that method). The run sat under
+the same 8 GiB ulimit -v cap, completed rc=0 with no OOM, and its wall (1,179.5 s bake) sits UNDER
+the stage-D 1,269 s measurement — but "under the budget" is stated from wall time + the unchanged
+memory profile of an unchanged pipeline (1,699,726 records, same sharded merge), not from a measured
+peak. Reported as such, not rounded up to the budget number.
