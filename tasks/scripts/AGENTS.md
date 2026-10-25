@@ -1,6 +1,6 @@
 # tasks/scripts/ — the tooling (scope rules)
 
-- **`../harness_data.yaml` is the machine source** for the `godot/HARNESS.md` §1 mode table and §3
+- **`../../godot/harness_data.yaml` is the machine source** for the `godot/HARNESS.md` §1 mode table and §3
   standing values. A doc must not double as a script's data file (AC-0301). Edit the data, then:
 
   ```bash

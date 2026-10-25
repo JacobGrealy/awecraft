@@ -9,7 +9,7 @@
   legitimate task in its own right, but never a side effect: they are the instrument every other
   change is judged by, so a task that edits them cannot be judged by them.
 - **Adding or changing an arm means two files**: the branch in `harness.gd` **and** a row in
-  `tasks/harness_data.yaml` (entry / tests / result_fields / envs / wall / notes), then
+  `godot/harness_data.yaml` (entry / tests / result_fields / envs / wall / notes), then
   `python3 tasks/scripts/harness_doc.py --render`. `--check` compares the doc against the data — it
   knows nothing about your branch, so an arm with no row is silent drift.
 - Every mode prints `RESULT {…}` (JSON, also written to `user://debug_result.json`) and quits. An arm

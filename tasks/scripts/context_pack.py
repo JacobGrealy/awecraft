@@ -23,7 +23,7 @@ Cap section. Two structural guards:
     request would include more than 200 lines of one of them.
 
 Never parses a document's markdown for machine facts: the only machine
-sources are the registry (tasks_lib) and tasks/harness_data.yaml (the mode
+sources are the registry (tasks_lib) and godot/harness_data.yaml (the mode
 NAMES and the per-mode rows, both lookups). Plan anchors are resolved
 against CODE: a `file:line` anchor reads +-8 lines, a symbol anchor is a
 literal search in the file, and a `grep -n "X"` anchor is run.
@@ -45,7 +45,7 @@ import yaml  # noqa: E402
 import tasks_lib  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-HARNESS_DATA = REPO_ROOT / "tasks" / "harness_data.yaml"
+HARNESS_DATA = REPO_ROOT / "godot" / "harness_data.yaml"
 
 # The known monsters: refusing >200 lines of one is exit 2 (the builder
 # cannot load them whole anyway — this guard makes that mechanical).
@@ -543,7 +543,7 @@ def build_pack(task_id, max_tokens=12000):
                 ["### %s" % mode]
                 + ["- %s: %s" % (k, _field(row[k])) for k in
                    ("entry", "tests", "result_fields", "notes") if k in row]
-                + ["- (full row: tasks/harness_data.yaml — modes.%s)" % mode])
+                + ["- (full row: godot/harness_data.yaml — modes.%s)" % mode])
             items.append(("Harness modes", "Harness modes: %s" % mode,
                           True, block))
     if not n_mode_items:

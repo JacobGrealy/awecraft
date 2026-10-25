@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render / check the GENERATED blocks of godot/HARNESS.md.
 
-`tasks/harness_data.yaml` is the single machine-readable source for the
+`godot/harness_data.yaml` is the single machine-readable source for the
 section-1 mode table and the section-3 known-stable value table. The doc keeps
 its prose (intros, run recipes, env knobs, warnings); only those two tables are
 generated, between explicit markers:
@@ -33,7 +33,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA = REPO_ROOT / "tasks" / "harness_data.yaml"
+DATA = REPO_ROOT / "godot" / "harness_data.yaml"
 DOC = REPO_ROOT / "godot" / "HARNESS.md"
 
 BLOCKS = {

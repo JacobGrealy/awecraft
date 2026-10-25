@@ -14,14 +14,14 @@ are deliberately rowless — ac0433probe is the precedent) and a name that IS
 in modes is only noted in the summary (informational).
 
 This tool deliberately parses NO markdown for machine facts: the mode NAMES
-and battery.smoke come from tasks/harness_data.yaml; timeouts and extra envs
+and battery.smoke come from godot/harness_data.yaml; timeouts and extra envs
 come from the CLI with the documented defaults.
 
 Per arm, the run shape (the .scratch/AC-0287-gates/gates_run.sh precedent,
 with the envs passed as a list — never a shell string, no eval):
 
     bash -c 'ulimit -v <mem_mb*1024>; cd <repo>;
-             exec timeout <sec> /home/angrygiant/tools/godot/godot
+             exec timeout <sec> <HOME>/tools/godot/godot
              --headless [--fixed-fps 600 when --fps] --path godot'
     > .scratch/AC-NNNN-gates/<arm>-r<N>.log 2>&1
 
@@ -60,9 +60,12 @@ import gate_census  # noqa: E402  (census: never reimplement the rule)
 import yaml  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-ENGINE = "/home/angrygiant/tools/godot/godot"
+# AC-0320: the engine sits at ~/tools/godot/godot on every supported
+# checkout (machine path and worktree flow, OPS.md §1) — resolved from
+# HOME, never from a hardcoded absolute path.
+ENGINE = str(Path.home() / "tools" / "godot" / "godot")
 GODOT_HOME = "/tmp/dsh_home"
-HARNESS_DATA = REPO_ROOT / "tasks" / "harness_data.yaml"
+HARNESS_DATA = REPO_ROOT / "godot" / "harness_data.yaml"
 MARKER = "HEAVY_GATES_DONE"
 
 ARM_NAME_RE = re.compile(r"[A-Za-z0-9_.\-]+\Z")

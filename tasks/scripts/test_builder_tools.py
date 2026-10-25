@@ -171,7 +171,7 @@ class GateRunTest(Base):
     def test_smoke_expands_to_battery_smoke(self):
         import yaml as _yaml
         want = (yaml.safe_load(
-            (REPO_ROOT / "tasks" / "harness_data.yaml").read_text())
+            (REPO_ROOT / "godot" / "harness_data.yaml").read_text())
                 .get("battery", {}).get("smoke", []))
         self.assertEqual(len(want), 5)
         _run_cli(gate_run.main, ["AC-9999", "--arms", "smoke",

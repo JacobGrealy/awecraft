@@ -8,7 +8,7 @@ the machine, the build, the daemons and git. Do not restate one in the other —
 
 ## 1. Machine
 
-- Linux dev box, repo at `/home/angrygiant/github_projects/AweCraft` (the repo root *is* the
+- Linux dev box, repo at `~/github_projects/AweCraft` (the repo root *is* the
   AweCraft checkout — there is no nested `AweCraft/godot` path).
 - Engine: `~/tools/godot/godot` → `4.7.1.stable.official.a13da4feb`. **Always an absolute
   path, always `--path godot`, run from the repo root.**
