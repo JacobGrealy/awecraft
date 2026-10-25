@@ -31551,5 +31551,12 @@ intake:
     then render). Refs: AC-0326, AC-0327, AC-0301 (the doc pipeline), `godot/scenes/AGENTS.md:12` (an
     arm change means two files).
 
-    '
+
+
+    SURVEY DONE AT FILING (coordinator, round 83), so the builder starts from facts: `godot/harness_data.yaml`
+    carries **149 mode-ish entries**, and of the arms I could name confidently, exactly **`basis` and
+    `sphere` are missing** — `genhash`, `trees` and `voxelcost` (the three others touched recently) all
+    have rows. So this looks like a two-row gap, not a systemic one, but the definitive check is the one
+    in task 3: enumerate the dispatcher''s actual mode keys from `harness.gd` and diff them against the
+    YAML, because a name I did not think to test could also be absent.'
   comments: []
