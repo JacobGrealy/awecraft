@@ -1,13 +1,39 @@
 meta:
-  updated_at: 2026-10-25T13:29
+  updated_at: 2026-10-25T15:56
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0482
+- AC-0509
+- AC-0483
 - AC-0480
 - AC-0481
 - AC-0438
+- AC-0484
+- AC-0485
+- AC-0486
+- AC-0487
+- AC-0488
+- AC-0489
+- AC-0490
+- AC-0491
+- AC-0492
+- AC-0493
+- AC-0494
+- AC-0495
+- AC-0496
+- AC-0497
+- AC-0498
+- AC-0499
+- AC-0500
+- AC-0501
+- AC-0502
+- AC-0503
+- AC-0504
+- AC-0505
+- AC-0506
+- AC-0507
+- AC-0508
 - AC-0475
 - AC-0476
 intake:
@@ -23247,11 +23273,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-01T14:33
-  updated_at: 2026-10-04T15:09
-  completed_at: null
+  updated_at: 2026-10-25T14:43
+  completed_at: 2026-10-25T14:43
   waiting_on: null
   parent_id: null
   notes: '1) User Story: From orbit the planet is a plain white ball, and it stays white - the detailed
@@ -32280,7 +32306,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-25T09:55
+  updated_at: 2026-10-25T14:39
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -32330,7 +32356,12 @@ intake:
     discipline for a seam), AC-0478 (the far tier''s current textures).
 
     '
-  comments: []
+  comments:
+  - id: 1
+    created_at: 2026-10-25T14:39
+    updated_at: null
+    text: '[user] it''s not just where they meet, the high lod has seems between all of it''s chunks,
+      but the sim doesn''t, why?'
 - id: AC-0481
   title: clouds look bad and straight seams run through clouds and sky
   source: user
@@ -32396,11 +32427,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T13:29
-  updated_at: 2026-10-25T13:29
-  completed_at: null
+  updated_at: 2026-10-25T15:56
+  completed_at: 2026-10-25T15:56
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32454,6 +32485,1908 @@ intake:
     placement), godot/world/world.gd (`world_pos_of_flat`, `world_pos_of` and the per-face cell conversions),
     godot/core/sphere_math.gd. Refs: AC-0479 (the fix and its measurements), AC-0458-0462 (the warp),
     AC-0469/AC-0471 (1 m cubic grid, twelve faces, no home).
+
+
+
+    CLOSED (round 108). THE MISMATCH WAS KILOMETRES, NOT MILLIMETRES — and that is worth stating first
+    because it says the face>1 path was never working at all rather than being slightly off.
+
+    PRE-FIX NUMBERS (aimface probe, seed 44): face4_edge centre error **3,313,236.8 mm (3.31 km)**, corner
+    tangential 3,035,943.1 mm, box_up 45.39 deg; face4_mid 3.03 km / 2.82 km / 88.02 deg; face2_pole **7.22
+    km** / 3.54 km / 155.27 deg. The box was sitting on the HOME patch while aiming at a block on another
+    face, with its basis never set — a stale home warp basis. So on any non-home face the indicator was
+    not approximate, it was pointing at the wrong part of the planet.
+
+    THE MIXED CONVERSION, NAMED: `aim_hit()`''s face>1 DDA returns `hit.cell` in the face chunk''s **CELL
+    frame** (absolute face columns, ~1 m/cell), and `_update_interaction`''s face>1 branch (player.gd:3227)
+    fed those CELL coordinates into `world_pos_of_flat` — the generic **home-chart FLAT->world** conversion
+    (`SphereMath.flat_to_world`, which takes NO face argument). Cells in, flats assumed.
+
+    THE FIX (1 file, player.gd, +60/-2): that branch now places the box through the exact per-vertex chart
+    warp the face mesh and collision consume, at the cell''s local slot, oriented by the **RAW** warp
+    Jacobian — NOT orthonormalised, because the chart''s in-plane shear reaches ~26 deg at chunk corners
+    and the orthonormal frame was measured 32-172 mm off. That second-order detail was measured and documented
+    rather than assumed, which is the difference between a fix and a near-miss. No per-face fudge; home
+    branch untouched.
+
+    POST-FIX: face4_edge **0.0 mm / 13.81 mm / ~0 deg**; face4_mid 0.0 / 14.23 / 0.0; face2_pole 0.0 /
+    13.96 / ~0 — reductions of **2x10^5 to 2x10^7**. The 11-14 mm residual is the same class as the home
+    face''s own (the 1.02 overhang plus second-order curvature), so the two paths now agree in kind as
+    well as in size.
+
+    HOME REGRESSION: spawn 0.0 / **10.87 mm** / ~0 deg and home_far D=152.7 m 0.0 / **15.00 mm** / 0.000
+    deg — byte-identical to AC-0479''s rows, so 10.9/15.5 mm are intact and no face was traded for another.
+
+    GATES: g0 0 script / 0 shader, genhash **25/25 byte-identical**, smoke green, interact place_ok=true
+    / drop_spawned=true with prog_max 0.9722 (the documented flake). Probe removed; git diff is player.gd
+    only.
+
+    LATENT FINDING recorded in the deviations and NOT fixed here: `_sim_cell_center`''s anchor-chunk behaviour.
+    Filed separately rather than bundled.'
+  comments: []
+- id: AC-0483
+  title: remove-synthetic-sky-horizon-use-planet-silhouette
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-25T14:39
+  updated_at: 2026-10-25T14:39
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    The planet now creates its own horizon. Remove the extra horizon painted into the sky background,
+    so there is no floating horizontal line, lower sky floor, or artificial horizon band competing with
+    the planet silhouette. Keep the day/night sky, sun, moon, stars, altitude transition and planet atmosphere.
+    This is removal of the synthetic horizon, not another attempt to soften or colour-match it. User requested
+    filing only; no implementation in this session.
+
+
+    2) Technical Details
+
+    Confirmed procedural sky, NOT an image/panorama asset: godot/scenes/main.gd:95-103 creates BG_SKY/Sky/ShaderMaterial
+    and loads res://core/aero_sky_gradient.gdshader. No replacement texture or skybox image is needed.
+
+
+    Primary removal site: godot/core/aero_sky_gradient.gdshader, sky_on(), lines 281-401 (line anchors
+    at filing).
+
+    - Drop the artificial local-horizontal division: hl=dot(dir,upc)/r at 281-284 feeds below_old/below_soft/below
+    at 313-316, splitting the background at hl=0 rather than at the planet silhouette. Remove that split
+    from the corrected background path, including the under_disc forced-fill decision. Retain geometric
+    variables where genuinely needed by planet-relative atmosphere calculations.
+
+    - Drop the separate below-horizon air/space floor: belowc construction and col=mix(above,belowc,below),
+    lines 377-389. Do not merely widen smoothstep(0,0.03,-hl).
+
+    - Drop the artificial horizon anchor/floor compensation, lines 339-375: clamped elevation u, horizon_eff/anchor,
+    and thinning tied to the synthetic horizontal boundary must no longer impose a lower edge or horizon-centred
+    stripe. A smooth directional sky gradient may remain, but must continue through local horizontal without
+    a floor, kink or anchored stripe. Current default u_no_floor=1 selects horizon_color at ws=0 (line
+    361), bypassing horizon_eff (350), while belowc selects u_air (388); this is a code-supported source
+    of a residual colour band, not screenshot-measured severity.
+
+    - Drop the explicit local-horizontal haze stripe: hz=exp(-abs(hl)*9.0)... and col=mix(col,haze_color,hz),
+    lines 390-401. It paints a horizon independent of the planet. Do not confuse it with the planet-relative
+    air-column term.
+
+    - Audit legacy sky_off() at 192-240 and sky() routing at 449-455: disabling sky_altitude must not
+    silently reintroduce the synthetic horizon in the corrected mode. Isolate legacy rendering behind
+    the explicit compatibility switch only.
+
+
+    Preserve: planet geometry/body silhouette; planet-relative forward-air-column/limb calculation at
+    shader 407-433 (unless separately proven to duplicate a planet effect); sun/moon at 436-445; star
+    rendering/occlusion; renderer colour correction at 458; live radial altitude/day-night inputs. Do
+    not remove the whole atmosphere, make the inside-atmosphere sky black below horizontal, or solve this
+    by hiding terrain/fog/clouds. Physical atmospheric variation following the planet is allowed; a separate
+    local-horizontal boundary is not.
+
+
+    Wiring to audit: godot/world/world.gd _ac0401_push around 5668-5741 pushes u_sky_alt/u_horizon/u_no_floor,
+    altitude weights and planet parameters; godot/autoload/settings.gd has sky_altitude, sky_horizon and
+    no_sky_floor defaults around 116/134/151. Retire obsolete horizon-only uniforms/settings/UI references
+    on the corrected path rather than accumulating another smoothing layer; retain shared atmosphere inputs.
+    Update ARCHITECTURE.md in the same implementation ticket if conventions/settings ownership change.
+
+
+    Player-facing switch: provide a persistent Options > Settings compatibility toggle labelled clearly
+    as legacy synthetic sky horizon, default OFF (user explicitly requested removal). OFF selects the
+    corrected horizon-free background and bypasses legacy horizon/floor/stripe work; ON restores pre-ticket
+    output for comparison. Reuse/relabel an existing horizon setting if that avoids redundant controls,
+    but migrate its saved meaning explicitly so existing default-true smoothing settings do not accidentally
+    opt everyone back into the old horizon. Keep legacy code isolated solely for that opt-in comparison,
+    not as the normal altitude-off path.
+
+
+    Acceptance / verification to specify in the implementation plan:
+
+    1. G0: zero SCRIPT ERROR lines AND clean process exit; compile both rendering paths. Add/extend the
+    focused sky/settings arm and register any arm changes in godot/harness_data.yaml, regenerate HARNESS.md
+    through its tool.
+
+    2. Prove the corrected background has no synthetic local-horizontal branch, distinct lower fill, or
+    exp(-abs(hl)*9) stripe. A diagnostic sky-only view (planet/cloud geometry temporarily hidden by a
+    test hook) must have no horizon line at hl=0; do not ship that diagnostic configuration. Sample a
+    vertical colour profile across horizontal to catch a narrow stripe/kink, not only a discontinuous
+    jump. Establish numeric tolerances from the baseline in the plan, do not invent passing measurements
+    in advance; legacy mode is the negative control.
+
+    3. Matched before/after views at ground, 120m, 700m, 941m, 1200m, 1500m and 2600m radial altitude,
+    looking through local horizontal and the actual planet limb; day/dusk/night, with normal fog/clouds
+    and diagnostic clouds-off views. Repeat a non-home planet face so world-Y assumptions cannot pass
+    unnoticed. Verify planet horizon remains intact and there is no black lower hemisphere while inside
+    the atmosphere, fog seam regression, missing stars, lost sun/moon or broken space transition.
+
+    4. Assert setting persistence/default and pre-ticket legacy-output identity when compatibility is
+    ON. Corrected mode must remain horizon-free with sky_altitude ON and OFF. Software-GL captures are
+    geometry/layout proxies; final appearance requires shipped Windows Forward+ review and user confirmation.
+
+
+    Scope: one coherent sky-rendering correction plus its settings/verification wiring; no planet radius,
+    terrain streaming, cloud redesign, image replacement or performance project. Related historical attempts
+    AC-0422/AC-0428/AC-0429/AC-0439 addressed smoothing/floor colours; this ticket removes the synthetic
+    horizon mechanism itself. No queue reorder requested.
+
+    '
+  comments: []
+- id: AC-0484
+  title: continent-p0-native-generation-cost-baseline
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - worldgen
+  - continents
+  - performance
+  - measurement
+  - design
+  created_at: 2026-10-25T14:41
+  updated_at: 2026-10-25T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want generation improvements to address the work that actually costs time, without
+    removing caves, decoration or other features to make the numbers look better.
+
+
+    2) Technical Details
+
+    Depends on: None; first measurement piece. Not queued.
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-0; docs/continent-biome-generation-plan.html#performance;
+    docs/continent-biome-generation-plan.html#baseline
+
+
+    Measurement only. Anchor native surface_h, col_heights_pass, field construction, carved_top_pass,
+    aquifer/decor/encoding stages in gdext/src/gen.cpp and worker calls in godot/world/world.gd. Recheck
+    shared-plan baseline anchors; do not read the monoliths whole. Capture revision/build/hardware/worker/settings
+    metadata, fixed representative request corpus, elapsed stage costs and sample/call counts. Separate
+    generation from meshing, lighting, I/O and queue wait. Acceptance: at least five interleaved trials
+    with median/p95/p99 and spread; instrument-off genhash remains 25/25 unchanged; output and enabled
+    features are unchanged. Prove counter/timer sensitivity with a negative control. Deliver logged bottleneck
+    rankings and a reusable protocol, not optimizations or planet changes. Windows native timing acceptance
+    may require a separate execution window; Linux numbers must be labeled development-only. Freeze no
+    atlas layout or speedup claim here.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0485
+  title: continent-p0-cold-warm-startup-and-cache-inventory
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - performance
+  - measurement
+  created_at: 2026-10-25T14:41
+  updated_at: 2026-10-25T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want faster generation to mean getting into and exploring a world sooner, rather than
+    waiting through a new bake or accumulating large hidden caches.
+
+
+    2) Technical Details
+
+    Depends on: AC-0484
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-0; docs/continent-biome-generation-plan.html#performance;
+    docs/continent-biome-generation-plan.html#budgets
+
+
+    Measurement only, using the prerequisite''s revision and protocol. Inspect save/cache ownership in
+    godot/autoload/save.gd and actual far/orbital cache consumers in godot/world/world.gd; recheck exact
+    paths before running. Inventory bytes and peak memory by cache family, including existing far-tier
+    data, temporary files and duplicate data. Measure cold creation, warm startup, first drawable/playable
+    footprint and fixed travel/promotion scenarios on the target Windows machine, with Linux proxy evidence
+    labeled separately. Acceptance: at least five paired trials; explicit generation versus I/O/mesh/lighting
+    wait; cache-state metadata; combined current disk footprint; logs sufficient to set the shared plan''s
+    provisional 3-second atlas/8-MiB disk/16-MiB resident/64-MiB scratch and global-cache targets against
+    real hardware. No new cache, eviction, behavior changes or optimistic extrapolation. Existing output
+    and queue remain unchanged.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0486
+  title: continent-p1-spherical-land-ocean-topology-prototype
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - measurement
+  - design
+  created_at: 2026-10-25T14:41
+  updated_at: 2026-10-25T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want several recognizable continents surrounded by an ocean, rather than connected
+    land dotted with unrelated ponds.
+
+
+    2) Technical Details
+
+    Depends on: AC-0484, AC-0485
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-1; docs/continent-biome-generation-plan.html#geography;
+    docs/continent-biome-generation-plan.html#visual-topology
+
+
+    Offline/test-only prototype; no shipped generator change. Coordinator selects a seam-connected coarse
+    spherical graph using current godot/core/planet_grid.gd and sphere helpers as orientation anchors,
+    not a block-resolution globe. Implement seeded continent groups with independently controlled fragmentation
+    and coast detail, bounded candidate/repair work, area-weighted component analysis and signed coast
+    distance. Test around 50k and 200k samples and a fixed 32-seed default sweep. Starting targets: 70%
+    ocean +/-3 points, 2-4 major landmasses (major >=5% of dry land), >=95% of ocean-classified water
+    in the largest connected ocean and >=85% of dry land in the largest four landmasses; separately report
+    inland seas. Acceptance: deterministic full-3D sphere samples, seam/corner adjacency checks, component-area
+    logs, build time/peak bytes and maps showing failures as well as successes. No infinite seed retry,
+    physical tectonics, full erosion, climate or hydrology implementation. The pictures in the plan are
+    illustrations, not expected numeric output.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0487
+  title: continent-p1-atlas-lookup-resolution-cost-proof
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - performance
+  - measurement
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the finite planet''s blueprint to save computation without making world creation
+    slow or smoothing away important coastlines.
+
+
+    2) Technical Details
+
+    Depends on: AC-0486
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-1; docs/continent-biome-generation-plan.html#architecture;
+    docs/continent-biome-generation-plan.html#performance; docs/continent-biome-generation-plan.html#budgets
+
+
+    Experiment only. Compare the prototype''s coarse resolutions and packed field layouts against the
+    actual macro surface work identified by the native baseline; include coordinate conversion, interpolation
+    and sample reuse costs rather than comparing a bare array read to full terrain generation. Anchors:
+    gdext/src/gen.cpp surface_h/field builders/col_heights_pass; existing planet chart helpers. Inspect
+    coast/channel fidelity after reconstruction and measure area-weighted topology at both atlas and refined
+    surface resolution. Acceptance: reproducible paired timings, sample counts, atlas payload/index/halo/scratch
+    bytes, build p95 and narrow-feature/seam errors; demonstrate what old work the atlas would replace.
+    Evaluate the proposed <=3s bake, <=8MiB disk, <=16MiB resident and <=64MiB scratch budgets without
+    assumed compression. Coordinator records one representation/resolution decision from evidence before
+    runtime tickets begin; if lookup loses, repair/reject the approach rather than adding all old fields
+    plus an atlas.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0488
+  title: continent-p2-versioned-planet-recipe-and-seed-channels
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - saves
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:47
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want a saved planet to keep the same identity and allow geography, climate or vegetation
+    rerolls without unintentionally changing everything else.
+
+
+    2) Technical Details
+
+    Depends on: AC-0487
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-2; docs/continent-biome-generation-plan.html#controls;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Bounded dormant metadata/contract change, not terrain activation. Anchors: godot/autoload/game.gd
+    world_seed/new_world, godot/autoload/save.gd format handling, godot/autoload/settings.gd persistence;
+    recheck current schema/version before editing. Coordinator specifies normalized effective recipe,
+    stable geography/detail/climate/ecology seed derivation, generator version and cache-identity key;
+    save actual normalized parameters, not only a preset label. Preserve radius/grid. Define classic versus
+    continental identity and clean rejection of incompatible old saves under the existing policy, with
+    no migration obligation. Acceptance: normalization and seed-isolation fixtures, save/reload identity,
+    unknown/corrupt/incompatible-version negative cases and architecture update. Existing classic generation
+    must remain byte-identical and no atlas is built yet. No arbitrary cache binary format or player UI
+    in this piece.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0489
+  title: continent-p2-new-world-generation-mode-setting
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - settings
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want an explicit generation choice I can change for my next planet, without a settings
+    change rewriting the world I am currently playing.
+
+
+    2) Technical Details
+
+    Depends on: AC-0488
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-2; docs/continent-biome-generation-plan.html#controls;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Bounded Settings/menu wiring using godot/autoload/settings.gd and existing Options > Settings UI in
+    godot/scenes/main.gd, plus the recipe/new-world boundary from the prerequisite. Expose persisted classic/continental
+    generation choice, with clear next-new-world-only semantics. Continental availability remains gated
+    until the surface/tier/activation ticket passes; do not let an incomplete generator start a normal
+    game. User requested continental generation, so it may become the next-world default only at that
+    activation gate. Acceptance: UI persistence, malformed-value sanitization, current-world immutability,
+    new-world recipe capture and classic/off short-circuit with zero atlas builds/lookups and original
+    generation hashes unchanged. An environment arm may test the states but is not the player switch.
+    No biome slider wall, live terrain toggle or old-save migration.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0490
+  title: continent-p2-immutable-atlas-sampler-and-worker-publication
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - performance
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want all generated terrain to consult the same planet blueprint without worker stalls,
+    duplicate memory or chart-boundary changes.
+
+
+    2) Technical Details
+
+    Depends on: AC-0487, AC-0488
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-2; docs/continent-biome-generation-plan.html#architecture;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Implement only the measured representation selected after the lookup proof. Anchors: gdext/src/gen.cpp
+    field sampling and public generation entry points, godot/world/generator.gd native dispatch, existing
+    extension registration if needed. Publish one complete immutable atlas per recipe, define packed continuous
+    fields and a compact column descriptor, and provide pure sphere-position sampling with deterministic
+    quantization/tie-breaking. Keep production generator routing inactive. Acceptance: exact repeated-position
+    samples across chart owners, seams/corners, cache absence and worker counts; interpolation fixtures/negative
+    controls; <=16MiB resident including halos and <=64MiB incremental construction scratch under proposed
+    budgets; no per-block allocation/lookup, filesystem access or global lock in sampling. Existing classic
+    hash unchanged, architecture updated. No cache persistence or full terrain materialization here.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0491
+  title: continent-p2-compact-atlas-cache-load-and-regeneration
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - cache
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want planets to start quickly when cached, while missing or damaged temporary geography
+    data can be rebuilt safely.
+
+
+    2) Technical Details
+
+    Depends on: AC-0490
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-2; docs/continent-biome-generation-plan.html#budgets;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Persistence lifecycle only, with runtime consumers still inactive. Use the prerequisite''s immutable
+    atlas and authoritative recipe identity; follow save/cache ownership in godot/autoload/save.gd and
+    current world cache integration. Specify canonical version/header/length/integrity validation, atomic
+    writes, temporary-file cleanup and regeneration on absent/stale/corrupt data. Benchmark raw versus
+    compressed loading including decompression; disk caching is optional acceleration and may be omitted
+    if regeneration wins, with the measured decision recorded. Acceptance: cold/warm output identity,
+    <=8MiB per atlas including indexes/metadata, <=3s proposed bake p95 and actual load time, truncated/oversized/checksum/version
+    failures, interruption and disk-full safety. No player edits or authoritative recipes may be discarded.
+    Architecture update required; no new whole-world voxel bake or permanent per-tier atlas copies.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0492
+  title: continent-p2-bounded-atlas-cache-eviction-and-accounting
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - cache
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want trying many planet seeds to have a predictable disk footprint, without deleting
+    saved progress or making active play stall.
+
+
+    2) Technical Details
+
+    Depends on: AC-0491
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-2; docs/continent-biome-generation-plan.html#budgets
+
+
+    Add only inactive derived-atlas accounting and eviction to the lifecycle selected in the preceding
+    ticket. Initial proposed global cap is 64MiB, with at most one current complete artifact per recipe/version;
+    include temporary artifacts and obsolete-version cleanup in accounting. Active atlas stays in memory;
+    avoid worker I/O or scans in generation. Acceptance: deterministic bounded-cache tests across many
+    recipes, least-recently-used inactive eviction, restart cleanup, active-world safety and identical
+    regeneration after eviction; authoritative save files and edits survive all cases. Publish combined
+    existing-plus-new cache sizes using the baseline inventory; do not claim the atlas cap bounds unrelated
+    far-tier data. If disk caching was rejected as slower, implement/verify zero atlas disk accumulation
+    rather than introducing storage just to satisfy this ticket. No unrelated cache overhaul.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0493
+  title: continent-p3-full-terrain-macro-surface-integration
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - terrain
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the detailed terrain on a new continental planet to match its broad landmasses,
+    coastlines, shelves and mountain regions.
+
+
+    2) Technical Details
+
+    Depends on: AC-0489, AC-0490, AC-0491, AC-0492
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-3; docs/continent-biome-generation-plan.html#geography;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Native full-path integration only, behind inactive normal-game activation until downstream parity
+    succeeds. Anchors: gdext/src/gen.cpp surface_h, col_heights_pass and cave/carver consumers. Replace
+    the selected repeated macro surface work with atlas sampling plus bounded local detail; preserve existing
+    cave/ore/decor quality and vertical/radius/grid limits. Keep the initial four-biome content palette;
+    climate arrives later. Define nominal versus carved surface and prevent unconstrained local noise
+    from turning continental interiors into ponds. Acceptance: new-version deterministic terrain fixtures
+    and atlas/refined topology comparisons, classic/off genhash unchanged with no new work, bounded surface
+    cost and applicable generation gates. Intentional new height hashes need explicit coordinator approval;
+    no opportunistic rebaseline. Do not activate shipping worlds or independently change fluid rules/far
+    paths in this piece.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0494
+  title: continent-p3-canonical-ocean-water-and-shore-surface-rules
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - water
+  - design
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:48
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want a consistent ocean around continents, sensible shores and no accidental widespread
+    inland flooding.
+
+
+    2) Technical Details
+
+    Depends on: AC-0493
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-3; docs/continent-biome-generation-plan.html#geography;
+    docs/continent-biome-generation-plan.html#water; docs/continent-biome-generation-plan.html#contracts
+
+
+    Bounded native water/surface contract for the new generator, still inactive for normal play. Anchors:
+    gdext/src/gen.cpp carved_top_pass, pre-carve versus carved water gates and beach/surface rules (reviewed
+    near 3504-3545). Coordinator distinguishes nominal surface, carved solid top, ocean classification,
+    visible water level and top material; implement one canonical descriptor/decision for consumers. Ocean
+    uses one radial sea level; cliffs need not become sand beaches. Preserve explicit cave-opening/aquifer
+    dry-mouth policy and deliberately supported simple basins; rich lakes/rivers are deferred. Acceptance:
+    wet/dry/top-material fixtures for coastal inlets, steep shores, interior depressions and cave openings,
+    plus fluids/buckets and applicable surface gates with negative controls. Classic/off remains identical.
+    No broad water simulation rewrite, global depression flooding or separate far-path guess.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0495
+  title: continent-p3-far-and-provisional-surface-payload-parity
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - lod
+  created_at: 2026-10-25T14:42
+  updated_at: 2026-10-25T14:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want a distant coastline and terrain surface to stay in place when I approach and detailed
+    chunks replace the distant representation.
+
+
+    2) Technical Details
+
+    Depends on: AC-0494
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-3; docs/continent-biome-generation-plan.html#contracts;
+    docs/continent-biome-generation-plan.html#performance
+
+
+    Consume the canonical descriptor in far payload generation and provisional materialization; no shader
+    redesign. Anchors: gdext/src/gen.cpp far generation, carved_top_pass and generate_resl payload route;
+    godot/world/world.gd materialization handoff and godot/world/generator.gd bindings. Far/provisional
+    must agree with full generation on contracted carved top, visible water and top material for the same
+    new recipe. Preserve whole-column promotion/light reseeding and existing residency rules. Acceptance:
+    farab-style full-versus-independent-far comparisons over shores/cave openings and all chart boundaries,
+    zero unexpected contracted-value mismatches, negative control and classic/off hashes unchanged. Capture
+    repeated-work costs versus baseline without adding another baked globe. Runtime activation stays gated
+    until orbital and seam acceptance.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0496
+  title: continent-p3-orbital-geography-from-shared-atlas
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - lod
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the continents I see from orbit to be the same continents and ocean I find when
+    landing.
+
+
+    2) Technical Details
+
+    Depends on: AC-0495
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-3; docs/continent-biome-generation-plan.html#architecture;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Source-data integration only for existing orbital/far-body consumers in godot/world/world.gd and satellite/planet-body
+    generation; recheck exact component names in godot/ARCHITECTURE.md before planning. Read the same
+    atlas geography/continuous fields and canonical water decisions as the near/far paths. Reuse the existing
+    visual representation: no shader appearance redesign or third implementation lane. Acceptance: sampled
+    orbital land/water correspondence to full/far columns at fixed sites on every chart, seam/corner cases,
+    default-seed orbit/coast/landing evidence, measured extra startup/cache bytes and no duplicate whole-world
+    bake. Preserve existing handover and fog/lighting behavior. Normal activation remains off until the
+    following setting/parity gate.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0497
+  title: continent-p3-seam-promotion-acceptance-and-mode-activation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - verification
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the continent generator to become available only when walking, flying, landing
+    and changing detail levels preserve the same geography.
+
+
+    2) Technical Details
+
+    Depends on: AC-0496
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-3; docs/continent-biome-generation-plan.html#contracts;
+    docs/continent-biome-generation-plan.html#acceptance
+
+
+    A bounded acceptance/activation step, not a new terrain algorithm. Use the prepared Options > Settings
+    next-world choice; enable continental worlds and the requested new-world default only after full/far/provisional/orbital
+    agreement. Verify all chart edges/corners, coast crossings, cave mouths, tier promotion and current-world
+    immutability; classic/off short-circuits before atlas work and stays byte-identical. Compare defined
+    surfaces and water classes with zero unexpected mismatches; demonstrate the probe detects an injected
+    disagreement. Preserve radius/grid/residency/light contracts, use the applicable existing gates, and
+    collect Windows orbit/ground/travel evidence with actual settings. Record early total generation/startup/resource
+    costs for the performance gate. Do not activate future climate/hydrology or silently accept a mismatch;
+    unresolved parity leaves the public continental choice unavailable.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0498
+  title: continent-p4-reuse-column-surface-decisions-in-native-generation
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - performance
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want new terrain to appear faster because the generator reuses its work, not because
+    features or detail were removed.
+
+
+    2) Technical Details
+
+    Depends on: AC-0497
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-4; docs/continent-biome-generation-plan.html#architecture;
+    docs/continent-biome-generation-plan.html#performance
+
+
+    One concrete optimization: identify and remove duplicate per-column macro/biome/surface samples among
+    height, material and decoration consumers in gdext/src/gen.cpp, using the compact descriptor introduced
+    earlier. Drive exact edit anchors and expected call-count reductions from the baseline and current
+    profile; if the calls already share results, record the no-op and let the coordinator choose a measured
+    bounded replacement instead of rewriting arbitrary cave code. Acceptance: byte-identical new-version
+    output before/after, unchanged classic hashes/features, lower measured duplicate-call counts and representative
+    total timing evidence with no extra per-worker atlas, allocations or lock contention. Preserve independent
+    full/far parity probes as genuine oracles rather than making both test sides call the same implementation.
+    No fluid/terrain design changes or unbounded optimization sweep.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0499
+  title: continent-p4-total-generation-speed-and-budget-gate
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - performance
+  - measurement
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:49
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want evidence that the new continent system improves generation overall and does not
+    exchange runtime speed for a long bake or oversized cache.
+
+
+    2) Technical Details
+
+    Depends on: AC-0498
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-4; docs/continent-biome-generation-plan.html#performance;
+    docs/continent-biome-generation-plan.html#budgets; docs/continent-biome-generation-plan.html#acceptance
+
+
+    Measurement-only go/no-go gate against the same baseline protocol/hardware/features. At least five
+    paired interleaved trials for corpus timing and cold/warm spawn/travel scenarios; report total native
+    generation, stage costs, chunks/sec, first-play readiness, p95/p99, variance, full cache footprint
+    and break-even workload. Acceptance: repeatable total generation reduction beyond noise; no material
+    tail/startup regression; investigate repeated >3% slowdowns rather than treating 3% as allowance.
+    Engineering aspiration is 20% median reduction, not a measured promise. Check proposed <=3s atlas
+    bake p95, <=8MiB disk, <=16MiB resident, <=64MiB incremental scratch and bounded global cache. If
+    dominated elsewhere or slower, report and hold downstream identity work; coordinator files targeted
+    equivalent optimizations based on logs. Never declare a surface-only improvement a total win or silently
+    lower quality.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0500
+  title: continent-p5-coherent-spherical-climate-fields
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - biomes
+  - design
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want cold, warm, wet and dry regions to make sense across an entire planet instead
+    of changing at arbitrary chart boundaries.
+
+
+    2) Technical Details
+
+    Depends on: AC-0499
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-5; docs/continent-biome-generation-plan.html#climate;
+    docs/continent-biome-generation-plan.html#architecture
+
+
+    Continuous fields only; normal-game biome activation waits for the later recipe-control ticket. Anchors:
+    native col_heights_pass''s current flat-coordinate temperature/moisture and the selected atlas sampler.
+    Compute planetary temperature/moisture baselines, configurable latitude influence, coast/interior
+    influence, elevation cooling and broad regional variation from full 3D direction and a stable climate
+    axis. Interpolate fields, not biome IDs. A bounded wind/rain-shadow pass is optional only if separately
+    measured within the existing bake budget; no atmospheric or iterative physical simulation. Acceptance:
+    same-position seam/corner continuity, polar/equatorial/elevation and seed-isolation fixtures, region-size
+    checks and expanded atlas bake/disk/resident/peak measurements. Classic/off and current active palette
+    remain unchanged; unsupported climate settings are not silently substituted.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0501
+  title: continent-p5-environmental-biome-classifier-and-surface-transitions
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - biomes
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want coherent forests, plains, deserts and cold regions with understandable transitions,
+    while hills and mountains can occur within different biomes.
+
+
+    2) Technical Details
+
+    Depends on: AC-0500
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-5; docs/continent-biome-generation-plan.html#climate;
+    docs/continent-biome-generation-plan.html#visual-biomes
+
+
+    Data-driven native classifier/surface-rule integration using the new continuous climate/terrain fields
+    and existing content families; no new asset dependency. Anchors: gdext/src/gen.cpp col_heights_pass,
+    biome/top-material/vegetation consumers and current biome tables. Define regional cores/transitions,
+    supported vegetation density/color treatment and coast/slope beach eligibility; do not make each biome
+    impose one fixed height shape or blend integer labels. Keep dormant or recipe-gated until the following
+    player-control activation. Acceptance: deterministic classification boundary fixtures, environmental
+    continuity, supported palette coverage/region sizes, full/far top-material agreement and no lost cave-biome
+    behavior. Remeasure cost/atlas bytes and preserve the preceding speed gate; classic/off unchanged.
+    Do not rewrite terrain, add rich hydrology or encode future unsupported assets.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0502
+  title: continent-p5-planet-presets-controls-and-independent-rerolls
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - biomes
+  - settings
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want to create distinct planets through understandable controls and keep a continent
+    layout I like while trying a different climate or ecology.
+
+
+    2) Technical Details
+
+    Depends on: AC-0501
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-5; docs/continent-biome-generation-plan.html#controls;
+    docs/continent-biome-generation-plan.html#visual-recipes
+
+
+    Extend the existing next-new-world Settings/recipe controls, not a live terrain editor. Expose coherent
+    geography arrangement/coverage/coast/island defaults, relief/terrain character, temperature/moisture/latitude/biome-region
+    size and supported ecology/palette choices; normalize/reject incompatible settings clearly. Activate
+    regional climate/biome behavior only with a persisted user-facing recipe selection; preserve the supported
+    off/basic behavior and do no extra climate work when off. Add stable independent geography/detail/climate/ecology
+    rerolls and normalized save/reload. Presets use implemented content; names/illustrations in the shared
+    plan do not imply rich lake/river controls exist yet. Acceptance: settings arms, malformed/range/conflict
+    cases, current-world immutability, reroll-isolation and six recipe sample maps where supported. UI
+    changes must not introduce per-frame generation or hide resource costs; update architecture for schema
+    changes.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0503
+  title: continent-p5-core-multiseed-and-windows-acceptance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - verification
+  - performance
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the continent and biome generator to work reliably across seeds and presets on
+    Windows, not only on a few attractive example worlds.
+
+
+    2) Technical Details
+
+    Depends on: AC-0502
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-5; docs/continent-biome-generation-plan.html#acceptance;
+    docs/continent-biome-generation-plan.html#performance; docs/continent-biome-generation-plan.html#budgets
+
+
+    Core release evidence only, before optional rich hydrology. Run the fixed 32-seed default sweep plus
+    >=4 seeds per supported named preset and supported-limit cases; report full component-area distributions,
+    coarse/refined coverage, ocean connectivity, unintended inland-water patches, biome region/transition/palette
+    behavior and bounded candidate failures. Apply the shared default geography thresholds without imposing
+    them on archipelago presets. Compare orbit/coast/inland/landing and near/far/promotion evidence on
+    Windows at actual settings. Repeat total generation, cold/warm readiness, travel tails and final climate-enabled
+    atlas/cache measurements against baseline. Acceptance requires retained speed improvement, budget
+    compliance, deterministic reload/eviction and unchanged unrelated gates; publish failures rather than
+    cherry-picking. If unmet, keep the epic incomplete and file focused follow-ups; optional hydrology
+    remains blocked. No new algorithm or asset work here.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0504
+  title: continent-p6-bounded-spherical-drainage-and-spill-levels
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - hydrology
+  - optional
+  - design
+  created_at: 2026-10-25T14:43
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want rivers and lakes to belong to connected landscapes, with water flowing toward
+    an ocean or an intentional basin.
+
+
+    2) Technical Details
+
+    Depends on: AC-0503
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-6; docs/continent-biome-generation-plan.html#water;
+    docs/continent-biome-generation-plan.html#budgets
+
+
+    Optional coarse routing only, conditioned on measured bake/storage headroom; no normal-game water
+    change. Use the selected seam-connected atlas graph, broad heights and preliminary moisture. Coordinator
+    specifies a bounded depression-fill/spill algorithm, flow accumulation, outlet/closed-basin classification,
+    deterministic tie-breaking and packed routing data. Avoid climate-terrain feedback loops and block-scale
+    simulation. Acceptance: every route reaches an ocean or explicitly labeled basin/outlet, no unexplained
+    cycles, cross-chart/corner adjacency fixtures and independent small-graph negative controls. Report
+    additional bake p95, final/resident/scratch/cache bytes against the already accepted total budgets;
+    no assumed compression. If it does not fit, defer this optional feature and leave core generation
+    unchanged. No local channel carving, lake filling, UI or unrelated fluid rewrite.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0505
+  title: continent-p6-new-world-freshwater-controls-and-off-path
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - hydrology
+  - settings
+  - optional
+  created_at: 2026-10-25T14:44
+  updated_at: 2026-10-25T14:50
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want lake and river abundance to be separate from ocean coverage, with an explicit
+    option to keep richer hydrology off.
+
+
+    2) Technical Details
+
+    Depends on: AC-0504
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-6; docs/continent-biome-generation-plan.html#water;
+    docs/continent-biome-generation-plan.html#controls
+
+
+    Prepare persisted next-new-world hydrology enable, lake abundance/size and river-density controls
+    using the established Options > Settings and recipe schema. Do not expose nonfunctional enabled behavior:
+    availability stays gated until local water integration and tier acceptance pass. Default richer hydrology
+    off unless explicitly chosen; capture effective settings/seed identity and prevent existing-world
+    regeneration. Acceptance: setting persistence/sanitization, independent ocean-versus-freshwater parameters,
+    current-world immutability and hydrology-off byte-identical core output with zero drainage build/sample
+    work. Environment tests may supplement but not replace the player switch. Cache keys/versioning must
+    include effective hydrology settings, with architecture updated as needed. No lake/river geometry
+    or dynamic fluids in this piece.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0506
+  title: continent-p6-spill-controlled-lakes-and-local-ponds
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - hydrology
+  - optional
+  created_at: 2026-10-25T14:44
+  updated_at: 2026-10-25T14:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want intentional lake districts and occasional ponds without turning every low patch
+    into an ocean-level pool.
+
+
+    2) Technical Details
+
+    Depends on: AC-0505
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-6; docs/continent-biome-generation-plan.html#water;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Full-column lake/pond integration only for the gated hydrology recipe. Use drainage spill levels and
+    explicit lake versus inland-sea classification; support local above-sea lake levels through the canonical
+    water descriptor instead of extending the global ocean-fill rule blindly. Small deterministic ponds
+    need not be stored individually in the global atlas. Anchors: native surface/water/top-material rules
+    and current aquifer/cave-opening policy. Acceptance: lake coverage/count/size distributions, outlet/basin
+    fixtures, cave/cliff contact and no accidental flooding in dry interiors; fluids/buckets and applicable
+    surface gates; hydrology-off core output identical and zero added work. Keep activation gated until
+    river/tier acceptance and retain total bake/cache/performance budgets. No global water simulation,
+    far/orbital independent water rules or unapproved cave-policy change.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0507
+  title: continent-p6-connected-river-channel-refinement
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - hydrology
+  - optional
+  created_at: 2026-10-25T14:44
+  updated_at: 2026-10-25T14:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want rivers that join larger waterways and reach lakes or the ocean, rather than isolated
+    decorative trenches.
+
+
+    2) Technical Details
+
+    Depends on: AC-0506
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-6; docs/continent-biome-generation-plan.html#water;
+    docs/continent-biome-generation-plan.html#contracts
+
+
+    Full-column local channel refinement only, under the still-gated hydrology recipe and canonical water
+    descriptor. Refine coarse routes deterministically into channels with bounded width/depth and supported
+    bank/floodplain material treatment; join upstream tributaries and lake outlets consistently across
+    chunk/chart boundaries. Recheck native carving/water/material anchors rather than introducing a separate
+    global simulator. Acceptance: endpoint/confluence and cross-chunk/chart fixtures, correct destination/outlet
+    levels, no unexplained flow cycles, cave-mouth interactions and existing fluid gates. Hydrology-off
+    hashes and core geography stay identical; measure local added generation cost without bypassing feature-quality
+    settings. No ship activation, weather feedback or separate far/orbit re-derivation; those consumers
+    are handled in the following parity gate.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0508
+  title: continent-p6-hydrology-tier-parity-and-final-budget-acceptance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: blocked
+  labels:
+  - worldgen
+  - continents
+  - hydrology
+  - optional
+  - verification
+  created_at: 2026-10-25T14:44
+  updated_at: 2026-10-25T14:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want enabled rivers and lakes to look consistent from orbit to the ground and retain
+    the generator''s speed and storage improvements.
+
+
+    2) Technical Details
+
+    Depends on: AC-0507
+
+    Plan sections: docs/continent-biome-generation-plan.html#phase-6; docs/continent-biome-generation-plan.html#contracts;
+    docs/continent-biome-generation-plan.html#acceptance; docs/continent-biome-generation-plan.html#budgets
+
+
+    One bounded water-payload integration/acceptance step; if it needs independent rendering work, split
+    before implementation rather than growing a three-lane ticket. Feed existing full/far/provisional/orbital
+    consumers from canonical lake/river levels/classification; no shader redesign. Verify zero unexpected
+    contracted-value mismatches, negative controls, seams/corners, lake outlets/confluences and promotions.
+    Only then make prepared user-facing hydrology settings available. Run multi-seed lake/river topology
+    checks, cold/warm regeneration/eviction identity and Windows full-versus-hydrology-off performance/resource
+    comparisons, also retaining the original baseline total-speed gain. All accepted atlas bake/disk/resident/scratch/global-cache
+    budgets and unrelated fluid/light gates remain in force. If hydrology consumes the performance gain
+    or misses budgets, leave it disabled/deferred, report honestly and do not compromise core delivery.
+
+
+    Shared wider-picture plan: docs/continent-biome-generation-plan.html (from this ticket''s spec: ../../docs/continent-biome-generation-plan.html).
+    This is one bounded piece, not authorization to implement the whole epic. Follow the dependency order;
+    do not queue or start this work until its prerequisites are satisfied. Before a builder starts, the
+    coordinator writes the ticket-specific plan with rechecked file anchors, exact expected gates and
+    scope fences. Proposed budgets and thresholds in the shared plan are not measured facts. Preserve
+    feature quality, cave/ore behavior, planet radius/grid and unrelated streaming/light contracts. No
+    silent quality reduction or unapproved rebaseline. Architectural, save/cache-schema and convention
+    changes update godot/ARCHITECTURE.md in the same task. Existing gates come from godot/HARNESS.md;
+    new-version geography gets explicitly approved fixtures rather than accidental old-hash rebaselines.
+    New visual generation choices must be player-facing persisted new-world recipe settings in Options
+    > Settings, never env-only; do not regenerate a running edited world when changing a choice. Classic/off
+    must short-circuit before new work and retain existing output. Keep prototype/new runtime paths inactive
+    until the relevant setting and representation-parity gates are ready. No implementation is authorized
+    by this filing operation.
+
+
+
+    Scheduling update (direct user request): queue the full continent/biome/performance series immediately
+    after AC-0438, the current fifth item at scheduling time, preserving all existing ticket relative
+    order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
+    is dependency order; blocked status still prevents starting a downstream piece before prerequisite
+    acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+  comments: []
+- id: AC-0509
+  title: audit and remove the remaining home-face behavioural branches
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-25T15:56
+  updated_at: 2026-10-25T15:56
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    The game should behave identically everywhere on the planet. Right now parts of the code still treat
+    the starting faces as special, which is exactly the asymmetry that must not exist - you should be
+    able to fly in at any point and get the same experience.
+
+
+    ## 2) Technical Details
+
+    RAISED BY THE USER (2026-10-24) in response to AC-0479/AC-0482: "why do we still have a home face???
+    There should be no home face?" The answer given at the time was that the fix covered "the home face''s
+    path" and not the others, which is precisely the problem being described.
+
+    THE STANDING REQUIREMENT, verbatim from the user: "there are going to be multiple planets, there is
+    no home… You fly in at whatever part of the planet you want. The experience has to be the same around
+    the entire planet."
+
+    WHAT IS ACTUALLY LEFT, counted on the current tree: **three branches on `face == 0 or face == 1`**
+    (all of them in `godot/world/world.gd`, at :16064, :16245, :16257) and **29 mentions of "home" in
+    `godot/player/player.gd`**. The AC-0469 migration unified the KEY SHAPE, the residency model, the
+    light path, the landing path and the generation queue — so the remaining home-ness is concentrated
+    in COORDINATE CONVERSION, which is exactly where AC-0482 just found a kilometres-large bug.
+
+    THE DISTINCTION THAT DECIDES EACH ONE: a CANONICAL CHART is legitimate — the flat<->sphere math and
+    the bake need an anchor, and `SphereMath.flat_to_world` must assume one. What is NOT legitimate is
+    a BEHAVIOURAL branch: different code taking a different path depending on whether you are on faces
+    0/1. AC-0482 removed the different CONVERSION for the aim box but the branch structure remains, so
+    the next person can reintroduce the divergence.
+
+    TASKS:
+
+    1. CLASSIFY EACH of the three `face == 0 or face == 1` branches and each "home" use in player.gd as
+    (a) legitimate chart anchoring — the caller pre-maps into the canonical chart before converting, so
+    no behaviour differs, or (b) a BEHAVIOURAL leak — a different path is taken per face. Report a table;
+    no branch left unclassified.
+
+    2. FOR EVERY (b), say what the two paths do differently and whether that difference is observable
+    to a player. AC-0482''s example is the calibration: a branch that fed CELL coordinates into a FLAT
+    conversion produced a 3-7 KM error on non-home faces while reading fine at spawn.
+
+    3. FIX the (b) ones so that ONE path serves all twelve faces, or if a face-dependent path is genuinely
+    required, say WHY with evidence from the geometry rather than from history.
+
+    4. ADD A GATE that would catch a new per-face divergence: the AC-0482 measurement (box corner tangential
+    error + box-up angle, per face) is already a working instrument — a standing check that measures it
+    on a home face and at least one non-home face, and fails if they differ in kind, would have caught
+    this the day the warp landed. Reuse that method rather than inventing a new one.
+
+    WHY THIS IS PRIORITY 1: the objective is multi-planet with no privileged starting point, so every
+    remaining behavioural home-face branch is a direct violation of a stated requirement, and AC-0482
+    proved such a branch can be WRONG BY KILOMETRES while the home face looks perfect.
+
+    FILES: godot/world/world.gd (:16064/:16245/:16257 and the conversions around them), godot/player/player.gd
+    (the "home" uses), godot/core/sphere_math.gd (the canonical chart). Refs: AC-0469 (the migration that
+    unified everything EXCEPT this), AC-0479/AC-0482 (the aim-box bug and its measurement method), the
+    user''s standing no-home-region requirement.
 
     '
   comments: []

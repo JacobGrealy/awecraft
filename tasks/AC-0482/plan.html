@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0482 face&gt;1 highlight unit mismatch</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0482 — the aim box is wrong on every face but the home face</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Measure on at least two non-home faces, fix at the source.</b></p>
+<h2>1. What AC-0479 fixed, and what it left</h2>
+<p>AC-0479 found the aim box was placed <b>position-only with an identity basis on the rigid per-column facet frame</b> while the block mesh and collision both consume the <b>per-vertex spherical warp</b>. It corrected the home face's path — the box now sits at the cell's exact warped centre and is oriented by the warp Jacobian — and measured the improvement: corner tangential <b>37.1 → 10.9 mm</b> at spawn, <b>296.1 → 15.5 mm</b> far out, box-up <b>2.316° → 0.162°</b>.</p>
+<p><b>It did not exercise `face > 1`, where a CELL/FLAT UNIT MISMATCH remains.</b> The flat frame and the per-face cell frame are different units, and the non-home path mixes them.</p>
+<h2>2. The seam is visible in the code already — start here</h2>
+<ul>
+<li><code>player.gd aim_hit()</code> (:2786) carries a comment that is essentially the bug in words: <b>"the ray runs in the local flat frame"</b> and then <b>"CELL frame (the in-plane axes per cell width) against the face block"</b>. It genuinely distinguishes a <b>cell frame</b> from the flat frame; the question is whether every downstream consumer does.</li>
+<li><code>world.gd:16087</code> <code>world_pos_of_flat(x,y,z)</code> is a <b>single generic</b> <code>SphereMath.flat_to_world(x, y, z, R)</code> — it takes no face argument. But <code>world.gd:16064</code>/<code>:16245</code>/<code>:16257</code> all branch on <code>face == 0 or face == 1</code>, so there <b>is</b> a face-dependent placement convention and the generic conversion cannot be right for all twelve unless the caller pre-maps into the canonical chart. <b>Establish which faces the caller pre-maps for, and where the `face > 1` path diverges.</b></li>
+<li><b>The world has NO HOME REGION by design</b> — the user's standing requirement is that the experience be identical around the entire planet. So a per-face aim defect is precisely the asymmetry the objective forbids, and it hides from home-face testing.</li>
+</ul>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3.1 MEASURE ON AT LEAST TWO NON-HOME FACES.</b> Move the player to a non-home face and measure the box's misalignment exactly as AC-0479 did: <b>corner tangential error, centre offset, and box-up angle vs block-up</b>. Report the numbers per face. <b>A cell-sized error (~16 m) or a whole-unit error will be obvious in millimetres and metres, so state the magnitude and its units.</b></li>
+<li><b>3.2 FIND THE CONVERSION, do not compensate the symptom.</b> Trace the aimed cell from <code>aim_hit()</code> to the placement (AC-0479's new code path) and identify where a <b>cell-frame</b> value is treated as <b>flat-frame</b> (or vice versa) on faces above 1. <b>Fix it at that source.</b> Do not add a per-face fudge offset at the call site.</li>
+<li><b>3.3 PROVE ON AT LEAST TWO DIFFERENT FACES</b> — a per-face bug can be right on one face and wrong on another, so one face is not proof.</li>
+<li><b>3.4 REGRESSION-CHECK THE HOME FACE</b> still measures as AC-0479 left it (corner ~10.9 mm at spawn, ~15.5 mm far out). <b>Do not trade one face for another.</b></li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/player/player.gd</td><td><code>_update_interaction</code> :3175-3200 (AC-0479's warped-centre + Jacobian placement), <code>aim_hit()</code> :2786 and its cell/flat frame handling</td><td>Edit per 3.2.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>world_pos_of_flat</code> :16087, <code>flat_of_world_pos</code> :16090, and the <code>face == 0 or face == 1</code> branches at :16064 / :16245 / :16257</td><td>Edit the conversion only if 3.2 names it.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>flat_to_world</code> / <code>world_to_flat</code> and any per-face chart mapping</td><td>Read; edit only if the mapping itself is wrong.</td></tr>
+<tr><td>tasks/AC-0482/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light, the far tier, the sampler, the bake, the data JSON files. <b>Do not change friction, speed or the damper.</b> Do not add a per-face offset table as a fix.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The mismatch is measured (the point)</td><td>Per-face numbers for at least two non-home faces, in the same units AC-0479 used (mm of corner error, degrees of box-up), <b>before</b> the fix. The magnitude tells you whether it is a unit error or something smaller.</td></tr>
+<tr><td>It is fixed at the source</td><td>After the fix the same numbers on the same faces, materially reduced, plus a statement of which conversion was mixing cells and flats.</td></tr>
+<tr><td>Both faces, not one</td><td>At least two non-home faces verified, and the home face unchanged from AC-0479's numbers.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0482 --arms g0,genhash,smoke,interact</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, smoke green, interact at its recorded values (the known mine-timing flake is <code>prog_max 0.9722</code>, do not chase it).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s, SERIAL. Getting to a non-home face may need a teleport/aim recipe — find how other arms travel (the boundary walk, <code>AWECRAFT_AIM</code> with flat coordinates past hw, or a face parameter) rather than inventing one.</p>
+<h2>6. Acceptance</h2><p>The mismatch measured as numbers on two or more non-home faces, the mixing conversion named and fixed at its source, both faces re-measured and materially reduced, and the home face's AC-0479 numbers intact.</p>
+<h2>7. Risks</h2><p>(1) Testing one non-home face and declaring it fixed — per-face bugs can be face-specific. (2) A per-face fudge offset instead of fixing the conversion, which would break the next face someone adds. (3) Regressing the home face, which is the path AC-0479 just fixed and is the one most likely to be re-tested.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. No friction/speed/damper changes, no per-face offset table.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0479 fixed the home face's placement and orientation and explicitly recorded this face>1 mismatch as out of scope. AC-0469/AC-0471 made twelve faces the world; the user requires the experience to be identical on all of them.</p>
+</body></html>

@@ -3197,6 +3197,40 @@ func _ac0479_warp_basis(fx: float, fy: float, fz: float, R: float) -> Basis:
 	return Basis(x, y, z).orthonormalized()
 
 
+# AC-0482: the exact per-vertex placement the face-lane mesh + collision
+# consume (chunk.gd _warp_cell_point, AC-0458 — the canonical face
+# placement; when the warp is on the chunk node is identity and the
+# vertices ride this chart map pointwise): the local slot (the
+# face_local_x data layout — the mirror class runs local +X against the
+# face's u) charts to (u, v) and places at (R + ly) *
+# normalize(uv_to_world(face, u, v, R)) - (0, R, 0). lx/lz are the
+# data-layout local slots; ccx/ccz the chunk's cell-index origin.
+func _ac0482_face_warp_point(face: int, ccx: int, ccz: int, lx: float, lz: float, ly: float, R: float) -> Vector3:
+	var mirrored: bool = SphereMath.face_mirror_x(face)
+	var u: float = float(ccx * 16) + (16.0 - lx if mirrored else lx)
+	var v: float = float(ccz * 16) + lz
+	var dir: Vector3 = SphereMath.uv_to_world(face, u / float(SphereMath.cells_u(face)), v / float(SphereMath.cells_v(face)), R)
+	return (R + ly) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+
+
+func _ac0482_face_warp_basis(face: int, ccx: int, ccz: int, lx: float, lz: float, ly: float, R: float) -> Basis:
+	# Central-difference the warp at the cell centre in each local axis —
+	# the RAW Jacobian, NOT orthonormalized (unlike the AC-0479 home twin):
+	# the face chart's in-plane metric is sheared (the LSQ fit's in-plane
+	# axes run up to ~26 deg off-orthogonal at the chunk corners — far
+	# more than the home warp's ~D/R ~ 3 deg), and orthonormalizing the
+	# frame moved the box corners off the block's own corners by up to
+	# ~0.5*sin(theta) per axis (measured: 32-172 mm on a 1.02 box). The
+	# box mirrors the block's local affine frame 1:1 (scaled 1.02) — a
+	# node basis may carry the shear (the indicator is unshaded, and the
+	# sheared transform is exactly what the block mesh rides).
+	var e: float = 0.1
+	var x: Vector3 = (_ac0482_face_warp_point(face, ccx, ccz, lx + e, lz, ly, R) - _ac0482_face_warp_point(face, ccx, ccz, lx - e, lz, ly, R)) / (2.0 * e)
+	var y: Vector3 = (_ac0482_face_warp_point(face, ccx, ccz, lx, lz, ly + e, R) - _ac0482_face_warp_point(face, ccx, ccz, lx, lz, ly - e, R)) / (2.0 * e)
+	var z: Vector3 = (_ac0482_face_warp_point(face, ccx, ccz, lx, lz + e, ly, R) - _ac0482_face_warp_point(face, ccx, ccz, lx, lz - e, ly, R)) / (2.0 * e)
+	return Basis(x, y, z)
+
+
 func _update_interaction(dt: float) -> void:
 	var hl := _ensure_highlight()  # AC-0309: survives the world free/recreate
 	_aim_wire_sync()  # AC-0440: the aim_wire look applies on change
@@ -3206,7 +3240,8 @@ func _update_interaction(dt: float) -> void:
 	var hit := aim_hit()
 	if hit.hit:
 		hl.visible = true
-		# AC-0307: the aimed cell is FLAT; the highlight node lives in the
+		# AC-0307: the aimed cell is FLAT on the home pair (the CELL frame
+		# past the patch edge, AC-0309 C5); the highlight node lives in the
 		# placed global frame.
 		if Game.world != null and int(_anchor.get("face", 0)) <= 1:
 			# AC-0479: home blocks are WARPED (per-vertex spherical warp,
@@ -3224,7 +3259,30 @@ func _update_interaction(dt: float) -> void:
 			hl.global_position = _ac0479_warp_point(cfx, cfy, cfz, R)
 			hl.global_basis = _ac0479_warp_basis(cfx, cfy, cfz, R)
 		elif Game.world != null:
-			hl.global_position = Game.world.world_pos_of_flat(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
+			# AC-0482: hit.cell here is the face chunk's CELL frame (the
+			# absolute face columns, in-plane ~1 m per cell, y unscaled
+			# metres — the AC-0309 C5 / AC-0462 frame aim_hit runs in for
+			# face > 1), NOT flat metres. world_pos_of_flat is the generic
+			# home-chart flat->world conversion (SphereMath.flat_to_world,
+			# no face argument) — feeding it another chart's cell coords
+			# placed the box on the HOME patch, kilometres from the block
+			# on every non-home site (measured 3.0-7.2 km centre offset;
+			# the cell/flat unit mismatch this ticket exists for). The
+			# face block mesh + collision ride the per-vertex chart warp
+			# (chunk.gd _warp_cell_point, the node identity — the AC-0479
+			# ground truth, face edition), so the box rides it: the cell's
+			# local slot (the face_local_x mirror data layout) through the
+			# warp at the cell centre, oriented by the RAW warp Jacobian
+			# there (the block's own local affine frame — sheared, by
+			# design: see _ac0482_face_warp_basis).
+			var face: int = int(_anchor["face"])
+			var ccx: int = int(floorf(float(hit.cell.x) / 16.0))
+			var ccz: int = int(floorf(float(hit.cell.z) / 16.0))
+			var lx: float = float(SphereMath.face_local_x(face, int(hit.cell.x), ccx)) + 0.5
+			var lz: float = float(int(hit.cell.z) - ccz * 16) + 0.5
+			var ly: float = float(hit.cell.y) + 0.5
+			hl.global_position = _ac0482_face_warp_point(face, ccx, ccz, lx, lz, ly, Game.planet_R)
+			hl.global_basis = _ac0482_face_warp_basis(face, ccx, ccz, lx, lz, ly, Game.planet_R)
 		else:
 			hl.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
 	else:
