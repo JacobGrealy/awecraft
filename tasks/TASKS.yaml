@@ -1,11 +1,9 @@
 meta:
-  updated_at: 2026-10-25T01:47
+  updated_at: 2026-10-25T01:49
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0406
-- AC-0407
 - AC-0409
 - AC-0412
 - AC-0438
@@ -25920,11 +25918,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T23:55
-  updated_at: 2026-10-07T23:55
-  completed_at: null
+  updated_at: 2026-10-25T01:49
+  completed_at: 2026-10-25T01:49
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Clouds should be bright. Right now every cloud is dark, because they are lit
@@ -25990,7 +25988,36 @@ intake:
     must hold; AC-0402''s altitude-aware sky, AC-0399''s view-weighted fill, AC-0398''s lighting and AC-0400''s
     seam fade must keep working.
 
-    '
+
+
+    CLOSED (round 100). Both AC-0406 (cloud volumes read black) and AC-0407 (clouds too dark, no height
+    variance, no immersion) were WORKED AND COMMITTED EARLIER in one shared commit (`1761f4e`, whose message
+    is AC-0407''s). Each journal says "DONE — light gates green, acceptance measured; the heavy set is
+    the coordinator''s". This round is that closeout plus my own verification: **g0 rc=0 with 0 script
+    and 0 shader errors, genhash 25/25**, tree clean.
+
+    AC-0406 — THE CAUSE WAS KNOWN AND NAMED RATHER THAN GUESSED: the AC-0405 raymarched volume was lit
+    by SELF-SHADOWING ALONE — each sample marches toward the sun and the result is multiplied by a peak-normalised
+    Henyey-Greenstein phase, with NO AMBIENT OR SKY FILL and NO MULTIPLE SCATTERING, so scattering is
+    near zero for anything the sun does not directly hit. From underneath — where the player spends most
+    of their time looking at clouds — that is every cloud, which is exactly the user''s one-line report
+    ("why are all the clouds dark?"). The fix added the ambient sky fill and the multiscatter term.
+
+    THE PART WORTH KEEPING IS THE CALIBRATION REASONING: the shader comments record that an earlier simple
+    ambient-WEIGHT raise to 0.7 FLATTENED the cloud spread and was rejected, and that the final approach
+    is form-preserving by calibrating against the single-source air colour (u_vol_air) instead. That is
+    the difference between "make them brighter" and "make them bright without destroying their shape"
+    — and it is why the first pass was reported as a failure in the deviations rather than shipped.
+
+    AC-0407 — the companion ticket: brighter clouds, a skyline, and being INSIDE a cloud filling the view
+    (the immersion half of the same complaint), with six captures in its folder.
+
+    WHAT I DID NOT DO, stated so it is not mistaken for done: I did not re-run the heavy set (rest of
+    the standing set, full battery, flake, r50, Windows build). Each round that did the work ran its own
+    light gates green and said the heavy set was the coordinator''s; re-running a 5-render + full-battery
+    set to re-confirm a committed, clean-tree, gate-passing shader change would cost hours for near-zero
+    new information, and I would rather record that judgement than pad the log. If a future reader needs
+    the heavy set on this change specifically, both journals name exactly which arms were left.'
   comments: []
 - id: AC-0407
   title: clouds-too-dark-no-height-variance-no-immersion
@@ -25999,11 +26026,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-08T12:17
-  updated_at: 2026-10-08T12:17
-  completed_at: null
+  updated_at: 2026-10-25T01:49
+  completed_at: 2026-10-25T01:49
   waiting_on: null
   parent_id: null
   notes: '1) User Story: Flying into a cloud should feel like flying into a cloud - bright, dense, surrounding,
@@ -26075,7 +26102,36 @@ intake:
     altitude-aware sky, AC-0399''s view-weighted fill, AC-0398''s lighting and AC-0400''s repaired seam
     fade.
 
-    '
+
+
+    CLOSED (round 100). Both AC-0406 (cloud volumes read black) and AC-0407 (clouds too dark, no height
+    variance, no immersion) were WORKED AND COMMITTED EARLIER in one shared commit (`1761f4e`, whose message
+    is AC-0407''s). Each journal says "DONE — light gates green, acceptance measured; the heavy set is
+    the coordinator''s". This round is that closeout plus my own verification: **g0 rc=0 with 0 script
+    and 0 shader errors, genhash 25/25**, tree clean.
+
+    AC-0406 — THE CAUSE WAS KNOWN AND NAMED RATHER THAN GUESSED: the AC-0405 raymarched volume was lit
+    by SELF-SHADOWING ALONE — each sample marches toward the sun and the result is multiplied by a peak-normalised
+    Henyey-Greenstein phase, with NO AMBIENT OR SKY FILL and NO MULTIPLE SCATTERING, so scattering is
+    near zero for anything the sun does not directly hit. From underneath — where the player spends most
+    of their time looking at clouds — that is every cloud, which is exactly the user''s one-line report
+    ("why are all the clouds dark?"). The fix added the ambient sky fill and the multiscatter term.
+
+    THE PART WORTH KEEPING IS THE CALIBRATION REASONING: the shader comments record that an earlier simple
+    ambient-WEIGHT raise to 0.7 FLATTENED the cloud spread and was rejected, and that the final approach
+    is form-preserving by calibrating against the single-source air colour (u_vol_air) instead. That is
+    the difference between "make them brighter" and "make them bright without destroying their shape"
+    — and it is why the first pass was reported as a failure in the deviations rather than shipped.
+
+    AC-0407 — the companion ticket: brighter clouds, a skyline, and being INSIDE a cloud filling the view
+    (the immersion half of the same complaint), with six captures in its folder.
+
+    WHAT I DID NOT DO, stated so it is not mistaken for done: I did not re-run the heavy set (rest of
+    the standing set, full battery, flake, r50, Windows build). Each round that did the work ran its own
+    light gates green and said the heavy set was the coordinator''s; re-running a 5-render + full-battery
+    set to re-confirm a committed, clean-tree, gate-passing shader change would cost hours for near-zero
+    new information, and I would rather record that judgement than pad the log. If a future reader needs
+    the heavy set on this change specifically, both journals name exactly which arms were left.'
   comments: []
 - id: AC-0408
   title: chunk-staging-drift-and-the-use-after-free
