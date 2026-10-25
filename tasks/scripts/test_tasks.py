@@ -285,7 +285,7 @@ def main():
 
     check("live TASKS.yaml untouched", sha(LIVE_YAML) == live_sha_before)
 
-    # AC-0301: godot/HARNESS.md is a RENDERING of tasks/harness_data.yaml. The
+    # AC-0301: godot/HARNESS.md is a RENDERING of godot/harness_data.yaml. The
     # generated blocks must be in sync, and spec_template.py must not parse the
     # doc's markdown (that coupling let a reformat silently weaken every spec).
     print("\n-- harness data (AC-0301)")
@@ -295,7 +295,7 @@ def main():
     check("harness_doc --check: doc in sync with data", p.returncode == 0,
           (p.stdout + p.stderr)[:300])
 
-    hdata = load_yaml(TASKS_DIR / "harness_data.yaml")
+    hdata = load_yaml(TASKS_DIR.parent / "godot" / "harness_data.yaml")
     modes = hdata.get("modes") or {}
     check("harness data: has modes", len(modes) > 0, str(len(modes)))
     ncols = len(hdata.get("mode_columns") or [])

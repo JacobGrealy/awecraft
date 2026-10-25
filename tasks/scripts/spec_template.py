@@ -55,7 +55,7 @@ DATA_GD = REPO_ROOT / "godot" / "autoload" / "data.gd"
 GEN_GD = REPO_ROOT / "godot" / "world" / "generator.gd"
 # The machine source for the mode table + known-stable values. The doc
 # (godot/HARNESS.md) is a RENDERING of this file - never parse the doc.
-HARNESS_DATA = REPO_ROOT / "tasks" / "harness_data.yaml"
+HARNESS_DATA = REPO_ROOT / "godot" / "harness_data.yaml"
 
 ID_RE = re.compile(r"^AC-(\d{4,})$")
 
@@ -123,7 +123,7 @@ def _parse_gd_constants(path):
 def _harness_data():
     """Load the harness machine data (AC-0301).
 
-    `tasks/harness_data.yaml` is the single source for the mode table and the
+    `godot/harness_data.yaml` is the single source for the mode table and the
     known-stable value table. Do NOT scrape godot/HARNESS.md: that doc is the
     agent-facing reference, and coupling a script to its markdown layout means a
     reformat silently weakens every generated spec (the reason the source moved).
@@ -286,7 +286,7 @@ def _build_html(task, task_id, full=False):
       'sets HOME first; <b>one godot at a time</b> (concurrent runs corrupt the '
       '<code>.godot</code> cache and hang). Scratch to project-local <code>.scratch/</code>.</div>')
     a("<pre>export HOME=/tmp/dsh_home; mkdir -p $HOME; "
-      "cd /home/angrygiant/github_projects/AweCraft</pre>")
+      "cd ~/github_projects/AweCraft</pre>")
 
     # ---- Coordinator heavy gates (AUTO — background bash/workflow, NOT the builder) ----
     a('<h2>Coordinator Heavy Gates (background bash/workflow, not builder, r50 nightly only)</h2>')
@@ -317,7 +317,7 @@ def _build_html(task, task_id, full=False):
     # ---- RESULT shapes (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Expected RESULT shapes (default battery + genhash)</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (rows from tasks/harness_data.yaml, rendered into '
+        a('<div class="auto"><b>AUTO (rows from godot/harness_data.yaml, rendered into '
           'godot/HARNESS.md §1 — do not hand-edit)</b></div>')
         if hrows:
             a("<table><tr><th>mode</th><th>key RESULT fields</th><th>typical wall</th></tr>")
@@ -329,7 +329,7 @@ def _build_html(task, task_id, full=False):
                   % (mode, escape(r.get("result_fields", "")), escape(r.get("wall", ""))))
             a("</table>")
         else:
-            a("<p class='note'>no modes in tasks/harness_data.yaml — regenerate after it is "
+            a("<p class='note'>no modes in godot/harness_data.yaml — regenerate after it is "
               "restored (it is the machine source for the mode table).</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the RESULT shapes live in '
@@ -345,7 +345,7 @@ def _build_html(task, task_id, full=False):
     # ---- Known-stable values (AUTO; slim = path pointer, --full = table) ----
     a('<h2>Known-stable gate values</h2>')
     if full:
-        a('<div class="auto"><b>AUTO (values from tasks/harness_data.yaml, rendered into '
+        a('<div class="auto"><b>AUTO (values from godot/harness_data.yaml, rendered into '
           'godot/HARNESS.md §3 — verify fresh on any fluids/world-touching change)</b></div>')
         if known:
             a("<table><tr>%s</tr>"
@@ -356,13 +356,13 @@ def _build_html(task, task_id, full=False):
                   % (escape(pad[0]), escape(pad[1]), escape(pad[2])))
             a("</table>")
         else:
-            a('<p class="note">no standing values in <code>tasks/harness_data.yaml</code> '
+            a('<p class="note">no standing values in <code>godot/harness_data.yaml</code> '
               "(it is the machine source for the anchor table) — <b>establish them "
               "fresh</b> before gating.</p>")
     else:
         a('<div class="auto"><b>AUTO (paths only — the anchor table lives in '
           '<code>godot/HARNESS.md</code> §3, generated from '
-          '<code>tasks/harness_data.yaml</code>; verify fresh on any '
+          '<code>godot/harness_data.yaml</code>; verify fresh on any '
           'fluids/world-touching change; inline with <code>--full</code>)</b></div>')
 
     # ---- FILL sections ----

@@ -31,7 +31,7 @@ or *measures* what one specifies; no builder prompt asks it to plan. A builder i
    convention. A task that leaves it wrong is not done. Owner: `godot/AGENTS.md`.
 3. **Never hand-edit generated or build outputs**: `exports/`, `godot/bin/*`, `gdext/bin/`, `.godot/`,
    `tasks/.tasks.lock`, and the `BEGIN/END GENERATED` blocks in `godot/HARNESS.md` — edit
-   `tasks/harness_data.yaml`, then `python3 tasks/scripts/harness_doc.py --render`.
+   `godot/harness_data.yaml`, then `python3 tasks/scripts/harness_doc.py --render`.
 4. **One godot process at a time**, every call prefixed with `HOME=/tmp/dsh_home` in the same bash
    command and using an absolute engine path. Never kill a godot process you did not start. Owner:
    `godot/AGENTS.md`.
