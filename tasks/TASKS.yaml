@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-25T06:12
+  updated_at: 2026-10-25T09:17
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28768,7 +28768,7 @@ intake:
   status: blocked
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-25T06:12
+  updated_at: 2026-10-25T09:17
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28891,7 +28891,42 @@ intake:
     box''s proxy) cannot answer that, and closing on a guess would either retire a real defect or send
     a builder into a bake change on no evidence. RE-MEASURE ON THE CURRENT TREE FIRST: the far-tier bake
     was rebuilt and re-shipped at AC-0469 stage D + AC-0478 (100% chart coverage where there was 16%,
-    23.4% texel difference), which could have removed the line already.'
+    23.4% texel difference), which could have removed the line already.
+
+
+
+    USER AGREED TO CHECK ON WINDOWS (round 105): "Yes — I can check on Windows." So the blocker is answerable;
+    this note records exactly what the check is, so the answer is usable.
+
+    PREREQUISITE — THE BUILD MUST INCLUDE THIS SESSION''S RE-BAKED TEXTURES. AC-0478 regenerated all 12
+    `godot/assets/satellite/satellite_face*.png` from the current bake (23.4% of texels differed from
+    what was shipping). Any Windows build made before that still carries the OLD orbital textures, so
+    a check against it would be answering a question about data the product no longer uses. Build fresh
+    from current HEAD before looking.
+
+    WHAT TO LOOK AT: launch the game, get to an orbital/high-altitude view roughly above the spawn area
+    looking down at the planet disc (the assessment''s frame was a spawn-nadir orbit at the 2600 m-class
+    altitude), and look for a THIN LINE crossing the disc — the filed measurement was a 1-2 px hard discontinuity
+    at rows 357-358 of a 1280x720 frame, a mean luminance step of 68 (a fifth of full range) rather than
+    a gradient.
+
+    WHAT THE ANSWER DECIDES, either way:
+
+    - LINE PRESENT on Windows -> it is a REAL seam, not a renderer artifact. Then the follow-up is a named
+    one: either a shader-only per-face radial offset, or a bake-worker seam-UV nudge that OWES A DELIBERATE
+    GENHASH REBASE (the earlier run recorded both options).
+
+    - LINE ABSENT on Windows -> it is an llvmpipe sub-texel artifact of THIS BOX''s proxy renderer, which
+    means it never affected the product. The ticket then closes as an environmental caveat recorded in
+    OPS.md, with the llvmpipe caveat stated rather than the defect "fixed".
+
+    EITHER WAY THE TICKET GETS A DEFINITE ANSWER instead of an assumption, which is why it was worth blocking
+    rather than guessing.
+
+    STILL TRUE AND STILL FIRST: re-measure on the current Linux tree before or alongside the Windows check,
+    because AC-0469 stage D and AC-0478 rebuilt and re-shipped the bake (100% chart coverage where there
+    had been 16%), and a chart-boundary artifact is exactly what that rebuild could have removed. If the
+    line is gone on Linux too, the Windows answer only confirms it.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
