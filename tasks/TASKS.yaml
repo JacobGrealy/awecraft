@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-24T22:51
+  updated_at: 2026-10-24T22:53
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -31512,7 +31512,7 @@ intake:
   status: open
   labels: []
   created_at: 2026-10-24T22:51
-  updated_at: 2026-10-24T22:51
+  updated_at: 2026-10-24T22:53
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -31558,5 +31558,31 @@ intake:
     `sphere` are missing** — `genhash`, `trees` and `voxelcost` (the three others touched recently) all
     have rows. So this looks like a two-row gap, not a systemic one, but the definitive check is the one
     in task 3: enumerate the dispatcher''s actual mode keys from `harness.gd` and diff them against the
-    YAML, because a name I did not think to test could also be absent.'
+    YAML, because a name I did not think to test could also be absent.
+
+
+    DEFINITIVE-CHECK ATTEMPT (coordinator, round 84) — PARTIAL, AND THE PARTIALITY IS THE FINDING.
+
+    I ran the check the filing note asked for: extract the mode keys from the dispatcher''s `match mode:`
+    block (harness.gd:2166) and diff them against the YAML. Result: that block yields only **17 keys**,
+    and **10 of them are absent from the YAML** — `pausemenu`, `bugreport`, `crash`, `overlays`, `dnlight`,
+    `oceanfill`, `editsnap`, `underwater`, `fluidflow`, `range`.
+
+    WHY I AM NOT CALLING THAT "TEN MISSING ROWS": 17 keys is far too few for the ~80 documented arms and
+    the 149 YAML entries, so **this `match` block is almost certainly a SHOT/SNAPSHOT group rather than
+    the authoritative arm dispatch** — arms are also dispatched through `harness.run(...)` and the battery
+    by env name, in more than one place. So the comparison above is against the WRONG SET, and my earlier
+    "two-row gap" conclusion is likewise not established by it.
+
+    WHAT THIS MEANS FOR THE BUILDER, and it is the genuinely useful output: DO NOT TRUST EITHER LIST.
+    There is no single obvious place where every arm name appears, which is itself worth reporting — the
+    doc pipeline needs one authoritative enumeration of mode names, or the generated tables can silently
+    drift from reality in both directions (rows for arms that no longer exist, and no rows for arms that
+    do). The task is therefore: find how `harness_doc.py` or the docs generation determines the mode list,
+    and make THAT the definition, rather than hand-diffing string literals.
+
+    ALSO WORTH CHECKING (the ten names): `pausemenu`, `bugreport`, `crash`, `overlays`, `dnlight`, `oceanfill`,
+    `editsnap`, `underwater`, `fluidflow`, `range` — some may be legitimate undocumented shot modes, some
+    may be documented under a different name, and some may be dead. Classify them rather than adding ten
+    rows.'
   comments: []
