@@ -17489,7 +17489,21 @@ func _basis_test(spawn: Vector3) -> void:
 	var ok := true
 	var bx := int(WorldGen.SPAWN_X)
 	var bz := int(WorldGen.SPAWN_Z)
-	# 1. bedrock at y=0 in the spawn column (boot sync-gen chunk).
+	# AC-0327: the first read settles on the boot landing BEFORE it asserts —
+	# the arm used to read the spawn column milliseconds after boot, before
+	# chunk (0,0)'s data had landed, and a data-less column reads as 0
+	# (world.gd get_block), so bedrock_y0 was 0 on every run (5/5,
+	# .scratch/AC-0327-gates/basis-r1..r5.log). The settle is the SAME
+	# recenter-then-3x3 idiom step 2 and the closing block already use (the
+	# settled count gate — 9 chunks with data + mesh — never a sleep): the
+	# bare await alone does NOT settle at arm start (the streaming requeues
+	# on the recenter crossing; measured 5/5 timeout at r6..r10), while
+	# recenter-then-await lands the read on the state it asserts (the
+	# generator's y0 = 11, gen.cpp bedrock band).
+	world.recenter(float(bx), float(bz), false)
+	await main._await_core_3x3(spawn, 3000)
+	# 1. bedrock at y=0 in the spawn column (settled above — the AC-0263
+	#    boot sync-gen is gone; the data lands through normal streaming).
 	var bed: int = world.get_block(bx, 0, bz)
 	out["bedrock_y0"] = bed
 	out["bedrock_ok"] = bed == WorldGen.B_BEDROCK

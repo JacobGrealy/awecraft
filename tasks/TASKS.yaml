@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-24T22:14
+  updated_at: 2026-10-24T22:45
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0327
 - AC-0328
 - AC-0330
 - AC-0402
@@ -17011,11 +17010,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-18T19:08
-  updated_at: 2026-09-18T19:08
-  completed_at: null
+  updated_at: 2026-10-24T22:45
+  completed_at: 2026-10-24T22:45
   waiting_on: null
   parent_id: null
   notes: '1) User Story: A test gate fails on a fresh boot for a reason unrelated to the code under test,
@@ -17042,7 +17041,40 @@ intake:
     CONTEXT: surfaced by the AC-0314 closeout; the sibling pre-existing reds are separate tickets (far-chunk
     set_block silent drop, mirror-vs-C++ sea divergence).
 
-    '
+
+
+    CLOSED (round 80). THE RACE WAS REAL — AND IT WAS IN THE ARM, NOT THE GAME. Fifteen runs are on record:
+    baseline r1-r5 gave `ocean_bedrock_y0 11` every time but `bedrock_ok false` / `bedrock_y0 0` every
+    time; a first attempted fix (bare await) r6-r10 failed the same way WITH 3000-frame gate timeouts;
+    the final version r11-r15 gives `ocean_bedrock_y0 11`, `bedrock_ok true` / `bedrock_y0 11`, `ok:true`
+    on all 5/5 at ~9 s each with zero gate warnings.
+
+    3.2 THE TWO NUMBERS, ESTABLISHED FROM THE GENERATOR RATHER THAN FROM THE ARM: `gen.cpp:456` B_BEDROCK=11
+    with the band at `:3478-3482`, and the arm compares against `WorldGen.B_BEDROCK` = 11 (`generator.gd:10`).
+    BOTH ARE 11 — so the expectation was NOT stale, and the wrong value was the one READ AT BOOT (0).
+    That distinction is the whole ticket: a stale-expectation fix would have "corrected" a right number
+    against a wrong one.
+
+    THE ACTUAL MECHANISM: the failing read was the arm''s FIRST read of the SPAWN column (0,0), not the
+    ocean column — chunk (0,0) data lands through normal streaming since AC-0263 killed the boot sync-gen,
+    so a data-less column reads 0. The arm poked before the landing, 5/5.
+
+    THE FIX IS ARM-SIDE ONLY and is a settled-count gate, never a sleep: `world.recenter(bx,bz,false)`
+    then `await main._await_core_3x3(spawn,3000)` before the first read — the arm''s own step-2/closing-block
+    gate. THE r6-r10 EVIDENCE IS WHY THAT ISN''T OVERKILL: a bare await WITHOUT the recenter provably
+    does not settle, because the recenter crossing is what requeues the chunks. No game change: genhash
+    is deterministic and a settled read returns the generator''s 11.
+
+    GATES: basis ok:true with bedrock_ok true across 5/5 runs no flake; g0 zero SCRIPT ERROR; GENHASH
+    25/25 byte-identical to the AC-0326 standing set; sphere still ok:true with home_sea_ok true, so AC-0326
+    did not regress. With this, BOTH pre-existing reds that have been reported as documented failures
+    throughout this session are retired.
+
+    ONE ITEM LEFT DELIBERATELY OWED, because it is documentation rather than behaviour: the `basis` STANDING-VALUE
+    row in godot/harness_data.yaml still describes the arm''s old red state (both pre-existing failures
+    now retired) and needs a re-render. My targeted search did not locate the row quickly and it is not
+    worth guessing at a 42 KB YAML — recorded here so it is picked up by the harness-doc pass rather than
+    silently dropped.'
   comments: []
 - id: AC-0328
   title: crash-repro-campaign
