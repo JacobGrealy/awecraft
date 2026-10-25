@@ -1,0 +1,46 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0330 battery ok-status debt</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0330 — make every battery mode usable as a pass/fail gate</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Per-arm, with evidence.</b> The ticket's rule is explicit: do not flip <code>ok</code> to true, do not delete arms, and do not decide the group as a block.</p>
+<h2>1. The debt, as filed</h2>
+<p>Seven of the 31 battery modes cannot be used as pass/fail gates, and that has been true for a long time. The battery compare script only diffs VALUES, so nobody notices status.</p>
+<ul>
+<li><b>Three report <code>ok:false</code> in the BASELINE ITSELF</b> and still do: <code>craft</code>, <code>water</code>, <code>trees</code>.</li>
+<li><b>Four emit NO <code>ok</code> key at all</b>, so pass/fail is undeclared: <code>atlas</code>, <code>buckets</code>, <code>player</code>, <code>interact</code>.</li>
+</ul>
+<h2>2. Facts that have MOVED since this was filed — verify, do not assume the filing</h2>
+<ul>
+<li><b><code>player</code></b> has been reporting <code>ok</code> in this session's runs (<code>sprint_ok true</code>, rc=0), and <b><code>interact</code></b> reports <code>place_ok</code> — so the "no <code>ok</code> key" claim may be stale for one or both. <b>Establish what each emits TODAY</b> before deciding anything.</li>
+<li><b><code>water</code></b> was identified at AC-0326 as a <b>third victim of the same dead sea parity</b> (its ±60-cell mirror-ocean scan finds no live water) — so its <code>ok:false</code> likely belongs to outcome (a) with a known cause, not (b).</li>
+<li><b><code>craft</code></b> was measured byte-equal at AC-0316 and <b><code>trees</code></b>' <code>ok:false</code> is documented as <b>stale Aug-19 fixtures</b> (AC-0320 noted <code>genhash_fail 2,2</code>). Both look like (a) with named causes — but confirm per arm.</li>
+<li><b><code>basis</code> and <code>sphere</code> are not in this list only because they are not battery modes</b> — both became green this session (AC-0326/AC-0327), which is the same class of debt being retired elsewhere.</li>
+</ul>
+<h2>3. What to do, per arm</h2>
+<ol>
+<li><b>3.1 Run each of the seven and record what it ACTUALLY emits today</b> (<code>ok</code> present/absent, its value, and the arm's own sub-flags). Report a table — one row per arm, before any edit.</li>
+<li><b>3.2 Classify each one with evidence</b>, not as a group: (a) stale expectation or broken scenario setup → fix so it asserts again, using the arm's own RESULT values and the standing values in <code>HARNESS.md</code> §3 as the reference; or (b) value-reporting by design → <b>say so explicitly in its <code>HARNESS.md</code> §1 row</b>, making <code>ok</code>-less a declared contract rather than an oversight.</li>
+<li><b>3.3 Fix only what 3.2 justifies.</b> For (a), the fix may be in the arm's expectation, its setup, or a product defect the arm correctly caught — <b>if it is a product defect, stop and report it rather than adjusting the arm to match broken behaviour.</b></li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the seven arms: <code>craft</code>, <code>water</code>, <code>trees</code>, <code>atlas</code>, <code>buckets</code>, <code>player</code>, <code>interact</code> — their RESULT construction and any <code>ok</code> assignment</td><td>Edit: only what 3.2 justifies, per arm.</td></tr>
+<tr><td>godot/harness_data.yaml</td><td>the §1 rows for those seven (the declared contract)</td><td>Edit for (b) outcomes; add rows where missing (see AC-0476 — <code>basis</code>/<code>sphere</code> are absent entirely).</td></tr>
+<tr><td>godot/HARNESS.md</td><td>the GENERATED tables</td><td>Re-render only (<code>harness_doc.py --render</code>); never hand-edit.</td></tr>
+<tr><td>tasks/AC-0330/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the battery compare script's value-only behaviour (that is why this debt was invisible — <b>note it as a follow-up rather than changing it here</b>), generation, streaming, light, the data JSON files.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>Every mode is classifiable (the point)</td><td>A <b>table of all seven arms</b> with: what it emitted before, its classification (a) or (b), what changed, and what it emits after. <b>No arm left unexplained</b> — that is the actual deliverable, not a green run.</td></tr>
+<tr><td>No value regressions</td><td>The battery's other arms unchanged mode-for-mode; <code>python3 tasks/scripts/gate_run.py AC-0330 --arms g0,genhash,player,craft</code> — g0 zero SCRIPT ERROR, genhash 25/25.</td></tr>
+<tr><td>The doc agrees with the code</td><td><code>harness_doc.py --render</code> then <code>--check</code> clean; <code>test_tasks.py</code> passes.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Load-arm runs need a 1500 s budget.</p>
+<h2>6. Acceptance</h2><p>A per-arm table with evidence, each of the seven classified and either fixed or declared, no value regressions, and the generated doc in sync.</p>
+<h2>7. Risks</h2><p>(1) Flipping <code>ok</code> to true — forbidden and it would fake the gate. (2) Adjusting an arm's expectation to match genuinely broken product behaviour — that converts a real defect into permanent silence. (3) Treating the seven as one problem; the ticket says per-arm and that is the point.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. Do not delete arms, do not change the battery compare script.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0326/AC-0327 retired two long-standing red arms (<code>sphere</code>, <code>basis</code>); AC-0320 found <code>trees</code>' red is stale fixtures; AC-0316 measured <code>craft</code> byte-equal. The same class of debt lands here, in the battery.</p>
+</body></html>
