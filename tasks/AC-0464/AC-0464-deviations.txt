@@ -1,0 +1,68 @@
+AC-0464 deviations (verify-first ticket — no code changed; the point is the measurement)
+
+1. THE AIM'S FLAT POSITION IS UNCHANGED AND STILL AT THE BOUNDARY (plan 3.1).
+   face_width(4000) = 6283.1853 m, hw = 3141.5927 m. Aim x=3133, z=0 sits on face 0,
+   8.59 m inside the +hw boundary — the same gap as at filing. The grid went to 1 m
+   cells (AC-0469/AC-0471: cell = 1.000 m) and chunks to 16 m (aim in col 195
+   [3120,3136); the boundary falls in col 196 [3136,3152)), but the flat chart did
+   not move: AC-0467's canonical placement moves the planet frame, not the flat
+   coordinates (player_anchor, world.gd:15981, returns the identity basis on the
+   home pair). yaw 0 = local -Z at that anchor, i.e. looking ALONG the x=+hw edge,
+   8.59 m from it, pitch -0.4 rad. VERDICT: the recorded aim is still a boundary view;
+   no new aim was needed.
+
+2. THE AIM'S HEIGHT IS BELOW THE CURRENT SURFACE — AND WAS ALREADY AT FILING.
+   BCELL read (existing hook, harness.gd:274, headless): the current terrain height
+   at (3133,0) is h=153 (desert; h=154 at (3141,0) right at the boundary, h=152 just
+   past it at (3145,0)). The aim eye is y=60, i.e. ~93 m below the surface. The filed
+   capture (2026-10-20) has the IDENTICAL frame composition (same sky/background,
+   same block silhouette in the same lower-right position), so the filed view was
+   looking at the boundary region from the same below-surface vantage — the recorded
+   aim was kept verbatim precisely because it reproduces the filed view, which is
+   what 3.1 guards against. (If the aim had silently stopped looking at the defect,
+   the frames would not match.)
+
+3. THE FLAG STILL EXISTS — THE SAME PAIR WAS RENDERED.
+   AWECRAFT_WARP still exists (chunk.gd:1740, default on, off-switch =0). Both
+   states rendered with the recorded recipe (AWECRAFT_AIM="3133,60,0,0,-0.4"
+   AWECRAFT_NOCLIP=1 AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_SIZE=1280,720
+   AWECRAFT_SNAP_DRAIN=300, Forward+ llvmpipe per HARNESS.md §4). The pair agrees:
+   full-frame mean abs channel-sum diff 0.00, zero pixels > 30 apart.
+
+4. MEASUREMENT — THE DEFECT IS GONE (plan 3.3).
+   The filed black block (lower right, frame x[~800..1100] y[~460..720]):
+   - filed capture: mean (45,53,55) over 672 samples, 79% of samples darker than 40,
+     corners (25,26,27)/(21,22,23)/(19,20,20) — the "pure black and unlit" block.
+   - rerun flag-off (WARP=0): the SAME block region is LIT gray stone — mean
+     (149,155,157), 0 samples darker than 40, corners (153,153,154)/(143,144,144)/
+     (137,137,137), visible stone texture.
+   - rerun flag-on (WARP=1): identical to flag-off.
+   - No other dark region in either rerun frame (whole-frame census: 0 samples
+     mean<8; 5 samples mean<24, all at the crosshair).
+   The black region did not move or shrink — the same geometry at the same frame
+   position is now lit. Logs: .scratch/AC-0464-gates/block-pixels.txt,
+   analyze-flagoff.txt, analyze-flagon.txt, bcell-r1.log.
+
+5. WHICH CHANGE MOST PLAUSIBLY REMOVED IT: AC-0463 L6.
+   The block sits at the +hw edge — the face side of the boundary, i.e. face-lane
+   territory (x beyond +hw; the home lane was always payload-fed and lit — AC-0463 L1:
+   "the face mesh light is ALWAYS the own-column pull (empty strips, chunk.gd:
+   1996-1998)" because the face build discarded the star payload). A boundary chunk
+   pulling light from an empty own-column is EXACTLY the filed symptom ("built with
+   no light payload / the fallback material"). L6 made all four face build sites
+   consume the star payload (window + 8 neighbour strips) instead — the documented
+   zero-light path for face chunks is gone. AC-0469 stage E (face generation on the
+   worker queue, landing through _face_land: data, light seed, mesh, collision,
+   occluder) is the plausible alternative (a chunk that used to land half-lit may now
+   land whole), but the mechanism the defect matches is L6's.
+
+6. TIMING NOTE.
+   The plan estimated ~1200 s per render; each render completed in ~4-5 min wall
+   (R=4 band = 81 chunks of 16 m 1-m cells builds far faster than the 98 m chunks at
+   filing; the satellite baked from the res cache in 5.7 s). Both renders are the
+   Forward+ llvmpipe boot line (HARNESS.md §4 requirement) and carry zero SCRIPT
+   ERROR / SHADER ERROR lines.
+
+7. NO CODE CHANGES. harness.gd, world.gd and everything else untouched (plan 3.3:
+   do not fix what is not broken; do not close as done when no work was done — this
+   ticket closes as CANCELLED on the measured numbers, not as done).

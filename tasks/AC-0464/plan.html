@@ -1,0 +1,46 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0464 verify the unlit boundary chunk</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0464 — does the boundary chunk still render unlit black?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Reproduce first; fix nothing that is already gone.</b> This ticket's coordinates predate both the warp and the 1 m grid, and two changes since could each have removed it.</p>
+<h2>1. The defect as filed (2026-10-20)</h2>
+<p>Standing near the edge of the spawn face looking along the boundary, a large block of the world rendered <b>pure black and unlit</b> — a hole or missing chunk that was actually geometry. Reproduced with these settings (kept for fidelity, but <b>treat the aim as suspect</b>, see §2):</p>
+<pre>xvfbn -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  AWECRAFT_SNAPSHOT=&lt;abs&gt;.png AWECRAFT_AIM="3133,60,0,0,-0.4" AWECRAFT_NOCLIP=1 \
+  AWECRAFT_RADIUS=4 AWECRAFT_TIME=0.5 AWECRAFT_SIZE=1280,720 AWECRAFT_SNAP_DRAIN=300 \
+  ~/tools/godot/godot --path godot --rendering-driver vulkan</pre>
+<p><code>AWECRAFT_AIM</code> takes FLAT coordinates; x=3133 was just inside the home/face boundary (hw = 3141.59 at R=4000), z=0. Two captures exist in <code>tasks/AC-0464/captures/</code> — flag off and flag on — <b>visually identical apart from noise</b>, so warp was ruled out at filing time.</p>
+<h2>2. Why this must be re-measured rather than assumed</h2>
+<ul>
+<li><b>The recorded aim may no longer be a boundary view.</b> hw is unchanged, but the grid went to 1 m cubic cells (AC-0469/AC-0471), the home pair moved to the CANONICAL CHART PLACEMENT (AC-0467), and chunks are now 16 m of 1 m cells. x=3133 is still ~8 m inside hw, so it is plausibly still a boundary view — <b>verify that arithmetically before rendering</b>, and if the geometry moved, choose a new aim that IS a boundary view and say so.</li>
+<li><b>AC-0463 L6 CHANGED HOW FACE CHUNKS ARE LIT</b>: the face build now consumes the star payload (window + 8 neighbour strips) instead of an own-column pull, at all four build sites. An unlit black chunk on the face side of the boundary is exactly the symptom that change could have removed.</li>
+<li><b>AC-0469 stage E</b> moved face chunk GENERATION onto the worker queue and its LANDING to <code>_face_land</code> (data, light seed, mesh, collision, occluder) — so a chunk that used to land half-lit may now land whole.</li>
+</ul>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3.1 Confirm the aim is still a boundary view</b> arithmetically (flat x vs hw, at the 1 m grid) and state it. Fix the aim if not.</li>
+<li><b>3.2 Render it</b> at the same settings and with the <b>same window/flag pair</b> if a flag still exists (if it does not, say so). Read the frame for a large black unlit region: report the <b>pixel values</b> of any suspicious region and where it sits in the frame.</li>
+<li><b>3.3 If it is GONE</b>: <b>cancel this ticket with those numbers</b> — do not fix what is not broken, do not close it as done. Say which of the two changes most plausibly removed it and why.</li>
+<li><b>3.4 If it is STILL THERE</b>: localise it before touching anything — is the black region <b>geometry with zero light</b> (read the light values at those blocks via an existing arm or the debug API) or <b>missing geometry</b> (a hole)? Those are different bugs. Then report and fix only the named one.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the shot hooks (<code>AWECRAFT_AIM</code>, <code>AWECRAFT_NOCLIP</code>, <code>AWECRAFT_RADIUS</code>, <code>AWECRAFT_TIME</code>) — verify each still exists</td><td>READ ONLY.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_face_land</code> (the unified landing AC-0469 E introduced) and the face light seed</td><td>Read first; edit only if 3.4 names a landing gap.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td><code>home_point</code>/<code>face_width</code> for the hw arithmetic in 3.1</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0464/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light ownership (AC-0463 just unified it), the far tier, the sampler, the data JSON files.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The status is measured (the point)</td><td>Whether a large black unlit region exists, with <b>pixel values and its frame position</b> reported, plus the aim arithmetic showing the view really is at the boundary. Either "gone, and here is what replaced it" or "present, and here is whether it is unlit geometry or a hole".</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0464 --arms g0,genhash,lightstate</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, lightstate invariants (leaks 0, wash false).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, ~1200 s each, SERIAL.</p>
+<h2>6. Acceptance</h2><p>The boundary view confirmed arithmetically, the frame measured with pixel values, and either a cancellation backed by those numbers or a localisation of the black region to unlit-geometry vs hole.</p>
+<h2>7. Risks</h2><p>(1) Rendering from a stale aim and concluding the defect is gone because the camera no longer looks at it — 3.1 exists for that. (2) "Looks fine" without pixel values. (3) Fixing a lighting symptom before deciding whether the geometry is even there.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. Do not touch light ownership or streaming.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0463 L6 (face build consumes the payload) and AC-0469 stage E (face generation on the queue, landing through <code>_face_land</code>) both postdate this defect and could each have removed it. Flagged verify-first in round 73 and not yet measured.</p>
+</body></html>

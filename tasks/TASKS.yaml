@@ -1,10 +1,13 @@
 meta:
-  updated_at: 2026-10-25T09:17
+  updated_at: 2026-10-25T09:57
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0464
+- AC-0479
+- AC-0480
+- AC-0481
+- AC-0438
 - AC-0475
 - AC-0476
 intake:
@@ -28343,11 +28346,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: in-progress
+  status: done
   labels: []
   created_at: 2026-10-15T09:54
-  updated_at: 2026-10-20T09:24
-  completed_at: null
+  updated_at: 2026-10-25T09:56
+  completed_at: 2026-10-25T09:55
   waiting_on: null
   parent_id: null
   notes: "1) User Story: The world is one planet and it should behave like one. Today one cube face -\
@@ -28457,7 +28460,17 @@ intake:
     \ vertices) -> AC-0459 (canonical chunk keys + save bump/reject) -> AC-0460 (single streaming lane)\
     \ -> AC-0461 (collision consumes warped vertices) -> AC-0462 (mob/player consumers) -> AC-0463 (remove\
     \ the legacy split and prove it end to end). AC-0433 leaves the queue while those six run and closes\
-    \ when they land."
+    \ when they land.\n\n\nCLOSED (round 106) — THE UMBRELLA IS RETIRED BECAUSE ITS OWN EXIT CONDITION\
+    \ IS MET. Its notes say it leaves the queue while six children run and closes when they land: AC-0458/AC-0459\
+    \ (chunk keys + save bump), AC-0460 (single streaming lane), AC-0461 (collision consumes warped vertices),\
+    \ AC-0462 (mob/player consumers), AC-0463 (the legacy split removed and proved end to end). ALL SIX\
+    \ LANDED, and the wider migration closed with them: one 1 m cubic grid (all twelve faces 1.000029\
+    \ x 1.000189 m), one placement, key shape, node path, landing, queue, drain, travel gate, window,\
+    \ residency model and light path, with the far tier at 100% chart coverage after AC-0469 stage D.\n\
+    THE STATUS WAS SIMPLY NEVER UPDATED after the last child landed — which is why the user had to ask\
+    \ why it still read in-progress. A stale in-progress on an umbrella is the same class of defect as\
+    \ a lying comment: it misreports the state of the work, and it is worth recording that it took a human\
+    \ question to surface it rather than any gate."
   comments: []
 - id: AC-0434
   title: seam-blocks-stretched-into-each-other
@@ -28765,10 +28778,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: blocked
+  status: open
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-25T09:17
+  updated_at: 2026-10-25T09:57
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28926,7 +28939,24 @@ intake:
     STILL TRUE AND STILL FIRST: re-measure on the current Linux tree before or alongside the Windows check,
     because AC-0469 stage D and AC-0478 rebuilt and re-shipped the bake (100% chart coverage where there
     had been 16%), and a chart-boundary artifact is exactly what that rebuild could have removed. If the
-    line is gone on Linux too, the Windows answer only confirms it.'
+    line is gone on Linux too, the Windows answer only confirms it.
+
+
+
+    CONFIRMED REAL BY THE USER ON 2026-10-24 (round 106): "And yes there is a seam in the satellite lod"
+    — with a high-altitude capture showing a thin dark line running from the limb down the middle of the
+    disc. So the earlier journal''s deciding question ("is the artifact renderer-specific?") is answered:
+    the line is present in the product the user runs, so it is a REAL SEAM and not an llvmpipe sub-texel
+    artifact of this dev box. The blocker is RESOLVED; the two named fix options from the diagnosis are
+    back in play: a shader-only per-face radial offset, or a bake-worker seam-UV nudge that OWES A DELIBERATE
+    GENHASH REBASE.
+
+    ALSO NOTE FROM THE SAME USER REPORT, because it may be the same defect seen at a different scale:
+    the user separately reported seams in the HIGH-LOD terrain at the sim-distance boundary (filed as
+    AC-0480) and straight seams through the CLOUDS AND SKY (AC-0481). Three seams in three tiers reported
+    in one message is worth checking for a COMMON cause before fixing any one of them — a shared tiling/wrap/projection
+    convention would produce all three, and fixing them separately would be three times the work for the
+    same bug.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
@@ -30895,11 +30925,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-10-20T12:15
-  updated_at: 2026-10-24T12:18
-  completed_at: null
+  updated_at: 2026-10-25T09:56
+  completed_at: 2026-10-25T09:56
   waiting_on: null
   parent_id: null
   notes: "1) User Story: Standing near the edge of the spawn face and looking along the boundary, a large\
@@ -30939,7 +30969,26 @@ intake:
     \ ticket with the measurement that shows it gone — do not \"fix\" something that is already fixed,\
     \ and do not close it as done when no work was done. If it still reproduces, update the ticket with\
     \ the current reproduction (the coordinates and commands in the text may be stale: they were written\
-    \ for the pre-1 m grid and pre-warp tree) and plan from that."
+    \ for the pre-1 m grid and pre-warp tree) and plan from that.\n\nCANCELLED WITH EVIDENCE (round 106)\
+    \ — THE DEFECT IS GONE, and the ticket's own rule was \"cancel this ticket with the measurement that\
+    \ shows it gone — do not 'fix' something that is already fixed, and do not close it as done when no\
+    \ work was done.\" So: not done, CANCELLED, and here is the measurement.\nTHE AIM IS STILL A BOUNDARY\
+    \ VIEW, checked arithmetically rather than assumed: face_width(4000) = 6283.19 m, hw = 3141.59 m,\
+    \ so x=3133,z=0 lies 8.59 m inside the +hw boundary with yaw 0 looking along that edge — the 1 m cell\
+    \ change and the canonical placement moved the planet frame, not the flat chart. One honest caveat\
+    \ recorded by the builder: the eye at y=60 is now ~93 m BELOW the surface (BCELL h=153 at that aim),\
+    \ but the filed capture has the same frame, so it is the same below-surface vantage the defect was\
+    \ recorded from — no new aim invented.\nTHE MEASUREMENT: the filed black block (lower right, frame\
+    \ x 800-1100, y 460-720) read a mean of **(45,53,55)** with **79% dark pixels** and corners near **(20,21,21)**.\
+    \ On the current tree the same region reads **lit grey stone, mean (149,155,157), ZERO dark pixels**,\
+    \ corners (153,153,154)/(143,144,144)/(137,137,137), and there is no other dark region in the frame.\
+    \ The warp flag pair (the flag still exists) is identical with a 0.00 frame diff.\nMOST PLAUSIBLE\
+    \ REMOVER: **AC-0463 L6**, which made all four face build sites consume the star payload — before\
+    \ it, face builds discarded the payload and pulled from an EMPTY OWN-COLUMN, which is exactly the\
+    \ documented zero-light path for boundary face chunks (AC-0463 L1). AC-0469 stage E is the alternative:\
+    \ face chunks now land whole through `_face_land` instead of half-built.\nGATES on the untouched tree:\
+    \ g0 zero script and zero shader errors, genhash 25/25 byte-identical, lightstate leaks 0/20 with\
+    \ wash false. No code was touched."
   comments: []
 - id: AC-0465
   title: single chunk-key producer (no format change)
@@ -32118,4 +32167,183 @@ intake:
     bake change ships stale by default unless someone remembers to re-run the ship path. Recorded on the
     ticket as a follow-up observation: regeneration should be a stated RELEASE STEP in OPS.md §4, or the
     next bake change will ship stale exactly as this one did.'
+  comments: []
+- id: AC-0479
+  title: block selection box is offset from the block and the player slides along its angle
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-25T09:55
+  updated_at: 2026-10-25T09:55
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    When I point at a block, the selection box should sit exactly on that block, and walking should go
+    where I aim. Right now the box is offset from the block, and I slide in the direction the box is angled.
+
+
+    ## 2) Technical Details
+
+    REPORTED BY THE USER 2026-10-24 WITH A SCREENSHOT AND VIVID. Two symptoms, likely one cause:
+
+    (a) THE SELECTION BOX DOES NOT MATCH THE BLOCKS 1 TO 1. In the capture the wireframe box is visibly
+    displaced from the terrain it should be outlining - it sits in front of and to the side of the block,
+    at an angle, with its edges crossing block boundaries rather than following them.
+
+    (b) THE PLAYER SLIDES IN THE DIRECTION THE SELECTION BOX IS ANGLED. This is the serious half: the
+    player''s movement is being deflected along the box''s orientation, which means the box''s transform
+    is not a display-only value - something is either reading it, or the same wrong transform feeds both.
+
+    WHY THIS IS PRIORITY 1 AND NOT COSMETIC: the selection box is the player''s only direct feedback about
+    what they are about to break or place, and a movement drift tied to its angle is a gameplay defect,
+    not a rendering one. It also breaks the AC-0094 line of work (the held-wood drop and the interaction
+    path) because anything keyed to the aimed block is aiming at the wrong place.
+
+    LIKELY AREAS, to be established not assumed (the 1 m cubic grid and the canonical chart placement
+    landed recently, AC-0469/AC-0471/AC-0467, and any one of them could have desynced a per-face or per-chart
+    transform): the selection box''s placement code and what transform it uses; whether it is placed in
+    the same space as the mesh (the warp, AC-0458-0462, made the vertex stream warped - a box placed from
+    UNWARPED coordinates would be offset exactly like this); and whether the movement path consumes that
+    same transform. The warp is the strongest hypothesis because it changed the space the geometry lives
+    in while a box built from logical block coordinates would not follow it.
+
+    THE TEST THAT DECIDES IT: put the player somewhere the warp is a KNOWN non-identity offset (the warp
+    is a function of position; near the spawn/limit it is smallest and away from it largest) and check
+    whether the box''s error GROWS with the warp magnitude. If it does, the box is unwarped in a warped
+    world - a one-line class of fix. If the error is constant, it is a plain coordinate/rounding bug instead.
+
+    ALSO CHECK: whether the box is offset by HALF A BLOCK, by a whole CELL, or by a warp-scale amount
+    - the three point at different code, and the capture alone cannot distinguish them.
+
+    FILES: the selection/highlight code (grep for the wireframe/box draw in godot/player/ and godot/scenes/),
+    the interaction aim path (player.gd), and whatever transform the warp exposes. Refs: AC-0469/AC-0471
+    (1 m cubic grid), AC-0458-0462 (the warp), AC-0094 (the interaction path that depends on aim being
+    right).
+
+    '
+  comments: []
+- id: AC-0480
+  title: high-LOD terrain does not match the sim distance at the tier boundary
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-25T09:55
+  updated_at: 2026-10-25T09:55
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    The far terrain and the near terrain should look like the SAME world. Right now there are visible
+    seams in the high-LOD terrain outside the simulation distance - the distant version does not match
+    what the near version would show.
+
+
+    ## 2) Technical Details
+
+    REPORTED BY THE USER 2026-10-24, asking the right question directly: "there are seams in the high
+    LOD terrain outside of the sim distance, why, shouldn''t high and sim look exactly the same?"
+
+    THE USER''S EXPECTATION IS THE SPEC: the high LOD tier is meant to be the same world at lower detail,
+    so any visible boundary between the simulated near field and the high-LOD far field is a defect by
+    definition. Where the two meet, geometry, lighting and texture must agree; what changes with distance
+    is DETAIL, not content.
+
+    WHAT TO ESTABLISH FIRST, in this order:
+
+    1. WHAT IS ACTUALLY AT THE BOUNDARY. Is the seam (a) a GEOMETRY discontinuity - different heights
+    or a gap between the near mesh and the far mesh; (b) a LIGHTING discontinuity - one side lit, the
+    other not, or different ambient; (c) a TEXTURE/COLOUR discontinuity - different palettes or a filtering
+    seam between the near blocks and the far tier''s averaged texture; or (d) an overlap/z-fight? Those
+    are four different bugs and the capture alone cannot distinguish them. Measure pixel values across
+    the boundary.
+
+    2. WHERE THE TIERS MEET AND HOW THEY ARE SUPPOSED TO AGREE. The residency sweep and the window decide
+    near vs far (AC-0469 stage A/B); the far tier is charted and baked (AC-0469 stage D, re-shipped AC-0478);
+    the handover rule says the near field draws until the body actually covers it (AC-0451). The seam
+    is where two of those disagree about the same ground.
+
+    3. WHETHER IT IS SEASONAL WITH THE 1 m GRID MIGRATION. The grid became 1 m cubic cells and the far
+    tier was rebuilt twice since (AC-0469 D, AC-0478). A seam introduced by either would be new; a seam
+    that predates them is a standing mismatch. Check whether the far tier''s averaged colour/height for
+    a cell is computed from the SAME data the near mesh builds from.
+
+    MEASURE, DO NOT EYEBALL: sample a line of pixels across the boundary and report the step size and
+    its character (hard edge vs gradient), the same way AC-0438 and AC-0402 were measured. A hard 1-pixel
+    step is a geometry/overlap bug; a soft ~10-unit gradient over several pixels is a colour/averaging
+    mismatch.
+
+    FILES: the far tier''s chart/bake and its shading (AC-0443/0444/0446/AC-0469 D), the residency window
+    and handover (AC-0451, AC-0469 stage A/B), the near chunk mesh builder. Refs: AC-0438 (the same measurement
+    discipline for a seam), AC-0478 (the far tier''s current textures).
+
+    '
+  comments: []
+- id: AC-0481
+  title: clouds look bad and straight seams run through clouds and sky
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-25T09:55
+  updated_at: 2026-10-25T09:55
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    The clouds should look like weather and the sky should be one continuous space. Right now the clouds
+    look bad and there are seams running through them and through the sky.
+
+
+    ## 2) Technical Details
+
+    REPORTED BY THE USER 2026-10-24 with two screenshots: "clouds look bad now, and there are like seams
+    running through the clouds/sky." In one capture a faint but clear STRAIGHT VERTICAL LINE runs from
+    the top of the frame down through the cloud layer and the sky, well above the horizon; the clouds
+    themselves read as thin smeared streaks rather than volumes.
+
+    TWO SEPARATE COMPLAINTS THAT MIGHT SHARE A CAUSE:
+
+    (a) THE SEAMS are straight, thin and run through the SKY as well as the clouds - which points at something
+    TILED or COORDINATE-BASED rather than at the volumetric marcher''s noise: a tile boundary in a sky
+    or cloud texture, a projected grid edge, or a UV wrap. A cloud-volume artifact would be soft and blobby;
+    a straight line through empty sky is almost certainly a tiling/wrap/quad edge.
+
+    (b) THE CLOUDS LOOK BAD "now" - the word NOW matters: AC-0405 introduced the raymarched volume, AC-0406
+    added the ambient fill and multiscatter (calibrated against the single-source air colour after a 0.7
+    ambient weight was rejected for flattening the spread), AC-0407 added the skyline and made being inside
+    a cloud fill the view, and AC-0412 changed the far tier sampler. So something in that sequence may
+    have cost the clouds their form. The AC-0406 notes explicitly record that a too-high ambient weight
+    FLATTENED the cloud spread - so a regression here is a real possibility and the first thing to check
+    is whether the current ambient/multiscatter weights are the calibrated ones or drifted.
+
+    ESTABLISH FIRST: (1) is the vertical seam present in the SKY ALONE with the clouds switched off? That
+    single test separates (a) from (b) and costs one render. (2) Is the seam at a fixed screen position
+    or a fixed WORLD direction? A fixed world direction means tiling; a fixed screen position means a
+    fullscreen post/quad edge. (3) Are the clouds'' shapes the calibrated AC-0406 ones - measure the spread/saturation
+    the way AC-0406 did rather than judging by eye.
+
+    MEASURE: pixel values along and across the seam; the cloud field''s spread statistic that AC-0406
+    used to reject the 0.7 ambient weight.
+
+    FILES: godot/core/cloud_layer.gdshader (the volume, the ambient and multiscatter terms), godot/core/aero_sky_gradient.gdshader
+    (the sky, and AC-0402''s u_sky_alt stretched window), and whatever binds the sky/cloud textures. Refs:
+    AC-0405/0406/0407 (the cloud volume''s history), AC-0412 (the far-tier sampler), AC-0402 (the sky''s
+    altitude window).
+
+    '
   comments: []
