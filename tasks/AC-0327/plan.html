@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0327 prove the bedrock race</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0327 — is the bedrock read a race, or is the expectation stale?</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Prove which one it is before changing anything</b> — the ticket's own first step, and the two answers lead to completely different fixes.</p>
+<h2>1. The red, as recorded</h2>
+<p><code>basis</code> reports <code>bedrock_ok false</code> with <code>ocean_bedrock_y0 11</code> (also <code>surface_eff</code>/<code>surface_sky</code> 15, <code>spawn_top_y</code> 136 — the pad-era build, so AC-0314's bisect is honest). The recorded diagnosis is a <b>boot-burst READ RACE dating to AC-0263</b>: the arm reads the bedrock column before the startup burst has finished writing it. Pre-existing, not an AC-0314 regression.</p>
+<h2>2. Two facts that make this worth re-proving on the CURRENT tree</h2>
+<ul>
+<li><b>The picker moved at AC-0326 (last round).</b> The <code>basis</code> sea/bedrock picker no longer scans the GDScript mirror — it now scans the generator's own analytic H over ±8 chunks and selects a different cell (cell 5 at [8,73]). <b>So the column being read for bedrock is not the same column the original race was diagnosed on.</b> Any conclusion from the old log must be re-established.</li>
+<li><b><code>ocean_bedrock_y0 11</code> may simply be CORRECT.</b> AC-0326's own dump shows block id <b>11 = bedrock</b> at y0 in the C++ column (with stone 3 above it). If the arm expects 0 (or a different id) at y0, then there is no race at all and the expectation is wrong — which is the second outcome the ticket explicitly anticipates ("if it is always 11, the expectation itself is stale and the fix is to correct the arm's expected value with evidence").</li>
+</ul>
+<h2>3. What to do, in the ticket's own order</h2>
+<ol>
+<li><b>3.1 PROVE THE RACE (or disprove it)</b>: run the arm <b>N ≥ 5 times</b> on the current tree and record <code>ocean_bedrock_y0</code> (and <code>bedrock_ok</code>) for every run. <b>Always 11 → no race, stale expectation. Sometimes 0 / sometimes 11 → race confirmed.</b> Report the full per-run values, not a summary.</li>
+<li><b>3.2 ESTABLISH WHAT THE CORRECT VALUE IS</b>, from the generator rather than from the arm: what block id does the C++ lane put at y=0 for that column, and what does the arm compare against? <b>Name both numbers and say which one is wrong.</b></li>
+<li><b>3.3 FIX THE RIGHT THING</b>: if the expectation is stale, correct it with that evidence. If it is a genuine race, <b>make the arm WAIT for the state it asserts — a settled/count gate, never a sleep</b> — or, if the race is real in the GAME rather than only in the arm, fix the write ordering and <b>say which of those the evidence supports</b>.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the <code>basis</code> arm: its bedrock assertion, its picker (as changed by AC-0326), and any settle/wait gate it already uses elsewhere</td><td>Edit: the expectation or the wait gate.</td></tr>
+<tr><td>gdext/src/gen.cpp</td><td>the bedrock rule (what is written at y0)</td><td>READ ONLY — the reference.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the startup burst / write ordering the race is attributed to (AC-0263)</td><td>Read first; edit only if 3.3 concludes the GAME races.</td></tr>
+<tr><td>tasks/AC-0327/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation behaviour, streaming, light, the data JSON files, the <code>sphere</code> arm, or any other arm's expectations.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>Determinism proven (the point)</td><td><code>basis</code> <b>ok:true</b> with <code>bedrock_ok true</code>, <b>run ≥5 times with no flake</b>, with the per-run values reported. A fix that passes once has proven nothing about a race.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0327 --arms g0,genhash,sphere</code> — g0 zero SCRIPT ERROR; <b>genhash 25/25</b>; <code>sphere</code> still <code>ok:true</code> with <code>home_sea_ok true</code> (AC-0326 must not regress).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path.</p>
+<h2>6. Acceptance</h2><p>The N≥5 per-run values on the record, the correct y0 value established from the generator, the right one of the two fixes applied, and <code>basis</code> green across ≥5 runs with <code>sphere</code> and genhash intact.</p>
+<h2>7. Risks</h2><p>(1) "Fixing" a race with a sleep — the ticket forbids it and it converts a flake into a slower flake. (2) Correcting the expected value without establishing it from the generator, which would make the arm agree with itself. (3) Reading the old AC-0314 log as current evidence when AC-0326 moved the picker.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4. Do not touch gen.cpp.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0326 retired the dead sea parity and moved the <code>basis</code> picker; <code>basis</code> still reports ok:false for this bedrock assertion. This closes the second half of that red.</p>
+</body></html>

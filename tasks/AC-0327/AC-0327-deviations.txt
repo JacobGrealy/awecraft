@@ -1,0 +1,44 @@
+1) The plan §2 premise "ocean_bedrock_y0 11 may simply be correct — if the arm
+   expects 0 (or a different id) at y0 then there is no race at all" does not
+   hold on the current tree: the arm compares against WorldGen.B_BEDROCK = 11
+   (godot/world/generator.gd:10) and the generator writes B_BEDROCK = 11 at
+   y=0 for every generated column (gdext/src/gen.cpp:456 B_BEDROCK=11;
+   :486 BEDROCK_BAND=5; :3478-3482 the band writes 11 at y 0..4; the
+   fill/far-emit mirrors write 11 too — mesh.cpp:3097, :4049). Both numbers
+   are 11, so the expectation was NOT stale and no expectation was changed.
+
+2) The red field is the arm's FIRST read — bedrock_y0/bedrock_ok (the spawn
+   column, harness.gd _basis_test step 1) — not the ocean column. Across all
+   5 baseline runs (basis-r1..r5.log) ocean_bedrock_y0 read 11, stable, no
+   flake (a settled read, after the arm's own recenter + _await_core_3x3), and
+   sea_ok was already true since AC-0326's picker. The race is real:
+   bedrock_y0 read 0 in 5/5 baseline runs — a data-less column reads as air
+   (world.gd get_block, 13146-13164) — because the arm's first read lands
+   before chunk (0,0)'s boot landing (AC-0263 removed the boot-time sync gen,
+   so spawn data arrives through the normal streaming pass).
+
+3) The first fix attempt (a bare `await main._await_core_3x3(spawn, 3000)`
+   before the read, no recenter) did NOT work: 5/5 runs (basis-r6..r10.log)
+   timed out the gate at 3000 frames ("CORE3X3 not fully built") and still
+   read 0. The streaming requeues chunks on the recenter crossing — the
+   sanctioned idiom is recenter-then-await, the same shape the arm's own
+   step 2 and closing block already use, and the shape the AC-0314 bisect
+   note documents ("a recenter-then-await read of the same cell is 11").
+
+4) Fix applied (arm-side only): `world.recenter(float(bx), float(bz), false)`
+   + `await main._await_core_3x3(spawn, 3000)` before the first spawn-column
+   read — a settled count gate (9 chunks with data + mesh_built), never a
+   sleep. The evidence supports the arm-side fix over a game-side fix: the
+   generator is deterministic (genhash 25/25 byte-identical to the AC-0326
+   set on the final tree) and the settled read returns exactly the generator's
+   value (11); the game's write ordering was never in dispute — the arm was
+   the only reader that read before the write.
+
+5) The basis standing-value row (harness_data.yaml standing_values /
+   HARNESS.md §3, "AC-0314 re-measure") still describes ok:false for two
+   pre-existing reasons; both are now retired ((b) the sea check by AC-0326,
+   (a) the bedrock read by this ticket). That row is outside this plan's §4
+   file table, so it was left untouched — flagged for coordinator closeout.
+
+6) The intermediate runs basis-r6..r10.log (the await-only attempt) are kept
+   in the gate dir as evidence of the failed first fix, not as a regression.
