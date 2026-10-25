@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-24T22:45
+  updated_at: 2026-10-24T22:51
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -14,6 +14,7 @@ queue:
 - AC-0438
 - AC-0464
 - AC-0475
+- AC-0476
 intake:
 - id: AC-0278
   title: remove-candidate-flag-single-orchestrator-check
@@ -31498,6 +31499,57 @@ intake:
     a classification (live code / gitignored / history) rather than a bare count.
 
     FILES: `godot/probe_alpha.gd`. Refs: AC-0320 (done), `godot/OPS.md` §2 (the machine path) and §5 (git).
+
+    '
+  comments: []
+- id: AC-0476
+  title: basis and sphere arms have no row in harness_data.yaml
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 3
+  status: open
+  labels: []
+  created_at: 2026-10-24T22:51
+  updated_at: 2026-10-24T22:51
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    A developer reading the generated test-arm documentation cannot find two of the oldest verification
+    arms, so the list of "what can I run to check this" is incomplete — and those two are exactly the
+    ones whose red states were tolerated for months because nobody could look them up.
+
+
+    ## 2) Technical Details
+
+    FOUND by AC-0327''s closeout check (round 82). `godot/harness_data.yaml`''s `modes:` block carries
+    ~80 arm entries and NEITHER `basis` NOR `sphere` is among them — all seven occurrences of the word
+    "basis" in the file are the ordinary English word inside OTHER arms'' prose blobs (crossface, faceedit,
+    spherewalk, vflight). Consequence: both arms are absent from the generated `godot/HARNESS.md` tables.
+
+    WHY IT MATTERS NOW: both were RED for months as documented pre-existing failures (the sea parity at
+    AC-0326 and the bedrock read at AC-0327) and both are now GREEN. An arm that is green but undocumented
+    is one nobody will run.
+
+    TASKS:
+
+    1. Add `basis` and `sphere` rows to `godot/harness_data.yaml` in the shape the other entries use (`entry`,
+    `tests`, `result_fields`, `envs`, `wall`, `notes`), describing what each asserts NOW (bedrock_ok /
+    sea_ok green, the settled-count gate AC-0327 added, the analytic-H picker AC-0326 added) and their
+    BATTSKIP status.
+
+    2. `python3 tasks/scripts/harness_doc.py --render`, then confirm `--check` is clean and the two rows
+    appear in `godot/HARNESS.md`.
+
+    3. While there: check whether any OTHER arm in harness.gd lacks a row (the same absence may not be
+    limited to these two) and report the list rather than fixing it all here.
+
+    FILES: `godot/harness_data.yaml`, `godot/HARNESS.md` (generated — never hand-edited, edit the YAML
+    then render). Refs: AC-0326, AC-0327, AC-0301 (the doc pipeline), `godot/scenes/AGENTS.md:12` (an
+    arm change means two files).
 
     '
   comments: []
