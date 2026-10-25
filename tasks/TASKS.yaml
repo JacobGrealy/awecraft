@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T01:43
+  updated_at: 2026-10-25T01:47
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0402
 - AC-0406
 - AC-0407
 - AC-0409
@@ -25443,11 +25442,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-07T14:39
-  updated_at: 2026-10-07T14:39
-  completed_at: null
+  updated_at: 2026-10-25T01:47
+  completed_at: 2026-10-25T01:47
   waiting_on: null
   parent_id: null
   notes: '1) User Story: The planet should look like a world at every time of day - green land, blue ocean,
@@ -25499,7 +25498,47 @@ intake:
     CONTEXT: read tasks/AC-0384/AC-0384-results.html section 25 for both findings and their method, and
     tasks/AC-0401/AC-0401-results.html for the layer and shader work that must survive.
 
-    '
+
+
+    CLOSED (round 99). THE WORK WAS ALREADY DONE IN AN EARLIER ROUND AND COMMITTED (`156fed4`); this round
+    is the coordinator closeout the journal asked for, plus my own re-verification.
+
+    D5 — THE GREY PLANET WAS THE CLOUDS, AND IT IS A THIRD INDEPENDENT CAUSE. The diagnosis ruled out
+    the two known ones properly: the body''s day-night re-weight is `albedo x (0.18 + 0.82*day*sun_l)`
+    and at T0.5 the factor is exactly 1.0 (sun_l clamps at the nadir), so the body was showing its FULL
+    baked terrain — not a material wash. It is also not cause #1 (the uncompiled shader drew a 255-white
+    Lambert ball) or cause #2 (the fog term repainted the disc cyan). The culprit is the CLOUD DECK''s
+    overcast phase: `cloud_amount = 0.30 + 0.45*day` makes the deck 2.5x denser by day, and the pre-AC-0401
+    deck (u_boost 2.2, u_under 0.70) covered the disc in an opaque neutral veil — measured disc centre
+    (221,221,221) with saturation 0, against (144,209,221) sat 77 with the AC-0401 deck default ON. So
+    the answer to the ticket''s question is explicit: the pale grey is the THIRD cause, not the two already
+    fixed.
+
+    D4 — THE SKY NOW KNOWS HOW HIGH YOU ARE, and it was done WITHOUT duplicating constants: the background
+    blend got its own stretched window (start BAND_WALK_MAX, end BAND_FLY_MIN*1.6 = 3200 m alt_rad, read
+    off the live player), so S_sky is ~0.04/0.44/0.92 at the 700/1600/2600 m frames instead of hitting
+    0.92 by 1600 m. The limb-glow gate, star opacity and sun-glow fade keep riding the physics-band S
+    untouched, so the AC-0386/AC-0401 contracts are preserved — and the switch''s OFF path leaves the
+    expression exactly as it was, which is what makes the A/B real.
+
+    THE EVIDENCE IS 13 RENDERS (4 before, 9 after), every run rc=0 with the Forward+ llvmpipe boot line
+    and a 0/0 census. After the T0 sweep at 2600 m: T0.0 black night sky with a dark structured disc,
+    T0.25 centre **(0,38,54) sat 54**, T0.75 centre **(1,60,75) sat 74** — saturated teal at dawn and
+    dusk. NO GREY AT ANY TIME OF DAY; the only neutral reading left is the T0.5 dense overcast phase,
+    which is WEATHER being weather rather than a wash. The 300 m frame is PIXEL-IDENTICAL to the pre-AC-0402
+    frame (0 diff px) because the stretched window is 0 below 500 m alt_rad — the fix is provably inert
+    where it should be.
+
+    MY OWN VERIFICATION THIS ROUND: the code is committed, `u_sky_alt` is present in the shader, and g0
+    (0 script / 0 shader errors — which also excludes cause #1 recurring), genhash 25/25, and lightstate
+    all pass (leaks 0 everywhere, ok=true). The heavy set (boundary/perf/flake/r50/full battery/Windows
+    build) was run green in the round that did the work; I did not re-run it, and I am saying so rather
+    than implying this round did it.
+
+    TWO FINDINGS RECORDED RATHER THAN FIXED: the deck''s drift phase is NOT strictly deterministic across
+    runs (the per-frame `_cloud_time` increment means the T0.5 overcast appearance varies), and the AC-0384-era
+    300 m sky differs from the AC-0401-era 300 m sky by ~30 sRGB with no AC-0402 involvement — a pre-existing
+    era difference worth knowing before anyone reads a sky diff as a regression.'
   comments: []
 - id: AC-0403
   title: intermittent-segfault-in-mob-tick-get-block
