@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-25T00:15
+  updated_at: 2026-10-25T01:23
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0330
+- AC-0477
 - AC-0402
 - AC-0406
 - AC-0407
@@ -17211,11 +17211,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: open
+  status: done
   labels: []
   created_at: 2026-09-19T08:42
-  updated_at: 2026-09-23T21:36
-  completed_at: null
+  updated_at: 2026-10-25T01:23
+  completed_at: 2026-10-25T01:23
   waiting_on: null
   parent_id: null
   notes: "1) User Story: A test gate that has been quietly failing for months is worse than no gate at\
@@ -17300,7 +17300,31 @@ intake:
     \ surface) would restore the check - that is the work item, and it belongs to this umbrella rather\
     \ than to a new ticket. Broader lesson, matching this umbrella's pattern: a fixture-anchored absolute\
     \ value (a cell coordinate, a count, a wall-clock budget) silently changes meaning when the terrain\
-    \ under it changes, while an invariant assertion does not."
+    \ under it changes, while an invariant assertion does not.\n\nCLOSED (round 97). SEVEN ARMS, EACH\
+    \ CLASSIFIED ON ITS OWN EVIDENCE, AND THE TWO THAT STAY RED ARE RED FOR GOOD REASONS.\n- `craft` —\
+    \ (a) real gate, ALREADY GREEN. Its baseline `ok:false` was a stale terrain F_cell; on the current\
+    \ tree it is ok:true and deterministic across r1/r2/r3. No fix needed, and none invented.\n- `water`\
+    \ — (a) and LEFT RED DELIBERATELY: it is CORRECTLY CATCHING AC-0326's mirror/C++ sea divergence (its\
+    \ fixture water is not live), which is a real, separately-filed product defect. Adjusting the arm\
+    \ to match would have converted a genuine finding into permanent silence — the exact thing the plan\
+    \ forbade.\n- `trees` — (a) and LEFT RED: stale August fixtures (GDScript mirror + `trees_expect_44.json`\
+    \ + `genhash_before_trees.log`), while generation itself is deterministic. Re-baselining means choosing\
+    \ a new oracle, which is a DESIGN DECISION rather than a closeout edit, so it is reported rather than\
+    \ guessed.\n- `atlas`, `buckets`, `player`, `interact` — (b) VALUE-REPORTING BY DESIGN, now DECLARED\
+    \ in `harness_data.yaml` §1 (their assertions are the sub-flags: `sprint_ok`, `place_ok`/`drop_spawned`,\
+    \ etc.). Zero code changed for these four; the honest fix was to stop calling an intended contract\
+    \ an oversight. `interact`'s remaining flake is a 3 s mine-window TIMING RACE, not a product defect,\
+    \ and is noted as a follow-up rather than papered over.\nNO `ok` WAS FLIPPED TO TRUE AND NO ARM WAS\
+    \ DELETED, which were the ticket's two hard rules.\nTWO FINDINGS WORTH MORE THAN THE CLASSIFICATION:\
+    \ the `player` arm's 2026-09-20 stale-value finding is now RESOLVED, and `buckets`' scoop fields carry\
+    \ the same AC-0326 caveat as `water` — so the dead sea parity reached at least three arms, which is\
+    \ a reminder that one retired root cause can hold several reds in place.\nGATES: the seven-row table\
+    \ is complete with prior state, classification, change and post state (the table was the deliverable);\
+    \ g0 zero SCRIPT ERROR; genhash 25/25; the battery unchanged mode-for-mode because no `harness.gd`\
+    \ line was touched; `harness_doc --render` then `--check` clean; `test_tasks.py` 53/0.\nOWED AND FILED\
+    \ (AC-0477): the battery compare script diffs VALUES ONLY — which is precisely WHY this debt stayed\
+    \ invisible for months. A status-aware compare would have flagged the `water`/`trees` reds the day\
+    \ they appeared."
   comments: []
 - id: AC-0331
   title: far-tier-mesh-floor-kernel
@@ -31609,4 +31633,54 @@ intake:
     `editsnap`, `underwater`, `fluidflow`, `range` — some may be legitimate undocumented shot modes, some
     may be documented under a different name, and some may be dead. Classify them rather than adding ten
     rows.'
+  comments: []
+- id: AC-0477
+  title: battery compare is value-only so red arms pass silently
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-25T01:22
+  updated_at: 2026-10-25T01:22
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    A test suite that reports values but never says pass or fail lets failures live quietly for months.
+    Nobody notices a red gate if nothing ever announces red.
+
+
+    ## 2) Technical Details
+
+    FOUND while closing AC-0330, which had to classify seven battery arms that were unusable as pass/fail
+    gates. The reason the debt survived so long is structural: **the battery compare script only diffs
+    VALUES**, so a run whose arm returned `ok:false` in both the baseline and the current run looks "identical"
+    and passes silently.
+
+    CONSEQUENCE, measured at AC-0330: `water` and `trees` have been red in the BASELINE ITSELF for months.
+    `water` is correctly catching the AC-0326 mirror/C++ sea divergence (a real defect) and `trees` is
+    on stale August fixtures. Neither showed up in any battery comparison.
+
+    TASKS:
+
+    1. Make the compare status-aware: it must FAIL (or loudly warn) when an arm''s pass/fail status changes
+    in either direction, in addition to the existing value diff, and it must REPORT arms whose status
+    is red in the baseline so a long-standing red is visible rather than normalised.
+
+    2. Do not let a declared value-reporting arm (AC-0330 declared `atlas`, `buckets`, `player`, `interact`
+    as `ok`-less BY DESIGN) trip the new check — the declared contract lives in `godot/harness_data.yaml`
+    §1, so read it rather than assuming every arm has an `ok`.
+
+    3. Prove it with teeth: run it against a battery where one arm is red and confirm it flags rather
+    than passes, and against one where nothing changed and confirm it stays quiet.
+
+    FILES: the battery compare script (find it — it is referenced in AC-0293''s and AC-0330''s notes),
+    `godot/harness_data.yaml` (the declared `ok`-less contracts). Refs: AC-0293 (found the compare script''s
+    value-only behaviour), AC-0330 (the seven arms), AC-0326 (the sea parity behind `water`).
+
+    '
   comments: []

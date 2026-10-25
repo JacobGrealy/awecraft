@@ -19,7 +19,7 @@ modes:
     envs: —
     wall: 3 s (standalone) / ~11 s battery (AC-0324)
     notes: |-
-      battery smoke mode; AC-0324: waits the SIM BAND (`_await_sim_band`) so the spawn search is ready — the player spawns at the searched column (the pad centre while the pad exists; AC-0314 pending). **AC-0340: `col_deferred_in_footprint` (the collision-budget fence tripwire — the player arm stands/walks/jumps near the spawn column (0,0) and must read 0).** STALE-VALUE FINDING (2026-09-20, AC-0340 before-run, deterministic on HEAD 5be1c78): the post-cave-terrain spawn area (AC-0288/0289 re-carved it AFTER the values below were last re-measured 2026-09-18) now has a cave opening on the arm's compass scan line — the player walks in and falls to the cave floor (`jump_peak_y` 110.33 vs the recorded 142.43, `sprint_ok` false, `is_on_floor` false at the probe; the AC-0264 PROBE line shows every slab under the fallen position WITH a body — a genuine air hole, not a missing body). The arm carries no `ok` field so the battery `ok` is unaffected; the recorded start/jump values are STALE pending re-measure (arm-side staleness, follow-up)
+      battery smoke mode; AC-0324: waits the SIM BAND (`_await_sim_band`) so the spawn search is ready — the player spawns at the searched column (the pad centre while the pad exists; AC-0314 pending). **AC-0340: `col_deferred_in_footprint` (the collision-budget fence tripwire — the player arm stands/walks/jumps near the spawn column (0,0) and must read 0).** **AC-0330 (2026-09-25, battery ok-status debt) — VALUE-REPORTING arm: no top-level `ok` by design; the effective smoke assertion is the `sprint_ok` sub-flag (a false `sprint_ok` is the smoke red; `start`/`jump_peak_y`/`after_fly_y` are report-only value fields that drift with the spawn search).** The 2026-09-20 STALE-VALUE FINDING (cave opening on the compass line → `jump_peak_y` 110.33, `sprint_ok` false, `is_on_floor` false) is RESOLVED — re-measured this run `sprint_ok` **true**, `jump_peak_y` 142.42 (standing 142.43), `is_on_floor` true, `col_deferred_in_footprint` 0. Promoting `sprint_ok` to a hard top-level battery gate is a follow-up design decision (which sub-flags gate), not made here
   spawnsearch:
     entry: '`_spawnsearch_test` (AC-0324)'
     tests: |-
@@ -48,7 +48,8 @@ modes:
       `target_cell`, `breakable_id`, `highlight_visible`, `after_mine_cell`, `drop_spawned`, `inv_grew`, `place_cell`, `after_place_cell`, `place_ok`
     envs: —
     wall: 3 s (standalone) / 1.3 s battery
-    notes: 'known-stable: `drop_spawned`/`place_ok` true'
+    notes: |-
+      **AC-0330 (2026-09-25, battery ok-status debt) — VALUE-REPORTING arm: no top-level `ok` by design; the effective assertions are the `place_ok` + `drop_spawned` sub-flags (contract: both true). CAVEAT — they are MINE-TIMING-FLAKY, not stable: the 3 s mine window races the mine completion (`mine_diag.prog_max` ~0.972 in every run) — observed `place_ok`/`drop_spawned` **true** in one run and **false** in the next (the block not mined, `after_mine_cell` 2, no drop, so the place lands on the wrong cell and `after_place_cell` 0). The prior "known-stable true" note was optimistic. A non-true `place_ok`/`drop_spawned` is the smoke red; widening the mine window to the game's own mine duration (not a product defect) is a follow-up
   consumers:
     entry: '`_consumers_test` (AC-0308)'
     tests: |-
@@ -224,7 +225,8 @@ modes:
     envs: —
     wall: |-
       ~5 s (standalone, not re-run 08-24) / ~3 s battery
-    notes: battery full mode (not in 08-24 smoke)
+    notes: |-
+      battery full mode (not in 08-24 smoke). **AC-0330 (2026-09-25, battery ok-status debt) — VALUE-REPORTING arm: no top-level `ok` by design (`scoop_before`/`after_scoop`/`inv_scoop`/`place_after`/`inv_place` are the contract, not a pass/fail gate).** CAVEAT: the current values are AC-0326-affected — the fixture water does not come up live the scoop can read (`scoop_before` [0,0], `after_scoop` [0,0], `inv_scoop` n 0 — the same mirror/C++ divergence the `water` arm is red on), so the scoop fields read no-water until AC-0326 lands; the place half works (`place_after` [5,8], `inv_place` n 2)
   water:
     entry: '`_water_test`'
     tests: |-
@@ -233,7 +235,8 @@ modes:
       `B`, `shore_top`, `timeline`, `max_y`, `first_above_frame`, `above_top`, `landed_frame`, `standing_on_shore`, `final`, `final_on_floor`, `water_cell_intact`, `ok`
     envs: —
     wall: ~20 s (not re-run 08-24)
-    notes: ''
+    notes: |-
+      **AC-0330 (2026-09-25, battery ok-status debt): `ok` = `above_top` and `standing_on_shore`. RED is DELIBERATE — the arm is correctly catching the AC-0326 mirror/C++ sea divergence: its local water-column fixture is not live water the player can buoy (`water_cell_intact` false, `above_top` false, `standing_on_shore` false, `max_y` 41.971 — the player never rises above the fixture floor). Left `ok` false on purpose (a gate that silently flipped to true would hide the AC-0326 defect); it goes green only when AC-0326 lands. Do NOT adjust the arm's expectation to match the broken water
   fpv:
     entry: '`_fpv_test`'
     tests: |-
@@ -418,10 +421,11 @@ modes:
   atlas:
     entry: '`_atlas_test`'
     tests: spawn chunk mesh UV sanity
-    result_fields: '`ok` (or `error`)'
+    result_fields: '`has_uv`, `uv_min`, `uv_max`, `uv_in_range`, `grass_top`, `grass_side`, `grass_distinct` (no top-level `ok`)'
     envs: —
     wall: ~5 s (not re-run 08-24)
-    notes: ''
+    notes: |-
+      **AC-0330 (2026-09-25, battery ok-status debt) — VALUE-REPORTING arm: no top-level `ok` by design; the mesh-UV sanity fields are the contract (`has_uv` true, `uv_in_range` true, `grass_distinct` true this run; `uv_max` 0.8645 / `uv_min` 0.0002). The prior `result_fields` "`ok` (or `error`)" was STALE — the arm never emitted an `ok`; corrected here. Report-only: a false `uv_in_range`/`grass_distinct` is a mesh-UV red for a human to read, not a battery gate
   r16:
     entry: '`_r16_test` (AC-0212, rebased at AC-0313, 3-tier rebase at AC-0312)'
     tests: |-
@@ -460,7 +464,8 @@ modes:
     result_fields: '`ok`, `data` (out), `per_chunk`'
     envs: —
     wall: ~10 s (not re-run 08-24)
-    notes: ''
+    notes: |-
+      **AC-0330 (2026-09-25, battery ok-status debt): `ok` = per-chunk live flora == the GDScript reference `_trees_ref_flora` + the `.scratch/trees_expect_44.json` + `.scratch/genhash_before_trees.log` fixtures. RED is the STALE-FIXTURE class (documented at AC-0320: `genhash_fail` 2,2) — the GDScript tree mirror + both `.scratch/` fixtures are August-era and disagree with the legitimately-rebased generation (determinism true, `desert_no_flora` true — the generation itself is sound). Left `ok` false on purpose: re-baselining the GDScript mirror is a design decision + needs an independent oracle (the arm cannot self-verify the native tree algorithm), out of this ticket's scope. Do NOT re-baseline blindly to the current output
   save:
     entry: '`_save_test`'
     tests: |-
