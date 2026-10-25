@@ -3173,6 +3173,30 @@ func _box_intersects_player(cell: Vector3i) -> bool:
 	return pmin.x < bmax.x and pmax.x > bmin.x and pmin.y < bmax.y and pmax.y > bmin.y and pmin.z < bmax.z and pmax.z > bmin.z
 
 
+# AC-0479: the home pair's per-vertex spherical warp, EXACTLY as the mesh
+# and collision consume it (chunk._warp_home_cell_point, AC-0461). A flat-
+# frame point (fx, fy, fz) maps to the planet-frame direction
+# SphereMath.home_point(fx, fz, R), scaled out to radius R + fy, then shifted
+# by (0, -R, 0) into the placed global frame. The box placement below uses
+# this (centre + Jacobian) instead of world_pos_of_flat (the per-column rigid
+# facet approximation), which diverges from the warped surface as the warp
+# magnitude grows — the aim box stopped matching the block 1:1.
+func _ac0479_warp_point(fx: float, fy: float, fz: float, R: float) -> Vector3:
+	var n: Vector3 = SphereMath.home_point(fx, fz, R)
+	return (R + fy) * (n / R) - Vector3(0.0, R, 0.0)
+
+
+func _ac0479_warp_basis(fx: float, fy: float, fz: float, R: float) -> Basis:
+	# Central-difference the warp at the cell centre in each flat axis and
+	# keep the rotation (orthonormalize) — the highlight box has a fixed
+	# 1.02 extent, so only the orientation of the warped frame is wanted.
+	var e: float = 0.1
+	var x: Vector3 = _ac0479_warp_point(fx + e, fy, fz, R) - _ac0479_warp_point(fx - e, fy, fz, R)
+	var y: Vector3 = _ac0479_warp_point(fx, fy + e, fz, R) - _ac0479_warp_point(fx, fy - e, fz, R)
+	var z: Vector3 = _ac0479_warp_point(fx, fy, fz + e, R) - _ac0479_warp_point(fx, fy, fz - e, R)
+	return Basis(x, y, z).orthonormalized()
+
+
 func _update_interaction(dt: float) -> void:
 	var hl := _ensure_highlight()  # AC-0309: survives the world free/recreate
 	_aim_wire_sync()  # AC-0440: the aim_wire look applies on change
@@ -3184,7 +3208,22 @@ func _update_interaction(dt: float) -> void:
 		hl.visible = true
 		# AC-0307: the aimed cell is FLAT; the highlight node lives in the
 		# placed global frame.
-		if Game.world != null:
+		if Game.world != null and int(_anchor.get("face", 0)) <= 1:
+			# AC-0479: home blocks are WARPED (per-vertex spherical warp,
+			# AC-0461); world_pos_of_flat is the per-column rigid facet
+			# approximation and diverges from the warped surface as the warp
+			# magnitude grows (measured: box corner error 37 mm @ D=11 m ->
+			# 296 mm @ D=153 m; box up vs block up 0.17 deg -> 2.32 deg).
+			# Place the box at the cell's WARPED centre and orient it by the
+			# warp Jacobian there, so the 1.02 indicator matches the 1.0
+			# warped block 1:1 at every warp magnitude.
+			var R: float = Game.planet_R
+			var cfx: float = float(hit.cell.x) + 0.5
+			var cfy: float = float(hit.cell.y) + 0.5
+			var cfz: float = float(hit.cell.z) + 0.5
+			hl.global_position = _ac0479_warp_point(cfx, cfy, cfz, R)
+			hl.global_basis = _ac0479_warp_basis(cfx, cfy, cfz, R)
+		elif Game.world != null:
 			hl.global_position = Game.world.world_pos_of_flat(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)
 		else:
 			hl.global_position = Vector3(float(hit.cell.x) + 0.5, float(hit.cell.y) + 0.5, float(hit.cell.z) + 0.5)

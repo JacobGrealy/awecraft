@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-25T09:57
+  updated_at: 2026-10-25T13:29
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0479
+- AC-0482
 - AC-0480
 - AC-0481
 - AC-0438
@@ -32175,11 +32175,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-25T09:55
-  completed_at: null
+  updated_at: 2026-10-25T13:29
+  completed_at: 2026-10-25T13:29
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32226,7 +32226,49 @@ intake:
     (1 m cubic grid), AC-0458-0462 (the warp), AC-0094 (the interaction path that depends on aim being
     right).
 
-    '
+
+
+    CLOSED (round 107). THE MAGNITUDE TEST CONFIRMED THE DIAGNOSIS AND ALSO REFUTED HALF THE REPORT —
+    which is the most useful thing it could have done.
+
+    THE ROOT CAUSE IS PRECISELY TWO DIFFERENT WARP APPLICATIONS, and that is sharper than the plan''s
+    hypothesis: the aim box was placed POSITION-ONLY with an IDENTITY BASIS on the RIGID PER-COLUMN FACET
+    FRAME (`world_pos_of_flat`), while the block MESH and the COLLISION both consume the PER-VERTEX SPHERICAL
+    WARP (`chunk._warp_home_cell_point`). The gap is therefore ~(h/R)*offset-from-column-centre plus the
+    D/R tilt — i.e. the indicator was reading a coarser warp than the geometry it was pointing at.
+
+    THE MAGNITUDE TEST, before any edit: centre offset **24.8 mm at D=11.3 m -> 264.2 mm at D=153 m**;
+    corner tangential **37.1 -> 296.1 mm**; box-up vs block-up **0.172 deg -> 2.316 deg**. The error scales
+    with distance at **13.5x against a D ratio of 13.5** — not a constant offset, so a plain coordinate/rounding
+    bug is ruled out and the warp diagnosis stands.
+
+    THE SLIDE WAS MEASURED AND IS NOT REAL, and I am reporting that plainly rather than accepting the
+    report''s framing: standing still drifted **0.0 mm/s at D=11.3 m and 0.71 mm/s UPHILL at D=153 m**
+    — well inside the AC-0420 damper''s 0.2 m/s band — and walk veer was **2.49 deg at spawn (the terrain-noise
+    floor) vs 0.007 deg far out**, so there is NO downhill slide to fix. Therefore 3.3 named no fix and
+    **friction, speed and the damper were left untouched**, which was the plan''s explicit guard against
+    masking a drift with tuning. What the user saw as sliding was the BOX/FACET TILT against the warped
+    terrain — the same defect, perceived through the other symptom.
+
+    THE FIX, ONE FILE: `godot/player/player.gd` (+41 lines) — the box is now placed at the cell''s EXACT
+    WARPED CENTRE (the mesh''s own spherical construction) and ORIENTED BY THE WARP JACOBIAN (central
+    differences at eps=0.1, orthonormalised, rotation only, no scale).
+
+    BEFORE/AFTER: corner tangential **37.1 -> 10.9 mm** at spawn and **296.1 -> 15.5 mm** far out (residual
+    = the designed 1.02 indicator overhang); centre **24.8 -> 0.0 / 264.2 -> 0.1 mm**; box-up **0.172
+    -> 0.013 deg / 2.316 -> 0.162 deg**. Captures show the box going from an axis-aligned float 296 mm
+    off to a perspective trapezoid hugging the block.
+
+    GATES: g0 **0 script / 0 shader**, genhash **25/25 byte-identical**, smoke green, interact at its
+    documented mine-timing flake (prog_max 0.9722 — "true in one run and false in the next"; not chased).
+    gate_run "all arms ok" rc=0. harness.gd pristine, probe arm removed.
+
+    THREE FINDINGS DOCUMENTED AND NOT FIXED, of which the second is a real remaining defect and has been
+    FILED as AC-0482: (1) the flat frame itself diverges from the sphere by METRES at distance (~0.4 m
+    round-trip gap at D~310 m); (2) **face>1 highlight placement still has a cell/flat UNIT MISMATCH**
+    — the fix here was correct for the home face''s path and does not cover that; (3) the GDScript `terrain_height`
+    mirror is 3-23 m stale vs the live C++ (already known, AC-0261 territory). Recording all three rather
+    than only the convenient one.'
   comments: []
 - id: AC-0480
   title: high-LOD terrain does not match the sim distance at the tier boundary
@@ -32344,6 +32386,74 @@ intake:
     (the sky, and AC-0402''s u_sky_alt stretched window), and whatever binds the sky/cloud textures. Refs:
     AC-0405/0406/0407 (the cloud volume''s history), AC-0412 (the far-tier sampler), AC-0402 (the sky''s
     altitude window).
+
+    '
+  comments: []
+- id: AC-0482
+  title: face>1 block highlight has a cell/flat unit mismatch
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-25T13:29
+  updated_at: 2026-10-25T13:29
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Standing on any face other than the home face, the block selection box can be wrong again - shifted
+    by a cell or by a flat-versus-cell unit error - so you cannot trust where a block will be placed.
+
+
+    ## 2) Technical Details
+
+    FOUND BY AC-0479 (round 107) while fixing the aim box''s warp alignment, and DOCUMENTED BUT NOT FIXED
+    because that ticket touched the home face''s path and AC-0479''s mandate did not cover this.
+
+    WHAT AC-0479 FIXED: the box was placed position-only with an identity basis on the rigid per-column
+    facet frame (`world_pos_of_flat`) while the block mesh and collision both consume the per-vertex spherical
+    warp (`chunk._warp_home_cell_point`). The box is now placed at the cell''s exact warped centre and
+    oriented by the warp Jacobian (central differences, orthonormalised, rotation only). Corrections were
+    measured: corner tangential 37.1 -> 10.9 mm at spawn and 296.1 -> 15.5 mm far out; box-up 0.172 ->
+    0.013 deg / 2.316 -> 0.162 deg.
+
+    WHAT REMAINS: **`face > 1` highlight placement has a CELL/FLAT UNIT MISMATCH.** The flat frame and
+    the per-face cell frame are different units, and the `face > 1` path mixes them, so the indicator
+    can be off by a cell or a unit conversion on any non-home face. AC-0479''s fix corrected the home
+    face and did not exercise this path.
+
+    WHY IT MATTERS: the world is now twelve faces with NO HOME REGION (the user''s standing requirement:
+    "you fly in at whatever part of the planet you want. The experience has to be the same around the
+    entire planet"). So a per-face aim defect is exactly the kind of asymmetry the objective forbids,
+    and it is invisible from the home face where most testing happens.
+
+    TASKS:
+
+    1. RE-ADJUST THE INDICATOR ON A NON-HOME FACE. Travel/teleport to another face, aim at blocks there,
+    and measure the box''s misalignment the way AC-0479 did (corner tangential error, centre offset, box-up
+    angle vs block-up) so the size of the unit error is a number rather than an impression.
+
+    2. FIND WHERE THE `face > 1` PATH CONVERTS between the flat frame and the per-face cell frame, and
+    fix the unit mismatch at its source rather than compensating at the call site.
+
+    3. PROVE IT ON AT LEAST TWO DIFFERENT FACES (not just the one you happen to test), because a per-face
+    bug can be correct on one face and wrong on another.
+
+    4. REGRESSION-CHECK THE HOME FACE still measures as AC-0479 left it (corner tangential ~10.9 mm at
+    spawn, ~15.5 mm far out) - do not trade one face for the other.
+
+    ALSO WORTH RECORDING FROM AC-0479: the flat frame diverges from the sphere by METRES at distance (~0.4
+    m round-trip gap at D~310 m), which is why the far-field residual exists at all. If that divergence
+    turns out to be the unit mismatch''s root, say so - it may be one fix rather than two.
+
+    FILES: godot/player/player.gd (`_update_interaction`, the new Jacobian orientation, and any face-conditional
+    placement), godot/world/world.gd (`world_pos_of_flat`, `world_pos_of` and the per-face cell conversions),
+    godot/core/sphere_math.gd. Refs: AC-0479 (the fix and its measurements), AC-0458-0462 (the warp),
+    AC-0469/AC-0471 (1 m cubic grid, twelve faces, no home).
 
     '
   comments: []

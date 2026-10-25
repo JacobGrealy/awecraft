@@ -1,0 +1,76 @@
+AC-0479 deviations — plan.html vs. what was applied
+
+D1. 4.1 Jacobian sampled on the EXACT warp, not on world_pos_of_flat.
+    The plan's 4.1 says: "derive the local basis from the warp's
+    Jacobian at the cell (sample world_pos_of_flat at the cell centre
+    and at ±ε along each axis...)". world_pos_of_flat is NOT the warp:
+    it is the per-column RIGID facet map (SphereMath.flat_to_world ->
+    column_transform, sphere_math.gd:387/419) — the very approximation
+    the magnitude test (r7, gate a) proved misaligns the box. Sampling
+    IT at ±ε returns the facet basis (the current, misoriented frame)
+    and would not fix the defect. The warp the mesh and collision
+    actually consume is chunk._warp_home_cell_point
+    (chunk.gd:1941): (R+ly)*(home_point(fx,fz,R)/R) - (0,R,0), where
+    home_point is the cube-map sphere map (sphere_math.gd:379). The
+    fix samples THAT (helpers _ac0479_warp_point/_ac0479_warp_basis in
+    player.gd, central differences ε=0.1, orthonormalized — rotation
+    only, no scale/offset-to-fit, per the plan's prohibition).
+    Effect: the plan's intent (box matches the block's actual warped
+    orientation) is met; the plan's named sampling function was not,
+    because it is the approximation under test.
+
+D2. The highlight's home-pair branch is selected via _anchor face.
+    The plan's anchor list names _update_interaction:3175-3190 as the
+    "position-only placement" and does not specify how to distinguish
+    the home pair from the face pairs for the new orientation. The
+    existing aim code already branches on int(_anchor.get("face",0)) > 1
+    (player.gd aim_hit :2795); the fix uses the same discriminator
+    (face <= 1 -> exact-sphere placement; face > 1 -> unchanged
+    world_pos_of_flat path, out of scope).
+
+D3. Finding, reported only (out of scope, not fixed): face-pair
+    (face > 1) highlight placement feeds FACE-CHUNK CELL coordinates
+    into world_pos_of_flat, which expects flat block coordinates — a
+    unit/domain mismatch (face cells are ~6 m wide). The aim box past
+    the home patch was therefore wrong before and remains wrong; this
+    ticket's fence is the home-pair box. (Consistent with the plan's
+    scope: the user report and screenshot are home-terrain.)
+
+D4. Finding, reported only (out of scope): the flat frame itself
+    (world_pos_of_flat / flat_of_world_pos, the per-column rigid net)
+    diverges from the home_point sphere by metres at large D — at
+    D~310 m a player standing on the warped surface of block y=158
+    reads back as flat y=158.6 vs the block-grid top 159.0 (~0.4 m
+    round-trip gap; the probe's farB site at D=310 m embeds the
+    player and freezes the walk test). Anything still routed through
+    the flat frame at distance (aim DDA origin, teleports, the face
+    placement of D3) inherits this. The 4.1 fix removes the BOX's
+    dependence on the facet map (exact sphere construction), so the
+    box is correct at every D in the home pair; the flat-frame
+    divergence at distance is a separate, larger issue (the flat
+    frame itself) and is not touched here per the fences.
+
+D5. Finding, reported only (out of scope): WorldGen.terrain_height
+    (godot/world/generator.gd:76) — the GDScript "mirror" of the
+    surface height — is STALE. The live C++ surface_h (gdext/src/
+    gen.cpp:1038) is a coarse-3D-field trilinear formula with a
+    calibration remap; the mirror diverges from the live terrain by
+    3-23 m (r6: 8/10 analytic site candidates rejected live-vs-
+    analytic, both signs). Any site selection / analytic height query
+    must use the live streamed grid, not the mirror.
+
+D6. 4.2: no code change. The plan says "the minimal honest fix is
+    whichever the measurement in 3.3 names". The 3.3 measurement
+    (r7/r9, 5 s stand + 2 s walk, at D=11.3 m and D=153 m):
+    standing drift 0.0 mm/s (spawn) and 0.68-0.71 mm/s UPHILL (farA,
+    i.e. anti-downhill = numerical settling, far below the AC-0420
+    idle-creep damper's 0.2 m/s band, which zeros it in normal play);
+    walk veer 0.007 deg (farA), far under the ~2.5 deg terrain-noise
+    floor seen at the spawn control (2.48 deg on a walk line with no
+    flatness guarantee). No non-zero DOWNHILL standing drift was
+    measured, so the damper-widening candidate is not triggered, and
+    per the fences no friction/speed/damper change was made. The
+    user's "slides in the direction the selection block is angled" is
+    consistent with the box/facet tilt vs the warped terrain — the
+    visual reference the 4.1 fix removes; the physics is unchanged by
+    design.

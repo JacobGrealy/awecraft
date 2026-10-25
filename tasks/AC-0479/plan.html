@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0479 selection box offset and slide</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0479 — the aim box is axis-aligned in a warped world, and the player slides on the tilt</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Two symptoms, one suspected root cause (the warp) — but the plan requires the magnitude test before any fix.</b></p>
+<h2>1. The report</h2>
+<p>User, with a screenshot: <em>"the block selector does not match 1 to 1 with the blocks, and the player slides in the direction that the selection block is angled."</em> In the capture the black wireframe box is clearly skewed relative to the terrain and offset from the block it should outline.</p>
+<h2>2. What the code already tells us — the mechanism, located</h2>
+<ul>
+<li><b>The box is placed by position only.</b> <code>player.gd:3177-3190</code> (<code>_update_interaction</code>) does <code>hl.global_position = Game.world.world_pos_of_flat(cell.x+0.5, cell.y+0.5, cell.z+0.5)</code> and <b>nothing else</b>: no basis, no rotation. Note its own comment — "the aimed cell is FLAT; the highlight node lives in the placed global frame" — which is true of the <b>position</b> and says nothing about the <b>orientation</b>.</li>
+<li><b>The box's own geometry is axis-aligned.</b> <code>_aim_wire_t(sx,sy,sz,ox,oy,oz)</code> (<code>player.gd:1164</code>) builds each of the 12 edge strips from a scale and an offset only — a perfectly axis-aligned frame at the 1.02 extent.</li>
+<li><b>But the terrain it must match is NOT axis-aligned any more.</b> The warp (AC-0458-0462) displaces vertices, so a block's faces are <b>tilted and slightly curved in world space</b>, and collision consumes those warped vertices (AC-0461). So within the warp's non-identity region <b>an axis-aligned box cannot coincide with a tilted block</b> — that is not a rounding error, it is a shape mismatch, which is exactly what "does not match 1 to 1" describes.</li>
+<li><b>The slide follows the same tilt.</b> If the ground under the player is tilted by the warp while the walk code assumes axis-aligned floors (the pre-warp assumption: gravity down, ground normal up), a player standing still drifts along the tilt's downhill direction — and the drift would run <b>in the direction the box appears angled</b>, because both are the same warp gradient.</li>
+</ul>
+<p><b>So the working hypothesis is ONE cause with two symptoms: the warp applied to geometry and collision but not to the aim indicator's orientation or the ground-walk assumption.</b> It must be tested, not assumed — §4.1.</p>
+<h2>3. What to establish FIRST (in this order)</h2>
+<ol>
+<li><b>3.1 THE MAGNITUDE TEST — it decides everything.</b> Record the box's misalignment at two places with <b>known-different warp magnitude</b> (near the warp's identity region and far from it). If the error <b>grows with warp magnitude</b>, the diagnosis in §2 holds. If the error is <b>constant</b> (e.g. a consistent half-cell or whole-cell offset), it is a plain coordinate/rounding bug and §2 is wrong — <b>say so and stop, do not fix a warp problem that is not there.</b></li>
+<li><b>3.2 Characterise the misalignment shape</b>: is the box offset by half a cell, a whole cell, or rotated/skewed? The capture suggests skewed, which supports §2, but state what you measure.</li>
+<li><b>3.3 Measure the slide</b>: stand still on flat-looking ground at two warp magnitudes and record <b>how far and in which direction</b> the player drifts per second. If the drift is zero near the identity region and non-zero elsewhere, that is the same confirmation from a second, independent instrument — <b>two symptoms agreeing is much stronger than either alone.</b></li>
+</ol>
+<h2>4. Then fix, minimally</h2>
+<ol>
+<li><b>4.1 The box's orientation.</b> The box must match the block's <b>actual warped orientation</b>. Two acceptable approaches — choose and justify: derive the local basis from the warp's Jacobian at the cell (sample <code>world_pos_of_flat</code> at the cell centre and at ±ε along each axis, build the basis from the differences), or, if that is numerically unstable, the honest fallback is to state that an axis-aligned indicator cannot match a warped block and propose the alternative. <b>Do not proceed by scaling or offsetting the box to "fit better" — a fitted constant is the mask this session has repeatedly refused.</b></li>
+<li><b>4.2 The slide.</b> Whatever makes the walk code handle a tilted ground normal instead of assuming flat. <b>The minimal honest fix is whichever the measurement in 3.3 names</b> — do not retune friction to hide a drift, because a friction change would slow the player everywhere to compensate for a defect somewhere.</li>
+</ol>
+<h2>5. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/player/player.gd</td><td><code>_update_interaction</code> :3175-3190 (the position-only placement), <code>_aim_wire_t</code> :1164 (axis-aligned strips), <code>_build_highlight</code> :1080, and the walk/gravity code that assumes a flat floor</td><td>Edit per 4.1/4.2.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>world_pos_of_flat</code> and the warp mapping it uses</td><td>READ the Jacobian source; edit only if a helper must be exposed.</td></tr>
+<tr><td>godot/autoload/</td><td>whatever exposes the warp (find it via <code>world_pos_of_flat</code>)</td><td>Read; add a sampling helper only if 4.1 needs it.</td></tr>
+<tr><td>tasks/AC-0479/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light, the far tier, the sampler, the bake, the data JSON files. <b>Do not change friction or movement speed to mask a slide.</b></p>
+<h2>6. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The magnitude test is reported (the point)</td><td>Box misalignment at two warp magnitudes, and the slide distance/direction at two warp magnitudes, <b>as numbers</b>. The diagnosis must be confirmed or refuted by these before any edit.</td></tr>
+<tr><td>The box matches</td><td>After the fix, the box's edges follow the block's edges — proven by a capture plus a stated measure (e.g. the box corner's distance from the block's warped corner, before and after).</td></tr>
+<tr><td>The slide stops</td><td>Standing still at a high-warp location drifts <b>zero</b> (or below a stated threshold) over a stated period, measured the same way as 3.3.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0479 --arms g0,genhash,smoke,interact</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, smoke tier green, <code>interact</code> arm's <code>place_ok</code>/<code>drop_spawned</code> still as recorded (this ticket touches the aim path, so that arm is the direct regression check).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s, SERIAL. Note <code>interact</code>'s <code>place_ok=false</code> has a known arm-timing flake (~0.583 s sim dt in a 3 s window vs dirt's 0.6 s need) — do not chase it as a regression.</p>
+<h2>7. Acceptance</h2><p>The magnitude test reported with numbers and the diagnosis confirmed or refuted; if confirmed, the box oriented to the warped block and the slide removed, each measured before/after; if refuted, the real cause named from the constant-error evidence instead.</p>
+<h2>8. Risks</h2><p>(1) Assuming the warp without the magnitude test — the plan's whole guard. (2) A fitted constant offset that makes the screenshot look better in one spot. (3) Masking the slide with friction or speed, which would degrade movement everywhere for a local defect. (4) Fixing the box and the slide as two unrelated bugs when they may be one — the two-instrument confirmation in 3.1/3.3 exists to settle that.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §5. Do not retune friction/speed, do not touch generation or streaming.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>10. Resume point</h2><p>AC-0458-0462 made the vertex stream and collision consume a warp; AC-0469/AC-0471 put the world on the 1 m cubic grid; AC-0467 moved the home pair to the canonical chart placement. Any of these could have desynced an aim indicator that was written for an unwarped, axis-aligned world. Filed at priority 1 because a movement drift tied to the aim indicator is a gameplay defect.</p>
+</body></html>

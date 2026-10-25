@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AC-0479 — results</title>
+<style>
+ body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem auto;max-width:1080px;color:#1a1a1a;padding:0 1rem}
+ h1{font-size:1.5rem;border-bottom:3px solid #2a6;font;padding-bottom:.3rem}
+ h2{font-size:1.15rem;margin-top:2rem;color:#234}
+ table{border-collapse:collapse;width:100%;margin:.8rem 0;font-size:.85rem}
+ th,td{border:1px solid #9ab;padding:.35rem .5rem;text-align:left;vertical-align:top}
+ th{background:#eef3f8}
+ td.num{text-align:right;font-variant-numeric:tabular-nums}
+ .ok{color:#0a0;font-weight:600}
+ .bad{color:#a30;font-weight:600}
+ .warn{color:#a60;font-weight:600}
+ code,pre{font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+ pre{background:#f5f6f8;border:1px solid #dde;border-radius:4px;padding:.6rem;overflow:auto}
+ img{max-width:100%;border:1px solid #9ab;border-radius:4px;margin:.4rem 0}
+ .pair{display:flex;gap:1rem;flex-wrap:wrap}
+ .pair figure{flex:1;min-width:300px;margin:0}
+ .pair figcaption{font-size:.8rem;color:#456;margin-top:.2rem}
+ .note{background:#fff8e6;border-left:4px solid #ec2;padding:.5rem .8rem;margin:.6rem 0;font-size:.85rem}
+</style>
+</head>
+<body>
+<h1>AC-0479 — builder results</h1>
+<p>User report: “the block selector does not match 1 to 1 with the blocks, and the player
+slides in the direction that the selection block is angled.” Every value below is greppable
+from the arm's log in <code>.scratch/AC-0479-gates/</code> (aimslide r7 = before-fix, r9 =
+after-fix; the gate run). Probe seed 44, R = 4000 m, <code>warp_home_on: true</code>.</p>
+
+<h2>1. Gates</h2>
+<table>
+<tr><th>arm</th><th>mode</th><th class="num">rc</th><th class="num">script err</th><th class="num">shader err</th><th>ok</th><th class="num">wall</th><th>headline</th></tr>
+<tr><td>g0 (bare)</td><td>g0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">3 s</td><td>—</td></tr>
+<tr><td>genhash</td><td>genhash</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">4 s</td><td>25/25 — all 25 chunk hashes byte-identical to the recorded reference set</td></tr>
+<tr><td>player (smoke)</td><td>player</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">17 s</td><td><code>sprint_ok=true</code></td></tr>
+<tr><td>interact</td><td>interact</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">9 s</td><td><span class="warn">place_ok=false</span> / <code>drop_spawned=false</code> — the documented mine-timing flake (<code>mine_diag.prog_max=0.9722</code>, ~0.972 in every run; see §5)</td></tr>
+<tr><td>light (smoke)</td><td>light</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">9 s</td><td><code>cave_census_cands=590 cave_eff=0 surface_eff=15</code> (standing values)</td></tr>
+<tr><td>fluids (smoke)</td><td>fluids</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="ok">true</td><td class="num">13 s</td><td><code>sea_stable=true sea_backed 320→320</code> (standing values)</td></tr>
+</table>
+<p><code>python3 tasks/scripts/gate_run.py AC-0479 --arms g0,genhash,smoke,interact</code> →
+<code>gate_run: AC-0479 — all arms ok</code>, GATE_RUN_RC=0. The <code>smoke</code> group runs the
+<b>player;interact;light;fluids</b> battery. g0 = zero <code>SCRIPT ERROR</code> and zero
+<code>SHADER ERROR</code> lines (verified 0 in all six logs).</p>
+
+<h2>2. The magnitude test (gate a) — CONFIRMED, measured BEFORE any edit</h2>
+<p>Plan §3.1: if the box error <i>grows</i> with warp magnitude the §2 diagnosis (box placed on
+the rigid per-column facet frame, not the warped surface) holds; if it is <i>constant</i>, the
+diagnosis is wrong and the fix must not be made. Two known-different warp magnitudes
+(warp slope = D/R):</p>
+<table>
+<tr><th>site</th><th class="num">D (m)</th><th class="num">warp D/R (°)</th><th class="num">box centre offset (mm)</th><th class="num">corner tangential max (mm)</th><th class="num">corner radial max (mm)</th><th class="num">box-up vs block-up (°)</th><th class="num">block top-face tilt vs world Y (°)</th></tr>
+<tr><td>spawn (identity region)</td><td class="num">11.3</td><td class="num">0.16</td><td class="num">24.8</td><td class="num">37.1</td><td class="num">11.9</td><td class="num">0.172</td><td class="num">0.153</td></tr>
+<tr><td>farA</td><td class="num">153</td><td class="num">2.19</td><td class="num">264.2</td><td class="num">296.1</td><td class="num">36.2</td><td class="num">2.316</td><td class="num">2.288</td></tr>
+</table>
+<p>The error <b>grows</b> with the warp magnitude: centre offset ×10.7, corner tangential ×8.0,
+and box-up-vs-block-up ×13.5 ≈ the D ratio (153/11.3 = 13.5). It is <b>not</b> a constant
+half-cell/whole-cell offset. <b class="ok">Diagnosis CONFIRMED</b> — the box is placed on the
+per-column rigid facet frame (<code>world_pos_of_flat</code>), which diverges from the
+per-vertex spherical warp the mesh and collision actually consume
+(<code>chunk._warp_home_cell_point</code>). (A third site at D≈310 m was attempted but is a
+broken probe site — the player embeds in the block — and is excluded; see §6.)</p>
+
+<h2>3. The fix (what changed)</h2>
+<p>One file: <code>godot/player/player.gd</code> (+41 lines, no other file touched —
+<code>harness.gd</code> is byte-identical to HEAD, the probe removed at closeout).</p>
+<ul>
+<li><code>_ac0479_warp_point(fx, fy, fz, R)</code> — the <b>exact</b> per-vertex spherical warp, the
+same construction the mesh/collision consume: <code>(R + fy) * (SphereMath.home_point(fx, fz, R) / R) - (0, R, 0)</code>.</li>
+<li><code>_ac0479_warp_basis(fx, fy, fz, R)</code> — central-difference that warp at the cell centre
+along each flat axis (ε = 0.1) and <code>orthonormalize()</code> — rotation only, no scale/offset
+to “fit” (per plan §4.1).</li>
+<li><code>_update_interaction</code> home-pair branch (<code>_anchor.face &lt;= 1</code>): the box is now placed
+at the cell's <b>warp</b>ed centre (<code>_ac0479_warp_point</code>) and oriented by the warp Jacobian
+(<code>_ac0479_warp_basis</code>) instead of position-only on <code>world_pos_of_flat</code>. The
+face-pair branch (<code>face &gt; 1</code>) is unchanged (out of scope, §6).</li>
+</ul>
+<p>The AC-0420 idle-creep damper, friction, and movement speed are <b>untouched</b>.</p>
+
+<h2>4. Gates a/b/c, before → after (same instrument, seed 44)</h2>
+<h3>Gate b — the box matches the block 1:1</h3>
+<p>Measure: box corner distance from the block's <b>warp</b>ed corner, decomposed
+<b>radial</b> (the designed 1.02 overhang ≈ 1 cm/face) vs <b>tangential</b> (the misalignment),
+plus box-up vs block-up. After the fix the tangential error collapses to the overhang and the
+centre offset to ~0:</p>
+<table>
+<tr><th>site</th><th class="num">D (m)</th><th class="num">centre offset mm (before → after)</th><th class="num">corner tang. mm (before → after)</th><th class="num">corner radial mm (before → after)</th><th class="num">box-up vs block-up ° (before → after)</th></tr>
+<tr><td>spawn</td><td class="num">11.3</td><td class="num">24.8 → <b class="ok">0.0</b></td><td class="num">37.1 → <b class="ok">10.9</b></td><td class="num">11.9 → 10.4</td><td class="num">0.172 → <b class="ok">0.013</b></td></tr>
+<tr><td>farA</td><td class="num">153</td><td class="num">264.2 → <b class="ok">0.1</b></td><td class="num">296.1 → <b class="ok">15.5</b></td><td class="num">36.2 → 11.6</td><td class="num">2.316 → <b class="ok">0.162</b></td></tr>
+</table>
+<p>Residuals after: tangential 10.9/15.5 mm ≈ the designed 1.02 indicator overhang (~1 cm/face,
+so ~10–15 mm at a corner), radial 10.4/11.6 mm ≈ the same overhang radially; box-up residual
+0.013°/0.162° is the straight-box-vs-curved-wedge second order (a straight 1.02 box cannot
+exactly match a curved block face — the plan's “match the orientation” is met to that limit).</p>
+<div class="pair">
+<figure><img src="snap-before_farA.png" alt="before, farA"><figcaption><b>BEFORE</b> (D=153 m): the axis-aligned indicator floats offset from the block; its edges are not parallel to the warped block's edges (296 mm tangential, 2.32° tilt).</figcaption></figure>
+<figure><img src="snap-after_farA.png" alt="after, farA"><figcaption><b>AFTER</b> (D=153 m): the indicator is a perspective-correct trapezoid that hugs the block's actual warped orientation — the 1:1 match (15.5 mm = overhang, 0.16° residual).</figcaption></figure>
+</div>
+<div class="pair">
+<figure><img src="snap-before_spawn.png" alt="before, spawn"><figcaption><b>BEFORE</b> (identity region): small but present offset (37 mm).</figcaption></figure>
+<figure><img src="snap-after_spawn.png" alt="after, spawn"><figcaption><b>AFTER</b>: centred (0.0 mm), oriented (0.013°).</figcaption></figure>
+</div>
+
+<h3>Gate c — the slide</h3>
+<p>Measure (plan §3.3, same instrument before/after): stand still for 5 s at two warp
+magnitudes, record drift (distance, mm/s, direction vs downhill); walk forward 2 s along
+downhill, record veer off the intended line.</p>
+<table>
+<tr><th>site</th><th class="num">D (m)</th><th class="num">stand drift (mm/s) before</th><th class="num">stand drift (mm/s) after</th><th>stand direction</th><th class="num">walk veer (°) before → after</th><th class="num">walk speed (m/s) before → after</th></tr>
+<tr><td>spawn</td><td class="num">11.3</td><td class="num">0.0</td><td class="num">0.0</td><td>— (AC-0420 damper)</td><td class="num">2.485 → 2.481</td><td class="num">4.069 → 4.103</td></tr>
+<tr><td>farA</td><td class="num">153</td><td class="num">0.712</td><td class="num">0.679</td><td class="warn">UPHILL (anti-downhill, dir −175.4° vs downhill ≈ +2.9°)</td><td class="num">0.0068 → 0.0065</td><td class="num">4.257 → 4.221</td></tr>
+</table>
+<p><b class="ok">Standing drift is zero (below the AC-0420 damper's 0.2 m/s band) at both
+magnitudes, before and after</b> — the fix is visual-only and the physics is unchanged, so the
+standing slide does not regress. The farA residual 0.68–0.71 mm/s is <b>uphill</b>
+(<code>frac_downhill ≈ −1.0</code>), i.e. numerical settling, not a downhill slide. The walk
+veer at farA (0.007°) is far under the ~2.5° terrain-noise floor seen at the spawn control
+(a walk line with no flatness guarantee). <b>No non-zero DOWNHILL standing drift was measured,
+so the plan's damper-widening candidate (4.2) is not triggered and no friction/speed/damper
+change was made.</b> The user's “slides the way the block is angled” is consistent with the
+box/facet tilt vs the warped terrain — the visual reference §3 removes (the box no longer
+points in a direction different from the block).</p>
+
+<h2>5. interact — “still as recorded” (the direct regression check)</h2>
+<p>Plan: the interact arm's <code>place_ok</code>/<code>drop_spawned</code> must be “still as
+recorded.” This run: <code>place_ok=false</code>, <code>drop_spawned=false</code>,
+<code>mine_diag.prog_max=0.9722</code> — the <b>documented mine-timing flake</b>: HARNESS.md
+records these as “MINE-TIMING-FLAKY, not stable: the 3 s mine window races the mine completion
+(<code>mine_diag.prog_max</code> ~0.972 in every run) — observed true in one run and false in
+the next.” The prior “known-stable true” note is explicitly called optimistic. The plan's own
+gate text notes “<code>place_ok=false</code> is a KNOWN arm-timing flake — do NOT chase it.”
+The arm is <b>still as recorded</b> (the flake class, not a new defect): the aim DDA this ticket
+touches still selects the correct target (<code>target_cell=[8,140,8]</code>,
+<code>breakable_id=2</code>, <code>highlight_visible=true</code>, <code>inv_grew</code> id 2) —
+only the mine→drop→place timing races, as it always has.</p>
+
+<h2>6. Deviations &amp; findings</h2>
+<p>Full text in <code>AC-0479-deviations.txt</code>. Summary:</p>
+<ul>
+<li><b>D1 (justified):</b> 4.1's Jacobian is sampled on the <b>exact warp</b>
+(<code>SphereMath.home_point</code>), not on <code>world_pos_of_flat</code> as the plan's literal
+wording says. <code>world_pos_of_flat</code> <i>is</i> the per-column rigid facet approximation —
+the frame under test; sampling it at ±ε would return the misoriented facet basis and not fix
+the defect. The plan's intent (match the block's actual warped orientation) is met.</li>
+<li><b>D2:</b> home-vs-face split uses the existing <code>_anchor.face</code> discriminator the aim
+code already uses.</li>
+<li><b>D3 (finding, out of scope):</b> face-pair (<code>face&gt;1</code>) highlight placement feeds
+face-chunk CELL coords into <code>world_pos_of_flat</code> (which expects flat block coords) — a
+unit/domain mismatch. The aim box past the home patch was wrong before and remains wrong; this
+ticket's fence is the home-pair box (the user's report/screenshot is home terrain).</li>
+<li><b>D4 (finding, out of scope):</b> the flat frame itself (<code>world_pos_of_flat</code>/
+<code>flat_of_world_pos</code>) diverges from the sphere by metres at large D (farB D≈310 m: a
+player standing on the warped surface reads back as flat y 158.6 vs the block-grid top 159.0,
+~0.4 m round-trip gap; the probe's farB site embeds the player and freezes the walk test).
+The 4.1 fix removes the <i>box's</i> dependence on the facet map, so the box is right at every D
+in the home pair; the flat-frame divergence at distance is a separate, larger issue (the flat
+frame itself), untouched per the fences.</li>
+<li><b>D5 (finding, out of scope):</b> <code>WorldGen.terrain_height</code> (generator.gd:76) —
+the GDScript “mirror” of surface height — is STALE; the live C++ <code>surface_h</code>
+(gdext/src/gen.cpp:1038) diverges from it by 3–23 m. Site selection / analytic height must use
+the live streamed grid.</li>
+<li><b>D6:</b> 4.2 made no code change — the 3.3 measurement names no fix (see §4, gate c).</li>
+</ul>
+
+<h2>7. Instrumentation</h2>
+<p>A temporary <code>aimslide</code> probe arm was added to <code>godot/scenes/harness.gd</code>
+for the §3 measurements and <b>removed at closeout</b> (<code>harness.gd</code> is now
+byte-identical to HEAD; no <code>aimslide</code>/<code>_ac0479</code> symbols remain). The probe
+was observation-only (it teleports the player and streams a few extra home columns at the far
+sites; it changes no block, no policy, no warp). Before/after captures:
+<code>.scratch/AC-0479-gates/snap-{before,after}_{spawn,farA}.png</code> (xvfb + vulkan,
+<code>AWECRAFT_SIZE=1280,720</code>, proxy renderer — evidence about geometry, not the shipped
+look). RESULT JSON for the two probe runs is in <code>.r7.json</code> (before) and
+<code>.r9.json</code> (after) beside this page; full logs in
+<code>.scratch/AC-0479-gates/aimslide-r7.log</code> / <code>aimslide-r9.log</code>.</p>
+<pre>
+# gate a/b/c — before (aimslide-r7.log) and after (aimslide-r9.log), seed 44
+# box corner distance from the block's WARPED corner, radial vs tangential,
+# box-up vs block-up, standing drift, walk veer — see §2/§4 tables.
+#
+# gate d — gate_run (summary.txt):
+g0      rc=0 script=0 shader=0 ok=true 3s
+genhash rc=0 script=0 shader=0 ok=true 4s  (25/25 = recorded reference)
+player  rc=0 script=0 shader=0 ok=true 17s sprint_ok=true
+interact rc=0 script=0 shader=0 ok=true 9s place_ok=false (documented flake)
+light   rc=0 script=0 shader=0 ok=true 9s
+fluids  rc=0 script=0 shader=0 ok=true 13s
+gate_run: AC-0479 — all arms ok
+</pre>
+<p><b>Conclusion:</b> the magnitude test confirmed the diagnosis (box error grows with warp
+magnitude, ×13.5 in orientation ≈ D ratio); the 4.1 fix orients the home-pair aim box to the
+block's actual warped orientation via the warp Jacobian, collapsing the tangential corner error
+from 37/296 mm to the designed 10.9/15.5 mm overhang and the box-up tilt from 0.172°/2.316° to
+0.013°/0.162°, with zero standing-slide regression and all gates green. No friction/speed,
+generation, streaming, or other file was touched.</p>
+</body>
+</html>
