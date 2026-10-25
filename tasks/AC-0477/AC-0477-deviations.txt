@@ -1,0 +1,38 @@
+AC-0477 deviations (none block acceptance; findings noted for the coordinator)
+
+1. Gate (a) reports SEVEN BASELINE-RED lines, not two. The plan names water and
+   trees (both reported as baseline-red, exactly as required); the other five
+   (craft, fluidfall, settings, tint, toolpose, webfall) are ok:false in the
+   AUGUST archive itself and are truthfully reported against that input pair.
+   craft additionally surfaces as a real STATUS-CHANGE (baseline false -> current
+   true) — the terrain-dependent flip the AC-0330 context documents. Not a
+   defect of the tool: a fresh full battery run (coordinator heavy stage) as the
+   current input is the intended usage.
+
+2. CRY-WOLF AVOIDED, per plan: the eight archive arms with no `ok` on either
+   side and no declaration (editperf, fluidprobe, fluids, fluidsettle, fpv,
+   held, light, perf) produce visible `no-status` lines with NO exit impact.
+   The four AC-0330-declared arms (atlas, buckets, player, interact) produce
+   only the informational `declared-no-ok` line and zero complaints in every
+   run, clean and dirty alike.
+
+3. Design decision (plan 2.2 left it to the builder, stated): STATUS-CHANGE
+   (either direction), NEW-RED and STATUS-LOST (undeclared) are hard FAILS;
+   BASELINE-RED is a loud report by default (no exit impact) with an opt-in
+   --fail-on-baseline-red flag to make standing reds fail once the debt is
+   worked down.
+
+4. Fixtures: the "current tree" input for gate (a) is constructed under
+   .scratch/AC-0477-gates/fixtures/real_cur/ from the REAL current-tree
+   measurements (.scratch/AC-0330-gates/<arm>-r1.log, 8 arms, 2026-10-25 tree)
+   plus the remaining arms copied from the archived baseline — no fresh full
+   battery run was started by the builder (the battery is the coordinator's
+   heavy stage, per implement.md). Gate (b) status changes were CONSTRUCTED
+   (alpha red->green, beta green->red, and the real water log red against an
+   ok:true baseline copy) — the branch is tested, not assumed.
+
+5. The stale archive predates the battery trim (godot/harness_data.yaml
+   battery.modes is now 8 modes) and the `ok` additions; the tool therefore
+   derives the mode set from the input directories (union) rather than a
+   hard-coded list, and reads the value-reporting declaration from
+   harness_data.yaml (machine source) instead of a hard-coded arm list.

@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T01:23
+  updated_at: 2026-10-25T01:43
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0477
 - AC-0402
 - AC-0406
 - AC-0407
@@ -31641,11 +31640,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T01:22
-  updated_at: 2026-10-25T01:22
-  completed_at: null
+  updated_at: 2026-10-25T01:43
+  completed_at: 2026-10-25T01:43
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -31682,5 +31681,40 @@ intake:
     `godot/harness_data.yaml` (the declared `ok`-less contracts). Refs: AC-0293 (found the compare script''s
     value-only behaviour), AC-0330 (the seven arms), AC-0326 (the sea parity behind `water`).
 
-    '
+
+
+    CLOSED (round 98). WHAT LANDED: ONE MAINTAINED TOOL, `tasks/scripts/battery_compare.py` — `BASE_DIR
+    CUR_DIR [--harness-data PATH] [--fail-on-baseline-red]` — based on the later of the two historical
+    copies (`.scratch/AC-0288-gates/battery_compare.py`, value-diff engine taken verbatim including its
+    jitter leaves) with these additions: a real CLI, mode discovery from the input dirs, a dataless-file
+    skip, the DECLARATION read from `godot/harness_data.yaml`, and the full status layer.
+
+    THE SCOPE INSIGHT THAT MADE THIS THE RIGHT FIX: the compare was never one script. It existed as PER-TICKET
+    AD-HOC COPIES (AC-0287, AC-0288, ac0284a), each rewritten by whoever needed one — which is why there
+    was no single place to fix and why the debt kept recurring. Creating the maintained tool is the fix;
+    patching a `.scratch` copy would have re-lost it.
+
+    BEHAVIOUR, stated precisely because the distinctions matter: `ok:false` in BOTH inputs is a loud `!!
+    BASELINE-RED` report with exit unchanged by default (opt-in `--fail-on-baseline-red`), while any STATUS
+    DIFFERENCE is a hard FAIL — `STATUS-CHANGE` in either direction, `NEW-RED`, `STATUS-LOST`. So a long-standing
+    red becomes VISIBLE, which was the actual defect, and a newly-broken arm cannot slip through.
+
+    THE STATUS-CHANGE BRANCH IS TESTED ALL THREE WAYS, which was the gate this ticket existed to enforce:
+    alpha red->green, beta green->red, and the REAL `water` log against an ok:true baseline — the tool
+    failed rc=1 naming all three. An untested branch would have been the "test that cannot fail" pattern
+    this whole line of work has been about.
+
+    IT ALSO INDEPENDENTLY CONFIRMED AC-0330: comparing the archived baseline against the current tree
+    surfaced a genuine `STATUS-CHANGE craft false->true`, i.e. the tool immediately re-found the thing
+    a human had to notice by hand last round.
+
+    NO CRYING WOLF: the four arms AC-0330 declared value-reporting (atlas, buckets, player, interact)
+    emit only an informational `declared-no-ok` line with zero complaints in every run, and eight UNDECLARED
+    no-ok archive arms get visible `no-status` lines with no exit impact — so the check reports ambiguity
+    without pretending it is failure.
+
+    GATES: gate (a) baseline-red reported for 7 arms including `water` and `trees` rather than passing;
+    (c) a clean pair rc=0 PASS and a same-tree run rc=0 with only standing-red lines; (d) zero complaints
+    on the declared arms; (e) g0 rc=0 with 0 SCRIPT ERROR, genhash 25/25, `test_tasks.py` 53/53. No godot/arms/data
+    touched — this is a tool, not a behaviour change.'
   comments: []

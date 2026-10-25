@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0477 status-aware battery compare</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0477 — a battery compare that fails on status, not only on values</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. <b>Tooling ticket.</b> The point is not to patch one script — it is that the script that would have caught this debt <b>does not exist as a maintained tool</b>.</p>
+<h2>1. Why this exists (measured while closing AC-0330)</h2>
+<p>The battery compare diffs <b>VALUES only</b>, so an arm returning <code>ok:false</code> in both the baseline and the current run looks "identical" and passes silently. That is why <code>water</code> and <code>trees</code> stayed red for months with nobody noticing.</p>
+<p><b>AND THE SCOPE IS LARGER THAN THE FILING ASSUMED:</b> the compare scripts are <b>per-ticket ad-hoc copies</b> — <code>.scratch/AC-0287-gates/battery_compare.py</code>, <code>.scratch/AC-0288-gates/battery_compare.py</code>, <code>.scratch/ac0284a/battery_compare_a.py</code>, plus unrelated ones for other arms. Each ticket rewrote its own. <b>So there is no single place to fix</b>, which is the real reason this class of debt recurs — and a fix that only edits one copy will be re-lost the next time someone writes their own.</p>
+<h2>2. What to build</h2>
+<ul>
+<li><b>2.1 One maintained tool</b> at <code>tasks/scripts/battery_compare.py</code> — a real script with a documented CLI, not another <code>.scratch</code> artifact. Model its diff on the most complete existing copy (read <code>.scratch/AC-0287-gates/battery_compare.py</code> and <code>.scratch/AC-0288-gates/battery_compare.py</code> and say which you based it on and what you added).</li>
+<li><b>2.2 STATUS-AWARE.</b> It must fail (or loudly warn, your call — stated) when an arm's pass/fail status CHANGES in either direction, <b>and it must report arms whose status is red in the BASELINE</b>, so a long-standing red is visible instead of normalised. That second half is the actual fix: the debt was a red that never moved.</li>
+<li><b>2.3 DECLARED <code>ok</code>-LESS ARMS ARE NOT RED.</b> AC-0330 declared <code>atlas</code>, <code>buckets</code>, <code>player</code>, <code>interact</code> as value-reporting BY DESIGN, with that contract recorded in <code>godot/harness_data.yaml</code> §1. <b>Read the declaration rather than assuming every arm has an <code>ok</code></b> — otherwise the new check will cry wolf on four arms on its first run, which is how a good check gets disabled.</li>
+<li><b>2.4 Do not weaken the value diff.</b> It is what catches terrain/behaviour drift; status is an ADDITION, not a replacement.</li>
+</ul>
+<h2>3. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>tasks/scripts/battery_compare.py</td><td>new</td><td>Create.</td></tr>
+<tr><td>.scratch/AC-0287-gates/battery_compare.py, .scratch/AC-0288-gates/battery_compare.py</td><td>the prior art to base the diff on</td><td>READ ONLY — these are historical artifacts, not the fix target.</td></tr>
+<tr><td>godot/harness_data.yaml</td><td>§1 rows for the four declared <code>ok</code>-less arms</td><td>Read: the declaration source.</td></tr>
+<tr><td>tasks/scripts/AGENTS.md</td><td>the tooling rules for scripts in that directory</td><td>Read, and follow.</td></tr>
+<tr><td>tasks/AC-0477/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> <code>godot/scenes/harness.gd</code>, the arms, the battery's own behaviour, generation, streaming, light, the data JSON files, or any arm's <code>ok</code> semantics.</p>
+<h2>4. Gates — with teeth, which is the whole point</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>It FLAGS a red (the point)</td><td>Run it against a battery where one arm is red (the current tree has <code>water</code> and <code>trees</code> red — perfect natural fixtures) and show it <b>reporting them as baseline-red rather than passing</b>.</td></tr>
+<tr><td>It FLAGS a status CHANGE</td><td>Construct or find a case where status differs between the two inputs and show it failing. <b>If you cannot produce one, say so and explain what you would need</b> — an untested branch is the thing this ticket exists to stop.</td></tr>
+<tr><td>It stays QUIET when nothing changed</td><td>A same-tree comparison reports no status findings and the value diff behaves as before.</td></tr>
+<tr><td>It does not cry wolf</td><td>The four declared <code>ok</code>-less arms produce <b>no</b> status complaints on a clean run.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0477 --arms g0,genhash</code> — g0 zero SCRIPT ERROR, genhash 25/25 (a tooling change must not move the world); <code>test_tasks.py</code> passes.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. If a battery run is needed for the fixtures, budget for it.</p>
+<h2>5. Acceptance</h2><p>A maintained status-aware compare exists, it flags the two real reds and any status change, it stays quiet on the four declared arms and on unchanged input, the value diff is intact, and the prior art it came from is named.</p>
+<h2>6. Risks</h2><p>(1) Editing one <code>.scratch</code> copy instead of creating the maintained tool — that re-loses the fix. (2) Crying wolf on the four value-reporting arms, which would get the check disabled by the next person. (3) An untested status-change branch, which is precisely the "test that cannot fail" pattern.</p>
+<h2>7. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §3. Do not change any arm or the battery.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>8. Resume point</h2><p>AC-0330 classified the seven battery arms and left <code>water</code>/<code>trees</code> deliberately red; this makes red visible in future comparisons, which is the reason that debt survived for months.</p>
+</body></html>

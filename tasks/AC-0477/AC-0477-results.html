@@ -1,0 +1,60 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0477 results</title>
+<style>body{font:15px/1.5 ui-sans-serif,system-ui;max-width:900px;margin:2rem auto;padding:0 1rem}
+td,th{border:1px solid #aaa;padding:.35rem .5rem}code{background:#eee;padding:0 .2rem}
+.ok{color:#080}.bad{color:#b00}pre{background:#f6f6f6;padding:.6rem;overflow-x:auto;font-size:13px}</style></head><body>
+<h1>AC-0477 — a battery compare that fails on status, not only on values</h1>
+
+<h2>1. Gates</h2>
+<table><tr><th>Gate</th><th>Command / inputs</th><th>rc</th><th>Headline</th></tr>
+<tr><td>FLAGS a red (the point)</td><td><code>battery_compare.py .scratch/percol_battery .scratch/AC-0477-gates/fixtures/real_cur</code></td>
+<td class="bad">1</td><td><code>!! BASELINE-RED (7): fluidfall, settings, tint, toolpose, trees, water, webfall</code> — <b>water</b> and <b>trees</b> reported as baseline-red, not passing; plus a real <code>STATUS-CHANGE craft: ok false -&gt; true</code>. Log: <code>.scratch/AC-0477-gates/compare_baseline_red.log</code></td></tr>
+<tr><td>FLAGS a status CHANGE</td><td><code>battery_compare.py fixtures/status_base fixtures/status_cur</code></td>
+<td class="bad">1</td><td><code>RESULT: FAIL (3 structural, 3 status-change)</code> — both directions constructed: alpha <code>false -&gt; true</code>, beta <code>true -&gt; false</code>, and the <b>real</b> water log (ok false) against an ok:true baseline. Log: <code>compare_status_change.log</code></td></tr>
+<tr><td>QUIET when nothing changed</td><td><code>battery_compare.py fixtures/clean_base fixtures/clean_cur</code>; and <code>real_cur</code> vs itself</td>
+<td class="ok">0</td><td><code>RESULT: PASS</code>, zero value diffs, no status-change findings; the standing BASELINE-RED line still shows (a long-standing red stays visible by design). Logs: <code>compare_clean.log</code>, <code>compare_same_tree.log</code></td></tr>
+<tr><td>DOES NOT CRY WOLF</td><td>the four declared ok-less arms in every run above</td>
+<td class="ok">—</td><td><code>declared-no-ok atlas / buckets / interact / player (value-reporting by design, harness_data.yaml)</code> — informational line only, zero complaints</td></tr>
+<tr><td>g0</td><td><code>gate_run.py AC-0477 --arms g0,genhash</code> (r2)</td><td class="ok">0</td><td><code>rc=0 script=0 shader=0 ok=true 3s</code> — zero SCRIPT ERROR. Log: <code>g0-r2.log</code> / <code>gate_run-r2.log</code></td></tr>
+<tr><td>genhash</td><td>same run</td><td class="ok">0</td><td><code>ok=true</code>, 25 GENHASH lines — 25/25, the world did not move. Log: <code>genhash-r2.log</code></td></tr>
+<tr><td>test_tasks.py</td><td><code>python3 tasks/scripts/test_tasks.py</code></td><td class="ok">0</td><td><code>53 passed, 0 failed</code> (RESULT ok:true)</td></tr>
+</table>
+<p>Opt-in check: the same same-tree pair with <code>--fail-on-baseline-red</code> exits 1 with
+<code>RESULT: FAIL (7 baseline-red)</code> (<code>compare_same_tree.log</code> sibling run, stated in deviations §3).</p>
+
+<h2>2. Deviations</h2>
+<p>Full text in <code>tasks/AC-0477/AC-0477-deviations.txt</code>. Summary: (1) gate (a) shows
+<b>seven</b> baseline-reds, not two — the extra five (craft, fluidfall, settings, tint, toolpose,
+webfall) are red in the August archive itself and are reported truthfully against that input pair;
+craft is also a genuine STATUS-CHANGE. (2) The eight archive arms with no <code>ok</code> either side
+get visible <code>no-status</code> lines with no exit impact — the cry-wolf avoidance the plan demands.
+(3) Stated design decision: status changes / new-red / status-lost hard-fail; baseline-red reports
+loudly by default with <code>--fail-on-baseline-red</code> opt-in. (4) Gate (a)'s "current tree" input is
+the real AC-0330-gates r1 measurements (8 arms) + the rest copied from the archive — no fresh
+battery run by the builder (coordinator's heavy stage). (5) Mode set is derived from the input
+directories and the declaration is read from <code>godot/harness_data.yaml</code> (machine source),
+since the stale 31-mode list in the prior copies predates the battery trim to 8 modes.</p>
+
+<h2>3. Files</h2>
+<ul>
+<li><code>tasks/scripts/battery_compare.py</code> — <b>new</b>, the maintained tool (documented CLI in its docstring)</li>
+<li><code>tasks/AC-0477/AC-0477-results.html</code>, <code>AC-0477-deviations.txt</code>, <code>continuity.md</code> (this ticket)</li>
+<li><code>.scratch/AC-0477-gates/</code> — logs: <code>compare_*.log</code> (four runs), <code>gate_run-r2.log</code>, <code>g0-r2.log</code>, <code>genhash-r2.log</code>, fixtures under <code>fixtures/</code></li>
+<li>read-only prior art: <code>.scratch/AC-0288-gates/battery_compare.py</code> (the base copy), <code>.scratch/AC-0287-gates/battery_compare.py</code>, <code>.scratch/ac0284a/battery_compare_a.py</code> — untouched; <code>godot/harness_data.yaml</code> — untouched</li>
+</ul>
+
+<h2>4. Headline evidence</h2>
+<pre>$ battery_compare.py .scratch/percol_battery .../fixtures/real_cur
+  !! STATUS-CHANGE  craft: ok false -&gt; true (either direction is a finding)
+  !! BASELINE-RED    (7): fluidfall, settings, tint, toolpose, trees, water, webfall  [standing reds — reported, not a regression]
+  declared-no-ok  atlas | buckets | interact | player (value-reporting by design, harness_data.yaml)
+RESULT: FAIL (8 structural, 1 status-change)   rc=1
+
+$ battery_compare.py .../status_base .../status_cur
+  !! STATUS-CHANGE  alpha: ok false -&gt; true
+  !! STATUS-CHANGE  beta:  ok true -&gt; false
+  !! STATUS-CHANGE  water: ok true -&gt; false      (the real red water log)
+RESULT: FAIL (3 structural, 3 status-change)   rc=1
+
+$ battery_compare.py .../clean_base .../clean_cur
+RESULT: PASS                                        rc=0   (four declared arms: no complaints)</pre>
+</body></html>
