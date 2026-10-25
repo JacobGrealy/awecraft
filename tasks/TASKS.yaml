@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-25T06:11
+  updated_at: 2026-10-25T06:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28766,10 +28766,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: blocked
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-25T06:11
+  updated_at: 2026-10-25T06:12
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28884,7 +28884,15 @@ intake:
     original method (254 points, step >= 6, mean step 68 at rows 357-358) and say whether the signature
     is still there; (2) if it is gone, cancel with the measurement; (3) if it is present, THEN ask for
     the Windows observation, because that is the only way to separate a real seam from an llvmpipe sub-texel
-    artifact.'
+    artifact.
+
+
+
+    WAITING ON: a Windows run — is the disc seam line present on the shipped renderer? llvmpipe (this
+    box''s proxy) cannot answer that, and closing on a guess would either retire a real defect or send
+    a builder into a bake change on no evidence. RE-MEASURE ON THE CURRENT TREE FIRST: the far-tier bake
+    was rebuilt and re-shipped at AC-0469 stage D + AC-0478 (100% chart coverage where there was 16%,
+    23.4% texel difference), which could have removed the line already.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
