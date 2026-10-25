@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0475 final dev-path residuals</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0475 — the last two tracked files that hardcode this dev box</h1>
+<p>Coordinator contract. Medium builder applies it with tasks/templates/implement.md. Small ticket; the important part is <b>deciding each file on its merits instead of sweeping</b>.</p>
+<h2>1. What is left (found by AC-0320's grep gate, outside that ticket's fence)</h2>
+<ul>
+<li><b><code>godot/probe_alpha.gd:5</code></b> — <code>const PACK := "/home/angrygiant/github_projects/AweCraft/Faithful-32x-1.21.11.mcpack"</code>. This is a standalone <code>extends SceneTree</code> probe (run with <code>-s</code>), and <b>nothing references it</b> (a grep across <code>.gd</code>/<code>.tscn</code>/<code>.cfg</code> finds no caller), so it is a developer tool rather than product code. Its other paths are already <code>res://</code>, which is portable.</li>
+<li><b><code>godot/HANDOFF-emergent-queue.archive.md:116</code></b> — an archived handoff document containing the same path. <b>Do not sweep this: decide whether it is history.</b></li>
+<li>For reference, the rest of the grep hits need nothing: 12 are gitignored (one <code>.godot</code> cache entry, thirteen legacy <code>godot/.scratch</code> logs) and <code>tasks/scripts/</code> is clean.</li>
+</ul>
+<h2>2. The rule this must follow</h2>
+<p>AC-0320 established ONE resolved output root — <code>AWECRAFT_SHOT_DIR</code> when set, else <code>ProjectSettings.globalize_path("res://..") + "/.scratch/"</code> — and the harness now routes its outputs through it. <b>A probe needing a repo-relative input should resolve it the same way rather than inventing a second convention.</b> Note <code>probe_alpha.gd</code>'s input is a <b>source asset</b> (a <code>.mcpack</code> in the repo root), not an output, so a read root is the right idea but likely needs its own tiny helper or an env override — <b>say which you chose and why</b>.</p>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3.1 <code>probe_alpha.gd</code></b>: make the pack path portable — resolve it relative to the repo (or take it from an env var / CLI arg with a sensible default). <b>Confirm the probe still runs when invoked</b>; if the <code>.mcpack</code> is not even present in the tree, say so and make the path an explicit required argument rather than a lying constant.</li>
+<li><b>3.2 <code>HANDOFF-emergent-queue.archive.md</code></b>: decide and state — an archive recording what was true when written is <b>history and should be left</b>, the same ruling AC-0320 applied to the three journals. If you conclude it should change, say what makes it different from those.</li>
+<li><b>3.3 Re-run the grep</b> and report the remaining lines <b>classified</b> (live code / gitignored / history) rather than a bare count.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/probe_alpha.gd</td><td><code>:5</code> <code>const PACK</code>, and wherever it reads the other <code>res://</code> paths</td><td>Edit: portable resolution.</td></tr>
+<tr><td>godot/HANDOFF-emergent-queue.archive.md</td><td><code>:116</code></td><td>Decide; most likely LEAVE and state why.</td></tr>
+<tr><td>tasks/AC-0475/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the harness, the shot root convention itself, gameplay, generation, streaming, light, the data JSON files, or the three journals AC-0320 preserved.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>No live dev paths</td><td><code>grep -rn "/home/angrygiant" godot/ tasks/scripts/</code> reported <b>classified line by line</b>: nothing in live code; gitignored hits identified as such; the archived handoff named as history with the decision stated.</td></tr>
+<tr><td>The probe still works (or is honestly retired)</td><td>Either the probe runs with the new resolution (report how you invoked it and what it printed), or a stated finding that its input asset is absent so the path becomes an explicit required argument.</td></tr>
+<tr><td>Nothing else broke</td><td><code>python3 tasks/scripts/gate_run.py AC-0475 --arms g0,genhash</code> — g0 zero SCRIPT ERROR, genhash 25/25. (The probe is not in the battery, so this is a guard against accidental damage, not a functional test of the probe.)</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. A <code>-s</code> probe run is itself a godot process: take the slot first.</p>
+<h2>6. Acceptance</h2><p>The probe's path portable (or its input honestly declared required), the archive decision stated, and the grep reported classified rather than counted.</p>
+<h2>7. Risks</h2><p>(1) Sweeping the archived handoff along with the live code — that is history rewriting and AC-0320 already ruled against it for three similar files. (2) "Fixing" the probe by pointing it at a path that does not exist, which is worse than the hardcoded one because it fails later and more confusingly. (3) Inventing a second path convention instead of following AC-0320's.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml; no new tickets.</li>
+<li>No edits outside §4.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0320 removed the hardcoded paths from the harness output paths and from <code>tasks/scripts/</code>, moved <code>harness_data.yaml</code> beside the doc it renders, and established the one shot-root convention. This finishes the residuals it had to fence out.</p>
+</body></html>
