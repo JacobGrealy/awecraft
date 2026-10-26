@@ -398,7 +398,15 @@ const DEFAULTS := {
 	# the render edge (R+1)*16), kept at/under 0.875 so the full-fog
 	# boundary stays ahead of the worst-case pop-in face at every R >= 7.
 	"fog_start_pct": 87,
-	"fog_enabled": true,
+	# AC-0510: the fog is REMOVED as the default look (user ruling: "remove
+	# both of them — the chunks should appear out of the satellite lod, not
+	# blue mist"). The key STAYS so a saved user://awecraft.cfg remains
+	# well-defined: a saved cfg that set fog_enabled=true still enables the
+	# engine fog on load (an explicit user choice is honoured, not silently
+	# dropped); a fresh/default cfg gets OFF. The Options row (menu.gd)
+	# stays as the opt-in toggle — removing the row is a separate ticket
+	# (menu.gd is outside this ticket's file list).
+	"fog_enabled": false,
 	# AC-0261: the med/low band split (taxi chunks). The visible LOD
 	# zones: HIGH = [0, sim_dist), MED (8x8x8) = [sim_dist, low_start),
 	# LOW (4x4x4) = [low_start, render_dist); NOTHING renders past the

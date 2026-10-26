@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-26T09:01
+  updated_at: 2026-10-26T10:38
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0510
+- AC-0511
 - AC-0480
 - AC-0484
 - AC-0485
@@ -34673,11 +34673,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-26T09:01
-  updated_at: 2026-10-26T09:01
-  completed_at: null
+  updated_at: 2026-10-26T10:38
+  completed_at: 2026-10-26T10:38
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -34731,6 +34731,115 @@ intake:
     in `godot/autoload/settings.gd`, `DayNight.fog_far`, and the push sites in `godot/world/world.gd`.
     Refs: AC-0399 (the far tier''s haze), AC-0451 (the handover), AC-0463 (the wash/light unification),
     AC-0480 (tier shading parity).
+
+
+
+    CLOSED (round 114) — BOTH TERMS ARE GONE AS INSTRUCTED, AND THE MEASUREMENT FOUND THAT **THE BLUE
+    THE USER PHOTOGRAPHED AT FLIGHT ALTITUDE WAS NEVER FOG OR WASH.** That is the most important sentence
+    in this close, and it means the ticket''s removal is done while the user''s actual symptom is NOT
+    yet fixed.
+
+    REMOVED: (1) FOG — `fog_enabled` now defaults OFF. The key and its Options row STAY, so a saved `user://awecraft.cfg`
+    with `fog_enabled=true` is still honoured as an explicit user choice while a fresh config gets off;
+    that is a deliberate decision, stated rather than left undefined. (2) WASH — `aero.gd wash_on()` returns
+    false, so the AeroWash quad is never created and `aero_wash.gdshader` is never loaded. Wash was never
+    a Settings key, so a saved cfg CANNOT request it and no cfg handling was needed; the `AWECRAFT_AERO_WASH`
+    dev env is now inert.
+
+    THE FRONTIER, MEASURED: the old veil read **(158.6, 208.7, 208.0)** against fully-fogged air at about
+    (215,249,249). With both terms gone the same annulus reads **(114.7, 152.4, 115.7)** — body terrain
+    resolving out of the air, GREEN rather than mist — and the near tier reads a saturated (71.3, 119.7,
+    49.8). So the requested behaviour ("chunks should appear out of the satellite lod") is what now happens
+    at the wall ring.
+
+    **BUT AT THE USER''S 941 m VANTAGE THE FRAMES ARE BYTE-IDENTICAL.** The fog window holds no ground
+    there at all, so **the blue tint they photographed while flying was never fog and never wash — it
+    is the PLANET BODY''S OWN HAZE plus the sky**, which this ticket fenced and did not touch. Removing
+    fog and mist therefore did not change that specific symptom, and pretending otherwise would be the
+    exact failure this project keeps correcting. Filed as **AC-0511** with this measurement.
+
+    THE PROOF OBLIGATION WAS ANSWERED HONESTLY, INCLUDING THE COST: what fog and wash WERE hiding is now
+    visible — per-chunk slab edges at the frontier (wall-jump 9.5 -> 20.0 mean, max 153 -> 249) and part
+    of the aerial perspective (300-400 m contrast 7.75 -> 17.97). Those are REPORTED AS FINDINGS AND NOT
+    RESTORED, per the plan''s explicit prohibition. The reassuring half: **no pop, no unbuilt edge, no
+    gap** — near-class hole reading went 0.09% to 0.05% and the annulus is continuous in both states.
+
+    AERIAL READABILITY HOLDS: at 941 m it is unchanged (curvature, disc and sky carry it), and at 300
+    m the cue is now texture plus the body''s haze gradient. So removing fog did not cost the sense of
+    altitude.
+
+    TWO THINGS CHECKED RATHER THAN ASSUMED: the far tier''s `haz_b` **does not exist** — it was deleted
+    in AC-0400/AC-0404/AC-0415, and both tiers ride the SAME engine env fog, so there is no per-tier asymmetry
+    and nothing to unify; and the `lightstate` arm''s `wash` field is `wash_detected`, a LIGHT-LEAK CANARY
+    rather than the wash quad, so it reads false and unchanged and **needed no re-baselining** — a distinction
+    worth recording, because the name invites exactly the wrong conclusion.
+
+    GATES: g0 **0 script / 0 shader**, genhash **25/25**, lightstate green (machine-timing fields demoted
+    1 / stragglers 3 / vc_diff 4, all inside their documented classes), 6/6 Forward+ renders clean.'
+  comments: []
+- id: AC-0511
+  title: the blue tint at altitude is the body's haze, not fog or mist
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-26T10:38
+  updated_at: 2026-10-26T10:38
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    When you fly, the chunks that load in look blue while the planet LOD does not. It is not fog and it
+    is not the mist effect - it is the planet body''s own atmosphere tinting the terrain, and it should
+    not be there (or should not differ between tiers).
+
+
+    ## 2) Technical Details
+
+    FOUND BY AC-0510 (round 114), which removed the fog and the wash as instructed and then MEASURED the
+    user''s actual vantage. That measurement is the reason this ticket exists:
+
+    **AT THE USER''S 941 m THE FRAMES ARE BYTE-IDENTICAL WITH FOG AND WASH BOTH OFF.** The fog window
+    holds no ground at that altitude, so the blue tint photographed while flying was NEVER fog and NEVER
+    wash. What remains is **the PLANET BODY''S OWN HAZE plus the SKY** — the `haz_d` rim/air-column term
+    AC-0399 repaired, which AC-0510 fenced and did not touch.
+
+    WHY THIS MATTERS: the user''s report had two halves — "the LODs are blue" and "remove the fog and
+    mist" — and only the second was actionable on the terms as understood. With fog and wash gone, the
+    blue is STILL THERE at altitude, now with nothing else to blame. So this is the real defect behind
+    the observation.
+
+    WHAT TO ESTABLISH FIRST:
+
+    1. **WHICH TERM** produces the blue at 941 m: the body''s `haz_d` air-column term, the sky gradient
+    behind it, or a combination. AC-0399''s notes cover `haz_d` and its reversed-mix repair; the shader
+    is `core/lod_avg.gdshader` (the body''s shader) and `core/aero_sky_gradient.gdshader`. Isolate one
+    at a time — the AC-0402 method (bypass a term, re-render, compare pixels) — rather than reasoning
+    about which is likely.
+
+    2. **WHETHER IT IS A TINT ON THE TERRAIN OR THE TERRAIN''S LEGITIMATE AERIAL PERSPECTIVE.** Aerial
+    perspective on a planet seen from 941 m is physically real; an over-strong or wrongly-hued version
+    is not. Measure the tint''s magnitude and hue against the near-field ground colour, and state whether
+    what remains is defensible or a defect. **AC-0510 removed the fog and the aerial perspective got stronger
+    at 300 m (contrast 7.75 -> 17.97), so at 941 m there may now be TOO LITTLE atmosphere rather than
+    too much — check both directions.**
+
+    3. **WHETHER THE TWO TIERS STILL DIFFER** — the user''s original complaint was that near LODs are
+    blue while the satellite is not. If both are now treated identically, say so with numbers; if they
+    differ, that asymmetry is the defect regardless of magnitude.
+
+    THE USER''S STANDING REQUIREMENT, relevant here: no atmospheric treatment should make the world look
+    like a different place depending on how far away it is. The tiers must read as ONE world.
+
+    FILES: `godot/core/lod_avg.gdshader` (the body''s haze, `haz_d`, AC-0399''s repair), `godot/core/aero_sky_gradient.gdshader`
+    (the sky — NOTE AC-0483 removed its synthetic horizon this session, so re-read it rather than trusting
+    older notes), the Aero/haze push sites in `godot/world/world.gd`, and `godot/autoload/aero*.gd`. Refs:
+    AC-0510 (the measurement that located this), AC-0399 (the haze mix repair), AC-0402 (the isolate-one-term
+    method), AC-0483 (the sky horizon removal).
 
     '
   comments: []

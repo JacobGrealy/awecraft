@@ -1,0 +1,50 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0510 remove fog and mist</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0510 — remove the fog and the mist; chunks emerge from the satellite LOD</h1>
+<p>Coordinator contract. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>A removal ticket with a proof obligation: if something was being hidden, report the thing rather than restoring the fog.</b></p>
+<h2>1. The ruling</h2>
+<p>User, with screenshots: <em>"I don't think the fog or mist make sense any more, remove both of them. the chunks should appear out of the satellite lod not blue mist."</em></p>
+<p><b>The observation that makes this more than a settings flip:</b> with fog <b>ON</b>, the LODs that load in are <b>blue</b> while flying, but the planet satellite is <b>not</b> — the two tiers are being atmospherically treated <b>differently</b>. And with fog <b>OFF the chunks still appear out of a blue mist</b>, which means <b>a second atmospheric term exists independently of the user-facing fog setting.</b> Both must go.</p>
+<h2>2. The two effects, already located</h2>
+<ul>
+<li><b>THE FOG</b> — <code>settings.gd:401</code> <code>"fog_enabled": true</code> (user-facing, already toggleable), plus <code>"fog_start_pct": 87</code> at :400, the distance model <code>DayNight.fog_far(render_radius, fog_start_pct)</code>, and the push site around <code>world.gd</code>'s fog uniform set.</li>
+<li><b>THE MIST / WASH</b> — a <b>separate</b> effect: <code>main.gd:1187</code> creates an <code>AeroWash</code> quad with <code>core/aero_wash.gdshader</code> <b>only if <code>AeroLib.wash_on()</code></b>, and <code>main.gd:1277</code> sets <code>aero_wash.visible = true</code>. Its uniforms are <code>WASH_COLOR</code>, <code>WASH_AMOUNT</code>, <code>WASH_TOP_GLOW</code>. <b>This is why turning fog off leaves the mist</b> — it is a full-screen haze quad gated by a different switch.</li>
+<li><b>A POSSIBLE THIRD:</b> <code>core/lod_avg.gdshader</code> carries the far tier's own haze terms (<code>haz_b</code>, which AC-0399 repaired after finding the mix reversed). If the far tier keeps haze while the near tier loses it, the tiers still will not match — <b>check it in §3c</b>.</li>
+</ul>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3a REMOVE THE FOG.</b> Default <code>fog_enabled</code> to <b>false</b> and make the push path not apply fog when it is off. <b>Decide and state whether the setting stays as an opt-in or is removed outright</b> — the user said "remove", so if you keep it as a toggle say why, and if you remove it say what happens to a saved cfg that sets it (a saved <code>user://awecraft.cfg</code> can still request it; handle that explicitly rather than leaving it undefined).</li>
+<li><b>3b REMOVE THE MIST.</b> Make <code>AeroLib.wash_on()</code> false / drop the wash quad and its shader use. <b>Same cfg question</b>: state how a saved override is handled.</li>
+<li><b>3c CHECK THE FAR TIER'S HAZE</b> (<code>lod_avg.gdshader</code>'s <code>haz_b</code> and its mix). If it survives, the far tier still has atmosphere the near tier does not, which is the asymmetry the user is describing. <b>Report whether it stays and why</b> — do not silently remove a term AC-0399 measured and repaired without saying so.</li>
+<li><b>3d PROVE THE REPLACEMENT BEHAVIOUR.</b> The user wants <b>chunks to appear out of the satellite LOD</b>. With both terms gone, the far tier already draws those pixels, so the transition should be the far tier's appearance resolving into geometry with <b>no atmospheric overlay between them</b>. <b>Verify that at the streaming frontier</b> and report what you see with numbers (pixel values at the frontier, before and after).</li>
+</ol>
+<h2>4. THE PROOF OBLIGATION — the part that matters most</h2>
+<p>Fog and wash may be load-bearing. They commonly hide: <b>(a) unbuilt-chunk edges at the streaming frontier</b>, <b>(b) the aerial perspective that makes altitude readable</b>, <b>(c) the far tier's haze</b>, and <b>(d) the handover between tiers (AC-0451)</b>. AC-0451's own measurement found the aerial see-through was <b>mostly UNBUILT CHUNKS rather than the handover</b> — which is exactly the kind of defect fog was covering.</p>
+<p><b>So: remove them, then LOOK for what they were hiding. If removal exposes a pop, a hard unbuilt edge, or a visible gap at the frontier, THAT DEFECT IS THE REAL ONE — report it as a finding. DO NOT reinstate fog or wash to hide it, and do not reduce the removal to a partial one to avoid the question.</b></p>
+<h2>5. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/autoload/settings.gd</td><td><code>fog_enabled</code> :401, <code>fog_start_pct</code> :400, and the UI definition around :683-685</td><td>Edit: default to false / remove per 3a.</td></tr>
+<tr><td>godot/scenes/main.gd</td><td><code>AeroWash</code> creation :1187-1199 (gated by <code>AeroLib.wash_on()</code>), <code>aero_wash.visible = true</code> :1277</td><td>Edit per 3b.</td></tr>
+<tr><td>the AeroLib / Aero autoload</td><td><code>wash_on()</code>, <code>WASH_COLOR</code>, <code>WASH_AMOUNT</code>, <code>WASH_TOP_GLOW</code> (find the file — an autoload exposing these)</td><td>Edit per 3b.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the fog uniform push and <code>DayNight.fog_far</code> call site</td><td>Edit per 3a.</td></tr>
+<tr><td>godot/core/lod_avg.gdshader</td><td><code>haz_b</code> and its mix (AC-0399)</td><td>Read; edit only per 3c, with the decision stated.</td></tr>
+<tr><td>tasks/AC-0510/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming residency rules, light ownership, the bake assets, the planet body, the sky gradient beyond its fog interaction, the data JSON files, the aim box, the cloud volume.</p>
+<h2>6. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>Both effects are GONE, and the cfg behaviour is stated</td><td>Fog off by default and not applied; wash not created/applied; <b>and an explicit statement of what happens to a saved cfg that requests either.</b></td></tr>
+<tr><td>The frontier is measured, not eyeballed</td><td>Pixel values across the streaming frontier <b>before and after</b>: the blue veil must be gone (report the old veil's colour and the new values at the same pixels), and the transition must read as far-tier appearance resolving into geometry.</td></tr>
+<tr><td>The proof obligation is answered</td><td>A statement of <b>what fog/wash were hiding, if anything</b>: unbuilt edges, aerial perspective, or nothing. <b>If removal exposes a defect, it is reported as a finding with numbers — not hidden by restoring fog.</b></td></tr>
+<tr><td>Aerial readability check</td><td>Altitude still reads as altitude from a high vantage without fog. If it does not, say so — that is a real finding about what fog was providing.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0510 --arms g0,genhash,lightstate</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, <b>lightstate</b> (this arm already reports a <code>wash</code> field — it will now read differently; <b>report the change explicitly and re-baseline the standing value if the arm's own invariant changes</b>, via <code>harness_data.yaml</code> + <code>harness_doc.py --render</code>).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>Blur is OFF by default (user ruling) — do not enable it.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>7. Acceptance</h2><p>Fog and wash both gone with the cfg behaviour stated; the frontier measured before/after with the veil's colour reported; the proof obligation answered honestly (including "it was hiding X, here it is"); the far tier's haze decision stated; lightstate's changed field explicitly re-baselined if its invariant moved.</p>
+<h2>8. Risks</h2><p>(1) <b>Reinstating fog to hide a pop</b> — the ticket forbids it; report the pop instead. (2) Removing only the user-facing fog and leaving the wash, which is the exact bug the user already observed. (3) Leaving the far tier's <code>haz_b</code> in place so the tiers still differ. (4) Forgetting a saved cfg can re-request either effect. (5) Silently changing the <code>lightstate</code> arm's standing value without re-baselining it.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §5. No partial removal to dodge the proof obligation, no restoration to hide a defect.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>10. Resume point</h2><p>AC-0399 repaired the far tier's haze; AC-0451 found the aerial see-through was mostly unbuilt chunks; AC-0463 unified light with a wash invariant. The user reports the tiers are atmospherically treated differently and wants both terms removed.</p>
+</body></html>

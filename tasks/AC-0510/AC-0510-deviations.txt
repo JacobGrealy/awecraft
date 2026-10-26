@@ -1,0 +1,89 @@
+AC-0510 deviations from plan.html
+
+1. world.gd NOT edited (plan §5 row says "Edit per 3a" at "the fog uniform
+   push and DayNight.fog_far call site"). The push there (world.gd:5461-5477,
+   _ac0401_push block (1)) is the AC-0401 u_fog_far OWNERSHIP WALL, not an
+   atmospheric term: the satellite body's per-fragment op ramp
+   (satellite_body.gdshader op = smoothstep(u_fog_far, u_render_edge, d))
+   and every near-tier discard (lod_avg / chunk_lit_* / fluid_anim_*) ride
+   on it. It carries no colour. The plan's own fence protects the consumer
+   ("do not touch: the planet body"), and the wall is exactly where the
+   satellite LOD takes over — the behaviour the user asked for ("chunks
+   should appear out of the satellite lod"). Gating it off with fog would
+   delete the handover. The atmospheric push path is ONLY main.gd (the env
+   init + _update_fog), and both are now gated. Stated here, not invented:
+   the plan's §2 location note ("the fog uniform push in world.gd") is
+   stale — world.gd pushes the wall, main.gd pushes the fog.
+
+2. §3c's premise is stale: core/lod_avg.gdshader carries NO haz_b. The far
+   tier's hand-rolled haze (the AC-0384 r8 bridge, thinned by AC-0400,
+   bridge removed by AC-0404, the duplicate deleted by AC-0415) is gone
+   from that file — its header documents the deletion and the single-source
+   consequence. The far tier now RIDES THE SAME ENGINE ENV FOG as the near
+   tier, so fog OFF removes both tiers identically: no residual far-tier
+   asymmetry survives this ticket. AC-0399's repair lives in the satellite
+   BODY's haz_d rim (satellite_body.gdshader) — fenced ("do not touch: the
+   planet body") and not a near-tier term. No shader edit made; nothing to
+   remove. Reported per the gate, not silently.
+
+3. 3a decision (the plan leaves it to me): the setting STAYS as an opt-in,
+   default false — not removed outright. Why: menu.gd (the "Enable fog"
+   checkbox, menu.gd:335-342, its sync at :1255, the fog_start_pct slider
+   enable state at :1302-1303, the toggle handler at :1617-1620) is outside
+   the plan's §5 file list; removing the key would strand those rows and
+   the settings load-path parse branch (settings.gd:685) — the removal is a
+   separate ticket. SAVED-CFG BEHAVIOUR (stated per the gate):
+   - fog: a saved user://awecraft.cfg with fog_enabled=true is HONOURED —
+     load_settings pulls the key (it stays in the table) and the per-frame
+     _update_fog enables the engine fog. An explicit user choice is not
+     silently dropped. A fresh/default cfg gets OFF.
+   - wash: it was NEVER a Settings key — a saved cfg CANNOT request it. The
+     only gate was the dev env AWECRAFT_AERO_WASH (A/B for AC-0241-era
+     work); it now has no effect (wash_on() is false unconditionally).
+
+4. _update_fog keeps pushing the depth WINDOW (env.fog_depth_begin/end)
+   even with fog off. The engine applies no fog while env.fog_enabled is
+   false, so this changes nothing visually; it keeps (a) the u_fog_far wall
+   home (main.gd:1515 feeds the lod_avg material from env.fog_depth_end)
+   "one number, one home" and (b) the rowless fogsettings probe's contract
+   (the slider's live wiring) intact.
+
+5. Measurement vantages and config (the plan fixes the recipe envs
+   AWECRAFT_SIZE=1280,720 + AWECRAFT_SNAP_DRAIN=600 — used — but not the
+   vantages; the standing air preset (AC-0450) was used):
+   - alt 941 m pitch-30 (the user's documented flight altitude, AC-0449):
+     the aerial-readability frame (gate d).
+   - alt 300 m nadir: THE streaming frontier — at 941 m the ground is >=800
+     m below the camera, OUTSIDE the 332 m fog window, so the fog-vs-terrain
+     effect is exactly zero there and the handover annulus is invisible;
+     at 300 m the fog window, the fog wall (332), and the body fade-in
+     (332-400) all cross the visible ground (AC-0450's R7 "the altitude
+     the handover arithmetic predicts").
+   - the user's documented config R24/F83 (fog_far 332 / render_edge 400,
+     the AC-0390 diagnostic pair) on every frame.
+   - CLOUDS=0: the 275-400 m cloud shell would veil the annulus (the
+     AC-0399/AC-0450 measurement-frame precedent). Blur OFF by default per
+     the user ruling (no DoF envs).
+
+6. lightstate: NO re-baseline needed. The arm's `wash` field is
+   `wash_detected` — a LIGHT-LEAK canary (worst_leaks > 0, _light_eff_stats:
+   air cells with light level 15 >= 2 m below the surface), independent of
+   the aero wash quad. It reads false both before (standing value) and
+   after (this run: worst=null, all 22 grid chunks leaks 0) — the arm's own
+   invariant did not move. Machine-timing fields moved inside their
+   documented classes (the gated invariants — census 0/0, wash false, 0
+   leaks — all held): demoted 1 vs standing 41 (the arm's own AC-0311 note
+   records an earlier SAME-BUILD run reading exactly 1/3), stragglers 3 vs
+   0, ab vc_diff 4 vs standing 1-2 (the settle-timing tail; arr_diff_cells
+   1 = the one-cell class holds), low_on_high_n 0 (documented churn, not a
+   gate).
+
+7. harness_data.yaml: no standing value moved (point 6) — NOT re-baselined,
+   so harness_doc.py --render was not run (nothing to render; the doc is
+   untouched). harness_doc.py --check confirms doc/data consistency
+   (see GATES entry).
+
+8. Render wall time: the ticket budgeted ~1200 s per render; the measured
+   R24 air-preset runs on this box completed in ~180-260 s each (llvmpipe,
+   drain 600). The budget is a ceiling, not a target — all six renders
+   completed well inside it.

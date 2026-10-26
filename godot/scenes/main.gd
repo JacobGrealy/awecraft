@@ -102,12 +102,15 @@ func _ready() -> void:
 	_sky_res.sky_material = sky_mat
 	env.sky = _sky_res
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.fog_enabled = bool(Settings.values.get("fog_enabled", true))
+	# AC-0510: the fog is REMOVED as the default look (user ruling — the
+	# chunks should appear out of the satellite LOD, not blue mist). The
+	# setting stays an opt-in (menu.gd's "Enable fog" row is outside this
+	# ticket's file list); the default flips to OFF and a saved cfg that
+	# sets fog_enabled=true is still honoured (an explicit user choice).
+	# AWECRAFT_NO_FOG stays the hard off for the render recipes.
+	env.fog_enabled = OS.get_environment("AWECRAFT_NO_FOG") != "1" \
+			and bool(Settings.values.get("fog_enabled", false))
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	if OS.get_environment("AWECRAFT_NO_FOG") == "1":
-		env.fog_enabled = false
-	if not bool(Settings.values.get("fog_enabled", true)):
-		env.fog_enabled = false
 	world_env.environment = env
 	add_child(world_env)
 	# AC-0242: apply the renderer fix to the shared water/lava materials; the
@@ -1517,10 +1520,15 @@ func _update_sky() -> void:
 		world._lod_avg_material.set_shader_parameter("u_center", Vector3(0.0, -float(Game.planet_R), 0.0))
 
 func _update_fog() -> void:
-	if OS.get_environment("AWECRAFT_NO_FOG") == "1" or not bool(Settings.values.get("fog_enabled", true)):
-		env.fog_enabled = false
-		return
-	env.fog_enabled = true
+	# AC-0510: the fog is OFF by default (user ruling) — env.fog_enabled is
+	# the per-frame switch. The depth window is STILL pushed either way:
+	# with fog off the values sit inert (the engine applies no fog), but
+	# the slider's live-wiring contract (the fogsettings probe) and the
+	# u_fog_far wall home (the lod_avg feed above reads env.fog_depth_end)
+	# keep one number, one home.
+	var fog_on := OS.get_environment("AWECRAFT_NO_FOG") != "1" \
+			and bool(Settings.values.get("fog_enabled", false))
+	env.fog_enabled = fog_on
 	var rr: int = world.render_radius
 	env.fog_depth_begin = DayNight.fog_near(rr)
 	# AC-0232: the full-fog boundary is now the "fog_start_pct" setting (a
