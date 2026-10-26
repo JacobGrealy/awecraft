@@ -124,53 +124,13 @@ uniform float u_sky_alt : hint_range(0.0, 1.0) = 0.0;
 // three consumers (the AC-0400 identity). The default is the T = 0.5
 // value; world.gd pushes the live day/night value per frame.
 uniform vec3 u_air : source_color = vec3(0.8157, 0.9451, 0.9843);
-// AC-0422: the continuous-horizon switch (Settings "sky_horizon",
-// default ON; pushed change-gated by world.gd _ac0401_push block 2c).
-// 0.0 = the pre-AC-0422 path VERBATIM (the hard branch step at
-// hl = 0 + the space-thinned below branch), so a material that never
-// sees the push keeps the old look; 1.0 is the fix (see sky_on).
-uniform float u_horizon : hint_range(0.0, 1.0) = 0.0;
-// AC-0429: the skybox-must-have-no-bottom-edge switch (Settings
-// "no_sky_floor", default ON; pushed change-gated by world.gd
-// _ac0401_push block 2d). 0.0 = the pre-AC-0429 path VERBATIM (the
-// u_air air floor below the local horizon, the u_air horizon anchor,
-// the (1-w) horizon haze band) — a material that never sees the push
-// keeps the AC-0428 look (the AC-0401 short-circuit convention).
-// 1.0 removes the lower boundary as a CONCEPT (not a smoother version
-// of it): below the local horizon the sky is SPACE — the same black,
-// the same stars — with no anchor, no band and no fade at the bottom
-// of the sky. The gradient's horizon anchor fades to space with the
-// floor's space weight ws (see sky_on), the below-branch fill blends
-// u_air -> space with the same ws (u_air survives ONLY at w = 0 — the
-// ground-level AC-0384 r8 fog seam), and the horizon haze band dies
-// with ws (the "air seen edge-on" of the floor is a ground-level
-// phenomenon; at altitude the local horizon is not the atmosphere).
-// What remains in the lower frame: the planet's disc, its u_air rim
-// haze and the limb air-column term — the planet and its air, the
-// only boundary present (the planet IS the horizon).
-uniform float u_no_floor : hint_range(0.0, 1.0) = 0.0;
-// AC-0439: the INSIDE/OUTSIDE weight of the atmosphere (one home:
-// Aero.sky_outside = smoothstep(A, A + 0.25A, alt_rad), A =
-// Aero.atmosphere_height). Pushed per frame by world.gd _ac0401_push
-// block (3) alongside u_space_sky (the same live radial, the same
-// seam). This is the FLOOR DECISION the user has been stating in three
-// reports: the sky must be consistent with WHERE THE PLAYER IS. 0.0 =
-// INSIDE (below A): the below-horizon fill stays the same air as the
-// sky above (u_air), the gradient's horizon anchor stays horizon_eff
-// and the horizon haze band stays alive — the AC-0428 continuous-air
-// shape, where only the planet's surface ends the air. 1.0 = OUTSIDE
-// (at/above A + 0.25A, where w = 1 makes the above-horizon sky space
-// exactly): the fill and the anchor are space — the AC-0429 shape, the
-// planet's limb the only boundary. It replaces AC-0429's
-// ws = smoothstep(0, 0.3, w), which reached 1 at ~630 m — deep INSIDE
-// the atmosphere (A = 1200) — and made below-horizon space at every
-// altitude: the user's "blue above, black below" frame (2026-10-16).
-// The shader default 0.0 is the conservative look (the floor stays
-// air — no black floor can appear on a material that never sees the
-// push); a real material always receives the push. Read ONLY through
-// ws on the u_no_floor = 1 path, so the u_no_floor = 0 contract
-// (pre-AC-0429 bit-for-bit) is untouched by this uniform.
-uniform float u_space_out : hint_range(0.0, 1.0) = 0.0;
+// AC-0483: the synthetic local-horizon boundary is REMOVED (the planet
+// is the horizon now) — the hl = 0 split, the below-horizon air/space
+// floor, the horizon anchor compensation and the local-horizontal haze
+// stripe are gone with the switches that modulated them (u_horizon
+// AC-0422, u_no_floor AC-0429, the u_space_out floor weight AC-0439).
+// See sky_on; the legacy sky_off (u_sky_alt < 0.5) keeps its own
+// world-Y horizon as the documented OFF contract, untouched.
 // AC-0417 clause D: the limb geometry at the atmosphere top A.
 // u_atmo_radius = R + A (the A shell's radius - the visible-tangent
 // convention u_limb_radius uses for R + SEA extends to A, so the
@@ -247,14 +207,13 @@ vec3 sky_off(vec3 dir) {
 // the whole upper hemisphere at every altitude (the gradient uniforms
 // were pushed but never read here: "the sky is dark during the day",
 // the user's 2026-10-11 report 1). The A window (u_space_sky = w)
-// thins the gradient to space SMOOTHLY: the zenith by w, the horizon
-// by w*w (the grazing ray sweeps a longer air column, so the horizon
-// holds the sky blue longest); at w = 1 the mix is space exactly, so
-// "the sky is space" still lands at A with the body's h_full
-// (satellite_body.gd) at the same A. Below the local tangent cone of
-// the R + SEA disc the single-source AIR colour is UNCHANGED (clause C
-// / AC-0417 F3: mix(space, u_air, 1 - w) - a coverage gap reads haze,
-// not a hole).
+// thins the gradient to space SMOOTHLY and UNIFORMLY at the rate w
+// (AC-0483: the boundary-anchored weight is gone with the boundary):
+// at w = 1 the mix is space exactly, so "the sky is space" still lands
+// at A with the body's h_full (satellite_body.gd) at the same A. Below
+// the local horizon the SAME gradient continues — the removed
+// below-branch fill is gone (AC-0483); the only boundary this pass
+// draws is the planet's limb air column.
 // The limb term keeps the AC-0417 clause-D geometry (the A shell:
 // u_atmo_radius = R + A) but the CLAMPED EXPONENTIAL is gone - it
 // filled the whole annulus inside the A-shell tangent to a flat 1.0
@@ -282,123 +241,37 @@ vec3 sky_on(vec3 dir) {
 	vec3 upc = -u_limb_center;
 	float r = length(upc);
 	float hl = (r > 0.0) ? dot(dir, upc) / r : dir.y;
-	// below the cone: the ray is under the local horizon (hl < 0) or the
-	// camera is inside the R + SEA disc (r <= u_limb_radius - no horizon
-	// exists, everything is air).
-	// AC-0422: the continuous horizon (u_horizon - see the uniform).
-	// The old path DREW a boundary instead of computing one: a hard
-	// step at hl = 0 (a straight line across the frame at altitude)
-	// with BOTH branches space-thinned by the A window (w) - so at
-	// w > 0 the sky no longer met the world's single-source fog
-	// colour (u_air - the env fog and the satellite body's rim ARE
-	// u_air, the AC-0384 r8 seam), and the fog wall and the body rim
-	// became visible hard edges (measured before: a 64.15/255
-	// single-row step at the local horizon and a 12.43/255 step at
-	// the body rim, tasks/AC-0422/AC-0422-results.html). The fix
-	// keeps every contract AC-0417/AC-0419 verified (the local-zenith
-	// gradient; the sky is space at A when LOOKING UP; the below
-	// branch reads as haze, not a hole) and removes the boundary:
-	// (1) the below branch is u_air at EVERY altitude - the air is
-	//     not space-thinned (the air does not become space, the view
-	//     does): the fog fades to u_air, the body's rim is u_air, the
-	//     sky under the horizon is u_air - one colour at the seam;
-	// (2) the space thinning spares the horizon: the weight is
-	//     multiplied by u - 0 at the local horizon (the grazing ray
-	//     sweeps the longest air column and keeps its colour: the
-	//     bright band at the horizon IS the atmosphere seen edge-on),
-	//     w at the zenith (u = 1 keeps the weight exactly w - the
-	//     sky is still space at A when looking up);
-	// (3) the branch switch is a smooth blend of width 0.03 (~2 deg)
-	//     below the horizon instead of the step.
-	float under_disc = 1.0 - step(u_limb_radius, r);
-	float below_old = clamp(step(0.0, -hl) + under_disc, 0.0, 1.0);
-	float below_soft = max(under_disc, smoothstep(0.0, 0.03, -hl));
-	float below = mix(below_old, below_soft, u_horizon);
+	// AC-0483: the hl = 0 SPLIT itself is gone (removal site 1) —
+	// under_disc (the forced fill while the camera is inside the
+	// R + SEA disc), below_old (the hard step) and below_soft (the
+	// 0.03-wide blend) no longer divide the background at the floating
+	// local-horizontal line. hl / r / upc stay: the planet-relative
+	// limb air column below needs them.
 	float w = u_space_sky;
-	// AC-0439: the FLOOR'S SPACE WEIGHT is the player's INSIDE/OUTSIDE
-	// position (u_space_out = Aero.sky_outside(alt) - see the uniform):
-	// 0.0 while the player is INSIDE the A shell, 1.0 outside, the fade
-	// over the limb's own 0.25A tail [A, A+0.25A]. AC-0429 derived it
-	// from the sky blend w (1 from ~630 m — deep INSIDE the atmosphere)
-	// and made below-horizon space at EVERY altitude: the user's 800 m
-	// frame at w = 0.8 then read "blue above, black below" — a boundary
-	// the sky model drew, the third skybox-edge report (2026-10-16).
-	// The rule (three user reports): the sky must be consistent with
-	// WHERE THE PLAYER IS — inside, the below-horizon sky is the same
-	// air as the sky above (ws = 0: the fill is u_air, the anchor is
-	// horizon_eff, the haze band alive — the AC-0428 continuous-air
-	// shape, and only the planet's surface ends it); outside, space with
-	// the planet as the only boundary (ws = 1: the AC-0429 shape — at
-	// ws = 1, w = 1, so the above horizon is space exactly and nothing
-	// the sky model draws remains but the limb). At the ground
-	// (alt = 0) sky_outside = 0 and every expression below reduces to
-	// its pre-ticket value (the AC-0384 r8 fog seam, untouched).
-	float ws = u_space_out;
-	// the local-zenith gradient (the sky_off expression, re-keyed):
-	// horizon -> mid over the lower third, -> zenith over the top.
-	float u = clamp(hl, 0.0, 1.0);
-	// AC-0428 item 1 ("sky still has a horizon"): the gradient's horizon
-	// anchor blends to the single-source air colour as the A window opens
-	// (w). The body's rim (haz) and the world's fog are u_air (the AC-0384
-	// r8 seam), so the sky just outside the limb must be u_air too -
-	// otherwise the seam keeps a visible step: AC-0422 softened the branch
-	// SWITCH (the 0.03 blend) but the two branch COLOURS still differed by
-	// the horizon/u_air gap (223,246,251 vs 208,241,251 at T = 0.5), which
-	// reads as a line across the frame at altitude. At w = 0 (ground) the
-	// anchor is horizon_color exactly (the daytime sky is untouched); the
-	// u_horizon gate keeps the OFF path bit-for-bit.
-	vec3 horizon_eff = mix(horizon_color, u_air, w * u_horizon);
-	// AC-0429: the gradient's horizon ANCHOR - the sky's lower edge -
-	// fades to SPACE (not u_air) as ws opens: the anchor and the below
-	// branch (belowc) mix toward space with the SAME ws, so the colour
-	// at hl = 0 stays continuous for every w (|seam| =
-	// |horizon - u_air| * (1-ws) - the pre-existing ground-level seam
-	// order, 0 from ws = 1): no line, no band; from ws = 1 the sky
-	// simply IS space at the local horizon - the lower boundary is gone,
-	// not smoothed. At w = 0, ws = 0 and the mix returns horizon_eff
-	// exactly (the ground daytime sky, bit-for-bit); u_no_floor = 0
-	// keeps horizon_eff verbatim (the pre-ticket path).
-	vec3 anchor = mix(horizon_eff, mix(horizon_color, space_color, ws), u_no_floor);
-	vec3 grad = mix(anchor, mid_color, smoothstep(0.0, 0.30, u));
+	// AC-0483: the rest of the synthetic boundary is gone too. Removal
+	// site 2 (the floor): belowc and the mix(above, belowc, below) join
+	// are deleted — there is no separate below-horizon air/space fill
+	// (the below-branch fill blended u_air -> space with the AC-0439
+	// floor weight ws = u_space_out; ws is deleted with it, and
+	// Aero.sky_outside is no longer read here). Removal site 3 (the
+	// anchor/floor compensation): horizon_eff and the u_no_floor anchor
+	// bypass are deleted — the filing's residual band was exactly that
+	// mechanism (u_no_floor = 1 selecting horizon_color at ws = 0 while
+	// belowc selected u_air: two colours meeting at the floating line).
+	// Removal site 4 (the stripe): the exp(-abs(hl) * 9.0) haze band
+	// hugging the local horizon is deleted. What remains is ONE smooth
+	// directional gradient keyed to the local elevation u = hl — the
+	// sky_off expression re-keyed to the local zenith, now UNCLAMPED at
+	// hl = 0: the smoothstep windows are C1 there, so the sky continues
+	// through local horizontal with no floor, kink or anchored stripe
+	// (the day sky is bit-identical for hl >= 0). The A window w thins
+	// it to space at a UNIFORM rate: w = 1 is space exactly (the
+	// AC-0417 contract), w = 0 the day sky exactly. The planet-relative
+	// limb air column below is the only boundary this pass draws.
+	float u = hl;
+	vec3 grad = mix(horizon_color, mid_color, smoothstep(0.0, 0.30, u));
 	grad = mix(grad, zenith_color, smoothstep(0.25, 0.90, u));
-	// above the horizon: the gradient thinned to space by the A window;
-	// w = 1 is space exactly at the zenith (the AC-0417 contract).
-	// AC-0428 item 2 ("the top of the sky turns into space faster than
-	// the rest - the entire sky should transition at the same rate"): the
-	// pre-fix weight mix(w*w, w, u) * u was CONVEX in the local elevation
-	// (slow near the horizon, fast near the zenith - the change
-	// concentrated near the top, the user's screenshot). The fix is w*u -
-	// a UNIFORM rate: the u_air -> space transition spreads evenly over
-	// the elevation range, still 0 at the horizon (the seam stays one
-	// colour, item 1) and w at the zenith (space at A looking up). The
-	// OFF path (u_horizon = 0) keeps the pre-AC-0422 weight bit-for-bit.
-	float thin = mix(mix(w * w, w, u) * 1.0, w * u, u_horizon);
-	vec3 above = mix(grad, space_color, thin);
-	vec3 belowc = mix(mix(space_color, u_air, 1.0 - w), u_air, u_horizon);
-	// AC-0429: the below branch - the "air floor", the skybox's bottom
-	// face - blends to SPACE with ws: below the local horizon the sky is
-	// the same black, the same stars as the space above, with no anchor,
-	// no band and no fade at the bottom of the sky. The planet and its
-	// air (the limb term, the body, the clouds) are the only thing left
-	// in the lower frame. u_air survives ONLY at w = 0 (ws = 0 - the
-	// ground-level AC-0384 r8 fog seam: the world's fog fades to u_air
-	// and the body's rim IS u_air, so the sky beyond must be the same).
-	// u_no_floor = 0 keeps the pre-ticket fill verbatim; at w = 0 the
-	// mix returns it exactly.
-	belowc = mix(belowc, mix(u_air, space_color, ws), u_no_floor);
-	vec3 col = mix(above, belowc, below);
-	// the horizon haze band (the sky_off term) hugs the local horizon
-	// from both sides and dies with the air (it is low-atmosphere
-	// scatter - at w = 1 there is no air left to haze).
-	// AC-0429: the band is the "air seen edge-on" of the FLOOR - a
-	// ground-level phenomenon (at w = 0 the local horizon is the real
-	// horizon). At altitude the local horizon is space, so the band must
-	// not survive there as a bright line hugging the sky's lower edge:
-	// it dies with the floor ((1-ws) - 1 at the ground, 0 from w >= 0.3),
-	// on top of the unchanged (1-w) air fade. u_no_floor = 0 is
-	// verbatim (mix(1.0, 1.0-ws, 0.0) = 1.0).
-	float hz = exp(-abs(hl) * 9.0) * haze_amount * (1.0 - w) * mix(1.0, 1.0 - ws, u_no_floor);
-	col = mix(col, haze_color, hz);
+	vec3 col = mix(grad, space_color, w);
 	// the limb term - the atmosphere's edge (the normalized air column,
 	// see the function header). u_limb_radius = 0 (no world yet) turns
 	// the term off with the pre-AC-0419 guard shape (b - 0 > 0 always,

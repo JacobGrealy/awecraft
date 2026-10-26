@@ -5336,19 +5336,15 @@ var _ac0451_lod_re := -1.0
 # default OFF; the shader's vgate short-circuits to 1.0 at u_gate < 0.5).
 var _ac0428_gate := -1.0
 var _ac0401_limb := -1.0
-# AC-0422: the continuous-horizon push state (same seam, change-gated).
-var _ac0422_horizon := -1.0
-# AC-0429: the skybox-no-bottom-edge push state (same seam, change-gated).
-var _ac0429_nofloor := -1.0
+# AC-0483: the synthetic local-horizon boundary (and its u_horizon /
+# u_no_floor switches, AC-0422/AC-0429) is removed — push state gone.
 # AC-0414: the clause-2 limb gate push state (same seam, change-gated).
 var _ac0414_limb_loaded := -1.0
 var _ac0414_body_loaded := -1.0
 var _ac0402_skyalt := -1.0
 var _ac0402_skyblend := -1.0
-# AC-0439: the inside/outside floor weight push state (same seam as
-# u_space_sky — per frame, value-gated; Aero.sky_outside is the one
-# home for the A-shell decision).
-var _ac0439_space_out := -1.0
+# AC-0483: the u_space_out floor weight (AC-0439) is removed with the
+# boundary it modulated — push state gone.
 # AC-0417: the atmosphere-height push state (same seam). The limb
 # geometry (u_atmo_radius = R + A, u_atmo_falloff = 0.25 A) moves only on
 # a planet_R / A change; the star-field A window (u_sky_alt switch,
@@ -5665,37 +5661,8 @@ func _ac0401_push() -> void:
 			sm2.set_shader_parameter("u_body_loaded", body_load_v)
 		_ac0414_limb_loaded = limb_load_v
 		_ac0414_body_loaded = body_load_v
-	# (2c) AC-0422: the continuous-horizon switch (Settings
-	# "sky_horizon", default ON - the user asked twice: "the skybox
-	# shouldn't have a horizon line", re-reported with a screenshot).
-	# The shader default is 0.0 = the pre-AC-0422 path bit-for-bit, so
-	# a material that never sees the push keeps the old look
-	# (the AC-0401 short-circuit convention).
-	var horz_v := 1.0 if bool(Settings.values.get("sky_horizon", true)) else 0.0
-	if horz_v != _ac0422_horizon:
-		var smh = mn.get("sky_mat")
-		if smh is ShaderMaterial:
-			smh.set_shader_parameter("u_horizon", horz_v)
-		_ac0422_horizon = horz_v
-	# (2d) AC-0429: the skybox-no-bottom-edge switch (Settings
-	# "no_sky_floor", default ON — the user's correction: the AC-0428
-	# blend removed the STEP at the local horizon but kept the box —
-	# the anchor, the band, the u_air floor below it. With the switch
-	# ON, below the local horizon the sky is space (the same black, the
-	# same stars): the below-branch fill and the gradient's horizon
-	# anchor blend to space with the floor's space weight ws
-	# (smoothstep(0, 0.3, w) — 1 from ~630 m), the horizon haze band
-	# dies with ws, and the planet's limb (the limb term + the body's
-	# u_air rim) is the only boundary left — the planet IS the horizon.
-	# The shader default is 0.0 = the pre-AC-0429 path bit-for-bit, so
-	# a material that never sees the push keeps the AC-0428 look
-	# (the AC-0401 short-circuit convention).
-	var nofl_v := 1.0 if bool(Settings.values.get("no_sky_floor", true)) else 0.0
-	if nofl_v != _ac0429_nofloor:
-		var smf = mn.get("sky_mat")
-		if smf is ShaderMaterial:
-			smf.set_shader_parameter("u_no_floor", nofl_v)
-		_ac0429_nofloor = nofl_v
+	# AC-0483: the (2c) u_horizon and (2d) u_no_floor pushes are removed
+	# — the synthetic local-horizon boundary they switched is gone.
 	# (3) AC-0402 -> AC-0417: the sky's altitude-aware space blend
 	# (Settings "sky_altitude", default ON; AWECRAFT_SKYALT=0|1 env
 	# preload). AC-0417 REDEFINED this setting: ON now runs the
@@ -5728,17 +5695,8 @@ func _ac0401_push() -> void:
 					if absf(ss2 - _ac0402_skyblend) > 0.001:
 						smb.set_shader_parameter("u_space_sky", ss2)
 						_ac0402_skyblend = ss2
-					# AC-0439: the INSIDE/OUTSIDE floor weight (one home -
-					# Aero.sky_outside): 0.0 while the player is INSIDE the
-					# A shell (the below-horizon sky is the same air as the
-					# sky above it), 1.0 outside (space below the horizon,
-					# the planet is the only boundary); the fade window is
-					# the limb's own 0.25A tail. Per-frame like u_space_sky
-					# (the same live radial, the same seam, the same gate).
-					var so2: float = Aero.sky_outside(alt_rad2)
-					if absf(so2 - _ac0439_space_out) > 0.001:
-						smb.set_shader_parameter("u_space_out", so2)
-						_ac0439_space_out = so2
+					# AC-0483: the u_space_out push (AC-0439) is removed
+					# with the boundary it modulated.
 	# (3b) AC-0417: the rest of the A re-key.
 	# - u_atmo_radius / u_atmo_falloff: the limb geometry at the A shell
 	#   (clause D - the atmosphere's silhouette is larger than the

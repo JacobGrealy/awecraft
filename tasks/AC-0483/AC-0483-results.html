@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AC-0483 — the planet's horizon: remove the synthetic sky band</title>
+<style>
+body{font:14px/1.45 system-ui,sans-serif;margin:2rem auto;max-width:1050px;color:#1a1a1a;padding:0 1rem}
+h1{font-size:1.4rem} h2{font-size:1.1rem;margin-top:1.8rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}
+table{border-collapse:collapse;margin:.6rem 0;font-size:12.5px}
+th,td{border:1px solid #bbb;padding:.3rem .55rem;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.ok{color:#0a0} .bad{color:#c00}
+code{background:#f4f4f4;padding:0 .25rem;border-radius:3px;font-size:12px}
+.log{color:#555;font-size:11.5px}
+.mono{font-family:ui-monospace,monospace;font-size:12px}
+</style></head><body>
+<h1>AC-0483 — the planet now creates its own horizon (synthetic sky band: REMOVED)</h1>
+<p><b>Verdict: PASS.</b> All four removal sites existed where the filing's symbols pointed (anchors stale, symbols found);
+both audits answered; G0 zero script + zero shader error; genhash 25/25; the band's measured signature at the old
+stance is gone (per-column horizon metrics at the median and in every full-width column), and the preserved features
+(planet body, limb air column, sun, moon, stars, day/night, A-transition) are confirmed in pixels.
+The sky is now ONE smooth local-zenith gradient, unclamped through local horizontal, thinned to space at a uniform
+rate. Blur/DOF was off in every capture.</p>
+
+<h2>1. Gates (arm set: g0, genhash)</h2>
+<table>
+<tr><th>arm</th><th>rc</th><th>script err</th><th>shader err</th><th>ok</th><th>headline</th><th>log</th></tr>
+<tr><td>g0</td><td>0</td><td>0</td><td>0</td><td class="ok">true</td><td>3.7 s</td><td class="log">.scratch/AC-0483-gates/g0-r1.log</td></tr>
+<tr><td>genhash</td><td>0</td><td>0</td><td>0</td><td class="ok">true</td><td>25 GENHASH lines, 4.0 s</td><td class="log">.scratch/AC-0483-gates/genhash-r1.log</td></tr>
+</table>
+<p class="log">summary: .scratch/AC-0483-gates/summary.json — both arms <code>ok: true</code>, 0 script / 0 shader errors.</p>
+<p>All ten captures rendered <code>rc=0 file=yes</code> (RENDERTAG lines in <code>.scratch/AC-0483-gates/render-*.log</code>):
+before-h100 / before-h800 (pre-edit tree, true before), before-h100-switches-off / before-h800-switches-off (pre-edit
+shader with shader-default switches, bonus), early-h800-newcode (final code at the h800 stance — the after-h800 frame),
+after-h100, after-outside-day (2000 m, T=0.5), after-outside-night (2000 m, T=0.0), after-sun-zenith (T=0.5, zenith aim),
+after-moon-zenith (T=0.0, zenith aim). RESULT lines per log: spawn [8.5, 141.0, 8.5], body_phase 4 (LOADED),
+u_sky_alt 1.0 on every frame.</p>
+
+<h2>2. Survey (located by symbol; filing's line anchors were stale — AC-0402+ edits moved the text)</h2>
+<table>
+<tr><th>#</th><th>site (by symbol)</th><th>status</th><th>pre-edit location</th></tr>
+<tr><td>1</td><td>hl = 0 split: <code>under_disc</code> (forced fill inside the R+SEA disc), <code>below_old</code> (hard step), <code>below_soft</code> (0.03 blend), <code>below = mix(...)</code></td><td>EXISTS</td><td>hl at :284; split at :313–316</td></tr>
+<tr><td>2</td><td><code>belowc</code> floor + <code>col = mix(above, belowc, below)</code> join</td><td>EXISTS</td><td>:377, :388–389</td></tr>
+<tr><td>3</td><td>clamped <code>u = clamp(hl,0,1)</code>, <code>horizon_eff</code> / <code>anchor</code> (u_no_floor bypass), boundary-tied <code>thin = mix(mix(w*w,w,u)*1.0, w*u, u_horizon)</code> — the filing's flagged mechanism (u_no_floor=1 selects horizon_color at ws=0 while belowc selects u_air: two colours meeting at the floating line)</td><td>EXISTS</td><td>:339, :350, :361–362, :375</td></tr>
+<tr><td>4</td><td><code>hz = exp(-abs(hl) * 9.0) * haze_amount * ...</code> haze stripe</td><td>EXISTS — <b>in BOTH paths</b></td><td>corrected path sky_on :400–401 (uses <code>hl</code>, exactly the filing's quoted symbol); legacy sky_off :200–201 (uses world-Y <code>h</code>)</td></tr>
+</table>
+<p><b>Haze-stripe question resolved:</b> the filing's hypothesis ("already gone from the corrected path; only the legacy
+one remains") was <b>wrong</b> — the corrected path carried its own <code>hl</code>-keyed stripe at :400–401; both
+existed; both were handled (corrected removed, legacy preserved verbatim — deviation D1).
+<br><b>Audit 1 (legacy synthetic horizon):</b> the sky_off h&lt;0 darkening (:197–199) + world-Y haze (:200–201) is
+confined to sky_off, reachable only via an explicit <code>u_sky_alt &lt; 0.5</code> (the Settings switch, default ON =
+1.0). Disabling the corrected path does NOT silently reintroduce anything — that IS the legacy path, by design.
+<br><b>Audit 2 (routing):</b> the runtime default is the CORRECTED path: world.gd pushes <code>u_sky_alt = 1.0</code>
+from the default-ON "sky_altitude" setting; the shader's 0.0 default applies only if a material never sees the push.
+Confirmed in every RESULT line (<code>u_sky_alt: 1.0</code>).</p>
+
+<h2>3. What was removed (removal, not softening)</h2>
+<table>
+<tr><th>file</th><th>change</th></tr>
+<tr><td class="mono">godot/core/aero_sky_gradient.gdshader (459 → 332 lines)</td><td>
+Site 1: <code>under_disc</code>/<code>below_old</code>/<code>below_soft</code>/<code>below</code> + the forced fill — gone.
+Site 2: <code>belowc</code> (both lines) + the <code>mix(above, belowc, below)</code> join + <code>ws = u_space_out</code> — gone.
+Site 3: <code>u = clamp(hl,0,1)</code> → <code>u = hl</code> (unclamped); <code>horizon_eff</code>, the <code>u_no_floor</code>
+anchor bypass, and the boundary-anchored <code>thin</code> — gone; the sky is now
+<code>grad = mix(mix(horizon_color, mid, ss(0,0.3,u)), zenith, ss(0.25,0.9,u)); col = mix(grad, space, w)</code> — the
+smoothstep windows are C1 at u = 0, so the below-horizon sky is the smooth flat extension of the day sky (horizon_color
+plateau at w = 0), and w thins it at a UNIFORM rate (w = 1 → space exactly).
+Site 4: the <code>exp(-abs(hl)*9.0)</code> stripe line + its mix — gone from sky_on (the legacy sky_off stripe stays, by audit 1).
+Uniforms <code>u_horizon</code>, <code>u_no_floor</code>, <code>u_space_out</code> deleted (declared count 27 → 24).</td></tr>
+<tr><td class="mono">godot/world/world.gd (16349 → 16307 lines)</td><td>the three push-state vars and the three push blocks for the
+removed uniforms (2c u_horizon, 2d u_no_floor, per-frame u_space_out) — dead pushes only; the <code>u_sky_alt</code> /
+<code>u_space_sky</code> / <code>u_air</code> pushes are untouched.</td></tr>
+<tr><td class="mono">godot/scenes/main.gd</td><td>NOT edited — verified it pushes none of the three removed uniforms.</td></tr>
+</table>
+<p><b>Preserved bit-for-bit:</b> the <code>hl</code>/<code>upc</code>/<code>r</code> geometry, the planet-relative limb
+air-column block (AC-0419: <code>b</code>, <code>s_exit = -r*hl + half</code>, <code>limb_col</code>, the AC-0401/AC-0414
+gates), the sun/moon block (disc + glow with the A-window fade), the whole legacy <code>sky_off()</code>, the
+<code>sky()</code> routing, and the AC-0402 altitude transition (<code>u_sky_alt</code>/<code>u_space_sky</code>).</p>
+
+<h2>4. Pixel evidence — column through where the band was</h2>
+<p>Instrument <code>tasks/AC-0483/colprof.py</code> (camera basis recomputed from the harness contract: R = 4000,
+FOV 75°, 1280×720, horizon aim — aim hl at the centre row = -0.0011). Per column over the |hl| ≤ 6° window:
+<b>crossing</b> = |lum 3 rows below hl=0 minus 3 above| (the two-colours-meeting test); <b>R crossing / R bump</b> =
+the same in the R channel, where the band lives (horizon_color R = 223 vs u_air R = 208, ΔR = 15); <b>reversals</b> =
+sign changes of the 5-smoothed profile. 1280 columns in every frame; every number in the colprof-*.log files under
+<code>.scratch/AC-0483-gates/</code>.</p>
+<table>
+<tr><th>frame (code)</th><th>w</th><th>lum crossing med / p95 / max</th><th>R crossing med / p95 / max</th><th>R bump p95 (cols &gt; 4/255)</th><th>reversals mean</th></tr>
+<tr><td>before-h100 — old tree, shipped switches</td><td>0.0</td><td>0.93 / 3.21 / 11.98</td><td>1.00 / 5.00 / 18.00</td><td>3.50 (4%)</td><td>4.42</td></tr>
+<tr><td>after-h100 — new code</td><td>0.0</td><td>0.00 / 3.14 / 10.70</td><td>0.00 / 4.00 / 15.00</td><td>3.00 (4%)</td><td>3.25*</td></tr>
+<tr><td>before-h800 — old tree, shipped switches</td><td>0.799</td><td>0.00 / 0.21 / 0.21</td><td>0.00 / 1.00 / 1.00</td><td>3.00 (0%)</td><td>0.45</td></tr>
+<tr><td>after-h800 = early-h800-newcode — new code</td><td>0.799</td><td>0.07 / 1.00 / 1.00</td><td>0.00 / 1.00 / 1.00</td><td>0.50 (0%)</td><td>0.03</td></tr>
+<tr><td>before-h100-switches-off — old shader, switches at defaults</td><td>0.0</td><td>5.33 / 8.54 / 18.17</td><td>—</td><td>4.63 (7%)</td><td>4.66</td></tr>
+<tr><td>before-h800-switches-off — old shader, switches at defaults</td><td>0.799</td><td>62.58 / 63.51 / 63.58</td><td>—</td><td>33.79 (100% of columns)</td><td>1.06</td></tr>
+</table>
+<p class="log">* the after-h100 reversals are saturation jitter on the bright (255-clamped) plateau, not a band; the band
+signature is full-width — the switches-off rows show it (88–100% of columns over the thresholds) while the after frames
+show 0–4% (localized cloud edges, not a horizon feature).</p>
+<p><b>Reading:</b> in the shipped (switches-ON) configuration the old band is modest in luminance — the two meeting
+colours are close pale blues — but present: R-crossing median 1.00 / p95 5.00 at h100 (the horizon_color↔u_air join
+across the 0.03 blend) plus the R stripe bump (p95 3.50, 4% of columns &gt; 4/255) and non-monotone profiles
+(4.42 reversals). The new code: medians 0.00 at both stances, 0% of columns over the full-width thresholds at h800,
+and the only step left in the whole after-h800 frame is the planet's own limb (row 719, 191.66/255). The switches-off
+rows show the mechanism at full strength (62.75/255 boundary at h800) — gone for every switch combination, because the
+switches no longer exist.</p>
+<p><b>Seam rows (centre column x = 640, from the colprof logs):</b></p>
+<table>
+<tr><th>frame</th><th>row 359 (hl +0.06)</th><th>row 360 (hl -0.06)</th><th>Δ</th></tr>
+<tr><td>before-h100</td><td class="mono">(209, 250, 255)</td><td class="mono">(209, 250, 255)</td><td>≤ 1 (smothered by the full-strength old haze stripe — the band lives in the R channel, see table above)</td></tr>
+<tr><td>after-h100</td><td class="mono">(227, 255, 255)</td><td class="mono">(228, 255, 255)</td><td>≤ 1 — both sides the same smooth plateau; no floor, no stripe</td></tr>
+<tr><td>before-h800</td><td class="mono">(232, 255, 255)</td><td class="mono">(233, 255, 255)</td><td>≤ 2</td></tr>
+<tr><td>after-h800</td><td class="mono">(13, 44, 55)</td><td class="mono">(13, 44, 55)</td><td>0 — one uniformly 79.9%-thinned sky through local horizontal</td></tr>
+</table>
+<p><b>Row-median profiles (every 20 rows):</b> after-h800 rises smoothly 1.80 → 73.90 (the limb glow) with no kink at the
+centre row (35.28 → 38.20 → 40.06); after-h100 rises monotonically 128.55 → 249.26 then flat — and its day-sky rows are
+bit-identical to before-h100's (row 0 = 128.55 in both: the hl ≥ 0 day sky is unchanged at w = 0). After-h100's below
+the limb is the flat horizon-color plateau; the planet body rows (680–719) are (249, 241, 202) — byte-identical to
+before-h100 (same max pixel 254 at (622, 646), same 921211 bright pixels: the body is untouched).</p>
+
+<h2>5. Preserved — confirmed in pixels (numbers in .scratch/AC-0483-gates/pixel-evidence.log + render logs)</h2>
+<table>
+<tr><th>feature</th><th>evidence</th></tr>
+<tr><td>planet body / silhouette</td><td>after-h100 bottom rows (249, 241, 202) = before-h100 byte-identical; silhouette edge at hl ≈ -19.4° (radial 241 m) visible in-frame</td></tr>
+<tr><td>limb air column (planet-relative)</td><td>after-h800 rows 560–700: 57.66 → 73.90 monotonic glow toward the limb (colprof log)</td></tr>
+<tr><td>sun</td><td>after-sun-zenith (T = 0.5, zenith aim): disc max 255 at (828, 175) rgb(255, 255, 255) + halo; 891493 lum&gt;50 px</td></tr>
+<tr><td>moon</td><td>after-moon-zenith (T = 0.0, zenith aim): moon disc max 255 at (591, 260) rgb(255, 255, 255)</td></tr>
+<tr><td>stars</td><td>199 lum&gt;50 px in BOTH outside frames (max 255 at (885, 52)); 2815 in the night zenith frame</td></tr>
+<tr><td>day/night colours</td><td>u_air [208, 241, 251] (day) / [48, 97, 109] (night) in the RESULT lines</td></tr>
+<tr><td>AC-0402 altitude transition (u_sky_alt / u_space_sky)</td><td>three measured points: w = 0 (h100, bright day sky), w = 0.799 (h800, uniformly thinned), w = 1.0 (outside frames, space exactly — row medians 0.00; u_space = 1.0 in both RESULT lines)</td></tr>
+<tr><td>legacy sky_off path</td><td>untouched bit-for-bit (audit 1); reachable only by the explicit switch</td></tr>
+</table>
+
+<h2>6. Deviations</h2>
+<p>Full text in <code>tasks/AC-0483/AC-0483-deviations.txt</code>:
+D1 haze-stripe "already gone" hypothesis was wrong (both paths had it); D2 the three Settings toggles
+(sky_horizon / no_sky_floor + env preloads) are now INERT — settings values + UI toggles left in place (out of file
+list); D3 <code>Aero.sky_outside</code> (aero.gd:75) left in place, now unused; D4 the boundary-anchored <code>w*u</code>
+thinning became uniform <code>w</code> (the anchored form existed only to keep the removed seam one colour — the plan's
+site-3 removal); D5 the clamp is gone but the below-0 region is the C1 smooth extension (extending the windows below 0
+would alter the preserved day sky); D6 <code>ulimit -v</code> unit is KB (the 8 MB mis-set segfaulted llvmpipe; re-ran
+with 20971520); D7 the first true-BEFORE pass installed only the pre-edit shader (the old switch pushes were already
+removed from world.gd) — those frames are the old shader at shader-default switches, kept as bonus evidence; the
+recorded BEFORE evidence was re-rendered with the pre-edit world.gd as well (both files byte-exact from git HEAD,
+marker-verified, restored and diff-verified after).</p>
+
+<h2>7. Files</h2>
+<p class="mono">
+godot/core/aero_sky_gradient.gdshader — edited (459 → 332 lines, removals only)<br>
+godot/world/world.gd — edited (16349 → 16307 lines, dead pushes only)<br>
+godot/scenes/main.gd — read, NOT edited<br>
+tasks/AC-0483/continuity.md — journal (RUN / SURVEY / DESIGN / LANDED / BEFORE-correction / GATES / CLOSE)<br>
+tasks/AC-0483/AC-0483-deviations.txt — D1–D7<br>
+tasks/AC-0483/AC-0483-results.html — this page<br>
+tasks/AC-0483/colprof.py — the column-profile instrument<br>
+tasks/AC-0483/captures/* — the ten frames (+ _s300/_s600 step snaps)<br>
+.scratch/AC-0483-gates/* — render/gate/colprof logs, gate summary, pre-edit + fixed backups of both files, driver scripts
+</p>
+</body></html>

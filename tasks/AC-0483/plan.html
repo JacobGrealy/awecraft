@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0483 remove synthetic sky horizon</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0483 — delete the synthetic sky horizon; the planet is the horizon now</h1>
+<p>Coordinator contract, written by me (the ticket was filed by another agent). <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>REMOVAL, not softening.</b> The ticket's own line — <em>"This is removal of the synthetic horizon, not another attempt to soften or colour-match it"</em> — is the acceptance test.</p>
+<h2>1. The requirement</h2>
+<p>The planet now creates its own horizon. The sky must contain <b>no floating horizontal line, no lower sky floor, no artificial horizon band</b> competing with the planet silhouette. Keep the day/night sky, sun, moon, stars, altitude transition and planet atmosphere.</p>
+<h2>2. ⚠ THE FILING'S LINE ANCHORS ARE STALE — LOCATE BY SYMBOL, NOT BY LINE</h2>
+<p>The filing says its anchors are "line anchors at filing", and <b>AC-0402 subsequently edited this exact shader</b> (it added <code>u_space_sky</code> and <code>u_sky_alt</code> and changed the background mix). Verified on the current tree:</p>
+<ul>
+<li><b>The haze stripe is NOT at 390-401.</b> <code>float hz = exp(-abs(h) * 9.0) * haze_amount; col = mix(col, haze_color, hz);</code> now sits at <b>:200-201</b>, inside the range the filing itself calls the LEGACY <code>sky_off()</code> (192-240). It also uses <code>h</code>, not <code>hl</code> as the filing quotes. <b>So either the corrected path's haze stripe is already gone and only the legacy one remains, or it moved — DO NOT GUESS: report which, with the symbol you found.</b></li>
+<li>Still present and countable: <code>u_no_floor</code> (8), <code>horizon_eff</code> (6), <code>belowc</code> (4), <code>below_soft</code> (2). The shader is 459 lines.</li>
+<li><code>u_sky_alt</code>/<code>u_space_sky</code> (AC-0402) is the <b>altitude transition the ticket says to preserve</b> — do not remove it as collateral.</li>
+</ul>
+<p><b>So step 1 is a survey, not an edit:</b> for each of the four removal sites and the two audits below, find the current symbol and line, and report a table. If a site no longer exists, say so — that is a result, and it means the filing is partly already satisfied.</p>
+<h2>3. The four removal sites (locate each by symbol)</h2>
+<ol>
+<li><b>The artificial local-horizontal division.</b> Filing: <code>hl = dot(dir,upc)/r</code> feeding <code>below_old</code>/<code>below_soft</code>/<code>below</code>, splitting the background at <code>hl=0</code> <b>rather than at the planet silhouette</b>. Remove that split from the corrected background path, <b>including the <code>under_disc</code> forced-fill decision</b>. Keep geometric variables that planet-relative atmosphere genuinely needs.</li>
+<li><b>The separate below-horizon air/space floor.</b> Filing: <code>belowc</code> construction and <code>col = mix(above, belowc, below)</code>. <b>Explicitly: do NOT merely widen <code>smoothstep(0, 0.03, -hl)</code></b> — widening is softening, which the ticket forbids.</li>
+<li><b>The artificial horizon anchor/floor compensation.</b> Filing: a clamped elevation <code>u</code>, <code>horizon_eff</code>/<code>anchor</code>, and thinning tied to the synthetic boundary must no longer impose a lower edge or horizon-centred stripe. <b>A smooth directional sky gradient may remain, but must continue through local horizontal without a floor, kink or anchored stripe.</b> The filing flags a specific code-supported residual band: <b><code>u_no_floor=1</code> selects <code>horizon_color</code> at <code>ws=0</code>, bypassing <code>horizon_eff</code>, while <code>belowc</code> selects <code>u_air</code></b> — two different colours meeting at the horizon. That is the mechanism to remove.</li>
+<li><b>The explicit local-horizontal haze stripe.</b> Filing: <code>hz = exp(-abs(hl)*9.0) … col = mix(col, haze_color, hz)</code>, which paints a horizon independent of the planet. <b>Do not confuse it with the planet-relative air-column term</b> (preserve that).</li>
+</ol>
+<h2>4. The two audits</h2>
+<ul>
+<li><b>Legacy <code>sky_off()</code></b>: confirm the synthetic horizon is confined to it, i.e. <b>disabling <code>sky_altitude</code> must not silently reintroduce the synthetic horizon in the corrected mode.</b> Isolate legacy rendering behind the explicit compatibility switch only.</li>
+<li><b><code>sky()</code> routing</b>: confirm which path is taken by default and that the default path is the corrected one.</li>
+</ul>
+<h2>5. Preserve (do not remove as collateral)</h2>
+<p>Planet geometry/body silhouette; the <b>planet-relative forward-air-column/limb calculation</b> (filing says :407-433 — locate by symbol, it is the <em>planet-relative</em> term, the legitimate one) unless you can <b>prove</b> it duplicates a planet effect; sun/moon; star rendering and occlusion; the AC-0402 altitude transition (<code>u_sky_alt</code>/<code>u_space_sky</code>).</p>
+<h2>6. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/aero_sky_gradient.gdshader</td><td>the four removal sites and two audits above, <b>located by symbol</b>; <code>sky_on()</code>, legacy <code>sky_off()</code> (:192-240 nominal), <code>sky()</code> routing (:449-455 nominal)</td><td>Edit: removals only.</td></tr>
+<tr><td>godot/scenes/main.gd</td><td>:95-103 — <code>BG_SKY</code>/<code>Sky</code>/<code>ShaderMaterial</code> creation and the shader load (confirmed procedural, no panorama)</td><td>Read; edit only if a uniform no longer exists.</td></tr>
+<tr><td>godot/world/world.gd</td><td>wherever the sky uniforms are pushed (<code>horizon_color</code>, <code>haze_color</code>, <code>u_no_floor</code>, <code>haze_amount</code>) — removing a uniform means its push must go too</td><td>Edit only to drop dead pushes.</td></tr>
+<tr><td>tasks/AC-0483/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light ownership, the far tier, the planet body's material/silhouette, the bake assets, the data JSON files, the aim box.</p>
+<h2>7. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The survey table (step 1)</td><td>Every one of the four sites and two audits located by <b>symbol and current line</b>, with "no longer exists" reported where true. <b>This is the first deliverable and it decides how much removal is left.</b></td></tr>
+<tr><td>The removal is REMOVAL (the point)</td><td>After the change, a capture at a stance where the old horizon band was visible, <b>plus a column of pixel values through where the band was</b>, showing <b>no local kink, floor, or stripe</b> — i.e. the sky varies smoothly through local horizontal. <b>A capture alone is not evidence; report numbers.</b></td></tr>
+<tr><td>Nothing preserved was broken</td><td>Captures confirming the planet silhouette, sun/moon, stars and the altitude transition still render. Note: <b>blur is OFF by default now (user ruling) — do not enable it in test renders.</b></td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0483 --arms g0,genhash</code> — g0 <b>zero SCRIPT ERROR and zero SHADER ERROR</b> (a shader compile error is the single most likely failure of this ticket and G0 is what catches it), genhash 25/25.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty and wait rather than killing anything you did not start.</p>
+<h2>8. Acceptance</h2><p>The survey table complete; the four sites removed (or reported already absent) and the two audits answered; pixel columns showing the sky now varies smoothly through local horizontal with no floor, kink or stripe; the planet silhouette, sun/moon, stars and altitude transition intact; G0 clean.</p>
+<h2>9. Risks</h2><p>(1) <b>Softening instead of removing</b> — widening a smoothstep is the specific thing the filing forbids. (2) Trusting the stale line numbers and editing the wrong block. (3) Removing the <b>planet-relative</b> air-column term along with the sun-relative one; the filing warns about exactly this confusion. (4) Collateral damage to AC-0402's altitude transition. (5) A shader compile error that only G0 catches.</p>
+<h2>10. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session is writing it); no new tickets.</li>
+<li>No edits outside §6. No softening, no colour-matching, no replacement horizon.</li>
+<li>If a removal site cannot be located or a step contradicts the code — <b>report it in the survey table and continue with the others</b>; only write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and exit if the CONTRADICTION BLOCKS ALL of them. Do not invent a horizon to remove.</li>
+</ul></div>
+<h2>11. Resume point</h2><p>Filed by another agent with precise-but-stale anchors; AC-0402 edited this shader since (adding the altitude transition this ticket says to preserve). Reviewed and accepted by me as the plan author.</p>
+</body></html>

@@ -1,0 +1,58 @@
+AC-0483 deviations (plan.html contract -> as built)
+
+D1. The filing's haze-stripe location claim was wrong in its conclusion.
+The filing verified the :200-201 stripe (uses `h`) and hypothesised "the
+corrected path's stripe is already gone and only the legacy one remains,
+or it moved". Measured: BOTH exist. The corrected path's stripe is in
+sky_on at :400-401 (pre-edit) using `hl` exactly as the filing quoted —
+it had not been removed by any earlier ticket; the :200-201 one is the
+legacy sky_off world-Y version. The corrected-path stripe WAS removed in
+this run; the legacy one stays (the OFF contract is bit-for-bit).
+
+D2. Three uniforms were removed, not just their uses: u_horizon (AC-0422
+"sky_horizon" setting), u_no_floor (AC-0429 "no_sky_floor" setting) and
+u_space_out (AC-0439 floor weight). All three exist ONLY to modulate the
+removed boundary — after the removals they are dead on both paths
+(sky_off reads none of them). The Settings values and the env preloads
+(AWECRAFT_SKYHORIZON / AWECRAFT_NOSKYFLOOR, world.gd ~:4105-4121) are
+left in place (not pushes; the data JSON files are untouchable per the
+plan) — the two settings are now INERT (no sky effect). This is the
+honest reading of "Edit: removals only" + "removing a uniform means its
+push must go too".
+
+D3. Aero.sky_outside (godot/core/aero.gd:75) is now unused (its only
+consumer was the removed u_space_out push). aero.gd is NOT in the plan's
+file list, so the function was left in place rather than deleted.
+
+D4. The A-window thinning changed from the boundary-anchored w*u
+(AC-0428) to the uniform w. The u factor existed to keep the removed
+belowc seam one colour (AC-0428 "item 1: still 0 at the horizon"); with
+the seam gone the anchor goes with it, and uniform w is the AC-0428
+"entire sky transitions at the same rate" ideal taken to completion.
+Contracts preserved: w = 1 => space exactly (AC-0417), w = 0 => day sky
+exactly (bit-identical above hl = 0). Visible consequence at 0 < w < 1:
+the sky below local horizontal is now the SAME gradient as above
+(uniformly thinned), not a separate fill — which is the ticket's point.
+
+D5. "Clamped elevation u" (site 3): the clamp was removed (u = hl), but
+the smoothstep(0, 0.3) / (0.25, 0.9) windows make the gradient's
+extension below hl = 0 a flat C1-continuous plateau at horizon_color
+(smoothstep is 0 with zero derivative below its lower edge). No kink
+(zero slope both sides), no floor (same colour both sides of hl = 0),
+no stripe — verified by the pixel columns. The alternative (extending
+the windows below 0) would have moved the day sky's own horizon colour
+in elevation, which would have altered the preserved day/night sky.
+
+D6. Render ulimit: the first render attempt used `ulimit -v 8192`
+(8 MB — the number was read in GB); the engine segfaulted at Vulkan init
+under ANY finite cap that low. Re-ran with the AC-0443/0447 lineage cap
+`ulimit -v 20971520` (20 GB virtual), which works.
+
+D7. The first true-BEFORE render pass installed only the pre-edit shader (the
+world.gd push removals were already on disk), so the old switch pushes never ran
+and u_horizon/u_no_floor stayed at their shader defaults (OFF). Those frames
+(before-*/switches-off captures) are the OLD shader in its pre-AC-0422
+switches-OFF configuration, kept as bonus evidence (the boundary this ticket
+removes at EVERY switch combination — 62.75/255 median crossing at h800). The
+recorded BEFORE evidence for the current configuration is re-rendered with the
+pre-edit world.gd as well (its pushes restore the shipped ON defaults).

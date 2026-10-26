@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T20:12
+  updated_at: 2026-10-25T22:32
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0483
 - AC-0509
 - AC-0481
 - AC-0438
@@ -32578,11 +32577,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T14:39
-  updated_at: 2026-10-25T14:39
-  completed_at: null
+  updated_at: 2026-10-25T22:32
+  completed_at: 2026-10-25T22:32
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -32680,7 +32679,40 @@ intake:
     AC-0422/AC-0428/AC-0429/AC-0439 addressed smoothing/floor colours; this ticket removes the synthetic
     horizon mechanism itself. No queue reorder requested.
 
-    '
+
+
+    CLOSED (round 110). THE SURVEY WAS THE RIGHT FIRST STEP AND IT OVERTURNED THE FILING''S OWN GUESS:
+    all four removal sites DID still exist, located by symbol because the line anchors were stale (AC-0402
+    edited this shader after filing). Specifically the filing hypothesised the corrected path''s haze
+    stripe "may already be gone" — **WRONG: BOTH paths carried one.** The corrected path had its own `hl`-stripe
+    at :400-401 while the filing pointed at :390-401 for a stripe that had also moved. Removing only what
+    the filing named would have left a horizon stripe in the default path.
+
+    REMOVED (real removal, not softening — the filing''s explicit prohibition): the local-horizontal split
+    (`under_disc`/`below_old`/`below_soft`), the `belowc` floor plus its join and `ws`, the `horizon_eff`/`anchor`
+    compensation and the `w*u` thinning (now a uniform `w`), and the `hl`-stripe line. Three uniforms
+    deleted (27 -> 24) with world.gd''s three dead pushes. Shader **459 -> 332 lines**; world.gd 16,349
+    -> 16,307; main.gd untouched. The widened-smoothstep "fix" the filing forbade was NOT used.
+
+    THE PIXEL EVIDENCE, which is what distinguishes a removal from a softening: with the OLD tree the
+    column profile at hl=0 (1280 columns) read R-crossing **median 1.00 / p95 5.00**, a **bump p95 3.50**,
+    and **4.42 reversals** at horizon 100; the switches-off variant was a **62.75/255 full-width boundary**
+    at horizon 800. On the NEW code the medians are **0.00-0.07** with **0% of columns over the full-width
+    thresholds** and the seam rows continuous ((13,44,55) both sides at h800). **The only in-frame step
+    left is the planet limb at 191.66** — i.e. the remaining hard edge is the planet''s own silhouette,
+    which is exactly what the ticket wanted the horizon to be.
+
+    NOTHING PRESERVED WAS BROKEN, and it was proved per element rather than asserted: body rows **byte-identical**
+    (249,241,202) before and after; limb glow 57.66 -> 73.90 (still present); sun disc 255 at (828,175);
+    moon disc 255 at (591,260); stars 199 px in both frames; `u_air` day and night; the altitude transition
+    w=0/0.799/1.0 measured; and the day sky above the horizon is **bit-identical** (row 0 = 128.55 both).
+
+    THE TWO AUDITS ANSWERED: legacy synthetic horizon is confined to `sky_off()` behind an explicit `u_sky_alt<0.5`
+    gate, so disabling sky_altitude cannot silently reintroduce it in the corrected mode; and the runtime
+    default IS the corrected path, with world.gd pushing `u_sky_alt=1.0` verified in every RESULT.
+
+    GATES: g0 rc=0 with **0 script and 0 shader errors** — the failure mode most likely for a shader surgery
+    of this size — and genhash **25/25**.'
   comments: []
 - id: AC-0484
   title: continent-p0-native-generation-cost-baseline
