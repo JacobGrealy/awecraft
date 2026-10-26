@@ -290,3 +290,42 @@ BUILD RECIPE". Compaction dropped that section, and the rules survived only insi
 step — the `awecraft-closeout` skill — enforces the harvest: **a durable rule discovered in a task
 is written here (machine/build/daemon) or into the process skills (pipeline/delegation) before
 the task folder is abandoned.**
+
+### Delegation: the coordinator plans, a MEDIUM builder implements (USER RULING, 2026-10-24)
+
+**The standing rule, in the user's words: "you write the plan, medium sub agent
+implements. only use xhigh if medium fails."** So the default is
+`subagent_medium`, always, and it is not a judgement call to be re-made per
+ticket.
+
+- Reaching for `subagent_xhigh` because a ticket *looks* subtle is a process
+  error. `AC-0479` (a geometry diagnosis) and `AC-0482` (locate-and-route) both
+  ran xhigh on that reasoning; `AC-0482` in particular was ordinary work that
+  medium would have done. Escalating on a hunch spends the shared slot for no
+  measured gain.
+- **Escalate only AFTER medium has actually failed** — a `PLAN-INSUFFICIENT`, a
+  triage hit, or a run that could not land — and say in the launch prompt which
+  failure is being retried.
+- `subagent_low` is for genuinely mechanical edits. Never run two local-LLM
+  subagents at once: `xhigh`, `medium` and `low` share ONE slot.
+
+### Blur is off by default and MUST NOT be used in testing (USER RULING, 2026-10-24)
+
+`dof_enabled` defaults to **false** (`autoload/settings.gd`, and its
+`dof_blur_far_enabled` fallback says the same). Two rules, and the second is the
+one that changes behaviour:
+
+1. **The product ships with blur off.** The effect and its tuned distance
+   (`dof_far_distance` 1500, `apply_dof`) are kept — a player may turn them on —
+   but they are not the default look.
+2. **Do not judge a defect from a blurred frame, and do not run verification
+   renders with blur on.** Depth-of-field destroys exactly the evidence this
+   project's filings depend on: 1-2 px seam steps, 16 m faceting, texture-parity
+   ratios, and streak direction are all unmeasurable once the frame is blurred.
+   Several historic filings were read off blurred captures and had to be
+   re-measured (`AWECRAFT_DOF*` exists to pin the effect for an A/B, not to
+   restore it as the default test look).
+
+A measurement taken with blur on is not a measurement. If a render job needs the
+old look for a specific comparison, set it explicitly for that run and say so in
+the results page.

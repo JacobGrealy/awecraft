@@ -1,12 +1,11 @@
 meta:
-  updated_at: 2026-10-25T15:56
+  updated_at: 2026-10-25T20:12
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0509
 - AC-0483
-- AC-0480
+- AC-0509
 - AC-0481
 - AC-0438
 - AC-0484
@@ -32303,11 +32302,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-25T14:39
-  completed_at: null
+  updated_at: 2026-10-25T20:12
+  completed_at: 2026-10-25T20:12
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32355,7 +32354,55 @@ intake:
     and handover (AC-0451, AC-0469 stage A/B), the near chunk mesh builder. Refs: AC-0438 (the same measurement
     discipline for a seam), AC-0478 (the far tier''s current textures).
 
-    '
+
+
+    CLOSED (round 109) — THE FIX ALREADY EXISTED, TESTED, AND WAS DEFAULT OFF. That is the whole ticket,
+    and it is worth stating that way because two runs were spent locating a defect whose remedy was already
+    written.
+
+    THE CLASSIFICATION (run 1, kept because it is the evidence): the seam is the AVERAGED BAND''S INNER
+    EDGE (the 1->2 tier boundary), classified **(b) LIGHTING-dominant plus a (c) residual colour term**.
+    `lod_avg.gdshader` was ENGINE-SHADED ON TOP OF ITS OWN LIGHT (double shading) while the near tier
+    is `unshaded` with L = 0.20 + 0.80*m_direct. Critically, the alternatives were RULED OUT with evidence
+    rather than by preference: heights are the SAME DATA by construction (`h_mismatch 0`, farab byte-identity)
+    so it is not geometry; chunk sets are disjoint so it is not overlap; the band IS built at the user''s
+    vantage so it is not a coverage gap; and the 0->1 sim edge measures **0 step** on open terrain, so
+    the sim boundary was already clean and the defect is specifically the averaged band''s inner edge.
+
+    SHARED-CAUSE CHECK: **NONE**, and answered rather than assumed — the satellite seam is the 12-face
+    chart mesh (world-fixed), the cloud/sky seam is seam-free 3D direction noise with no wrap in `cloud_layer.gdshader`,
+    and the terrain tiers are player-anchored taxicab rings. Three different geometry classes, so no common
+    tiling/wrap cause. That retires the hypothesis this session raised when the user reported three seams
+    at once.
+
+    RUN 2 — ENABLED THE EXISTING FIX, DID NOT WRITE A NEW ONE: a tested parity fix (`lod_avg_seam.gdshader`,
+    built at AC-0446 with an AFTER profile of -3..-15 and "no dark step") was behind the `far_seam` switch,
+    DEFAULT OFF. `settings.gd:209` now defaults it **true**; the AC-0446 shader is untouched.
+
+    THE NUMBERS THE USER''S REPORT WAS ABOUT, before vs after: the 1->2 band face read **(50.6,40.0,31.4)
+    L41.6 against the near flank (135,116,103) L116 — a x0.37 dark step (the 2.5-3x) plus a day-grey tint.**
+    With the default ON the band''s grass cells read **(10.6,104.0,0.0) L76.6 against same-frame near
+    grass (14.2,128.4,0.0) L94.8 — ratio 0.80, dL -18, HUE INTACT, NO GREY TINT.** So the dark step and
+    the tint are gone; the residual -18 sits 3 luma past the AC-0446 band and is the documented (c) per-cell
+    sampling term, which is recorded rather than claimed fixed.
+
+    "FRESH START SEES IT ON" WAS PROVED, NOT ASSERTED: the settings state space is {user://awecraft.cfg,
+    AWECRAFT_FARSEAM env, code DEFAULTS}; `load_settings` returns DEFAULTS verbatim with no cfg; all six
+    renders asserted CFG_FILES 0 before and after and logged FARSEAM_ENV unset — so a fresh boot''s only
+    possible value is the new default. A default is only real if a clean start sees it.
+
+    RECORDED REASON FOR IT HAVING BEEN OFF: none technical — AC-0446''s note says "default OFF = current
+    look" with a "conservative: the shipped look is bit-identical" comment. A conservative-defaulting
+    policy, not a blocker, and the user reports the OFF path as the defect, so the default moves. (A player
+    with a SAVED explicit far_seam=false keeps it until they toggle — inherent to any default flip and
+    stated rather than glossed.)
+
+    GATES: g0 **0/0**, genhash **25/25**, residency leak False / STABLE (74/92, keys_same), lightstate
+    leaks 0 / demoted 1 / delta 0.
+
+    ONE DEVIATION REPRODUCED 4x AND DOCUMENTED: at the A2 user vantage the post-flip rows are unchanged
+    (dL +11.10 vs +11.07) because NO band-B pixels exist in that drain window — so that particular frame
+    cannot show the fix either way, which is why the band was located in-frame instead.'
   comments:
   - id: 1
     created_at: 2026-10-25T14:39
@@ -32711,14 +32758,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - performance
   - measurement
   created_at: 2026-10-25T14:41
-  updated_at: 2026-10-25T14:47
+  updated_at: 2026-10-25T18:18
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -32779,14 +32826,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - measurement
   - design
   created_at: 2026-10-25T14:41
-  updated_at: 2026-10-25T14:47
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -32848,7 +32895,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
@@ -32856,7 +32903,7 @@ intake:
   - measurement
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:47
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -32918,14 +32965,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - saves
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:47
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -32986,13 +33033,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - settings
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33052,14 +33099,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - performance
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33119,14 +33166,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - cache
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33186,13 +33233,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - cache
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33251,14 +33298,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - terrain
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33319,14 +33366,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - water
   - design
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:48
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33386,13 +33433,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - lod
   created_at: 2026-10-25T14:42
-  updated_at: 2026-10-25T14:49
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33452,13 +33499,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - lod
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:49
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33517,13 +33564,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - verification
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:49
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33583,13 +33630,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - performance
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:49
+  updated_at: 2026-10-25T18:19
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33649,14 +33696,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - performance
   - measurement
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:49
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33717,14 +33764,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - biomes
   - design
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33784,13 +33831,13 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - biomes
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33850,14 +33897,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - biomes
   - settings
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33918,14 +33965,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - verification
   - performance
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33986,7 +34033,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
@@ -33994,7 +34041,7 @@ intake:
   - optional
   - design
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -34054,7 +34101,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
@@ -34062,7 +34109,7 @@ intake:
   - settings
   - optional
   created_at: 2026-10-25T14:44
-  updated_at: 2026-10-25T14:50
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -34122,14 +34169,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - hydrology
   - optional
   created_at: 2026-10-25T14:44
-  updated_at: 2026-10-25T14:51
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -34189,14 +34236,14 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
   - hydrology
   - optional
   created_at: 2026-10-25T14:44
-  updated_at: 2026-10-25T14:51
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -34256,7 +34303,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 3
-  status: blocked
+  status: open
   labels:
   - worldgen
   - continents
@@ -34264,7 +34311,7 @@ intake:
   - optional
   - verification
   created_at: 2026-10-25T14:44
-  updated_at: 2026-10-25T14:51
+  updated_at: 2026-10-25T18:20
   completed_at: null
   waiting_on: null
   parent_id: null

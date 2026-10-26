@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0480 results — high-LOD terrain seam outside the sim distance</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#222}
+h1{font-size:22px}h2{font-size:18px;border-bottom:2px solid #ccc;padding-bottom:4px;margin-top:32px}
+table{border-collapse:collapse;margin:12px 0}th,td{border:1px solid #bbb;padding:4px 10px;text-align:left;font-size:14px}
+th{background:#eee}code{background:#f2f2f2;padding:1px 5px;border-radius:3px;font-size:13px}
+.bad{background:#fdecea;color:#b71c1c;font-weight:600}.ok{background:#e8f5e9;color:#1b5e20;font-weight:600}
+.warn{background:#fff8e1;color:#7a5b00;font-weight:600}
+img{max-width:480px;border:1px solid #999;margin:6px 12px 6px 0}
+.row{display:flex;gap:16px;flex-wrap:wrap}.row .col{flex:1;min-width:340px}
+.note{background:#f5f5f5;border-left:4px solid #888;padding:8px 12px;margin:10px 0;font-size:14px}
+</style></head><body>
+
+<h1>AC-0480 — "seams in the high-LOD terrain outside the sim distance"</h1>
+<p><b>Outcome (run 2, after the plan's §4a repair): THE FIX LANDED.</b> The tested parity fix
+(<code>lod_avg_seam.gdshader</code>, AC-0446) is now <b>the shipped default</b>: one-line change at
+<code>godot/autoload/settings.gd:209</code> (<code>far_seam: false → true</code> + comment), proven with
+the same pixel measurements as run 1 / AC-0446, and a fresh start sees it ON. Run 1 = measurement +
+classification (below, unchanged). Run 2 = Sun 2026-10-25 18:01–20:10 EDT, seed 44, R24, engine
+4.7.1, llvmpipe proxy renders (geometry/layout evidence only — <code>godot/HARNESS.md</code> §2).
+Every number below appears in a log under <code>.scratch/AC-0480-gates/</code> (paths in §6).</p>
+
+<h2>0. Run 2 — the flip, and the proof</h2>
+<p><b>The change (the only one):</b> <code>settings.gd:209</code> <code>"far_seam": false → true</code>;
+the DEFAULT-OFF comment block rewritten to record the flip. <code>git status</code>: <b>settings.gd is the
+only modified file under <code>godot/</code></b> — <code>lod_avg_seam.gdshader</code>, <code>world.gd</code>,
+<code>lod_avg.gdshader</code> untouched, so the ON path loads AC-0446's tested shader byte-identically
+(no re-bake, no new shader, no residency/generation/light/sampler/aim-box touch).</p>
+<table><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr>
+<tr><td>(a) 1→2 boundary, before vs after</td><td class="ok">The 2.5–3× dark step and the day-gray tint are GONE in the fresh-default frame; band/near L ratio 0.80 (dL −18, same hue) — inside the parity class of the AC-0446 AFTER profile (−3…−15, "no dark step"); the 3-luma top-face excess over −15 is the documented (c) per-cell sampling residual</td><td>BEFORE (re-verified in-session, exact): band face (50.6,40.0,31.4) L41.6 vs near flank (135,116,103) L116 = ×0.37 (2.5–3×) + gray tint. AFTER (fresh default ON frame G): band grass cells (10.6,104.0,0.0) L76.6 vs same-frame near grass (14.2,128.4,0.0) L94.8 — ratio 0.80, per-channel 0.75/0.81, B=0 both (no gray tint). Stated acceptance: no 2.5–3× dark step; dL ∈ [−15,+3] (measured −18 → residual attributed to per-cell sampling). <code>measure-seam-r2.log</code>, <code>measure-parity-r2.log</code>. At the A2 user-repro vantage the post-flip rows are unchanged (row 360 dL +11.10 vs +11.07): no band-B pixels exist in that drain window (run-1 deviation 4, reproduced 4×) — documented, not hidden. <code>analyze-a2-after-r2.log</code></td></tr>
+<tr><td>(b) g0, genhash, residency, lightstate</td><td class="ok">g0 0/0 · genhash 25/25 · residency leak False / STABLE (face 74 / home 92, keys_same) · lightstate leaks 0, demoted 1, move.delta 0, hole_slabs 87 flat, stragglers 3</td><td><code>summary.json</code>/<code>summary.txt</code> ("all arms ok") + per-arm r2 logs (g0-r2, genhash-r1, residency-r2, lightstate-r2)</td></tr>
+<tr><td>(c) fresh start sees it ON</td><td class="ok">Proven by elimination over the complete settings state space</td><td>State space = {user://awecraft.cfg, AWECRAFT_FARSEAM env (world.gd:4138–4140, applies only if set), code DEFAULTS}. <code>load_settings</code> (settings.gd:498–506) returns DEFAULTS verbatim when no cfg exists. All six run-2 renders asserted <code>CFG_FILES_BEFORE=0</code> AND <code>CFG_FILES_AFTER=0</code> (the game writes no cfg in a render session) and the default runs logged <code>FARSEAM_ENV=&lt;unset&gt;</code> — so a fresh boot's only possible value is the code default, now <b>true</b>. The switch itself is proven live on this box by AC-0446's same-day A/B at the same boxes: env 0 → L41.6, env 1 → L79.5 (re-measured exact today). Caveat: a user with a SAVED explicit far_seam=false keeps it until they toggle — inherent to any default flip; fresh installs see ON.</td></tr>
+</table>
+<p><b>Recorded reason the default was OFF, and why it was flipped anyway:</b> AC-0446 (continuity
+line 4): "Settings 'far_seam' (default OFF = current look)"; the old settings.gd comment: "DEFAULT OFF —
+conservative: the shipped look is the current partial parity (the AC-0443 lift on the same band),
+bit-identical". That is a <b>conservative-defaulting policy</b> (ship bit-identical), not a technical
+blocker; run 1 recorded that "re-ruling the default ON is the coordinator/user's step". The plan's §4a
+makes that step: the user is reporting the OFF path's appearance as the defect, so ON is the default.
+OFF stays one menu toggle / <code>AWECRAFT_FARSEAM=0</code> away, bit-identically.</p>
+<p class="note"><b>Run-2 measurement conditions (the honest caveats):</b> (1) AC-0479/AC-0482's aim-box
+fixes re-posed every historical <code>AWECRAFT_AIM</code> recipe — AC-0446's pixel boxes now hit sky in
+new frames, so the band was located in-frame (flatness scan) and measured there; the box
+re-verification on AC-0446's own in-repo captures is exact. (2) On this box the low-lane band-B mesh is
+not materialisable at the A2 user vantage in any practical drain (600/1800/2400/9000 frames, 4 runs) —
+so the A2 post-flip re-measure is unchanged by construction, and the authoritative step numbers remain
+AC-0446's gated in-repo measurement (re-verified exact today). (3) A/R9-nadir negative-control triple
+(FARSEAM=0 / default / =1) is pixel-identical: at R9 the band-B ring is past the 160 m render-edge
+discard, structurally invisible there. (4) The G (default ON) vs H (forced OFF) 9000-frame pair differs
+in 7049 px &gt;40 — mid-streaming build-state drift (complementary bright/dark presence/absence pairs in
+the near-textured zone the switch never touches), not switch shading. All in
+<code>AC-0480-deviations.txt</code> items 10–12 + <code>measure-ab*.log</code>.</p>
+
+<h2>1. Shared-cause check (the 3 seams in one report)</h2>
+<p class="ok">NO shared tiling / wrap / projection convention.</p>
+<table><tr><th>Seam</th><th>Geometry class</th><th>Anchor</th></tr>
+<tr><td>AC-0438 satellite disc line</td><td>12-face cube-chart body mesh; sub-texel raster artifact at the coincident face edge (AC-0438's measured run: nadir rows 357–358, 254 pts ≥6, mean 68)</td><td>world-fixed (on the sphere)</td></tr>
+<tr><td>AC-0481 sky/cloud vertical line</td><td>cloud volume = world-anchored <b>3D</b> direction noise (<code>cloud_layer.gdshader:915+</code> — continuous on the sphere, <b>no UV wrap seam exists in the field</b>); sky = continuous direction gradient (no tiling in <code>aero_sky_gradient.gdshader</b>)</td><td>to be determined (unmeasured); nothing in the cloud/sky code can produce it from a wrap seam</td></tr>
+<tr><td>this ticket — terrain tier seam</td><td>world-space taxicab rings around the player (the tier model, <code>world.gd</code> <code>_lod_tier_of</code>)</td><td><b>player-anchored — moves with the player</b></td></tr></table>
+<p>The terrain seam and the satellite seam are different geometry classes (one moves with the
+player, one is world-fixed), so they cannot be the same artifact. The cloud/sky line has no
+wrap-seam source in its code at all. No further shared cause found; the residual test (a
+fixed-<i>screen</i> line common to all three) is answered negative for the terrain frames: no
+straight line at a fixed screen position appears in any capture (the only straight lines are the
+world-aligned tier edges and the chunk grid).</p>
+
+<h2>2. Classification — gate (a)</h2>
+<p>The user's seam is the <b>inner edge of the averaged (high-LOD) band</b> — the tier
+<b>1 → 2 boundary</b> (band A full-LOD → band B 8×8-avg; 128 m at the user's defaults, or closer
+if their <code>medium_start</code> sits near the sim edge). Classification:
+<span class="bad">(b) lighting — dominant</span> +
+<span class="warn">(c) texture/colour — residual representational limit</span>.
+Not (a) geometry, not (d) overlap/z-fight, not a coverage bug.</p>
+<table><tr><th>Sub-question (plan §4)</th><th>Answer</th><th>Evidence</th></tr>
+<tr><td>Is the far-tier <b>height</b> the same data?</td><td class="ok">Yes — by construction</td><td>band B columns are far (h-only) columns; <code>h_avg_emit</code> output is byte-identical to the same-data <code>low_emit_avg</code> (<code>gdext/src/mesh.cpp</code>), enforced by the farab gate (<code>h_mismatch = 0</code>). No depth offset exists at the boundary (the step is pure colour/brightness, §3). ⇒ If a height offset were ever seen, the plan's own rule says the fix is a blend, not a wrong-sample fix.</td></tr>
+<tr><td>Is the far <b>colour</b> an avg of the same blocks, or a different palette/bake?</td><td class="warn">Same palette, per-cell SAMPLED (not averaged)</td><td><code>avg_grid_emit</code>: one block sample per 8×8×8 cell from the same <code>fcc</code> palette, quantised to 31 levels for the merge key; quad alpha = cell sky. The hue shift at the boundary (brown → beige, §3) is this coarse sampling + the light model — "detail" the spec allows to change with distance.</td></tr>
+<tr><td>Is the seam a <b>coverage</b> bug (AC-0451)?</td><td class="ok">No — where the user sees it, band B is built</td><td>The user sees the averaged terrain itself. In my frames the visible outer boundary is UNBUILT-coverage state (body (207,251,255) beyond the jagged built edge at 112–124 m, <code>analyze-b2-seam-r1.log</code>) — a mid-streaming state, not the persistent seam; AC-0451 measured "most of what the player sees through from the air is NOT the handover gap but missing chunks".</td></tr>
+<tr><td>Does the <b>handover</b> cover the gap?</td><td>Designed fade; its annulus shows the body where chunks are unbuilt</td><td>Near tiers discard at <code>u_fog_far</code> (332 m at R24/F87); the body op ramps <code>smoothstep(332, 400, d)</code> with a single-source air colour (<code>satellite_body.gdshader:177-179</code>). Measured in A2: the 332–400 m annulus renders the body's baked sand (189,178,125)/(174,161,107) — §3. This is the CURRENT state for the unbuilt annulus (AC-0451's fix covers the built annulus only); out of fence (no residency edits).</td></tr></table>
+
+<p><b>THE MECHANISM, one sentence:</b> the default far shader (<code>lod_avg.gdshader</code>) is
+<b>engine-shaded</b> — the engine multiplies its <code>ALBEDO</code> by (sun·lambert + sky·ambient)
+<b>on top of</b> the material's own per-vertex light (<code>lit = mix(0.2, 1.0, COLOR.a)</code>) —
+while the near tier is <code>render_mode unshaded</code> with its own
+<code>L = 0.20 + 0.80·m_direct</code> (<code>chunk_lit_opaque.gdshader:93-94</code>): a
+double-shading discontinuity at the mesh edge, on top of the coarser per-cell colour sampling.</p>
+
+<h2>3. Pixel numbers — the boundary, measured</h2>
+<p class="note"><b>Geometry first (the R=4000 trap):</b> from a 1.6 m eye the true horizon is
+~113 m out and far terrain projects <i>above</i> the flat-earth horizon row. In a vfov-99 / 720 px
+frame the tier lines sit at: 64 m → row 367.1, <b>128 m → row 358.5</b>, 200 m → row 352.9,
+<b>332 m fog wall → row 344.7</b>, 400 m → row 340.8 (<code>analyze-census-r1.log</code>).
+Without this table, horizon-row attribution is wrong.</p>
+<table><tr><th>Boundary</th><th>Pixel line measured</th><th>Step size</th><th>Character</th></tr>
+<tr><td><b>0 → 1</b> (sim square, 64 m)</td><td>A2 row 367 / nadir frames at the sim edge</td><td class="ok">0 — no step on open terrain</td><td>both sides full-LOD <code>chunk_lit</code>; a step exists only where lighting <i>data</i> differs (cliffs/caves: sky_eff vs starlight). Matches the user's phrasing — the seam is in the high-LOD terrain, not at the sim edge.</td></tr>
+<tr><td><b>1 → 2</b> (128 m) — the user's seam</td><td>in-session: A2 row 360 (dirt on both sides): (107,51,14) → (103,68,16); authoritative: AC-0446's in-repo R24 measurement (same code path, gated)</td><td class="bad">hard 1–2 m mesh edge; side faces (50,40,31) vs the same ridge's near flank (135,116,103) = <b>×2.5–3 too dark</b>; tops +17%</td><td>soft over 4–8 px (perspective + filtering of the 1–2 m edge); <b>pure brightness scale + hue shift, no depth step</b> = lighting-model discontinuity (b) + per-cell sampling (c). In-session re-measurement of the full step was impossible: the low-lane band B mesh never materialises in a frozen llvmpipe run (§5, deviations 4) — AC-0446's numbers are cited.</td></tr>
+<tr><td><b>2 → body</b> handover (332–400 m)</td><td>A2 rows 344/352 = the 332 m wall / 200 m zone (per the table above): near (130,126,61)/(107,67,19) → far (189,178,125)/(174,161,107)</td><td class="warn">hard 4–8 px; ratios ×(1.45 1.41 2.05) / ×(1.63 2.40 5.63)</td><td>the handover annulus: body baked sand behind the op ramp (the far tier there is 100 % fogged by design; the annulus shows the body where chunks are unbuilt — AC-0451). <code>analyze-a2-seam-r1.log</code>.</td></tr>
+<tr><td>unbuilt-coverage edge (mid-streaming state, nadir 139 m eye)</td><td>B2 rows 320/420: built edge at 112–124 m; same-terrain crossing row 500: (30,98,80) → (33,99,90)</td><td class="ok">dL +2.7 (3 %) — no tier step present</td><td>body (207,251,255) beyond the jagged edge; gap slivers at chunk corners. Streaming state, not the user's seam. <code>analyze-b2-seam-r1.log</code>.</td></tr>
+<tr><td>chunk-grid artifact (llvmpipe class, every 16 m)</td><td>nadir frames, all built chunks</td><td class="warn">1 px symmetric dips, 35–85 % darker, sometimes (0,0,0)</td><td>software mesh-edge class; sub-pixel in every user vantage (a 1 m line at 30–900 m is &lt;1 px). NOT the user's seam. <code>analyze-nadir-r1.log</code> (also the 1 px lake line (107,177,224)→(32,108,202) at the chunk boundary through the lake).</td></tr></table>
+
+<h2>4. What would fix it — and why nothing landed</h2>
+<p>The tested fix already exists: <code>lod_avg_seam.gdshader</code> (unshaded; mirrors the near
+tier's L on the band's own a-channel data), behind the Options switch
+<i>"Distance terrain: match the near-tier light at the seam"</i> (<code>menu.gd:643-663</code>,
+<code>Settings "far_seam"</code>), <b>default OFF</b>. AC-0446 measured it: AFTER boundary profile
+−3…−15 (the band falls inside the near tier's own texture range) — "no dark step; the boundary is
+now a texture/depth transition, not a shading step". The residual after parity is the 8×8 colour
+sampling + jitter — the representation limit, which the spec permits.</p>
+<p>The fix did NOT land because shipping it requires a design decision the plan does not make
+(plan fence: "If the plan cannot be applied … write PLAN-INSUFFICIENT … Do not invent the design"):</p>
+<table><tr><th>Path</th><th>Blocker</th></tr>
+<tr><td>flip the shipped default: <code>settings.gd:209</code> <code>"far_seam": false → true</code></td><td class="bad"><code>settings.gd</code> is not in the plan's §5 file list</td></tr>
+<tr><td>make the default path parity by editing <code>lod_avg.gdshader</code> (allowed "only if (c) is the classification")</td><td class="bad">the classification is (b)+(c), (b) dominant; an exact port needs the <code>u_day</code> push, gated in <code>world.gd:5579</code> on <code>_ac0446_seam == 1.0</code> — and <code>world.gd</code> is editable <i>only</i> for a coverage/handover bug (this is not one). Swapping the shader contents instead would break NIGHT (<code>u_day</code> would sit at its 1.0 default — a new defect).</td></tr></table>
+<p><b>STATUS (run 2): the re-plan was applied — <code>settings.gd:209</code> flipped, <code>far_seam</code>
+defaults to <code>true</code>, proven in §0.</b></p>
+
+<h2>5. Gates — gate (c)</h2>
+<p><b>Run 2 (code changed → full gate set, "all arms ok" in <code>summary.json</code>):</b>
+g0 rc=0 script=0 shader=0 · genhash rc=0 ok (25/25) · residency rc=0 leak=False verdict STABLE
+(face 74 / home 92 constant, keys_same) · lightstate rc=0 leaks=0 before/after, demoted=1,
+move.delta=0, hole_slabs 87 flat, stragglers=3. Run 1 below is the no-change confirmation.</p>
+<p><b>Run 1:</b> no code changed → no-change green confirmation
+(<code>gate_run.py AC-0480 --arms g0,residency,lightstate</code>, "all arms ok",
+<code>gate-run-r1.log</code>):</p>
+<table><tr><th>Arm</th><th>Result</th><th>Standing</th></tr>
+<tr><td>g0</td><td class="ok">script=0 shader=0</td><td>0 SCRIPT + 0 SHADER ERROR</td></tr>
+<tr><td>residency</td><td class="ok">leak=False, verdict STABLE (face 74 / home 93 constant, keys_same)</td><td>leak false / stable</td></tr>
+<tr><td>lightstate</td><td class="ok">leaks=0 before/after, demoted=1, move.delta=0, hole_slabs 116 flat, stragglers=3</td><td>leaks 0, wash false</td></tr>
+<tr><td>genhash</td><td>not run</td><td>owed only if <code>godot/world/*</code> or <code>autoload/data.gd</code> touched — zero edits this ticket</td></tr></table>
+
+<h2>6. Evidence</h2>
+<div class="row">
+<div class="col"><img src="ac0480-fpv-horizon-day.png">
+<caption>A2 — first-person horizon (R24, seed 44, T=0.5, user fog): the far band / handover annulus
+(332–400 m) as the beige line above the near field; the 128 m tier line sits at row ≈358.5, inside
+the 2–3 px far sliver — why it reads as "a line" from the ground.</caption></div>
+<div class="col"><img src="ac0480-nadir-full.png">
+<caption>C — nadir, 139 m above ground, settled build (drain complete, T=0.5 re-pinned): the sim
+square + band A (textured) and the UNBUILT band B ring (body beyond the jagged edge) — the
+coverage state the AC-0451 lesson warns about; no tier step is present where band B is absent.</caption></div></div>
+<p><b>Frames</b> (this folder): <code>ac0480-fpv-spawn-day.png</code> (A),
+<code>ac0480-fpv-horizon-day.png</code> (A2), <code>ac0480-nadir-r9day*.png</code> (B — NO_FOG,
+flawed, deviations 2), <code>ac0480-nadir-fog100*.png</code> (B2),
+<code>ac0480-nadir-full*.png</code> (C, settled). <b>Logs</b>
+(<code>.scratch/AC-0480-gates/</code>): <code>shotA-fpv-r1.log</code>,
+<code>shotA2-horizon-r1.log</code>, <code>shotB-nadir-r1.log</code>,
+<code>shotB2-nadir-r1.log</code>, <code>shotC-nadir-full.log</code> (RESULT JSONs: camera poses,
+fog_far, render_edge, drain state), <code>analyze-fpvh-r1.log</code>,
+<code>analyze-nadir-r1.log</code>, <code>analyze-a2-seam-r1.log</code>,
+<code>analyze-b2-seam-r1.log</code>, <code>analyze-census-r1.log</code> (frame-diff census,
+timestamps, horizon-geometry table), <code>gate-run-r1.log</code> + per-arm logs.
+<b>Run-2 frames</b> (this folder): <code>ac0480-fpv-horizon-day-after.png</code> (A2 post-flip, default
+ON — terrain rows identical to the run-1 OFF frame: no band-B pixels in that drain window),
+<code>ac0480-nadir-r9-off/on/forcedon.png</code> (+ <code>_s600/_s1200/_s1800</code> — the pixel-identical
+negative-control triple, band B structurally past the render edge at R9),
+<code>ac0480-seam-defaulton-day.png</code> (G — fresh boot, default ON, the 1→2 band measured in §0) and
+<code>ac0480-seam-forcedoff-day.png</code> (H — forced-OFF A/B control). <b>Run-2 logs</b>
+(<code>.scratch/AC-0480-gates/</code>): <code>shotA2-after-r2.log</code>, <code>shotD/E/F-nadir-r9-*.log</code>,
+<code>shotG-seam-defaulton.log</code>, <code>shotH-seam-forcedoff.log</code>, <code>measure-seam-r2.log</code>
+(the instrument re-verification on AC-0446's own frames), <code>measure-ab-r2.log</code> /
+<code>measure-ab2-r2.log</code> / <code>measure-ab3-r2.log</code> (G/H A/B diff map + characterization),
+<code>measure-parity-r2.log</code> (the §0 band/near numbers), <code>analyze-a2-after-r2.log</code>,
+<code>summary.json</code>/<code>summary.txt</code> ("all arms ok") + per-arm r2 logs (g0-r2, genhash-r1, residency-r2, lightstate-r2).
+<b>Deviations:</b> <code>AC-0480-deviations.txt</code> (TM_HO pacing env, NO_FOG/stale-env quirk,
+vantages, partial builds + the drain-<code>mesh_built</code> semantics, curvature geometry,
+gate/render slot overlap, day-cycle drift, seed 44; run 2 adds items 10–12: the A2 no-band-B
+identity, the R9 render-edge structural absence + negative triple, the aim-box re-pose and
+build-drift caveats, and the stale "default OFF" comments left in <code>world.gd</code>/
+<code>menu.gd</code> (out of the plan's edit fence — for the closeout harvest)).</p>
+
+</body></html>

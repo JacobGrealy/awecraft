@@ -1,0 +1,95 @@
+AC-0480 deviations (measurement conditions vs user-repro conditions)
+
+1. AWECRAFT_TM_HO=50 on every capture — the documented harness handoff-pacing
+   env (HARNESS §4); pacing only, no mesh-content change.
+2. Shot B (ac0480-nadir-r9day*) used AWECRAFT_CLOUDS=0 + AWECRAFT_NO_FOG=1 as
+   measurement conditions (clean tier boundaries, no sky/cloud occlusion).
+   NOT user-repro conditions. Post-hoc finding: NO_FOG leaves
+   env.fog_depth_end at the Godot Environment default (100.0) because
+   main.gd:1520 early-returns before _update_fog sets it, and the per-frame
+   push main.gd:1515 carries that 100 into the lod_avg material's u_fog_far
+   (the chunk materials instead get the live DayNight.fog_far — 348 at R24).
+   Result: in shot B the band B/C tiers (lod_avg) discarded at 100 m and never
+   drew; only tiers 0/1 + the body are in that frame. Shot B2 (ac0480-nadir-
+   fog100*) and shot C (ac0480-nadir-full*) fixed the walls (engine fog on,
+   AWECRAFT_FOG_PCT=100 so u_fog_far = u_render_edge = 400 everywhere).
+   The NO_FOG/env-push inconsistency is a harness-only quirk (play sessions
+   never set AWECRAFT_NO_FOG); reported here, not fixed (out of fence).
+3. Vantages differ from the user's: shots A/A2 are first-person at the spawn
+   (eye 142.6 m radial); shots B/B2/C are the harness "air" preset (frozen
+   player flown nadir, AIR_ALT 371 / 280 m radial = 230 / 139 m above local
+   ground). The user's report mentions a 941 m flight; no flight capture was
+   run (the air nadir vantage isolates the world-aligned tier lines, which a
+   941 m view compresses to sub-pixel).
+4. Build state is PARTIAL in every capture, and the band B/C (avg-tier) mesh
+   is ABSENT in all of them. The llvmpipe worker builds ~1.3 chunks/s; shots
+   A/A2/B/B2 ran a 600-frame drain (the plan's recipe) and are mid-streaming:
+   the outer built edge + body-showing-through slivers in those frames are
+   UNBUILT-coverage state (the AC-0451 lesson), not tier seams. Shot C ran a
+   2400-frame drain to reach a settled build, and the drain DID complete
+   (no "SNAPDRAIN" line) — but _await_world_build (main.gd:1826-1841) only
+   checks `mesh_built` on chunks present in world.chunks, which for far
+   columns means their h-only data is ready, NOT that the low lane built the
+   avg mesh. Frame-diff proves it: s600->s1200 changed 254 px (0.028%, lake
+   ripple), s1200->final changed 6.6% of pixels because the day cycle ran
+   during the 7-min drain and AWECRAFT_TIME=0.5 was re-pinned pre-snap (the
+   lighting delta, not terrain). Net: in a frozen-player llvmpipe run the
+   low-lane band B mesh never materialises, so the 1->2 tier step could not
+   be re-measured in-session; the in-repo AC-0446 measurement of that step
+   ((50,40,31) vs (135,116,103) = x2.5-3 side faces; +17% tops) is cited as
+   the authoritative number.
+   CONSEQUENT RE-LABEL: the A2 horizon rows 344-352 I first read as a 1->2
+   boundary are ABOVE the flat-earth horizon row (360): on the R=4000 planet
+   the true horizon sits ~113 m out and far terrain projects above row 360,
+   so those rows are the 250-400 m far band / 2->body handover annulus (body
+   baked sand (189,178,125)/(174,161,107), op ramp 332->400 m), not band B.
+5. AWECRAFT_FOG_PCT=100 (B2/C) stretches the fog window to 100..400 m (the
+   user's is ~87% -> 348 m at R24): the measured tier boundaries in B2/C sit
+   in a light fog wash (13-50%), slightly reducing the visible step. The A2
+   horizon frame ran the user's fog (default 87%).
+7. The green-confirmation gate (g0/residency/lightstate) ran with its
+   headless arms overlapping shot C's render for ~1-2 min: this session's
+   bash sandbox cannot see other process namespaces (pgrep/ps return only
+   the calling sandbox's processes), so the one-godot-at-a-time slot check
+   is unreliable here. No OOM; all arms green (leak False/STABLE, leaks 0).
+   No render-vs-render overlap occurred.
+8. Day cycle: AWECRAFT_TIME=0.5 is pinned at run start and re-pinned
+   pre-snap (SNAP_DRAIN set), but RUNS freely during the drain; long drains
+   therefore capture mid-run sun positions in the step frames (shot C's
+   s600/s1200 are at T>0.5; only the final frame is at T=0.5).
+
+9. Seed 44 (harness default), not the user's world (seed 5432, reported R24):
+   the tier model, materials and shader paths are seed-independent; seed 44
+   supplies open grass + sand + a lake + forest, which exercises the boundary
+   on both flat and ridged terrain.
+
+10. Run 2 (the default flip): the A2 600-frame horizon frame (r1 recipe,
+    far_seam default ON, no env, no cfg) is pixel-identical to run 1's
+    OFF frame in every terrain row I measured (full-frame diff: 3799/921600
+    px > 12, all vegetation shimmer at rows 314-315 x~1220-1250; the 128 m
+    line rows 352-368 differ by <= 0.03 luma). This is EXPECTED and not a
+    no-op finding: run-1 deviation 4 established that the low-lane band-B
+    mesh never materialises in a frozen llvmpipe run at R24 within a 600-
+    (or 2400-)frame drain, so the A2 frame contains no band-B pixels for
+    the switch to act on. The far_seam switch re-shades ONLY the band-B
+    material (world.gd _ac0446_apply_shader).
+11. Run 2 negative controls at R9 nadir (render-edge 160 m line-of-sight):
+    three identical-recipe runs differing only in the switch input —
+    AWECRAFT_FARSEAM=0 (D), no env / code default (E), AWECRAFT_FARSEAM=1
+    (F) — are PIXEL-IDENTICAL to each other (0 px > 12 in all three
+    pairs). At R9 the band-B ring (128-160 m ground = 190-229 m
+    line-of-sight) lies entirely PAST the 160 m render-edge discard, so
+    band B is structurally invisible in that vantage — the zero-diff
+    triple confirms the switch has no visible surface there and cannot be
+    used as the pixel proof. The 1->2 re-measurement therefore runs on
+    AC-0446's own recipe (R24, AIM 8.5,143.62,8.5,1.57,0.08, FOG_PCT 83,
+    TIME_FREEZE=1, CLOUD_T0=411200, SNAP_DRAIN 9000, 1200 s budget) — the
+    9000-frame drain is what materialised the band-B ridge in AC-0446's
+    r1/r2 frames — with AC-0446's own measure.py boxes (BAND_FACE
+    x1192-1279 y376-400; NEAR_FACE cluster x1144-1225 y418-451; boundary
+    profiles x=1200/1240).
+12. Stale comments left in place (out of edit fence — the plan's §5 lists
+    settings.gd as the only editable file; world.gd is read-only here):
+    world.gd:1621-1622 and 5567-5568 still say "default OFF". menu.gd:109
+    and 643 do the same. Behaviour is correct (the DEFAULTS dict is the
+    single source); the comment drift is noted for the closeout harvest.

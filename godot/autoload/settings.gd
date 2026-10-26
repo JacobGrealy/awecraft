@@ -196,9 +196,13 @@ const DEFAULTS := {
 	# than one tier closer: the band is a SHADED material, so the engine
 	# ambient/direct multiplies onto a light model the near tier
 	# (unshaded) has no, plus a day-gray tint it has no either — see
-	# tasks/AC-0446/plan.html for the measured shape). DEFAULT OFF —
-	# conservative: the shipped look is the current partial parity
-	# (the AC-0443 lift on the same band), bit-identical. ON swaps the
+	# tasks/AC-0446/plan.html for the measured shape). DEFAULT ON —
+	# AC-0480 flipped the default: the user reported the OFF path's
+	# appearance (the 1->2 tier seam, AC-0446's (50,40,31) vs
+	# (135,116,103) 2.5-3x dark step) as a defect, and the ON path is
+	# the tested parity fix (AC-0446 AFTER profile -3..-15, no dark
+	# step). OFF (the menu toggle, or AWECRAFT_FARSEAM=0) restores the
+	# exact shipped partial-parity look bit-identically. ON swaps the
 	# band's material to the unshaded near-tier-parity variant
 	# (core/lod_avg_seam.gdshader — render_mode can't be a uniform, so
 	# world._ac0446_apply_shader does the material-shader swap on
@@ -206,7 +210,7 @@ const DEFAULTS := {
 	# near tier's own by construction. Rides world.gd _ac0401_push
 	# (change-gated shader swap + the u_day/u_moon pushes).
 	# Env-overridable (AWECRAFT_FARSEAM=0|1 at boot, world.gd).
-	"far_seam": false,
+	"far_seam": true,
 	# AC-0414: the bake-before-load switch. DEFAULTS ON — the user asked
 	# ("after a recent build the level of detail was not showing at all,
 	# and when they looked into it the world 'was still baking'": the
@@ -434,7 +438,14 @@ const DEFAULTS := {
 	# The effect stays; the distance moves (and the ramp broadens —
 	# apply_dof). AWECRAFT_DOFFAR=0 restores the pre-ticket values
 	# (world.gd preload).
-	"dof_enabled": true,
+	# USER RULING 2026-10-24 (round 109): depth-of-field BLUR IS OFF BY DEFAULT,
+	# and it is NOT to be used in testing either — a blurred frame cannot be
+	# measured for the sharp-edged defects this project files (seams, faceting,
+	# texture parity), and several of those filings were read off blurred
+	# captures. The effect and its tuned distance stay (dof_far_distance 1500,
+	# apply_dof, AWECRAFT_DOFFAR=0 still restores the pre-ticket values); only the
+	# DEFAULT flips. A player who wants it can turn it on.
+	"dof_enabled": false,
 	"dof_far_distance": 1500.0,
 	"dof_amount": 0.08,
 	# AC-0332: the far-tier mesh floor (AC-0331's kernel — the sub-waterline
@@ -986,7 +997,7 @@ func apply_dof() -> void:
 				cam.attributes = attrs.duplicate()
 				attrs = cam.attributes
 			if attrs != null:
-				attrs.set("dof_blur_far_enabled", bool(values.get("dof_enabled", true)))
+				attrs.set("dof_blur_far_enabled", bool(values.get("dof_enabled", false)))
 				attrs.set("dof_blur_far_distance", float(values.get("dof_far_distance", 1500.0)))
 				attrs.set("dof_blur_far_transition", trans)
 				attrs.set("dof_blur_amount", float(values.get("dof_amount", 0.08)))
