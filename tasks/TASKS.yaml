@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-26T00:30
+  updated_at: 2026-10-26T01:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0481
 - AC-0438
 - AC-0484
 - AC-0485
@@ -32414,11 +32413,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: cancelled
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-25T09:55
-  completed_at: null
+  updated_at: 2026-10-26T01:40
+  completed_at: 2026-10-26T01:40
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32463,7 +32462,45 @@ intake:
     AC-0405/0406/0407 (the cloud volume''s history), AC-0412 (the far-tier sampler), AC-0402 (the sky''s
     altitude window).
 
-    '
+
+
+    CANCELLED WITH EVIDENCE (round 112) — NEITHER COMPLAINT REPRODUCES ON THE CURRENT TREE, and the most
+    likely explanation is one the user themselves just fixed: BLUR.
+
+    (a) THE SEAM IS ABSENT. Zero candidates in two fresh user-vantage renders (a zenith dome and an r120
+    limb) and also absent from ALL TEN AC-0483 captures, on BOTH the old tree and the new. RULED OUT BY
+    EVIDENCE: AC-0483 did NOT remove it — AC-0483 removed a HORIZONTAL horizon band, and old-tree captures
+    that still contain that band show no vertical line at all. So my own plan''s leading attribution was
+    wrong and the measurement corrected it.
+
+    (b) THE CLOUD WEIGHTS HAVE NOT DRIFTED. u_vol_amb 0.45, u_vol_ms1 0.30, u_vol_iso 0.4 all equal AC-0406''s
+    calibrated values; the only delta is u_vol_ms2 0.24 vs 0.18, which is AC-0407''s DOCUMENTED re-calibration
+    rather than drift. Nothing in the push path overrides any of them, and the rejected 0.7 ambient weight
+    is nowhere in the file.
+
+    (c) THE FORM SURVIVES, measured with AC-0406''s OWN script so the comparison is like-for-like: the
+    r700 lower_mid spread reads **52.2 against a calibrated 44.9**, a no-cloud floor of 40.2, and the
+    REJECTED configuration''s 39.1 — i.e. current cloud form is measurably BETTER than the calibrated
+    baseline and far from the flattened state AC-0406 refused. No black clouds either: r700 min 85.2,
+    r120 underside min 175.9 / p10 201.7. The builder also recorded an honest framing caveat: the current
+    A-window makes the "r700" frame 65% space with u_space_sky 0.6496.
+
+    THE MOST LIKELY EXPLANATION, and it is a user-side one: **BLUR WAS ON BY DEFAULT when those captures
+    were taken** (dof_enabled true, dof_far_distance 1500, dof_amount 0.08 — flipped to false by the user''s
+    ruling this session). Depth-of-field at altitude softens exactly the distant cloud and terrain detail
+    those screenshots show, and a blurred volumetric field can read as streaks with faint banding. That
+    is a hypothesis, NOT a finding — the seam did not appear in any capture WITH blur on in this session''s
+    renders either, so it may simply have been transient. Either way the honest statement is: not reproducible
+    here, and the user should re-check with the new default.
+
+    WHAT WOULD MAKE THIS REPRODUCIBLE IF IT IS REAL: the exact vantage and time of day, and whether the
+    user''s build had any cfg saved overrides (a saved user://awecraft.cfg can pin far_seam, dof_enabled
+    or a render scale that a clean run does not have). Asking for those is cheaper than inventing a fix.
+
+    GATES: g0 0/0, genhash 25/25, lightstate leaks 0 / wash false / move.delta 0 / hole_slabs 106 flat;
+    3/3 renders rc=0 with zero shader errors and DOF off in all of them.
+
+    NO CODE WAS CHANGED, because no defect was found. Reporting that plainly is the point.'
   comments: []
 - id: AC-0482
   title: face>1 block highlight has a cell/flat unit mismatch

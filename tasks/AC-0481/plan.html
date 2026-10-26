@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0481 cloud look and sky seams</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0481 — the clouds lost their form, and a straight seam runs through sky and cloud</h1>
+<p>Coordinator contract. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>Separate the two complaints before fixing either</b>, and re-check the seam on the CURRENT tree first.</p>
+<h2>1. The report</h2>
+<p>User, with screenshots: <em>"clouds look bad now, and there are like seams running through the clouds/sky."</em> In the capture a <b>faint but clear straight vertical line</b> runs from the top of the frame down through the cloud layer into the sky, well above the horizon; the clouds themselves read as <b>thin smeared streaks rather than volumes</b>.</p>
+<h2>2. ⚠ RE-CHECK FIRST: the capture PREDATES a major sky change</h2>
+<p><b>AC-0483 landed in the round before this one and REMOVED THE SYNTHETIC SKY HORIZON from <code>core/aero_sky_gradient.gdshader</code></b> — the shader went <b>459 → 332 lines</b>, three uniforms were deleted (27 → 24), and the local-horizontal split, the below-horizon floor, the horizon anchor compensation and the <code>hl</code>-stripe were all removed. The user's screenshot was taken <b>before</b> that surgery.</p>
+<p><b>So step 1 is: does the vertical seam still exist?</b> Reproduce the user's vantage on the current tree and look. If it is gone, the seam half of this ticket is <b>already resolved by AC-0483</b> and must be recorded as such rather than "fixed" twice. If it remains, continue to §3.</p>
+<h2>3. Separate the two complaints</h2>
+<p><b>(a) THE SEAM.</b> It is straight, thin, and runs through the <b>SKY as well as the clouds</b> — which argues against the volumetric marcher (whose artifacts are soft and blobby) and toward something <b>tiled or coordinate-based</b>: a tile boundary in a sky/cloud texture, a projected grid edge, or a UV wrap. <b>THE DECISIVE TEST, and it costs one render: does the seam persist with the CLOUDS SWITCHED OFF?</b></p>
+<ul>
+<li><b>Sky alone, seam present</b> → the cause is in the sky path, not the cloud path.</li>
+<li><b>Seam only with clouds on</b> → the cause is in the cloud volume or its projection.</li>
+<li><b>Also distinguish</b>: is the seam at a fixed <b>SCREEN</b> position or a fixed <b>WORLD direction</b>? Fixed screen position implies a fullscreen/post or quad edge; fixed world direction implies tiling or a UV wrap. <b>Move the camera and look — the seam either follows the view or stays in the world.</b></li>
+</ul>
+<p><b>(b) THE CLOUD FORM.</b> The word <b>"now"</b> matters: AC-0405 introduced the raymarched volume, AC-0406 added the ambient fill and multiscatter, AC-0407 added the skyline and inside-cloud fill, AC-0412 changed the far-tier sampler, AC-0441 added jitter. <b>AC-0406's notes record that an over-high ambient weight (0.7) FLATTENED the cloud spread and was rejected</b> — and the final calibration was against the single-source air colour (<code>u_vol_air</code>) precisely so form survived. <b>So the first thing to check is whether the shipped ambient/multiscatter weights are still the calibrated ones or have drifted</b>, and whether a later ticket (AC-0407's skyline, AC-0441's jitter) changed the spread.</li>
+</ul>
+<h2>4. What to do</h2>
+<ol>
+<li><b>4.1 Re-check the seam on the current tree</b> (§2). Report present/absent with pixel evidence.</li>
+<li><b>4.2 If present</b>: run the clouds-off test and the camera-move test to localise it (§3a), <b>then fix only what that names</b>.</li>
+<li><b>4.3 Measure the cloud form</b> using AC-0406's own statistic so the comparison is like-for-like, and <b>report the current ambient/multiscatter weights against the calibrated values</b> (§3b). If they have drifted, say what changed them and restore the calibration — do not invent new weights.</li>
+<li><b>4.4 Fix minimally</b>, with before/after numbers.</li>
+</ol>
+<h2>5. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/cloud_layer.gdshader</td><td>the raymarch, the ambient/sky fill and multiscatter terms, the jitter, the phase function, and the projection/UV derivation</td><td>Edit per 4.2/4.4.</td></tr>
+<tr><td>godot/core/aero_sky_gradient.gdshader</td><td><b>just surgically changed by AC-0483</b> (459 → 332 lines) — check its current state before assuming anything about it</td><td>Read; edit only if 4.2 names the sky path.</td></tr>
+<tr><td>godot/world/world.gd</td><td>where the cloud and sky uniforms are pushed (<code>u_vol_air</code>, ambient/multiscatter weights, cloud time/drift)</td><td>Read; edit only if a weight/push is the cause.</td></tr>
+<tr><td>tasks/AC-0481/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light ownership, the far tier, the bake assets, the planet body, the data JSON files, the aim box. <b>Do not re-tune the ambient weight to taste</b> — AC-0406 established the calibrated value and why 0.7 was rejected.</p>
+<h2>6. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The seam's status is measured (first)</td><td>Present or absent on the CURRENT tree, with pixel evidence and the clouds-off and camera-move results if present. If AC-0483 already removed it, <b>say so and attribute it</b>.</td></tr>
+<tr><td>The cloud form is measured against AC-0406's calibration</td><td>The current weights reported against the calibrated ones, and the spread statistic measured the way AC-0406 measured it. <b>A capture alone is not evidence.</b></td></tr>
+<tr><td>If fixed: before/after</td><td>The same numbers, with a stated acceptance threshold.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0481 --arms g0,genhash,lightstate</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, lightstate invariants (leaks 0, wash false).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>BLUR IS OFF BY DEFAULT (user ruling) AND MUST NOT BE ENABLED in test renders</b> — depth-of-field would blur away exactly the 1–2 px seam this ticket is about. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>7. Acceptance</h2><p>The seam's current status measured (and attributed to AC-0483 if it is gone); if present, localised by the clouds-off and camera-move tests; the cloud form measured against AC-0406's calibration with the weights reported; a minimal fix with before/after numbers or a documented finding of what remains.</p>
+<h2>8. Risks</h2><p>(1) <b>"Fixing" a seam AC-0483 already removed</b> — hence §2. (2) Judging cloud form by eye when AC-0406 left a statistic and a rejection rationale. (3) Re-tuning the ambient weight to taste, which is the specific thing AC-0406 measured as wrong. (4) Blur in a test render destroying the seam evidence. (5) Confusing the seam's two halves — fixing the sky when the cause is the cloud projection, or the reverse.</p>
+<h2>9. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §5. No ambient-weight re-tuning, no blur in renders.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>10. Resume point</h2><p>AC-0483 removed the synthetic sky horizon in the round before this one, so the user's capture predates the current sky shader. AC-0406 calibrated the cloud's ambient fill against <code>u_vol_air</code> after rejecting a 0.7 weight for flattening the spread; AC-0407 and AC-0441 have touched the cloud path since.</p>
+</body></html>

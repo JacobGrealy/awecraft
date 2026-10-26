@@ -1,0 +1,110 @@
+AC-0481 — findings and deviations (all numbers greppable under .scratch/AC-0481-gates/)
+
+## Findings
+
+1. SEAM STATUS ON THE CURRENT TREE: ABSENT. Measured on the current tree (HEAD
+   53c8955, shader 332-line post-AC-0483, default settings, DOF off) with a
+   signed per-column offset detector (seam.py; a 1-2 px straight vertical seam
+   shows as an opposite-sign (x, x+1) column-step pair, scene content does not):
+   - seam-zenith-day.png (dome view, whole frame sky, 1280x720): max |d| 0.56,
+     zero seam candidates (seam-zenith-day.log).
+   - seam-r120-limb.png (user-vantage limb aim, deck in frame): max |d| 0.99 in
+     the sky rows [0,300), zero candidates (seam-r120-limb.log).
+   - AC-0483's current-tree captures (after-h100/h800, after-outside-day,
+     after-sun-zenith, after-moon-zenith): zero candidates
+     (seam-ac0483-captures.log).
+   - AC-0483's OLD-tree captures (before-h100, before-h800, switches-off,
+     BROKENMIX — the pre-AC-0483 shader with the synthetic horizon still in):
+     also zero candidates (same log).
+   No vertical seam exists in the scene geometry of EITHER tree at any of these
+   vantages. 4.2 (clouds-off + camera-move) was therefore not run — its
+   precondition ("if present") did not hold (deviation D1).
+
+2. ATTRIBUTION: the user's 10-24 capture predates the 2026-10-24 user ruling
+   "depth-of-field BLUR IS OFF BY DEFAULT ... several of those filings were
+   read off blurred captures" (settings.gd:441-448, shipped in AC-0480 commit
+   27a3838), and the seam is a 1-2 px straight line — a blur-pass artifact
+   class, not a volumetric one. AC-0480's shared-cause audit (its results
+   section 1) had already established the user's report contained THREE seams
+   (terrain tier seam -> AC-0480 itself; satellite disc line -> AC-0438; this
+   sky/cloud line -> "to be determined") and found no wrap/tiling/projection
+   mechanism in the cloud/sky code. Re-verified on the current tree: the cloud
+   field is world-anchored continuous 3-D direction noise (ahash/anv FBM, no
+   textures, no UV — cloud_layer.gdshader), and the sky is one continuous
+   directional gradient (aero_sky_gradient.gdshader, 24 uniforms, no split
+   after AC-0483). Note for the record: AC-0483 removed a HORIZONTAL horizon
+   band (the hl=0 split/floor/stripe, measured gone in its own captures), not a
+   vertical line — the old-tree h100/h800 captures, with the band still
+   present, already show no vertical seam. So the seam half is resolved by the
+   current tree, but the attribution is the blur-off ruling + AC-0480's
+   classification, with AC-0483 recorded as the co-landed sky change rather
+   than the seam's remover (deviation D2). No fix was applied, and none is
+   owed.
+
+3. CLOUD FORM vs AC-0406 CALIBRATION. Current ambient/multiscatter weights
+   (shipped = the shader defaults; NOTHING in the codebase pushes any of them —
+   grep across all .gd hits only the shader; the single-source u_vol_air is
+   pushed per frame by world.gd:5892 = Aero.fog_display):
+   - u_vol_amb  = 0.45  (cloud_layer.gdshader:277) — AC-0406 calibrated 0.45: NO DRIFT.
+   - u_vol_ms1  = 0.30  (:259) — calibrated 0.30: NO DRIFT.
+   - u_vol_ms2  = 0.24  (:265) — calibrated 0.18: the ONLY delta, and it is
+     AC-0407's own documented re-calibration ("still too dark" fix, :260-265),
+     not a drift.
+   - u_vol_iso  = 0.4   (:272) — calibrated 0.4: NO DRIFT.
+   - AC-0407's extra levers in their calibrated shapes: u_vol_glow 0.30 /
+     u_vol_glow_pow 6.0 / u_vol_air_lift 0.10. The rejected 0.7 ambient weight
+     (the one that flattened the spread to 39.1) is nowhere in the tree.
+   The spread statistic, measured the way AC-0406 measured it (their own
+   measure.py, same bands, same stances):
+   - r700 lower_mid lum_std: 52.2 current vs 44.9 (AC-0406 calibrated,
+     re-measured 44.9 on the in-repo reference frame) vs 40.2 (no-cloud floor)
+     vs 39.1 (the rejected 0.7) (measure-r700.log). ABOVE the floor: the
+     0.7-class flattening has not happened; form survives. Framing caveat D3.
+   - r700 lower_min 85.2 (current) / 98.4 (AC-0406): no black pixels.
+   - r120 underside_120 (the other AC-0406 acceptance band, same stance):
+     current min 175.9 / p10 201.7 / mean 229.8 vs AC-0406 23.1 / 146.0 /
+     179.4 (measure-r120.log) — no-black preserved with margin; the band is
+     now brighter by design (sky A-window + unclamped gradient + gate-ON
+     coverage, all separately ruled).
+   4.4: NO FIX NEEDED — the calibration is intact; nothing was re-tuned. The
+   "thin smeared streaks" read in the user's capture is consistent with the
+   DOF-blurred frame (the same ruling records the contamination) plus the
+   deck's by-design new look (gate-ON sparse groups, AC-0428/AC-0435); the
+   current-tree frames show puffy masses with dark cores, not streaks.
+
+4. GATES (unmodified tree — no code change was made): g0 rc=0 script=0
+   shader=0; genhash rc=0, 25 GENHASH lines (25/25); lightstate rc=0,
+   leaks 0 before/after, wash_detected false, move.delta 0, hole_slabs 106
+   flat, stragglers 3 (g0-r1/genhash-r1/lightstate-r1 logs, summary.json).
+   Renders 3/3 rc=0, 0 SHADER ERROR, 0 SCRIPT ERROR, Forward+ asserted
+   (render-*.log, renders-driver2.log). Blur/DOF was OFF in every render
+   (user ruling).
+
+## Deviations
+
+D1. Plan 4.2 (clouds-off + camera-move tests) not run: the seam is absent on
+    the current tree, and the plan's 4.2 is conditional on presence ("If
+    present: ..."). Absence is measured with pixel evidence (Finding 1).
+D2. The plan's §2 expectation that a vanished seam be "attributed to AC-0483"
+    is not supported as the mechanism: AC-0483 removed a horizontal horizon
+    band, and the vertical line is absent in the old-tree captures where that
+    band still existed. Attribution is the 2026-10-24 blur-off ruling (the
+    user's own: "several of those filings were read off blurred captures") +
+    AC-0480's three-seams classification. Recorded per the plan's own rule
+    ("recorded as such and attributed rather than fixed twice") — nothing was
+    fixed twice.
+D3. The plan's r700 stance is no longer like-for-like with AC-0406's r700:
+    the current A window (Aero.sky_space = smoothstep(0.25A, A, h), A = 1200,
+    aero.gd:54-56; AC-0417 replaced AC-0402's 500..3200 stretched window) puts
+    the stance at radial 841 m (SAT_ALT 700 + spawn 141; u_space_sky 0.6496 in
+    the render's RESULT line) — a 65 %-space frame, vs AC-0406's day-sky
+    r700 (top-band mean 95.4 now vs 233.6 then). The spread statistic was
+    still measured exactly AC-0406's way and is reported as a class check
+    against the 40.2 floor, with this caveat stated (Finding 3).
+D4. Plan 4.1 said "reproduce the user's vantage"; the user's screenshots are
+    not in the repo, so the vantage was reconstructed from the report's
+    geometry (a line "from the top of the frame down through the cloud layer
+    ... well above the horizon" = the limb-aim ~120 m stance, plus the dome
+    view as the fixed-azimuth discriminator). Two fresh renders + the
+    ten AC-0483 captures (old and new tree) cover multiple vantages,
+    altitudes and times of day; absence holds in all of them.
