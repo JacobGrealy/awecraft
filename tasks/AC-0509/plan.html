@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0509 home-face behavioural branches</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0509 — classify every home-face branch; remove the behavioural ones</h1>
+<p>Coordinator contract. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>A survey-and-classify ticket first.</b> The deliverable is a table with <b>no branch left unclassified</b>, then removal of the ones that are behavioural leaks — not a blanket deletion.</p>
+<h2>1. Why this exists (the user's question)</h2>
+<p>The user, after AC-0479/AC-0482: <em>"why do we still have a home face??? There should be no home face?"</em> Their standing requirement, verbatim: <em>"there are going to be multiple planets, there is no home… You fly in at whatever part of the planet you want. The experience has to be the same around the entire planet."</em></p>
+<p><b>The distinction that decides every case:</b></p>
+<ul>
+<li><b>LEGITIMATE — canonical chart anchoring.</b> The flat↔sphere math and the bake need <em>some</em> anchor, and <code>SphereMath.flat_to_world</code> must assume one. Code that pre-maps into the canonical chart and then behaves identically on all twelve faces is <b>not</b> a home face; it is a coordinate convention.</li>
+<li><b>NOT LEGITIMATE — a behavioural branch.</b> Different code takes a different path depending on whether you are on faces 0/1. That is a home face, it violates the requirement, and <b>AC-0482 proved it can be wrong by 3.3–7.2 KILOMETRES while the home face reads perfect.</b></li>
+</ul>
+<h2>2. What is actually left (counted on the current tree)</h2>
+<ul>
+<li><b>Three <code>face == 0 or face == 1</code> branches, all in <code>godot/world/world.gd</code></b> — at <b>:16022, :16203, :16215</b> on the current tree. <b>(Anchor by SEARCH, not by these numbers: the file changed by 42 lines in the round before this ticket, and has shifted repeatedly.)</b></li>
+<li><b>29 mentions of "home" in <code>godot/player/player.gd</code>.</b></li>
+<li>Only <b>three</b> such branches exist across the whole <code>godot/</code> tree, so this is a bounded job rather than a sweep.</li>
+</ul>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3.1 SURVEY AND CLASSIFY — the primary deliverable.</b> For <b>each</b> of the three <code>face == 0 or face == 1</code> branches and <b>each</b> of the 29 <code>player.gd</code> "home" uses, state: what it does, which side of §1 it falls on, and <b>if behavioural, what the two paths do differently and whether a player can observe the difference</b>. <b>No branch left unclassified.</b> Names like <code>home_point</code>/<code>home_cell</code> that merely name the canonical chart's anchor are legitimate — say so rather than renaming them for tidiness.</li>
+<li><b>3.2 REMOVE THE BEHAVIOURAL ONES</b> so one path serves all twelve faces. <b>Where a face-dependent path is genuinely required, say WHY with evidence from the geometry</b> — not from history ("this is how it was built").</li>
+<li><b>3.3 THE GATE THAT WOULD HAVE CAUGHT AC-0482.</b> AC-0482's measurement is already a working instrument: <b>box corner tangential error and box-up angle, per face</b>. Build a standing check that measures it on a home face <b>and at least one non-home face</b> and <b>fails if they differ in kind</b> (AC-0482 measured ~10.9 mm / ~13.8–14.2 mm — i.e. the same class). Reuse that method; do not invent a new one. Wire it as an arm or extend an existing one, and register it in <code>godot/harness_data.yaml</code> if it becomes a standing row.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td>the three <code>face == 0 or face == 1</code> branches (~:16022, :16203, :16215 — LOCATE BY SEARCH) and the conversions around them (<code>world_pos_of_flat</code>, <code>flat_of_world_pos</code>, <code>home_point</code>, <code>home_cell</code>)</td><td>Edit per 3.2.</td></tr>
+<tr><td>godot/player/player.gd</td><td>the 29 "home" uses; the AC-0479 Jacobian orientation and AC-0482's face&gt;1 placement branch</td><td>Edit per 3.2.</td></tr>
+<tr><td>godot/core/sphere_math.gd</td><td>the canonical chart, <code>flat_to_world</code>/<code>world_to_flat</code>, <code>CHUNKS_PER_FACE</code></td><td>Read; edit only if the chart mapping itself is behaviourally face-dependent.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>where 3.3's new per-face check lives</td><td>Edit: add the check.</td></tr>
+<tr><td>godot/harness_data.yaml</td><td>a standing row if the check becomes one</td><td>Edit; never hand-edit HARNESS.md — run <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>tasks/AC-0509/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light ownership, the far tier, the bake assets, the sky shader, the data JSON files. <b>Do not rename things for tidiness</b> — the target is behaviour, not vocabulary.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The classification table (primary)</td><td>All three branches and all 29 "home" uses classified as legitimate anchoring or behavioural leak, with observability stated for each leak. <b>Zero unclassified.</b></td></tr>
+<tr><td>Removal proved safe</td><td>For each behavioural branch removed, <b>the per-face aim measurement (AC-0482's instrument) before and after on a home AND a non-home face</b> — the numbers must stay in the same class, proving the removal did not shift behaviour on any face.</td></tr>
+<tr><td>The new gate can fail</td><td><b>Prove the per-face check would catch a divergence</b> (a negative control, e.g. feeding it the pre-AC-0482 numbers, which differed by kilometres). An untested gate is what let this survive; do not add another one.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0509 --arms g0,genhash,smoke,residency</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, smoke green, residency leak false / stable.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>Blur is OFF by default (user ruling) — do not enable depth-of-field in test renders.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>6. Acceptance</h2><p>Every home-face branch and "home" use classified; the behavioural ones removed with per-face measurements proving no face shifted; the legitimate ones left alone and named as legitimate; and a per-face gate that is proven able to fail.</p>
+<h2>7. Risks</h2><p>(1) <b>Blanket deletion</b> — removing canonical-chart anchoring would break the flat↔sphere math on all faces, which is far worse than the leak. (2) Renaming "home" identifiers and calling it progress: the vocabulary is not the defect. (3) A gate that cannot be shown to fail. (4) Removing a branch that turns out to be required, discovered by a green g0 and a wrong world — so the per-face measurement must accompany each removal, not just the aggregate gates.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §4. No renaming for tidiness, no deletion of chart anchoring.</li>
+<li>If a branch cannot be classified from the code, <b>say so in the table with what you would need to decide</b> rather than guessing a side. Only return <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and exit if the ambiguity blocks the whole ticket.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0482 fixed the aim box on faces above 1 and measured a 3.3–7.2 km error that the home face could never show; this ticket generalises that finding to every remaining branch. AC-0469's migration unified keys, residency, light, landing and generation — the home-ness that survived is concentrated in coordinate conversion.</p>
+</body></html>

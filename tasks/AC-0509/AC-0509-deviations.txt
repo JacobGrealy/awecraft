@@ -1,0 +1,205 @@
+AC-0509 deviations (the survey first — no blanket deletion)
+
+THE CLASSIFICATION — 32/32, NO BRANCH LEFT UNCLASSIFIED
+Line numbers are the pre-edit tree (HEAD). "Behavioural" = a different
+code path (or the code it documents) that the player can observe on the
+home pair vs a non-home face. "Legitimate" = canonical chart anchoring:
+the home pair IS the canonical flat chart; per-chart addressing that
+behaves identically on all 12 faces (a coordinate convention, not a
+behaviour).
+
+world.gd — the three `face == 0 or face == 1` branches:
+
+  W1  world.gd:16022  key_for_sphere_pos      LEGITIMATE
+      What: resolves a planet position to the column key of the face's
+      OWN storage layout — the home pair in flat metres (round; 1 flat
+      m = 1 m of arc, the AC-0306 grid lock W = pi*R/2), faces 2-11 in
+      per-face grid cells (floor; cells_u/cells_v ~ 1 m/cell, AC-0471).
+      Why not behavioural: the two paths address the two storage
+      layouts of the SAME canonical map. Every read/write below routes
+      through the key this produces, so the same logical block is
+      addressed on every face. Not player-observable.
+
+  W2  world.gd:16203  get_block_key           LEGITIMATE
+      What: read routing — faces 0/1 -> flat get_block; faces 2-11 ->
+      _ensure_face_chunk + get_local (the face_local_x data layout).
+      Why not behavioural: identical read semantics (y range, recorded
+      edits, fluid levels, the star-edit lane with the same reseed
+      rule). The face data-less path is unreachable on player queries
+      (_ensure_face_chunk sync-builds on the player's own column
+      queries). Not player-observable.
+
+  W3  world.gd:16215  set_block_key           LEGITIMATE
+      What: write routing, the same split.
+      Why not behavioural: both lanes share ONE _star_edit_entry
+      (lanes 0/1, the same reseed rule), the same _dirty_add, the same
+      boundary rebake. Identical edit semantics on every face. Not
+      player-observable.
+
+player.gd — the twenty-nine "home" uses:
+
+  1   :23     comment   BEHAVIOURAL (documents the FACE_STEP branch)
+      Removed in 3.2 with the branch (const block rewritten to
+      document the unified AUTO_STEP_MAX).
+  2   :266    comment   LEGITIMATE — per-chart anchor-frame naming
+      (home = the column frame, face = the cell frame).
+  3   :539    comment   LEGITIMATE — the sim-anchor documentation
+      (home patch: the identity frame; past the edge: the face-chunk
+      frame).
+  4   :778-781 comment  BEHAVIOURAL (documents the FACE_STEP branch)
+      Removed in 3.2 (rewritten to the unified-threshold note).
+  5   :885    comment   LEGITIMATE — head-offset-along-local-up
+      documentation (face-neutral by construction; the comment notes
+      where the two frames diverge).
+  6   :944    comment   LEGITIMATE — English "home" (one home = one
+      location of the blend).
+  7   :1393   comment   BEHAVIOURAL — the viewmodel-light guard
+      (home: the light_at pull; face: the player-light floor 0).
+      LEFT, fenced: fixing it is a face-grid light pull = light
+      ownership (plan don't-touch list). The guard is correct —
+      removing it would feed the home light_at with face coordinates,
+      the AC-0482-class bug.
+  8   :1420   comment   LEGITIMATE — English "home".
+  9   :3127   comment   BEHAVIOURAL — the bucket no-op on faces 2-11
+      (the fluid sim runs on the home grid only). LEFT, fenced: the
+      code's own comment scopes it to the fluids ticket (plan fence:
+      no new tickets).
+  10  :3176   comment   LEGITIMATE — the home warp naming (AC-0479
+      per-vertex spherical warp).
+  11  :3177   comment   LEGITIMATE — chunk._warp_home_cell_point
+      naming (AC-0461).
+  12  :3179   comment   LEGITIMATE — SphereMath.home_point names the
+      canonical chart anchor (plan §3.1: say so, do not rename).
+  13  :3185   CODE      LEGITIMATE — `SphereMath.home_point(fx, fz, R)`:
+      the one code identifier among the 29; it names the canonical
+      chart anchor. The face path uses uv_to_world instead — both are
+      per-chart exact (post-AC-0479/AC-0482, measured the same class:
+      10.87-15.01 mm home vs 13.81-14.23 mm face).
+  14  :3218   comment   LEGITIMATE — the raw-Jacobian documentation
+      (the AC-0482 fix; unlike the AC-0479 home twin).
+  15  :3221   comment   LEGITIMATE — the home-warp angle documentation
+      (~D/R ~ 3 deg).
+  16  :3243   comment   LEGITIMATE — the aim-box chart-branch
+      documentation (home: the home-point warp; face: the uv_to_world
+      warp — both per-vertex exact, the AC-0482 fix; this is the
+      branch the new aimface gate measures on both sides).
+  17  :3247   comment   LEGITIMATE — AC-0479 documentation.
+  18  :3266   comment   LEGITIMATE — the chart-conversion naming
+      (the AC-0482 defect's conversion, fixed).
+  19  :3269   comment   LEGITIMATE — the AC-0482 defect documentation
+      (the historical record of the 3.0-7.2 km leak).
+  20  :3326   comment   LEGITIMATE — the sim routing documentation
+      (home: flat->world; face: the chunk transform on the local cell
+      centre).
+  21  :3374   comment   LEGITIMATE — the sim-frame documentation
+      (flat 1 m on home, the face cell frame past the patch edge).
+  22  :3395   comment   LEGITIMATE — _sim_cell_center documentation
+      (per-chart conversion).
+  23  :3540   comment   LEGITIMATE — _anchor_basis documentation
+      (the column basis in the home patch; the face-chunk frame past
+      the edge).
+  24  :3566   comment   LEGITIMATE — English "home" (the debug label's
+      home).
+  25  :3604   comment   LEGITIMATE — English "home".
+  26  :3788   comment   LEGITIMATE — the respawn sim-frame
+      documentation (the frames agree only near the home centre).
+  27  :3789   comment   LEGITIMATE — the respawn defect documentation
+      (the far-from-home float, fixed by the sim-frame respawn).
+  28  :3791   comment   LEGITIMATE — the per-chart sim-frame
+      documentation (the flat net on the home pair, the anchor's face
+      cell frame past it).
+  29  :3793   comment   LEGITIMATE — the per-chart conversion
+      documentation (world_pos_of_flat on home, the anchor chunk
+      transform on a face).
+
+Tally: 28 LEGITIMATE (3 world + 25 player, including the home_point
+identifier), 4 BEHAVIOURAL — 2 describing ONE branch (removed) + 2
+left with fences.
+
+THE REMOVAL (3.2) — the one behavioural branch, removed
+  player.gd:775-814 auto-step: FACE_STEP 1.0 m on faces 2-11 vs 0.5 m
+  on the home pair. Observable: a 1 m ledge is auto-climbed on faces
+  2-11 but is a wall the jump (1.35 m) clears on the home pair.
+  Removed: one threshold for all twelve faces — const AUTO_STEP_MAX
+  := 0.5 (the home value, the canonical one) used by both code paths.
+  WHY the face side had no geometry to keep (from geometry, not
+  history): post-AC-0471 both charts resolve at ~1 m/cell (6283 cells
+  across 6283.19 m; 3141 cells across 3141.59 m — the same 1 m
+  in-plane resolution as the home pair), and the face warp is
+  pointwise-continuous (the identity chunk node +
+  chunk._warp_cell_point — no seam lip to step on the face side; the
+  6 m cell resolution the old comment assumed no longer exists).
+  Per-face aim measurement before/after (gate b): aimface r3 (pre)
+  vs r4 (post) — identical per-site values (home 10.8699/15.0104 mm;
+  face 13.8095/14.2322/13.9563 mm; box_up <= 0.028 deg) — the aim
+  path is untouched by the edit, as expected.
+  ARCHITECTURE.md :1302 updated in the same task (invariant 2: the
+  renamed component FACE_STEP -> AUTO_STEP_MAX; the stale "6 m cell
+  resolution" claim corrected in both player.gd and the doc).
+
+THE TWO BEHAVIOURAL LEAVES (fenced, with reasons)
+  1. player.gd:1398 viewmodel light — the hand's ambient on faces 2-11
+     rides the player-light floor instead of a local light pull.
+     Left: the fix is a face-grid light pull = light ownership
+     (plan don't-touch). The guard is correct; removing it feeds the
+     home light_at with face coordinates (the AC-0482-class bug).
+  2. player.gd:3130 bucket — no-op on faces 2-11 (the fluid sim runs
+     on the home grid only). Left: the fluids ticket's scope per the
+     code's own comment; plan fence = no new tickets.
+
+THE NEW STANDING GATE (3.3) — `aimface`
+  harness.gd: dispatch after voxelcost + 7 trailing functions
+  (_aimface_test, _aimface_site, _aimface_measure,
+  _aimface_column_top, _aimface_verdict, _aimface_reco_pre_fix,
+  _aimface_reco_post_fix); harness_data.yaml row added; HARNESS.md
+  rendered via harness_doc.py --render (never hand-edited). BATTSKIP
+  (standalone, quits — the warpcensus shape).
+  Method: REUSED from AC-0482, not reinvented — fly-stand the eye 2.0 m
+  above the column top (the game's own surface data), aim straight
+  down (pitch -1.55), require 30 consecutive stable aim frames on the
+  target column before reading the highlight; block truth = the
+  chunk's OWN warp method (the mesh's construction itself:
+  _warp_home_cell_point on home, _warp_cell_point on faces — no second
+  placement invented). Sites: the AC-0482 set verbatim (spawn,
+  home_far, face4_edge, face4_mid, face2_pole). Quantities per site:
+  centre_mm, the 8-corner nearest-corner split (corner_rad_mm /
+  corner_tang_mm), box_up_deg. The aim target is the DDA's own
+  convention (topmost non-water block — the box lands on the block the
+  game aims at).
+  The teeth (_aimface_verdict): every site in the HOME CLASS (centre
+  < 100 mm, corner_tang < 100 mm, box_up < 5 deg) AND both chart
+  classes covered (>= 1 home, >= 1 non-home site). 100 mm is 6.7x the
+  current tree's worst home value (15.01 mm) and 30,000x below the
+  AC-0482 leak.
+  Negative control (gate c): AWECRAFT_AIMFACE_NEGCTRL=1 feeds the
+  verdict the RECORDED pre-AC-0482 numbers (the km-scale leak) — it
+  must REJECT (it does: 9 fails, centre/corner_tang/box_up at all
+  three non-home sites) and ACCEPT the recorded post-fix numbers (it
+  does). An instrument that cannot fail is the defect this ticket
+  exists to remove.
+
+MEASUREMENT FIDELITY (arm development — discarded runs)
+  aimface-r1.log: parse errors (a coroutine called without await;
+  Vector3 has no unsigned_angle_to in 4.7.1) — no data.
+  aimface-r2.log: first live run; exposed two measurement bugs fixed
+  before the baseline run: (a) the face truth corners must use the
+  DATA-LAYOUT slot (face_local_x) — a raw local offset double-flips on
+  the mirror class and read 1.0-11.4 m off, growing with chart
+  distance; (b) the aim target is the DDA's topmost non-water block,
+  not surface_top's solid-only scan (home_far carries a non-solid top,
+  block 19 at y=164 against a solid top of 163). After the fixes the
+  face values reproduce AC-0482's post-fix r2 log to 4 decimal places
+  (13.8095/14.2322/13.9563) — the construction is the AC-0482 probe.
+
+GATES (all green; logs in .scratch/AC-0509-gates/)
+  (a) classification table above — 32/32, zero unclassified.
+  (b) aimface BEFORE (r3, pre-removal player) vs AFTER (r4,
+      post-removal): identical per-site values, same class.
+  (c) aimface NEGCTRL (r5): rejects the recorded pre-AC-0482 numbers
+      (9 fails), accepts the post-fix numbers.
+  (d) g0: rc=0, 0 script errors, 0 shader errors (g0-r1.log).
+      genhash: 25/25 byte-identical to the reference set
+      (genhash-r1.log vs tasks/AC-0433/captures/genhash-ref2.txt).
+      smoke: player/interact/light/fluids ok, 0/0 (player-r1.log,
+      interact-r1.log, light-r1.log, fluids-r1.log).
+      residency: leak=false, verdict STABLE (residency-r1.log).

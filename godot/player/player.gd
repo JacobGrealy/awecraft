@@ -18,10 +18,17 @@ const MOUSE_SENS := 0.0022
 const PAD_LOOK_SPEED := 2.5
 const PITCH_LIMIT := 1.55
 const REACH := 6.0
-# AC-0309 C5: the auto-step on the FACE world (6 m cell resolution —
-# terrain steps up to ~2-3 m): 1.0 m auto-stepped, the jump (1.35 m)
-# covers the rest. The home step stays 0.5 m (the folded-net seam lip).
-const FACE_STEP := 1.0
+# AC-0509: the ONE auto-step maximum for all twelve faces (0.5 m — the
+# home pair's folded-net seam lip, the canonical value). AC-0309 C5's
+# FACE_STEP (1.0 m on faces 2-11) was a home-face behavioural branch,
+# removed here: post-AC-0471 both charts resolve at ~1 m/cell (the
+# per-axis cell counts are the face width in metres — the same 1 m
+# in-plane resolution as the home pair) and the face warp is
+# pointwise-continuous (chunk.gd _warp_cell_point, the identity node —
+# no seam lip to step), so the 1.0 m threshold auto-climbed 1 m ledges
+# on faces 2-11 that the home pair treats as a wall the jump (1.35 m)
+# clears — the experience is now the same around the entire planet.
+const AUTO_STEP_MAX := 0.5
 # AC-0039: step cadence — one "step" SFX per this much ground distance.
 const STEP_DIST := 2.3
 # AC-0145 P1: core sphere motion. The basis is an ACCUMULATED continuous
@@ -775,10 +782,9 @@ func _physics_process_impl(dt: float) -> void:
 			if int(_anchor.get("face", 0)) > 1:
 				# AC-0309 C5: the face world — the forward CELL (the anchor's
 				# cell frame; the in-plane axes per cell width, y unscaled
-				# metres). The face grid's 6 m resolution means terrain steps
-				# up to ~2-3 m: the step threshold is FACE_STEP (1.0 m, vs
-				# the home 0.5 m seam lip) and the jump (1.35 m) covers the
-				# rest.
+				# metres). AC-0509: the threshold is AUTO_STEP_MAX — the
+				# SAME value the home pair uses below (one path serves all
+				# twelve faces; see the const block for the geometry).
 				var p: Vector3 = fpos - _anchor["origin"]
 				var bx: Vector3 = _anchor["basis"].x
 				var bn: Vector3 = _anchor["basis"].y
@@ -789,7 +795,7 @@ func _physics_process_impl(dt: float) -> void:
 				var fz2 := int(floorf(pc.z))
 				var ftop: int = Game.world.surface_top_key(int(_anchor["face"]), fx2, fz2)
 				var step_h: float = float(ftop) - pc.y
-				if step_h > 0.001 and step_h <= FACE_STEP:
+				if step_h > 0.001 and step_h <= AUTO_STEP_MAX:
 					var head_cell: int = Game.world.get_block_key(int(_anchor["face"]), fx2, fz2, ftop + 2)
 					var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)
 					if not head_solid:
@@ -804,9 +810,10 @@ func _physics_process_impl(dt: float) -> void:
 				var fwd_g: Vector3 = Game.world.world_pos_of_flat(fp2.x, float(ftop) + 1.0, fp2.z)
 				var step_h := fwd_g.y - position.y
 				# the residual varies continuously along the fold (down to sub-mm);
-				# ANY positive step under 0.5 m is stepped (sub-mm false positives
-				# from the conversion noise are harmless — the nudge just settles)
-				if step_h > 0.001 and step_h <= 0.5:
+				# ANY positive step under AUTO_STEP_MAX (0.5 m) is stepped (sub-mm
+				# false positives from the conversion noise are harmless — the
+				# nudge just settles)
+				if step_h > 0.001 and step_h <= AUTO_STEP_MAX:
 					# head clearance above the step (capsule ~1.8 m)
 					var head_cell: int = Game.world.get_block(fx2, ftop + 2, fz2)
 					var head_solid := head_cell != 0 and Data.block(head_cell) != null and bool(Data.block(head_cell).solid)

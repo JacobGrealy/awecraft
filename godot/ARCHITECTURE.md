@@ -1299,9 +1299,12 @@ p2b3_probe.gd, p2c1_probe.gd.
   from the landing (pull) light — the AC-0297 seam contract (byte-equal in
   steady state, a self-heal if the engines disagree). **Player anchor (C5)**:
   at the edge the player's anchor switches to the face frame — the face
-  auto-step is 1.0 m (`Player.FACE_STEP`; the 6 m cell resolution makes
-  2–3 m steps common; the 1.35 m jump covers the rest) vs 0.5 m on the home
-  net. Gate: the `crossface` arm (`AWECRAFT_LOGIC=crossface` — the
+  auto-step is 0.5 m on every face (`Player.AUTO_STEP_MAX`; AC-0509
+  removed the face-only 1.0 m `FACE_STEP` — post-AC-0471 both charts
+  resolve at ~1 m/cell and the face warp is pointwise-continuous, so the
+  two charts share the home pair's 0.5 m seam-lip threshold and a 1 m
+  terrain step is a jumped wall (1.35 m jump) everywhere). Gate: the
+  `crossface` arm (`AWECRAFT_LOGIC=crossface` — the
   walk/flight crossing, the light seam, the edit interactions, the save
   round-trip, the seam audit).
 - **Collision**: player and mobs are `CharacterBody3D`; voxel collision is a **per-slab**

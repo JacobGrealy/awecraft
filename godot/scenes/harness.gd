@@ -456,6 +456,26 @@ func run(seed_env: String, logic: String, cam: String, snapshot_path: String, sp
 			await _voxelcost_test(spawn)
 			get_tree().quit()
 			return
+		if logic == "aimface":
+			# AC-0509 (plan.html §3.3): the standing per-face AIM-BOX gate
+			# (the check that would have caught AC-0482). AC-0482's
+			# temporary aimface probe — same quantities, same block truth,
+			# same sites — made STANDING: it measures the box centre
+			# offset, the 8-corner nearest-corner split radial/tangential,
+			# and the box-up vs block-up on a HOME face (spawn, home_far)
+			# AND non-home faces (face4_edge, face4_mid, face2_pole) and
+			# FAILS if any site leaves the home class (centre or
+			# corner_tang >= 100 mm, box_up >= 5 deg — the AC-0482 leak
+			# read 3,000,000+ mm and 45-155 deg). AWECRAFT_AIMFACE_
+			# NEGCTRL=1: the negative control — the verdict is fed the
+			# RECORDED pre-AC-0482 numbers (km-scale) and must REJECT
+			# them (an instrument that cannot fail is the defect this
+			# ticket exists to remove, the planetwalk negctrl shape).
+			# STANDALONE (it quits) — BATTSKIP, no main.gd entry (the
+			# warpcensus shape).
+			await _aimface_test(spawn)
+			get_tree().quit()
+			return
 		if logic == "gamepad":
 			world.recenter(spawn.x, spawn.z, true)
 			await main._await_spawn_floor(spawn, 300)
@@ -40092,3 +40112,408 @@ func _facefeed_ref(face: int, ccx: int, ccz: int, landed: Dictionary, io: Varian
 		first = false
 	var tk := "%d,%d" % [ccx, ccz]
 	return {"eff": effs.get(tk, PackedByteArray()), "rounds": rounds, "converged": rounds < 32}
+
+
+# AC-0509 (plan.html §3.3): the standing per-face aim-box gate — THE
+# gate that would have caught AC-0482. AC-0482's TEMPORARY aimface probe
+# (dispatch after voxelcost + trailing functions, removed at that
+# closeout; the numbers in .scratch/AC-0482-gates/aimface-r1.log =
+# BEFORE the fix, aimface-r2.log = AFTER) made STANDING: the SAME
+# quantities on a HOME face AND non-home faces, failing if any site
+# leaves the home class.
+#
+# THE MEASUREMENT (reused — not reinvented; the AC-0482 construction):
+# the player fly-stands above the target column (the eye 2.0 m above
+# the column top — the game's own surface data, the faceedit lift
+# shape), aims straight down (pitch -1.55 = -PITCH_LIMIT), and the aim
+# must stably land on the target column (30 consecutive frames) before
+# the highlight transform is read (the r1a aim-bleed lesson: the eye
+# sits at the cell-centre +0.5, never the integer boundary). Quantities
+# per site: the box centre offset from the block's TRUE centre
+# (centre_mm); the 8 box corners' nearest-corner error split radial /
+# tangential (corner_rad_mm / corner_tang_mm, the maxima); box-up vs
+# block-up (box_up_deg — the block's up is the radial at the block
+# centre). D_m = the in-plane distance from the home-patch centre (home
+# sites — the warp-magnitude axis the AC-0479 numbers run on; -1 on the
+# face sites, where the home frame does not apply).
+#
+# BLOCK TRUTH: the chunk's OWN warp method — the mesh's construction
+# itself (home: Chunk._warp_home_cell_point, the AC-0467 canonical home
+# warp; face: Chunk._warp_cell_point, the AC-0458 face warp — the
+# faceedit convention, no second placement invented), falling back to
+# the legacy node transform (SphereMath.column_transform /
+# face_chunk_transform) when the warp flag is off.
+#
+# THE TEETH (_aimface_verdict): every site must sit in the HOME CLASS —
+# centre_mm < 100.0, corner_tang_mm < 100.0, box_up_deg < 5.0 — and the
+# run must cover >= 1 home (face <= 1) and >= 1 non-home (face > 1)
+# face. Home's own worst on the current tree is 15.0 mm (home_far,
+# D~153); 100 mm is 6.7x that and 30,000x below the AC-0482 leak
+# (corner_tang 3,035,943-3,538,831 mm, box-up 45-155 deg).
+# AWECRAFT_AIMFACE_NEGCTRL=1: the verdict is fed the RECORDED
+# pre-AC-0482 numbers and must REJECT them (and accept the recorded
+# post-fix numbers) — an untested gate is what let AC-0482 survive.
+func _aimface_test(spawn: Vector3) -> void:
+	var t0 := Time.get_ticks_msec()
+	var R: float = Game.planet_R
+	var ck: GDScript = load("res://world/chunk.gd")
+	var warp := 1 if bool(ck._warp_on) else 0
+	var warp_home := 1 if bool(ck._warp_home) else 0
+	var res: Dictionary = {"warp": warp, "warp_home": warp_home}
+	if R <= 0.0:
+		res["ok"] = false
+		res["fail"] = "no_planet_R"
+		res["ms"] = Time.get_ticks_msec() - t0
+		Debug.result({"aimface": res})
+		return
+	if OS.get_environment("AWECRAFT_AIMFACE_NEGCTRL") == "1":
+		# THE negative control (fast, no world): the verdict must REJECT
+		# the RECORDED pre-AC-0482 numbers (the km-scale leak — the gate
+		# catching AC-0482, replayed) and ACCEPT the recorded post-fix
+		# numbers (the same class as home). A verdict that accepts the
+		# pre-fix numbers is a BLIND instrument: the arm fails.
+		var pre_v: Dictionary = _aimface_verdict(_aimface_reco_pre_fix())
+		var post_v: Dictionary = _aimface_verdict(_aimface_reco_post_fix())
+		res["negctrl"] = {
+			"ran": true,
+			"rejects_pre_fix": not bool(pre_v.get("ok", true)),
+			"accepts_post_fix": bool(post_v.get("ok", false)),
+			"pre_fails": pre_v.get("fails", []),
+			"post_fails": post_v.get("fails", []),
+		}
+		res["ok"] = res["negctrl"]["rejects_pre_fix"] and res["negctrl"]["accepts_post_fix"]
+		res["ms"] = Time.get_ticks_msec() - t0
+		Debug.result({"aimface": res})
+		return
+	Game.mode = "play"
+	world.recenter(float(WorldGen.SPAWN_X), float(WorldGen.SPAWN_Z), true)
+	await main._await_sim_band(spawn, 3000)
+	var p = main._spawn_player()
+	Debug.fly(true)
+	for i in 8:
+		await get_tree().physics_frame
+	# THE sites — the AC-0482 set verbatim (spawn + home_far on the home
+	# face; face4_edge 3 cells inside the +x home edge, mirror class;
+	# face4_mid the +x midline; face2_pole the -Y pole). The column tops
+	# are the game's own surface data at run time (a regen that moves a
+	# top is measured where the terrain is — never a stale guess); the
+	# spawn site derives from the live spawn search; home_far is the
+	# AC-0482 offset from the spawn column (+144 x, -16 z: cell
+	# [152,164,-8] at seed 44, D~153).
+	var sites: Array = []
+	sites.append(await _aimface_site(p, "spawn", 0, -1, -1, R, warp, warp_home))
+	var pf_sp: Vector3 = world.flat_of_world_pos(p.position)
+	var spx: int = int(floorf(pf_sp.x))
+	var spz: int = int(floorf(pf_sp.z))
+	sites.append(await _aimface_site(p, "home_far", 0, spx + 144, spz - 16, R, warp, warp_home))
+	sites.append(await _aimface_site(p, "face4_edge", 4, 6280, 1570, R, warp, warp_home))
+	sites.append(await _aimface_site(p, "face4_mid", 4, 3141, 1570, R, warp, warp_home))
+	sites.append(await _aimface_site(p, "face2_pole", 2, 1570, 3141, R, warp, warp_home))
+	var verdict: Dictionary = _aimface_verdict(sites)
+	res["sites"] = sites
+	res["fails"] = verdict.get("fails", [])
+	res["ok"] = bool(verdict.get("ok", false))
+	res["ms"] = Time.get_ticks_msec() - t0
+	for s in sites:
+		if s.has("fail"):
+			print("AIMFACE site=%s fail=%s face=%d" % [s["site"], s["fail"], int(s.get("face", -1))])
+		else:
+			print("AIMFACE site=%s face=%d mirror=%d cell=[%d,%d,%d] centre_mm=%.4f corner_tang_mm=%.4f corner_rad_mm=%.4f box_up_deg=%.4f D=%s" % [
+				s["site"], int(s["face"]), int(s["mirror"]),
+				int(s["cell"][0]), int(s["cell"][1]), int(s["cell"][2]),
+				float(s["centre_mm"]), float(s["corner_tang_mm"]), float(s["corner_rad_mm"]),
+				float(s["box_up_deg"]), str(s["D_m"])])
+	Debug.result({"aimface": res})
+
+
+func _aimface_site(p, site: String, face: int, colx: int, colz: int, R: float, warp: int, warp_home: int) -> Dictionary:
+	var t0 := Time.get_ticks_msec()
+	var out: Dictionary = {"site": site, "face": face, "mirror": 1 if SphereMath.face_mirror_x(face) else 0}
+	if face <= 1:
+		# HOME site: flat coordinates. "spawn" (colx < 0) derives the
+		# live spawn column. Stand at the column centre (fly, above the
+		# terrain), recenter + settle so the home lane has the column's
+		# data, then read the top (the game's own surface data) and set
+		# the exact stand: the eye 2.0 m above the top, the cell-centre
+		# +0.5 in-plane (the AC-0482 probe placement).
+		if colx < 0:
+			var pf: Vector3 = world.flat_of_world_pos(p.position)
+			colx = int(floorf(pf.x))
+			colz = int(floorf(pf.z))
+		p.position = world.world_pos_of_flat(float(colx) + 0.5, 250.0, float(colz) + 0.5)
+		world.recenter(float(colx), float(colz), true)
+		for i in 240:
+			await get_tree().process_frame
+		var ct0: Dictionary = _aimface_column_top(0, colx, colz)
+		var top: int = int(ct0["top"])
+		if top < 0:
+			out["fail"] = "no_home_top"
+			out["col"] = [colx, colz]
+			out["ms"] = Time.get_ticks_msec() - t0
+			return out
+		out["top_block"] = int(ct0["id"])
+		p.position = world.world_pos_of_flat(float(colx) + 0.5, float(top) + 2.0 - p.EYE, float(colz) + 0.5)
+		for i in 30:
+			await get_tree().physics_frame
+		var anch: Dictionary = world.player_anchor(p.position)
+		if int(anch.get("face", -1)) > 1:
+			out["fail"] = "home_site_anchor_off_pair"
+			out["anchor_face"] = int(anch["face"])
+			out["ms"] = Time.get_ticks_msec() - t0
+			return out
+		return await _aimface_measure(p, out, face, colx, top, colz, R, warp, warp_home, t0)
+	# FACE site: chart cells (the AC-0482 sites, absolute columns).
+	var cu: int = SphereMath.cells_u(face)
+	var cv: int = SphereMath.cells_v(face)
+	if colx < 0 or colz < 0 or colx >= cu or colz >= cv:
+		out["fail"] = "col_out_of_chart"
+		out["col"] = [colx, colz]
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	var ct: Dictionary = _aimface_column_top(face, colx, colz)
+	var top: int = int(ct["top"])
+	if top < 0:
+		out["fail"] = "no_face_top"
+		out["col"] = [colx, colz]
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	out["top_block"] = int(ct["id"])
+	# stand at the column centre (the chart direction at the cell
+	# centre, radius R + top), then recenter in FLAT (the faceedit
+	# recenter contract) and run the warpcensus 240-frame settle.
+	var dir: Vector3 = SphereMath.uv_to_world(face, (float(colx) + 0.5) / float(cu), (float(colz) + 0.5) / float(cv), R)
+	p.position = (R + float(top)) * (dir / dir.length()) - Vector3(0.0, R, 0.0)
+	var pf2: Vector3 = world.flat_of_world_pos(p.position)
+	world.recenter(pf2.x, pf2.z, true)
+	for i in 240:
+		await get_tree().process_frame
+	var anch2: Dictionary = world.player_anchor(p.position)
+	if int(anch2.get("face", -1)) != face:
+		out["fail"] = "anchor_face_mismatch"
+		out["anchor_face"] = int(anch2.get("face", -1))
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	# THE lift (the faceedit shape, the game's own surface data): the
+	# eye to 2.0 m above the anchor column's top, along the anchor's
+	# own y (the cell frame's up).
+	var pa: Dictionary = p._anchor
+	var inv0: Transform3D = pa["inv"]
+	var ocell0: Vector3 = inv0 * p.camera.global_position
+	var paface: int = int(pa.get("face", face))
+	var ccx_p: int = int(pa.get("ccx", 0))
+	var ccz_p: int = int(pa.get("ccz", 0))
+	var mir0: bool = SphereMath.face_mirror_x(paface)
+	var kx0: int = int(floorf(ocell0.x))
+	var colx0: int = ccx_p * 16 + (15 - kx0 if mir0 else kx0)
+	var colz0: int = ccz_p * 16 + int(floorf(ocell0.z))
+	var ltop: int = world.surface_top_key(paface, colx0, colz0)
+	var want_y: float = ocell0.y + 2.0 if ltop < 0 else float(ltop) + 2.0
+	var lift: float = want_y - ocell0.y
+	if lift > 0.05:
+		p.position = p.position + (pa["basis"] as Basis).y * lift
+		for i in 8:
+			await get_tree().physics_frame
+	return await _aimface_measure(p, out, face, colx, top, colz, R, warp, warp_home, t0)
+
+
+func _aimface_measure(p, out: Dictionary, face: int, colx: int, top: int, colz: int, R: float, warp: int, warp_home: int, t0: int) -> Dictionary:
+	p.look(0.0, -p.PITCH_LIMIT)  # straight down (the AC-0482 probe: -1.55)
+	# THE stable-aim gate: 30 consecutive frames on the target column
+	# BEFORE the highlight transform is read (the r1a aim-bleed lesson).
+	var target := Vector3i(colx, top, colz)
+	var stable := 0
+	var last: Vector3i = Vector3i(-1, -1, -1)
+	for i in 600:
+		await get_tree().physics_frame
+		var h: Dictionary = p.aim_hit()
+		if h.hit and h.cell == target:
+			stable += 1
+		else:
+			stable = 0
+			if h.hit:
+				last = h.cell
+		if stable >= 30:
+			break
+	if stable < 30:
+		out["fail"] = "aim_not_stable"
+		out["col"] = [colx, top, colz]
+		out["last_cell"] = [last.x, last.y, last.z]
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	var hl: GeometryInstance3D = p.highlight
+	if hl == null:
+		out["fail"] = "no_highlight"
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	var box_pos: Vector3 = hl.global_position
+	var box_basis: Basis = hl.global_basis
+	# THE block truth: the 8 warped corners through the chunk's OWN warp
+	# method (the mesh's construction itself) — or the legacy node
+	# transform when the warp flag is off.
+	var ccx: int = int(floorf(float(colx) / 16.0))
+	var ccz: int = int(floorf(float(colz) / 16.0))
+	var c: Node3D
+	if face <= 1:
+		c = world.chunks.get(world._key(ccx, ccz))
+	else:
+		c = world.chunks.get("%d:%d:%d" % [face, ccx, ccz])
+	if c == null:
+		out["fail"] = "no_chunk"
+		out["chunk"] = "%d:%d:%d" % [face, ccx, ccz]
+		out["ms"] = Time.get_ticks_msec() - t0
+		return out
+	# THE 8 cell corners in the DATA-LAYOUT local frame: the mirror class
+	# stores absolute column iu in data slot 15 - (iu - ccx*16)
+	# (face_local_x), and _warp_cell_point's mirror flip maps that slot
+	# back to the chart — the SAME construction the live aim box runs
+	# (player.gd's AC-0482 face warp). A raw local offset (colx - 16*ccx)
+	# double-flips on the mirror class and read 1.0-11.4 m off in the r2
+	# run. Home is unmirrored (face_local_x is the identity there), so
+	# one construction serves both charts.
+	var sl: int = SphereMath.face_local_x(face, int(colx), ccx)
+	var corners: Array = []
+	for ix in [0.0, 1.0]:
+		for iy in [0.0, 1.0]:
+			for iz in [0.0, 1.0]:
+				var lx: float = float(sl) + ix
+				var lz: float = float(colz) + iz - float(ccz) * 16.0
+				var ly: float = float(top) + iy
+				if face <= 1:
+					if warp_home == 1:
+						corners.append(c._warp_home_cell_point(R, float(ccx) * 16.0, float(ccz) * 16.0, lx, lz, ly))
+					else:
+						corners.append(SphereMath.column_transform(ccx, ccz, R) * Vector3(lx, ly, lz))
+				else:
+					var mir: bool = SphereMath.face_mirror_x(face)
+					if warp == 1:
+						corners.append(c._warp_cell_point(face, R, mir, float(ccx) * 16.0, float(ccz) * 16.0, lx, lz, ly))
+					else:
+						corners.append(SphereMath.face_chunk_transform(face, ccx, ccz, R) * Vector3(lx, ly, lz))
+	var centre: Vector3
+	var cxx: float = float(sl) + 0.5
+	var czz: float = float(colz) + 0.5 - float(ccz) * 16.0
+	if face <= 1:
+		if warp_home == 1:
+			centre = c._warp_home_cell_point(R, float(ccx) * 16.0, float(ccz) * 16.0, cxx, czz, float(top) + 0.5)
+		else:
+			centre = SphereMath.column_transform(ccx, ccz, R) * Vector3(cxx, float(top) + 0.5, czz)
+	else:
+		var mir2: bool = SphereMath.face_mirror_x(face)
+		if warp == 1:
+			centre = c._warp_cell_point(face, R, mir2, float(ccx) * 16.0, float(ccz) * 16.0, cxx, czz, float(top) + 0.5)
+		else:
+			centre = SphereMath.face_chunk_transform(face, ccx, ccz, R) * Vector3(cxx, float(top) + 0.5, czz)
+	# THE AC-0482 quantities: centre offset, the 8-corner nearest-corner
+	# error split radial/tangential (the maxima), box-up vs block-up.
+	var centre_mm: float = box_pos.distance_to(centre) * 1000.0
+	var planet_c: Vector3 = Vector3(0.0, -R, 0.0)  # the GLOBAL-frame planet centre
+	var max_tang := 0.0
+	var max_rad := 0.0
+	for sx in [-0.51, 0.51]:
+		for sy in [-0.51, 0.51]:
+			for sz in [-0.51, 0.51]:
+				var bc: Vector3 = box_pos + box_basis * Vector3(sx, sy, sz)
+				var best: Vector3 = corners[0]
+				var bd: float = bc.distance_squared_to(best)
+				for k in range(1, 8):
+					var d2: float = bc.distance_squared_to(corners[k])
+					if d2 < bd:
+						bd = d2
+						best = corners[k]
+				var err: Vector3 = bc - best
+				var rr: Vector3 = (bc - planet_c).normalized()
+				var rad: float = err.dot(rr)
+				var tang: float = (err - rr * rad).length()
+				max_tang = maxf(max_tang, tang)
+				max_rad = maxf(max_rad, absf(rad))
+	var box_up: Vector3 = box_basis.y
+	var block_up: Vector3 = (centre - planet_c).normalized()
+	var box_up_deg: float = rad_to_deg(acos(clampf(box_up.normalized().dot(block_up), -1.0, 1.0)))
+	out["cell"] = [colx, top, colz]
+	if face <= 1:
+		var pfh: Vector3 = world.flat_of_world_pos(centre)
+		out["D_m"] = roundf(Vector2(pfh.x, pfh.z).length() * 100.0) / 100.0
+	else:
+		out["D_m"] = -1
+	out["centre_mm"] = centre_mm
+	out["corner_tang_mm"] = max_tang * 1000.0
+	out["corner_rad_mm"] = max_rad * 1000.0
+	out["box_up_deg"] = box_up_deg
+	out["box_up_vec"] = [roundf(box_up.x * 1000.0) / 1000.0, roundf(box_up.y * 1000.0) / 1000.0, roundf(box_up.z * 1000.0) / 1000.0]
+	out["ms"] = Time.get_ticks_msec() - t0
+	return out
+
+
+# THE aim-target column top: the topmost block the game's own DDA
+# (VoxelMath.raycast_blocks, fluid=false — core/math.gd skips water only)
+# hits from straight above: any id != 0 except water. That is the block
+# the aim box lands on, so it is the block the gate measures against —
+# NOT surface_top, whose solid-only scan skips non-solid tops (a
+# non-solid block at [152,164,-8] read 163 against the DDA's 164 in the
+# r2 run; the face twin surface_top_key skips water AND lava, which the
+# DDA does not). Face reads go through get_block_key, which sync-builds
+# the chunk (the player-own-column-query guarantee).
+func _aimface_column_top(face: int, colx: int, colz: int) -> Dictionary:
+	for y in range(Data.HEIGHT - 1, -1, -1):
+		var b: int = world.get_block(colx, y, colz) if face <= 1 else world.get_block_key(face, colx, colz, y)
+		if b != 0 and b != WorldGen.B_WATER:
+			return {"top": y, "id": b}
+	return {"top": -1, "id": 0}
+
+
+# THE per-face gate (AC-0509 §3.3): every site in the HOME CLASS and
+# both chart classes covered. The class bounds carry 6.7x margin over
+# the current tree's worst home value (15.0 mm at home_far): centre <
+# 100 mm, corner_tang < 100 mm, box_up < 5 deg. The AC-0482 leak sits
+# 30,000x outside the class (centre 3,028,876-7,220,077 mm; corner_tang
+# 2,820,392-3,538,831 mm; box_up 45-155 deg) — that is the divergence
+# this fails on.
+func _aimface_verdict(sites: Array) -> Dictionary:
+	var fails: Array = []
+	var saw_home := false
+	var saw_nonhome := false
+	for s in sites:
+		var name: String = str(s.get("site", "?"))
+		if s.has("fail"):
+			fails.append("%s:%s" % [name, s["fail"]])
+			continue
+		var f: int = int(s.get("face", -1))
+		if f <= 1:
+			saw_home = true
+		elif f > 1:
+			saw_nonhome = true
+		if float(s.get("centre_mm", 1e9)) >= 100.0:
+			fails.append("%s:centre_mm_out_of_class" % name)
+		if float(s.get("corner_tang_mm", 1e9)) >= 100.0:
+			fails.append("%s:corner_tang_mm_out_of_class" % name)
+		if float(s.get("box_up_deg", 1e9)) >= 5.0:
+			fails.append("%s:box_up_deg_out_of_class" % name)
+	if not saw_home:
+		fails.append("no_home_site")
+	if not saw_nonhome:
+		fails.append("no_nonhome_site")
+	return {"ok": fails.is_empty(), "fails": fails}
+
+
+# THE RECORDED numbers — the negative control's feed. Pre-fix:
+# .scratch/AC-0482-gates/aimface-r1.log (BEFORE the AC-0482 fix — the
+# km-scale leak the gate exists to catch). Post-fix: aimface-r2.log
+# (AFTER — the same class as home's own 10.4-15.0 mm residual).
+func _aimface_reco_pre_fix() -> Array:
+	return [
+		{"site": "spawn", "face": 0, "centre_mm": 0.0, "corner_tang_mm": 10.8699, "corner_rad_mm": 10.3642, "box_up_deg": 0.0},
+		{"site": "home_far", "face": 0, "centre_mm": 0.0, "corner_tang_mm": 14.9970, "corner_rad_mm": 10.6122, "box_up_deg": 0.0},
+		{"site": "face4_edge", "face": 4, "centre_mm": 3313236.8, "corner_tang_mm": 3035943.1, "corner_rad_mm": 1327219.1, "box_up_deg": 45.39},
+		{"site": "face4_mid", "face": 4, "centre_mm": 3028876.0, "corner_tang_mm": 2820392.8, "corner_rad_mm": 1104938.7, "box_up_deg": 88.02},
+		{"site": "face2_pole", "face": 2, "centre_mm": 7220077.1, "corner_tang_mm": 3538831.3, "corner_rad_mm": 6293670.4, "box_up_deg": 155.27},
+	]
+
+
+func _aimface_reco_post_fix() -> Array:
+	return [
+		{"site": "spawn", "face": 0, "centre_mm": 0.0, "corner_tang_mm": 10.8699, "corner_rad_mm": 10.3642, "box_up_deg": 0.0},
+		{"site": "home_far", "face": 0, "centre_mm": 0.0, "corner_tang_mm": 14.9970, "corner_rad_mm": 10.6122, "box_up_deg": 0.0},
+		{"site": "face4_edge", "face": 4, "centre_mm": 0.0, "corner_tang_mm": 13.8095, "corner_rad_mm": 11.1848, "box_up_deg": 0.0},
+		{"site": "face4_mid", "face": 4, "centre_mm": 0.0, "corner_tang_mm": 14.2322, "corner_rad_mm": 10.6200, "box_up_deg": 0.0},
+		{"site": "face2_pole", "face": 2, "centre_mm": 0.0, "corner_tang_mm": 13.9563, "corner_rad_mm": 11.0473, "box_up_deg": 0.0},
+	]

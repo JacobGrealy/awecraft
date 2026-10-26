@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-25T22:32
+  updated_at: 2026-10-26T00:30
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0509
 - AC-0481
 - AC-0438
 - AC-0484
@@ -34403,11 +34402,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T15:56
-  updated_at: 2026-10-25T15:56
-  completed_at: null
+  updated_at: 2026-10-26T00:30
+  completed_at: 2026-10-26T00:30
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -34467,5 +34466,45 @@ intake:
     unified everything EXCEPT this), AC-0479/AC-0482 (the aim-box bug and its measurement method), the
     user''s standing no-home-region requirement.
 
-    '
+
+
+    CLOSED (round 111). THE SURVEY FOUND THE HOME FACE HIDING IN GAMEPLAY, NOT IN GEOMETRY — and the answer
+    to the user''s question is now evidence rather than opinion.
+
+    THE CLASSIFICATION, 32 OF 32 WITH ZERO UNCLASSIFIED: all **three `face == 0 or face == 1` branches
+    in world.gd (:16022/:16203/:16215) are LEGITIMATE canonical chart anchoring and storage routing**
+    — they pre-map into the canonical chart and then behave identically on all twelve faces, which is
+    a coordinate convention and not a home face. Of the **29 "home" uses in player.gd, 25 are legitimate**
+    (including the `home_point` identifier, which was KEPT rather than renamed — the target is behaviour,
+    not vocabulary) **and 4 were behavioural.**
+
+    THE REMOVAL, and it is a gameplay defect rather than a cosmetic one: **`FACE_STEP` was 1.0 m on faces
+    2-11 against 0.5 m at home**, so a **1 m ledge was AUTO-CLIMBED on every face except the home faces,
+    where you had to jump it.** That is precisely the asymmetry the user''s requirement forbids — "the
+    experience has to be the same around the entire planet" — and it was invisible to anyone testing at
+    spawn, which is where testing happens. Now `AUTO_STEP_MAX := 0.5` for all twelve faces, justified
+    from the GEOMETRY (post-AC-0471 both charts are ~1 m/cell with a pointwise-continuous face warp, so
+    there is no seam lip to step over) rather than from history.
+
+    ALSO CORRECTED: stale **"6 m cell" comments** in `godot/player/player.gd` and `godot/ARCHITECTURE.md:1302`
+    — leftovers from before the 1 m grid migration, which is the same class of lying documentation this
+    session has repeatedly had to fix.
+
+    TWO BEHAVIOURAL ITEMS LEFT DELIBERATELY, WITH REASONS RATHER THAN SILENCE: (1) a **viewmodel-light
+    floor on faces** whose real fix belongs to light ownership, and whose guard currently shields an AC-0482-class
+    bug — removing the guard without fixing ownership would trade a known asymmetry for an unknown one;
+    (2) a **bucket no-op on faces**, which belongs to the fluids work. BOTH ARE OWED and are named here
+    so they are not lost.
+
+    THE NEW STANDING GATE IS THE DURABLE PART: an `aimface` arm in `godot/scenes/harness.gd` with a row
+    in `godot/harness_data.yaml` and HARNESS.md re-rendered (`--check` clean), reusing AC-0482''s measurement
+    method verbatim — it asserts the home class (centre and corner tangential under 100 mm, box_up under
+    5 deg) on at least one home AND one non-home face. **It has teeth, proved by negative control:** the
+    NEGCTRL run REJECTS the recorded pre-fix kilometre numbers (9 fails) and accepts the post-fix ones.
+
+    SAFETY PROVED BEFORE AND AFTER: the per-site aim values are **identical** across the change — home
+    10.87/15.01 mm; faces 13.81/14.23/13.96 mm, reproducing AC-0482''s post-fix log to 4 decimal places
+    — so removing the branch shifted no face''s behaviour.
+
+    GATES: g0 **0/0**, genhash **25/25 byte-identical**, smoke green, residency leak false / STABLE.'
   comments: []
