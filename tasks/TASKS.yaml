@@ -1,10 +1,11 @@
 meta:
-  updated_at: 2026-10-26T01:40
+  updated_at: 2026-10-26T09:01
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0438
+- AC-0510
+- AC-0480
 - AC-0484
 - AC-0485
 - AC-0486
@@ -28800,10 +28801,10 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: blocked
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-25T09:57
+  updated_at: 2026-10-26T09:01
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -28978,7 +28979,50 @@ intake:
     AC-0480) and straight seams through the CLOUDS AND SKY (AC-0481). Three seams in three tiers reported
     in one message is worth checking for a COMMON cause before fixing any one of them — a shared tiling/wrap/projection
     convention would produce all three, and fixing them separately would be three times the work for the
-    same bug.'
+    same bug.
+
+
+
+    SECOND PLAN-INSUFFICIENT (round 113) — ALL FOUR SAMPLING CANDIDATES ANSWERED, NONE IS THE CAUSE, AND
+    THE LINE SURVIVES EVERY ONE. Both attempted fixes were measured, did not meet the stated acceptance
+    threshold, and were REVERTED; the tree is at HEAD with an empty git diff. Gates clean (g0 0/0, genhash
+    25/25, satellite 12/12 height_decode).
+
+    WHAT WAS RULED OUT, WITH MEASUREMENTS RATHER THAN READING:
+
+    - ADDRESS MODE: the 3D sampler provably REPEATS (wrap), established by a per-fragment discard probe
+    that fired on every fragment of all twelve faces — the whole disc vanished — while clamp would have
+    left at least one row per face different (offline margins 0.022-0.871 exceed the 0.01 tolerance).
+    So wrap is REAL but it is NOT the line''s mechanism. A UV remap of UV*(1023/1024) MOVED the line (n
+    415 -> 276) without fixing it, so it was reverted.
+
+    - UV DERIVATION: clean — the mesh UV reaches exactly 1.0 and never overshoots.
+
+    - ANISOTROPY, tested separately from mips as instructed: line-independent (n 434, mean_abs 44.6, max
+    211 versus baseline 415/45.0/212) — reverted.
+
+    - MIPS: already ruled out in round 113.
+
+    - ATLAS LAYOUT: TWELVE SEPARATE 1024-squared ImageTextures, one per face — not one atlas, so per-face
+    clamping is not the knob.
+
+    - THE FORENSIC DETAIL THAT MATTERS: the line row sits exactly on FACE 1''S FINAL TEXEL-COLUMN BAND
+    at the f00/f01 seam, and its per-x colours MATCH NO LOCAL TEXEL while tracking far or opposite-edge
+    content — yet the line is wrap-, aniso-, mip- and UV-source-independent. That combination (samples
+    something not local, but not through any of the four mechanisms) points at the SEAM BETWEEN TWO FACES
+    as a compositing/stitching issue rather than a per-face sampling one.
+
+    NEXT CHEAPEST DECISIVE PROBE, recorded by the builder rather than left to guesswork: a SHADER-ONLY
+    PER-FACE RADIAL OFFSET (no re-bake, no genhash rebase) with the same measurement, PLUS ONE WINDOWS
+    CHECK — because every measurement here is llvmpipe, the line has already survived evidence that should
+    have moved it, and the user''s own Windows capture is the only instrument that has confirmed it exists
+    in the product.
+
+    THE HONEST STATE OF THIS TICKET: three runs have established what the line is NOT (geometry, bake
+    content, mips, wrap, aniso, UV overshoot, per-face clamp) and one run has measured what it tracks
+    (face 1''s last texel column, non-local colours). Nobody has yet named what it IS. It should not be
+    closed as "not reproducible" — the user sees it in the shipped product — and it should not absorb
+    more budget on llvmpipe guesses.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
@@ -32299,11 +32343,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: done
+  status: open
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-25T20:12
-  completed_at: 2026-10-25T20:12
+  updated_at: 2026-10-26T09:00
+  completed_at: null
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32399,7 +32443,39 @@ intake:
 
     ONE DEVIATION REPRODUCED 4x AND DOCUMENTED: at the A2 user vantage the post-flip rows are unchanged
     (dL +11.10 vs +11.07) because NO band-B pixels exist in that drain window — so that particular frame
-    cannot show the fix either way, which is why the band was located in-frame instead.'
+    cannot show the fix either way, which is why the band was located in-frame instead.
+
+
+
+    REOPENED (round 113) — THE USER REPORTS IT WAS NOT FIXED, AND MY CLOSE WAS WRONG. I closed this on
+    a measurement of the 1->2 TIER BOUNDARY and reported the dark step and grey tint gone. The user''s
+    correction, verbatim: **"AC-0480 did not fix the seam issue, the seam issue is in high lod between
+    chunks within the high lod tier, not just the boundary between high lod and sim lod. If high and sim
+    lod are using different shaders they should not be."**
+
+    TWO DISTINCT DEFECTS, AND I FIXED THE ONE THAT WAS EASIER TO MEASURE: (i) the tier-boundary step between
+    the averaged band and the near field — which the `far_seam` flip did address and which measured ratio
+    0.80 with hue intact; and (ii) **SEAMS BETWEEN CHUNKS INSIDE THE HIGH-LOD TIER ITSELF**, which the
+    far_seam shader does not touch (it changes the band''s lighting model, not the per-chunk continuity
+    within the band). The user''s screenshot shows a dense grid/plaid pattern of seams across the whole
+    far expanse, not a single boundary line.
+
+    THE USER''S HYPOTHESIS IS THE LEADING ONE AND IT IS ARCHITECTURALLY SOUND: **"If high and sim lod
+    are using different shaders they should not be."** AC-0480''s own investigation recorded exactly that
+    split — the near tier is `unshaded` with `L = 0.20 + 0.80*m_direct` while `lod_avg.gdshader` is ENGINE-SHADED
+    ON TOP OF ITS OWN LIGHT (double shading), and `far_seam` introduces a THIRD shader (`lod_avg_seam.gdshader`).
+    Three different shading models for one world means the tiers cannot match by construction, and per-chunk
+    seam artifacts inside the far tier are exactly what a per-chunk-averaged material produces when adjacent
+    chunks average differently.
+
+    WHAT THIS TICKET NOW IS: (1) DO NOT re-do the boundary measurement — it is recorded and it was correct
+    for what it measured. (2) MEASURE THE INTRA-TIER SEAMS: the grid of seams between adjacent high-LOD
+    chunks, with pixel numbers across a chunk edge, and establish whether the step is per-chunk AVERAGING
+    (adjacent chunks average their cells independently, so the average changes at the boundary) or per-chunk
+    SHADING (each chunk quad gets a slightly different light). (3) ANSWER THE SHADER QUESTION EXPLICITLY:
+    list which shader/material each tier renders with, and state whether the near and far tiers share
+    one. If they do not, THAT is the defect the user is pointing at and the fix is to unify them rather
+    than to keep patching the far tier''s model. (4) Only then fix.'
   comments:
   - id: 1
     created_at: 2026-10-25T14:39
@@ -33905,7 +33981,7 @@ intake:
   - continents
   - biomes
   created_at: 2026-10-25T14:43
-  updated_at: 2026-10-25T18:20
+  updated_at: 2026-10-26T07:43
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -33956,7 +34032,52 @@ intake:
     order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
     is dependency order; blocked status still prevents starting a downstream piece before prerequisite
     acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
-    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.
+
+
+    Scope amendment (direct user request, tree/flower clustering investigation): include the vegetation
+    placement bug fix in this continent-series ticket, not as deferred polish.
+
+
+    Player requirement: trees and flowers must not appear in artificial, synchronized 4x4 blocks of adjacent
+    trunks or identical flowers. Preserve intentional biome-scale forests/groves and flower abundance;
+    reducing density is not a fix.
+
+
+    Confirmed provenance: AC-0311 sphere-domain port, commit 306c866 (2026-10-01). gdext/src/gen.cpp sp_key2
+    at investigation lines 803-818 quantizes each horizontal candidate to its containing 4-block lattice
+    cell, making all 16 candidates share a key. gen_flat tree placement/height at 3767-3777 and 3861 and
+    flower placement/species at 3898-3916 reuse those keys. gen_veg_cells repeats the behavior at 2960-2968,
+    3007 and 3063-3069. Recheck anchors before implementation.
+
+
+    Required fix: deterministic candidate-level placement randomness keyed by stable world position plus
+    independent seed channels, rather than one placement/height/species roll shared across a whole coarse
+    lattice tile. Use a globally unambiguous position identity; do not blindly replace this with another
+    lossy two-axis sphere projection. Keep full and far vegetation consumers consistent, including chunk
+    margins and cross-chart ownership. Recheck tree overlap/write-order behavior and flower overwrites
+    of trunk-base cells so the result is valid vegetation, not just changed hashes. Coarse fields may
+    still drive ecological density, not synchronize the individual placement rolls.
+
+
+    Acceptance: (1) a deterministic regression fixture that demonstrates the old shared-key 4x4 failure
+    and fails if that behavior is restored; (2) multi-seed candidate-key/placement spatial-correlation
+    checks, including negative coordinates, chunk boundaries and representative chart edges/corners, that
+    distinguish valid groves from lattice-aligned synchronization (freeze explicit thresholds in the execution
+    plan); (3) full/far vegetation parity and generation-order/thread determinism; (4) ground-scale visual
+    evidence for trunks/canopies and flowers at documented settings, not merely matching hashes; (5) retained
+    intended biome densities and measured total-generation cost against the series performance gate. Record
+    intentional new-version hash changes; do not rebaseline away the distribution failure.
+
+
+    User ruling superseding classic/off-preservation language in this ticket and the shared series intake:
+    the continent generator replaces the old generator outright. No classic/continental selection switch
+    or permanent old-generation lane is required, and this bug fix is not toggleable. Temporary development
+    isolation before representation-parity acceptance is not a shipped classic mode. Preserve independent
+    optional recipe controls and the existing clean-reject/versioning policy; do not silently regenerate
+    edited worlds. See docs/continent-biome-generation-plan.html#vegetation-placement-fix for the series
+    amendment. Scheduling, prerequisite AC-0500, ticket status and queue order remain unchanged. Ticketing
+    only; no implementation in this amendment.'
   comments: []
 - id: AC-0502
   title: continent-p5-planet-presets-controls-and-independent-rerolls
@@ -34544,4 +34665,72 @@ intake:
     — so removing the branch shifted no face''s behaviour.
 
     GATES: g0 **0/0**, genhash **25/25 byte-identical**, smoke green, residency leak false / STABLE.'
+  comments: []
+- id: AC-0510
+  title: remove the fog and the mist; chunks should emerge from the satellite LOD
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 1
+  status: open
+  labels: []
+  created_at: 2026-10-26T09:01
+  updated_at: 2026-10-26T09:01
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Remove the fog and the mist. When you fly, the chunks that load in are wrapped in a blue haze that
+    the satellite LOD is not, so the world has two different atmospheres depending on how far away it
+    is. Chunks should emerge out of the satellite LOD, not out of blue mist.
+
+
+    ## 2) Technical Details
+
+    USER INSTRUCTION 2026-10-25, with two screenshots and a clear ruling: **"I don''t think the fog or
+    mist make sense any more, remove both of them. the chunks should appear out of the satellite lod not
+    blue mist."**
+
+    THE OBSERVATION THAT PROMPTED IT: **with fog ON the LODs that load in are BLUE while flying, but the
+    planet satellite is NOT** — so the two tiers are being atmospherically treated differently. And **with
+    fog OFF the chunks still appear out of a blue mist as you approach**, which means there is a SECOND
+    atmospheric term independent of the user-facing fog setting. That second one is the more important
+    discovery: turning fog off does not remove the mist, so "fog" and "mist/wash" are separate effects
+    and the user wants BOTH gone.
+
+    WHAT TO REMOVE:
+
+    1. THE FOG — the depth fog that tints distant geometry (find the push site and the `fog_*` settings;
+    `DayNight.fog_far(render_radius, fog_start_pct)` is the distance model, and `dof_far_distance`/`fog_start_pct`
+    are the settings).
+
+    2. THE MIST / WASH — the atmospheric wash applied to near/sim chunks. `godot/core/aero_wash.gdshader`
+    exists and is the likely site; the AC-0463-era "wash false" invariant in the `lightstate` arm suggests
+    a `wash` switch already exists that can be turned off or the term removed outright. **Find what produces
+    the blue veil on freshly-loaded chunks specifically** — a per-chunk fade-in or a distance-based wash
+    would explain why it reads as chunks emerging from mist.
+
+    THE REPLACEMENT BEHAVIOUR THE USER WANTS: chunks should **appear out of the satellite LOD** — i.e.
+    the transition is the far tier''s own appearance resolving into full geometry, with NO atmospheric
+    overlay between them. That may be satisfied simply by removing both terms (the far tier already renders
+    those same pixels); say so if it is.
+
+    IMPORTANT CONTEXT — THIS IS A TICKET ABOUT REMOVAL, AND THE BURDEN IS TO PROVE NOTHING ELSE DEPENDED
+    ON THE TERMS: fog and wash may be load-bearing for (a) hiding unbuilt-chunk edges at the streaming
+    frontier, (b) the aerial perspective that makes altitude readable, (c) the far tier''s haze that AC-0399
+    fixed (its `haz_b` term and the reversed-mix repair), or (d) the handover between tiers (AC-0451).
+    So: remove them, then CHECK whether the streaming frontier or the aerial view now shows something
+    worse (a hard pop, an unbuilt edge, a visible unbuilt-chunk gap). If removal exposes a defect, THAT
+    DEFECT IS THE REAL ONE and should be reported rather than having the fog quietly reinstated. Do not
+    restore fog to hide a pop.
+
+    FILES (locate by search, do not trust line numbers): `godot/core/aero_wash.gdshader`, `godot/core/aero_sky_gradient.gdshader`,
+    `godot/core/lod_avg.gdshader` (the haze terms — AC-0399''s `haz_b` and its mix), the `fog_*` settings
+    in `godot/autoload/settings.gd`, `DayNight.fog_far`, and the push sites in `godot/world/world.gd`.
+    Refs: AC-0399 (the far tier''s haze), AC-0451 (the handover), AC-0463 (the wash/light unification),
+    AC-0480 (tier shading parity).
+
+    '
   comments: []

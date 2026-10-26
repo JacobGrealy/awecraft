@@ -1,93 +1,136 @@
-<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>AC-0438 results — chart-seam-line-across-the-planet-disc (FINDING)</title></head>
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AC-0438 results — round 114 (repair: (C) sampling path) — PLAN-INSUFFICIENT</title></head>
 <body>
-<h1>AC-0438 results — chart-seam-line-across-the-planet-disc</h1>
-<p><strong>Outcome: FINDING — no effective in-repo fix. The line is a sub-texel rasterization
-artifact in the satellite body on the llvmpipe verification box; it is UV-independent and is not
-removable by any UV, bake, or shader-term change.</strong> The conservative fix (a computed
-chart-UV sample source behind a switch) was implemented, proven pixel-inert on the line, and
-reverted so the tree stays minimal. Working tree: <code>godot/core/satellite_body.gdshader</code>
-and <code>godot/world/satellite_body.gd</code> are back at HEAD (no diff); the only working-tree
-changes are the other session&rsquo;s fenced files (untouched) and 5 new untracked <code>.uid</code>
-files created by the <code>--import</code> rebuilds (tracked-convention; left for the coordinator).</p>
+<h1>AC-0438 results — chart-seam-line-across-the-planet-disc (round 114, repair plan §3a)</h1>
 
-<h2>Acceptance evidence</h2>
-<table border="1" cellpadding="4">
-<tr><th>Metric (r24 recipe, AWECRAFT_CAM=planet, SAT_ALT=2600, nadir, day T=0.5, 1280&times;720)</th><th>BEFORE (r24, clean tree)</th><th>AFTER (computed-UV fix, same tree otherwise)</th></tr>
-<tr><td>Seam rows 357&rarr;358, x 200..1080: n / mean|&Delta;| / pts&ge;6 / mean-of-&ge;6 / max</td><td>880 / 38.9 / <strong>444</strong> / 75.5 / 229</td><td>880 / 38.9 / <strong>444</strong> / 75.5 / 229 &nbsp;(identical)</td></tr>
-<tr><td>Row 358 pixel at x=640</td><td>(179,210,95)</td><td>(179,210,95) &nbsp;(identical)</td></tr>
-<tr><td>Disc region (212,140)-(1068,580) avg RGB + pale fraction</td><td>(115.9,178.7,149.6) / 0.228</td><td>(115.9,178.7,149.6) / 0.228 &nbsp;(identical)</td></tr>
-<tr><td>Full-disc pixel diff, attribute-UV vs computed-UV frames</td><td colspan="2">disc region 0 px differ; 5333 px differ <em>outside</em> the disc (cloud/sky run-to-run, x&le;110)</td></tr>
+<p><strong>Verdict: PLAN-INSUFFICIENT.</strong> All four ordered checks of (C) are
+answered with pixel-level or code-level evidence, none of them names the cause, and the
+line survives every one of them (two were also attempted as fixes; both moved the
+measured step without removing it and were reverted per the plan's revert rule). The
+mechanism behind the line is still open — the new evidence below narrows it sharply but
+does not name it. Every number appears in a log/frame under
+<code>.scratch/AC-0438/rem2/</code>; gates in <code>.scratch/AC-0438-gates/</code> (rev 2).</p>
+
+<h2>Gate (a) — which check caused it + proving measurement</h2>
+<p>No single check caused it. The proving measurements:</p>
+<ul>
+<li><strong>Check (1) address mode — the 3D sampler REPEATS (wrap), proven pixel-level;
+the wrap is NOT the line's mechanism.</strong> rem2-diag-addr render (0 SCRIPT/SHADER
+ERROR, baseline-identical recipe): a per-fragment discard fired when the out-of-bounds
+probe (u=1.5) equals the centre probe (u=0.5) on three texel-centre rows (256.5/512.5/768.5
+of 1024). Under wrap the pair is identical on every face; under clamp it differs on at
+least one row per face (offline margins 0.022..0.871 &gt; the 0.01 threshold on all 12
+faces). Observed: the <em>entire</em> disc discarded — frame = the space-sky
+(0,34,56) = space_color (0.0078, 0.0118, 0.0392) display-encoded at u_space=1.0.
+Texture-missing ruled out by the same-day baseline (fully textured, identical
+src=res via=import 12/12 load). This refutes the static reading "no 3D repeat knob in
+4.7.1 → 3D must clamp": no knob exists (repeat is a 2D/canvas_item-only concept in this
+build — no Texture2D/ImageTexture repeat API, no 3D RepeatMode enum), but the effective
+3D mode is REPEAT. <strong>Fix attempt</strong>: UV remap <code>UVs = UV *
+(1023.0/1024.0)</code> on both axes (in <code>godot/core/satellite_body.gdshader</code>)
+so no bilinear footprint ever crosses an edge — rem2-fixed-day: 357→358 n=276 (was 415),
+mean_abs 51.5 (was 45.0), max 212 (same); the signature (179,210,95)@(640,358) survives
+as (181,211,98), the per-x variety persists. <strong>Moved but not fixed → REVERTED</strong>
+(shader back to HEAD, git diff empty).</li>
+<li><strong>Check (2) UV derivation — clean.</strong> Mesh UV = i/nu, j/nv over
+i∈[0,nu], j∈[0,nv] (<code>satellite_bake_worker.gd:599</code>): the last column reaches
+exactly 1.0, never overshoots (affine interpolation of the attribute). Nothing to fix.</li>
+<li><strong>Check (3) anisotropy, separate from the mip chain — line-independent.</strong>
+rem2-aniso-off render, single change <code>filter_linear_mipmap_anisotropic</code> →
+<code>filter_linear_mipmap</code> (mips ON), A/B against rem2-baseline-day: 357→358
+n=434 (was 415), mean_abs 44.6 (was 45.0), max 211 (was 212); line px (187,213,102)
+@(640,358) with the same per-x variety (cyan/white/pale/dark/blue at x300/400/500/600/700/900).
+<strong>REVERTED</strong> (shader at HEAD). (Mip chain already ruled out in round 113:
+chainless texture left the line — n 415→356, max 212→119.)</li>
+<li><strong>Check (4) atlas layout — TWELVE separate textures, established.</strong> One
+1024×1024 ImageTexture per face (<code>satellite_body.gd:893/931</code>); gate arm
+"12 meshes / 12 textures 1024×1024". Not one atlas — per-texture addressing was the (C)(1)
+knob, and it has now been measured.</li>
+</ul>
+
+<h2>Gate (b) — before/after, same method (filing census: per-row hard-step
+|Δlum|≥6 within the disc span 236..1043, 808 columns)</h2>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>frame</th><th>change vs baseline</th><th>rows 357→358 (n / mean_signed / mean_abs / max)</th><th>rows 358→359 (n / mean_abs / max)</th><th>line px (640,358)</th></tr>
+<tr><td>rem2-baseline-day (BEFORE)</td><td>none (current tree)</td><td>415 / +28.3 / 45.0 / 212</td><td>388 / 46.0 / 123</td><td>(179,210,95)</td></tr>
+<tr><td>rem2-diag-addr</td><td>discard diagnostic (wrap proof)</td><td>197 / −5.4 / 19.0 / 101</td><td>174 / 18.5 / 123</td><td>disc absent (all fragments discarded)</td></tr>
+<tr><td>rem2-fixed-day</td><td>UV remap 1023/1024 (fix attempt 1)</td><td>276 / +40.3 / 51.5 / 212</td><td>265 / 50.2 / 123</td><td>(181,211,98)</td></tr>
+<tr><td>rem2-aniso-off</td><td>aniso hint dropped (fix attempt 2)</td><td>434 / +26.8 / 44.6 / 211</td><td>429 / 44.3 / 123</td><td>(187,213,102)</td></tr>
 </table>
-<p>The acceptance target (re-take with no line) is <strong>not met</strong> because the defect does
-not respond to the sample-UV source — see the mechanism below. No second-altitude /
-second-position &ldquo;gone-not-moved&rdquo; proof is applicable (nothing moved).</p>
+<p>Acceptance threshold (stated): the step at 357→358 collapses to the ambient texture
+level of the neighbouring rows (baseline ambient n≈135–193, mean_abs≈16–30; i.e. n below
+~200 at 357/358 and mean_abs below ~30). <strong>Neither fix met it</strong> — both were
+reverted. The line's signature (the hard pair at 357/358 flanking a 1-px row whose colour
+no texel has) is present in every line-rendering frame at the filing values (±render
+variance: n 415..434, mean_abs 44.6..51.5, max 211..212).</p>
 
-<h2>Deciding evidence chain (the true layer)</h2>
-<ol>
-<li><strong>The line is the body.</strong> One render with the body&rsquo;s <code>ALBEDO</code>
-forced to zero (everything else untouched): row 358 goes (179,210,95) &rarr; (0,0,0); the line is
-gone; rows 350&ndash;368 all (0,0,0). Not fog, not atmosphere, not clouds, not HUD.
-&nbsp;(<code>.scratch/AC-0438/blackbody.png</code>)</li>
-<li><strong>The line is a texture-sample brightness, UV-independent.</strong>
-  <ul>
-  <li>texv probe (<code>ALBEDO = vec3(texv)</code>): row 358 = (179,210,95) vs neighbours
-      (41,157,0) — the sampled texture term itself is ~4&times; brighter in R on that row
-      (<code>.scratch/AC-0438/texvfield.png</code>).</li>
-  <li>Three sample-UV sources rendered at the r24 recipe — (a) the mesh <code>UV</code> attribute,
-      (b) fragment-stage chart UV from the radial normal, (c) vertex-stage chart UV with the
-      <em>authoritative</em> per-face index (exact inverse of <code>SphereMath.uv_to_world</code>,
-      face from a per-material float, not re-derived from the normal): the disc is
-      <strong>pixel-identical in all three</strong> and the line is present in all three. The line
-      therefore does not depend on which texel the UV addresses — it is a sub-texel
-      rasterization/sampling artifact at the chart&rsquo;s coincident face seam
-      (1&nbsp;px &asymp; 5.5&nbsp;m &lt; 1 texel at this render distance), not a UV-content error.</li>
-  </ul></li>
-<li><strong>Not the bake.</strong> All 12 face textures scanned for spike rows (row vs neighbour
-mean, &Delta;&gt;40): zero. The x=0 seam columns are identical between faces (mean &Delta;=0, gapless
-bake). No bright feature exists for the row to sample.</li>
-<li><strong>Not haze/relief/sun.</strong> Term-field probe (<code>ALBEDO = vec3(haz, sun_l,
-texs.a)</code>): haz uniform across the disc, sun_l uniform, relief alpha near-flat — no spike at
-row 358 (<code>.scratch/AC-0438/termfield.png</code>). The line&rsquo;s hue (179,210,95) is not
-reproducible from any bake texel &times; day/relief factor, nor from a haz mix toward
-<code>u_air</code> (B=95 is below both mix parents).</li>
-<li><strong>Minification ruled out.</strong> All 12 face imports flipped to
-<code>mipmaps/generate=true</code> + re-import + re-render &rarr; frame pixel-identical to r24.
-(Imports reverted; the tree carries no import change.)</li>
-<li><strong>Stale shader cache ruled out.</strong> <code>godot/.godot</code> wipe +
-<code>--headless --import</code> + re-render &rarr; byte-identical.</li>
-<li><strong>Normal/geometry sanity.</strong> Light-cancelled normal probes (engine lighting
-cancelled via a reference channel, saturation-safe) show a coherent radial normal field over the
-disc; the disc centre sits in the +Z/x&gt;0 face territory; the normal field shows no sign flip at
-the line row at the disc centre — the line is not a face-boundary normal discontinuity either.</li>
-</ol>
+<h2>New forensics (offline on rem2-baseline-day.png; screen→(face,u,v) decode via the
+harness camera: spawn [8.5,141,8.5], R=4000, alt 2600, fov 75, nadir, up hint
+(0,0,1)×(cam−cen); sphere_math prewarp tan(c·π/4))</h2>
+<ul>
+<li>The line row (358) lies entirely on face 1's <em>final texel-column band</em>
+(texel pos 1023.0..1023.8; v sweeps 0.21..1.0 along the line); the chart boundary (the
+x=0 great circle = the f00/f01 seam) falls between rows 358 and 359; row 359 = face 0
+pos ≈0.7 (safe interior). u advances ~1.9 texels per screen row, continuously across the
+boundary — no UV discontinuity at the seam.</li>
+<li>At x=640 (v≈0.5008, j512) rows 354–357 and 359–363 all sample the seam columns —
+uniform (55,104,34) dark grass — and all render (41,157,0) dark, consistent. ONLY the
+line row renders (179,210,95). The bright bands flanking the dark seam band are real
+content 2–10 texels INSIDE the face edge (face1 cols 1005–1015 / face0 cols 10–21).</li>
+<li>Along the line the rendered colour varies with x (cyan (188,242,238) / white
+(247,255,241) / pale (209,229,168) / dark (38,155,0) / blue (108,219,255) at
+x300/400/500/700/900) while the decoded texel neighbourhood is uniform dark grass at most
+positions — the line-row colours match NO local texel, and several match content that
+exists only FAR from the sample point (water (35,76,165), bright (246,251,251), the
+opposite edge of the face). Caveat: the box's sRGB round-trip is not exactly modelled and
+the oblique-angle decode can be off by tens of texels in v, so this is corroborating, not
+by itself decisive.</li>
+<li>Summary of invariants: the line is boundary-row-confined, texture-content-driven
+(round 113: a flat body erases it), mip-chain-independent (round 113), wrap-independent
+(rem2-fixed-day), aniso-independent (rem2-aniso-off), UV-source-independent (round 113:
+three sample-UV sources rendered a pixel-identical disc, line present in all three).</li>
+</ul>
 
-<h2>Light gates (this tree, post-revert)</h2>
-<table border="1" cellpadding="4">
-<tr><th>Gate</th><th>Result</th></tr>
-<tr><td>G0 (game load, <code>gate_census.py</code>)</td><td>0 SCRIPT ERROR + 0 SHADER ERROR, world phase=LOADED (log <code>.scratch/AC-0438-gates/g0.log</code>; the run keeps running as a game — no crash, no error census findings)</td></tr>
-<tr><td>G0 (genhash arm, paired rc)</td><td>rc=0; 0 SCRIPT ERROR + 0 SHADER ERROR (<code>.scratch/AC-0438-gates/genhash.log</code>)</td></tr>
-<tr><td>genhash</td><td><strong>25/25 byte-identical</strong> to the AC-0437 reference set (<code>.scratch/AC-0437-genhash.log</code>); GENMS 158. (The older AC-0367 set in HARNESS is stale — superseded by later rebases.)</td></tr>
-<tr><td>Render tier</td><td>&gt;10 Forward+ lavapipe renders this run, all with 0 SCRIPT ERROR + 0 SHADER ERROR; r24 recipe reproduced bit-identical on the clean tree</td></tr>
-<tr><td>shaderforce</td><td>not owed — no shader change remains in the tree</td></tr>
-</table>
-<p>No <code>AWECRAFT_LOGIC</code> arm was used for any render (arm would own the shot). Heavy gates
-(boundary r4, flake, battery, r50, Windows build) are the coordinator&rsquo;s.</p>
+<h2>Light gates (final tree = HEAD for godot/; <code>gate_run.py AC-0438 --arms
+g0,genhash,satellite --rev 2</code>)</h2>
+<ul>
+<li>g0: rc=0, 0 SCRIPT ERROR + 0 SHADER ERROR (all four render logs of this round: 0/0).</li>
+<li>genhash: rc=0, 25/25, hash census byte-identical to rev 1 (tree unchanged — no
+rebase owed; no bake/asset touched this round).</li>
+<li>satellite: rc=0, src=res (mode=res, res_load_via=import), textures 12/12 1024×1024,
+height_decode 12/12 (diff_px=0, max_byte=0, alpha_max_byte_diff=0), guard ok,
+res_export_ok, tex_shape_ok.</li>
+</ul>
 
-<h2>Recommendation / follow-up</h2>
-<ol>
-<li><strong>Confirm on the Windows build</strong> (the shipped forward_plus/D3D11 renderer): take
-    the same r24 nadir recipe and check rows 357&ndash;358. If the line is absent there, it is a
-    llvmpipe (software Vulkan) sub-texel rasterization artifact — document as a verification-box
-    caveat in <code>godot/OPS.md</code> and close the ticket as environmental. If present there
-    too, it is a real mesh-seam rendering defect.</li>
-<li><strong>If real:</strong> file a follow-up targeting the 12-face chart&rsquo;s coincident
-    boundary edges — a sub-texel per-face radial offset in the body&rsquo;s vertex stage (shader-only,
-    genhash-safe) to break the coplanar seam, or a seam-UV nudge in the bake worker
-    (<code>world/*</code>, owes a deliberate genhash rebase). Either is a geometry-level change;
-    nothing at the sample-UV level can fix it (proven above).</li>
-</ol>
-<p>Probe frames and logs: <code>.scratch/AC-0438/</code> (blackbody, texvfield, termfield,
-nrmfield/nrmxy, modeprobe, attruv/compuv A/B, mip, fix2/fix4/fix5 re-takes); gate logs:
-<code>.scratch/AC-0438-gates/</code>.</p>
+<h2>Tree state / probes</h2>
+<p>godot/ is clean (git diff vs HEAD empty): the discard diagnostic, the UV remap and the
+aniso hint were all reverted; the temporary standalone probe scene
+(<code>godot/probe_min.tscn/.gd</code> + orphan <code>.uid</code>) was deleted. The
+standalone 3D probe is a known dead end on this box (2D renders, 3D never draws under
+forward+ or gl_compatibility — cause unidentified) and is not reusable evidence.
+No git add/commit/push; no TASKS.yaml; no new tickets; other sessions' dirty files
+untouched.</p>
+
+<h2>Next (for the amended plan)</h2>
+<ul>
+<li>Remaining untested suspects: (i) the rasterizer's derivative/LOD estimation at the
+coincident boundary — the boundary row's footprint may be estimated far larger than the
+true ~1.9 texels/px, pulling the sample into a multi-texel mix that no sampler-level A/B
+above can touch; (ii) the coincident-geometry rasterization itself — two coincident faces
+at the boundary may give the boundary-row pixel coverage from BOTH faces, mixing face0
+and face1 samples even though the seam content is byte-identical (a per-face radial
+offset, which the original plan already names, would separate the surfaces and kill any
+such mixing; round 113's UV-source swap could not test this because it kept the geometry
+coincident).</li>
+<li>Cheapest decisive probes for the next plan: (a) render with the 12 faces offset
+radially by distinct tiny per-face amounts (shader-only,
+<code>VERTEX -= normalize(VERTEX) * (2.0 + 0.05 * FACE)</code> — no re-bake, no genhash
+rebase) and measure; if the line dies, coincident-geometry interaction is the cause.
+(b) a fragment-stage dump of <code>textureLod` at fixed lods 0..4 across the line row to
+see which lod the row actually integrates.</li>
+<li>Windows re-check (round 113's open item) is worth one user report: if the line is
+absent in the shipped forward_plus on Windows, the mechanism is renderer-specific
+(lavapipe) and the ticket closes with an OPS.md caveat instead of a code fix.</li>
+</ul>
+
 </body></html>

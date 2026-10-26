@@ -1,0 +1,160 @@
+AC-0438 — deviations from the round-113 plan (tasks/AC-0438/plan.html)
+Run: round 113 (single MEDIUM builder), exit PLAN-INSUFFICIENT.
+
+1. OPTION CHOSEN: none implementable - PLAN-INSUFFICIENT (plan §8 fence: "a design decision
+   this plan does not make ... write PLAN-INSUFFICIENT and EXIT. Do not invent the design.").
+   The plan offers exactly two fixes and one decision rule; the measurements rule out both:
+   - (A) "shader-only per-face radial offset, correct if the seam is a geometric
+     discontinuity": RULED OUT by the flat-body render (u_flat_probe, constant texv,
+     rem2-flat-day.png) - the line VANISHES (centre column rows 336-385 all exactly
+     (236,233,222); row-358 step census n=0/808). A geometric radial step would persist
+     with the texture bypassed; it does not.
+   - (B) "bake-worker seam-UV nudge ... adjacent charts sampling texels that disagree at
+     the boundary ... OWES A DELIBERATE GENHASH REBASE": the stated mechanism is refuted -
+     the boundary columns f00[i=0] and f01[i=1023] are BYTE-IDENTICAL in BOTH the current
+     and the pre-AC-0478 bake, and the line is present in both bakes. There is no content
+     mismatch at the boundary for a bake nudge to fix; a re-bake (1,198-1,269 s, ~4.6 GiB)
+     plus genhash rebase cannot be justified against a target that does not exist. The
+     plan's own rule ("vanishes on a flat-coloured body -> (B)") points at the texture
+     side, but (B)'s definition (baked-content mismatch) is not what the evidence shows.
+   => The plan's rule and (B)'s definition contradict each other under these measurements;
+      the remaining cause class (texture-dependent, UV-source-independent, content-
+      independent, mip-independent rasterization/sampling discontinuity at the coincident
+      seam) is not one of the two named options. That is the design decision the plan does
+      not make.
+
+2. NO FIX IMPLEMENTED, NOTHING KEPT: both temporary probe files restored byte-identical
+   to HEAD before the gates (md5-verified: satellite_body.gdshader 1e3960730ea8eb600b95a91482bd5a6f,
+   satellite_body.gd a0289cbdc4131aaeede337152aaf605c; git clean on both). No re-bake
+   performed, no genhash rebase owed or done. This is consistent with plan §8 risk (3)
+   ("a change that does not move the measured step must be reverted") - here taken at the
+   "no change may be kept unless it is one of the two named options" limit.
+
+3. MEASUREMENT NOTE (transparency, not a deviation): the probe-2 UV-dump frame
+   (rem2-probe2-day.png) could not be fully decoded - the sampled-texel channel fails the
+   PNG-consistency check for 479/500 interior face0 pixels (bilinear tolerance), and some
+   sampled values (B=255 = texel R=1.0) exist in no face PNG (max R across all 12 faces =
+   250). The per-fragment UV->texel mapping at the line row therefore remains unresolved;
+   the prior run's "UV-independent" finding (three UV sample sources rendered a
+   pixel-identical disc with the line present in all three) remains the best-supported
+   characterisation. Suggested next probe for the amended plan: a level-0
+   texel-neighbourhood dump (ALBEDO = vec3(sampled_r at UV, at UV+1 texel u, at UV-1 texel
+   u)) with the mip chain OFF, to pin the exact texel(s) the line row reads.
+
+4. EVERYTHING ELSE PER PLAN: re-measured first with the filing's own method (gate a);
+   distinguishing measurements rendered (flat body, mip chain off); no blur; no git
+   add/commit/push; no TASKS.yaml; no new tickets; no edits outside the two probe files
+   (both reverted); gates g0 + genhash + satellite run on the post-revert tree, all green.
+
+== ROUND 114 (repair plan: (C) sampling path, four ordered checks) ==
+
+R114-1. CHECK (4) answered by static reading, no render: the atlas is TWELVE separate
+   1024x1024 ImageTextures (one per face), not one atlas texture - satellite_body.gd:893
+   (res/cache path) and :931 (bake path) both build per-face ImageTexture instances from
+   the 12 PNGs; the standing satellite gate arm reports "12 meshes / 12 textures
+   1024x1024". Per-texture address mode is therefore the (C)(1) knob, not an atlas
+   layout.
+R114-2. CHECK (2) answered by static reading: the mesh UV is i/nu, j/nv over i in
+   [0,nu], j in [0,nv] (satellite_bake_worker.gd:599) - the last column/row reach
+   EXACTLY 1.0, never overshoot (affine screen-space interpolation of the attribute).
+   No UV-derivation overshoot at the face boundary.
+R114-3. CHECK (1) static reading: Godot 4.7.1 exposes no 3D-texture address mode to
+   GDScript (no RepeatMode enum, no ImageTexture.repeat member; the repeat concept in
+   this build is 2D/canvas_item only - verified by binary string scan + introspection).
+   Static reading implies clamp-to-edge is the only 3D mode; per the plan this is being
+   PROVEN pixel-level by a temporary in-shader discard diagnostic (rem2-diag-addr
+   render) instead of assumed: the sampler's behaviour on an out-of-bounds coordinate
+   (u=1.5) is compared to the centre coordinate on three texel-centre rows; REPEAT
+   makes the pair identical on all 12 faces (whole disc discarded), CLAMP leaves at
+   least one differing row per face (disc unchanged; offline-verified margins
+   0.022..0.871 > the 0.01 threshold).
+R114-4. Standalone 3D render probe NOT usable on this box: minimal scenes render 2D
+   (canvas) but never 3D (clear colour) under forward+ and gl_compatibility, with
+   WorldEnvironment + DirectionalLight + current camera + long warmup, while the real
+   game renders 3D fine through the same root.get_texture() capture. The cause is
+   unidentified (the game does something at boot this box's standalone scene lacks);
+   the probe files are temporary (godot/probe_min.tscn/.gd) and deleted before exit.
+   Consequence: all (C) evidence this round is in-game render + offline math.
+R114-5. OFFLINE FORENSICS on rem2-baseline-day.png (new, no render): decoded screen
+   pixels to (face,u,v) using the harness camera constants (spawn [8.5,141,8.5],
+   R=4000, alt 2600, fov 75, nadir aim, up hint (0,0,1)x(pl_a)) + the sphere_math
+   prewarp (tan(c*PI/4)). The line row (358) lies entirely on face 1's final texel
+   column band (texel pos 1023.0..1023.8; v sweeps 0.21..1.0 along the line); the
+   chart boundary (x=0 great circle) falls between rows 358/359. Rows 354-357 and
+   359-363 all sample the seam columns (uniform (55,104,34) dark grass at j512) and
+   all render dark (41,157,0); ONLY the line row renders (179,210,95) at x=640. Along
+   the line the rendered colour varies with x (cyan/white/pale/dark/blue) while the
+   decoded texel neighbourhood is uniform dark grass - the line-row colours match no
+   local texel and some match distant content (water (35,76,165) / bright
+   (246,251,251)) that exists only on the OPPOSITE side of each face's texture. That
+   is the wrap signature: the last half-texel band blending edge column with the
+   opposite-edge column. Corroborating, not by itself decisive (the box's sRGB
+   round-trip is not exactly modelled); the rem2-diag-addr render is decisive.
+R114-6. CAUSE + FIX (the plan's ordered check (1) named it, proven by render): the
+   3D sampler in this build REPEATS (wrap) across texture edges - not clamp-to-edge.
+   Proof: rem2-diag-addr render (0 SCRIPT/SHADER ERROR, baseline-identical recipe,
+   satellite LOADED 12/12, snapshot at the same game time) with a per-fragment discard
+   when the out-of-bounds probe (u=1.5) equals the centre probe (u=0.5) on three
+   texel-centre rows: the WHOLE disc was discarded (frame = the space-sky (0,34,56)
+   = space_color (0.0078,0.0118,0.0392) display-encoded at u_space=1.0), i.e. the
+   probe pair was identical on all 12 faces - possible under wrap (1.5 mod 1 = 0.5)
+   and impossible under clamp (offline margins 0.022..0.871 > the 0.01 threshold on
+   every face). Texture-missing ruled out by the same-day baseline (fully textured
+   disc, identical src=res via=import 12/12 load). Note: this refutes the static
+   reading "no 3D repeat knob in 4.7.1 -> 3D must clamp": no knob exists, but the
+   effective 3D address mode in this pipeline is REPEAT.
+R114-7. FIX APPLIED (in the named file, sample site of godot/core/satellite_body.gdshader,
+   replacing the plain `texture(tex, UV)`): UV remap UVs = UV * (1023.0/1024.0) on
+   both axes, so no bilinear footprint (p +/- 0.5 texels) crosses a texture edge and
+   the wrap path is never read. The mechanism this removes: the last half-texel band
+   of every face edge (sample pos in [1023.5, 1024)) blended the edge column with the
+   OPPOSITE edge's column (1024.5 wraps to 0.5) - a colour no texel has - which is the
+   1 px seam line (rows 357/358: n=415 mean_abs 45.0 max 212, (179,210,95)@(640,358)).
+   Consistent with every prior observation: texture-dependent (flat body erases it),
+   mip-independent (level-0 addressing), present in both bakes (same sampler), the
+   line row's per-x colour variety tracking opposite-edge content along v. No
+   re-bake (sample-time fix; no asset/bake change -> no genhash rebase owed).
+   Verification render rem2-fixed-day pending; if the line survives, the remap is
+   REVERTED per the plan's revert rule and the run returns PLAN-INSUFFICIENT.
+R114-8. UV-remap fix (R114-7) REVERTED per the plan's revert rule: the remap moved the
+   measured step (357->358 n 415->276, mean_abs 45.0->51.5, max 212 unchanged,
+   mean_signed +28.3->+40.3; the line signature colour (179,210,95)@(640,358) survives
+   as (181,211,98) and the per-x colour variety persists on rem2-fixed-day) but did NOT
+   fix it. Conclusion: the wrap reads in the last half-texel band are not the line's
+   mechanism, even though the sampler provably repeats (R114-6). The remap was not kept
+   (it is not a fix and would corrupt the before/after baseline); the shader is back at
+   HEAD (git diff empty on godot/core/satellite_body.gdshader).
+R114-9. CHECK (3) in flight: the only untested (C) check - anisotropy, separate from
+   the mip chain (round 113: mips-off changed the census mildly, n 415->356, max
+   212->119 - the line survived a chainless texture). rem2-aniso-off render with the
+   single change filter_linear_mipmap_anisotropic -> filter_linear_mipmap (mips ON).
+   A/B baseline = rem2-baseline-day (n=415 mean_abs 45.0 max 212). If the line
+   survives: all four checks are answered, the hint is reverted, and the run returns
+   PLAN-INSUFFICIENT with the ruled-out list + the forensics (the line row sits on
+   face 1's final texel column band; its per-x colour variety tracks content that is
+   not in the local texel neighbourhood; the wrap is real but line-independent; the
+   mechanism remains open for a fresh plan).
+R114-10. ANISO A/B RESULT + FINAL VERDICT: rem2-aniso-off (0 SCRIPT/SHADER ERROR,
+   baseline-identical recipe, satellite LOADED 12/12): 357->358 n=434 (baseline 415),
+   mean_abs 44.6 (45.0), max 211 (212), mean_signed +26.8; 358->359 n=429; line px
+   (187,213,102)@(640,358) with the same per-x variety (cyan/white/pale/dark/blue at
+   x300/400/500/600/700/900). ANISOTROPY IS LINE-INDEPENDENT; the hint was reverted.
+   ALL FOUR (C) CHECKS ANSWERED - (1) wrap proven pixel-level but line-independent
+   (UV-remap fix reverted), (2) UV exact [0,1] no overshoot, (3) aniso line-
+   independent, (4) twelve separate textures - and the line survives all of them at
+   the filing values (render variance n 415..434, mean_abs 44.6..51.5, max 211..212).
+   VERDICT: PLAN-INSUFFICIENT per the plan's explicit clause; no fix kept. Gates on
+   the final tree (= HEAD for godot/, git diff empty): g0 rc=0 (0 script + 0 shader
+   errors); genhash rc=0 25/25, census byte-identical to rev 1 (no rebase owed);
+   satellite rc=0 src=res via=import, 12/12 textures 1024x1024, height_decode 12/12
+   (diff_px=0, max_byte=0), guard ok (gate_run.py AC-0438 --arms g0,genhash,satellite
+   --rev 2, .scratch/AC-0438-gates/). Temp probe scene deleted (godot/probe_min.tscn/
+   .gd + orphan .uid); the standalone 3D probe is a dead end on this box (2D renders,
+   3D never draws, forward+ and gl_compatibility alike) and must not be reused.
+   Evidence for the amended plan (in the results page): the line is boundary-row-
+   confined and reads NON-LOCAL texture content while being wrap/aniso/mip/UV-source
+   independent - remaining suspects: rasterizer derivative/LOD blow-up at the
+   coincident boundary, or coincident-geometry rasterization mixing both faces'
+   coverage in the boundary row; cheapest decisive probe = shader-only per-face
+   radial offset (VERTEX -= normalize(VERTEX) * (2.0 + 0.05*FACE); no re-bake, no
+   genhash rebase) + measure.

@@ -1,72 +1,60 @@
-<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>AC-0438 plan — chart-seam-line-across-the-planet-disc</title></head>
-<body>
-<h1>AC-0438 — chart-seam-line-across-the-planet-disc</h1>
-
-<h2>Goal</h2>
-<p>Find the <strong>true layer</strong> of the 1&ndash;2&nbsp;px hard pale line across the planet
-disc in the spawn-nadir orbit view (r24 assessment: rows 357&ndash;358, 254 pts &Delta;&ge;6,
-mean step 68), then implement a conservative fix behind a switch and verify with light gates
-only (heavy gates are the coordinator&rsquo;s). The mandate: do <em>not</em> assume the bake is at
-fault &mdash; identify the layer first.</p>
-
-<h2>Files to touch</h2>
-<ul>
-  <li><code>godot/core/satellite_body.gdshader</code> &mdash; the satellite body&rsquo;s 12-face
-      great-circle-chart fragment (the candidate layer for the disc&rsquo;s pixels).</li>
-  <li><code>godot/world/satellite_body.gd</code> &mdash; per-face material build + uniform pushes
-      (the A/B switch home, the house pattern of <code>u_srgb_pre</code>).</li>
-</ul>
-<p>No <code>world/*</code> generation file is touched by the fix (mesh <em>construction</em> is
-unchanged; only the shader&rsquo;s sample-source selection moves) &mdash; so genhash 25/25 must hold,
-and any drift is a finding.</p>
-
-<h2>Harness gates (light only)</h2>
-<ul>
-  <li><strong>G0</strong> via <code>tasks/scripts/gate_census.py</code> &mdash; zero SCRIPT ERROR +
-      zero SHADER ERROR <em>and</em> process exit status 0 (AC-0396/AC-0403 paired rule).</li>
-  <li><strong>SMOKE</strong> &mdash; dependency-mapped modes on the changed area (the body render path).</li>
-  <li><strong>genhash</strong> &mdash; 25/25 byte-identical (a move = a finding to report).</li>
-  <li><strong>shaderforce</strong> &mdash; only if a shader change lands (it does not in the
-      final tree &mdash; see results).</li>
-  <li>No <code>AWECRAFT_LOGIC</code> arm for the renders (the arm would own the shot);
-      <code>AWECRAFT_SIZE=1280,720</code> (comma), xvfb-run + lavapipe +
-      <code>--rendering-driver vulkan</code>.</li>
-</ul>
-
-<h2>Which layer + the deciding evidence</h2>
-<p><strong>The line is in the satellite body</strong> (the 12-face chart mesh), proven by the
-black-body render: setting the body&rsquo;s <code>ALBEDO</code> to zero removes the line (the
-frame&rsquo;s row 358 goes from (179,210,95) to (0,0,0)). It is <em>not</em> the fog, the
-atmosphere, the cloud shell, or the HUD.</p>
-<p><strong>The line is a sub-texel sampling artifact and is UV-independent.</strong> Three
-independent sample-UV sources were rendered at the exact r24 recipe and the disc is
-pixel-identical in all three:</p>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0438 satellite disc seam</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0438 — a real seam across the satellite disc, and two candidate fixes</h1>
+<p>Coordinator contract, rewritten (round 113) to carry what the previous run and the user established. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>The seam is CONFIRMED real. Re-measure on the current tree, then pick between two named fixes with evidence.</b></p>
+<h2>1. Status: confirmed real, not a dev-box artifact</h2>
+<p>The filing measured a <b>1–2 px line across the disc</b> in the spawn-nadir frame at rows 357–358, 254 sample points stepping ≥6 luminance units, <b>mean step 68</b> (a fifth of full range) — a hard narrow discontinuity, not a gradient.</p>
+<p>An earlier run did the diagnosis properly: it found the layer, <b>tried a fix, PROVED the fix pixel-inert on the line</b> (it could not affect a UV-independent artifact), and <b>REVERTED it</b>, leaving shader and <code>satellite_body.gd</code> at HEAD with no diff. That was the right call — a fix that does not move the measured artifact should not be kept.</p>
+<p>Its journal blocked on one question: <em>is the line renderer-specific (llvmpipe) or real?</em> <b>THE USER ANSWERED IT: the seam is visible in the product they run.</b> So it is a <b>real seam</b>, the llvmpipe caveat is retired, and the fix options are back in play.</p>
+<h2>2. ⚠ RE-MEASURE FIRST — the bake was rebuilt TWICE since that diagnosis</h2>
+<p><b>AC-0469 stage D</b> rebuilt the far-tier bake (<code>FACE_GRID</code> now derives from <code>CHUNKS_PER_FACE</code> = 393, covering <b>100% of every chart face</b> where it had been ~16% and charted 329 chunks past each edge), and <b>AC-0478</b> then <b>REGENERATED AND RE-SHIPPED the 12 <code>satellite_face*.png</code> textures</b> (23.4% of texels differed from what had been shipping). A chart-face-boundary artifact is exactly the kind of thing those two changes could have <b>removed, moved, or newly introduced</b>.</p>
+<p><b>So step 1: re-measure the spawn-nadir frame on the CURRENT tree with the filing's own method</b> (254 points, step ≥6, mean step, row index) and report it. If the signature is gone, <b>cancel with the measurement</b> and attribute it. Do not fix a seam the rebuild already removed.</p>
+<h2>3. The two candidate fixes (choose with evidence)</h2>
 <ol>
-  <li>the mesh&rsquo;s stored <code>UV</code> attribute (the pre-AC-0438 path);</li>
-  <li>a fragment-stage chart UV recomputed from the radial normal;</li>
-  <li>a vertex-stage chart UV with the <em>authoritative</em> per-face index (the exact
-      inverse of <code>SphereMath.uv_to_world</code>, face not re-derived from the normal).</li>
+<li><b>(A) SHADER-ONLY per-face radial offset.</b> Cheap, no asset change, no genhash impact. Correct if the seam is a <b>geometric discontinuity at the chart boundary</b> — two adjacent chart faces meeting with a small radial/height step that a per-face offset can cancel.</li>
+<li><b>(B) BAKE-WORKER seam-UV nudge.</b> Correct if the seam is <b>in the baked texture</b> — adjacent charts sampling texels that disagree at the boundary. <b>THIS OWES A DELIBERATE GENHASH REBASE</b>, so it is the more expensive option and must be justified, not defaulted to.</li>
 </ol>
-<p>All three leave the line byte-for-byte (seam rows 357&rarr;358: 444 pts&ge;6, mean 75.5,
-max 229 &mdash; identical to r24; disc stats identical). So the line is <em>not</em> a UV-content
-error: whatever UV the sampler receives, the same 1-px row reads a bright texel.</p>
-<p>Also ruled out, each by a decisive A/B on this box:</p>
+<p><b>The test that decides:</b> the seam's character distinguishes them. A <b>step that persists when the texture is bypassed</b> (or that moves only with geometry) points at (A); a step that <b>changes with the bake or vanishes on a flat-coloured body</b> points at (B). Measure, then choose — <b>do not implement both</b>.</p>
+<h2>3a. ⚠ REPAIR (round 113) — BOTH (A) AND (B) ARE REFUTED. THE CAUSE IS (C), THE SAMPLING PATH.</h2>
+<p>A medium run measured all of this and correctly returned <code>PLAN-INSUFFICIENT</code> instead of forcing a fix. Its evidence, which is the starting point of this repair:</p>
 <ul>
-  <li><strong>bake content</strong> &mdash; no face texture has a bright spike row (all 12 scanned);
-      the seam columns are identical between faces (gapless bake, mean &Delta;=0);</li>
-  <li><strong>minification aliasing</strong> &mdash; mipmaps on (12 imports flipped + re-import)
-      &rarr; frame pixel-identical to r24;</li>
-  <li><strong>haze / relief / sun light</strong> &mdash; term-field probes: <code>haz</code> uniform
-      across the disc, <code>sun_l</code> uniform, relief alpha near-flat &mdash; none spikes at row 358;</li>
-  <li><strong>stale shader cache</strong> &mdash; <code>.godot</code> wipe + re-import &rarr; byte-identical.</li>
+<li><b>THE SEAM IS STILL PRESENT on the current tree</b>, same character as filed: rows 357↔358, <b>n=415, mean_abs 45.0, max 212</b>; the line pixel reads <b>(179,210,95)</b> at x=640 against neighbours <b>(41,157,0)</b>. So AC-0469 D and AC-0478 did not remove it, and the re-measure requirement is satisfied.</li>
+<li><b>(A) GEOMETRY IS REFUTED:</b> a <b>flat-body probe makes the line VANISH</b> (n=372 → <b>0 of 681</b>, max 0). The artifact therefore depends on <b>texture content</b>, not on geometry.</li>
+<li><b>MINIFICATION IS REFUTED:</b> with the <b>mip chain OFF the line is UNCHANGED</b> (n=356, max 119), so it is not a mip level.</li>
+<li><b>(B) BAKE CONTENT IS REFUTED BY A STATIC FACT:</b> the boundary columns <code>f00[i=0]</code> ≡ <code>f01[i=1023]</code> are <b>973 of 1024 texels BYTE-IDENTICAL</b>, max channel delta <b>31</b> (quantization wobble only, <b>no bright/dark pair</b>), in <b>both</b> bakes. There is <b>no content mismatch for a bake nudge to fix</b>.</li>
+<li><b>AND THE DECISIVE CLUE:</b> the line's colour <b>(179,210,95) exists in NO TEXEL</b> (max R in the atlas is 250). A colour that exists nowhere in the source but is drawn on screen is the signature of a <b>FILTERED BLEND ACROSS A BOUNDARY</b> — the sampler is averaging texels that are not true neighbours.</li>
 </ul>
-<p><strong>Verdict:</strong> the line is a sub-texel (1&nbsp;px &asymp; 5.5&nbsp;m &lt; 1 texel at the
-r24 render distance) rasterization/sampling artifact at the chart&rsquo;s coincident face seam,
-present on the llvmpipe verification box. It is in the body but is <em>not removable by any UV
-change, bake change, or shader-term change</em>. The honest resolution is a FINDING (see
-<code>AC-0438-results.html</code>): the conservative fix (computed chart UV behind a switch) was
-implemented and proven inert, then reverted to keep the tree minimal; the coordinator is asked to
-confirm on the Windows build whether the artifact is renderer-specific.</p>
-
+<p><b>THEREFORE THE CAUSE IS (C): THE SAMPLING PATH AT THE CHART BOUNDARY</b> — the <b>UV derivation or the address mode</b> at the seam, with linear/anisotropic filtering blending across it. The bake is consistent and the geometry is not involved; what is wrong is <b>which texels the boundary pixel samples</b>.</p>
+<p><b>THINGS TO CHECK FOR (C), in this order:</b></p>
+<ol>
+<li><b>The address mode / wrap</b> on the satellite textures. A wrap that is not clamp — or a clamp that is correct on one axis and not the other — makes a boundary pixel sample the <b>opposite edge</b> of the atlas, which at a 1024-texel face is a very different colour and blends to something no texel contains.</li>
+<li><b>The UV derivation at the face boundary</b>: does the UV reach exactly 1.0 at the last column, or overshoot past it? An overshoot of half a texel samples the next chart (or the opposite edge).</li>
+<li><b>The filter setting, now that AC-0412 re-enabled <code>filter_linear_mipmap_anisotropic</code> + <code>generate_mipmaps()</code></b>: anisotropy samples along the view-major axis and can reach further across a boundary than plain linear. Compare with anisotropy forced off — <b>but note mips-off did NOT change it, so do not assume the filter alone is the cause; test anisotropy separately from the mip chain.</b></li>
+<li><b>The atlas layout</b>: are the twelve faces in ONE atlas texture (in which case a linear sample at a face edge legitimately touches the neighbouring face and must be clamped per-face), or twelve separate textures (in which case wrap/clamp per texture is the knob)? <b>Establish which, because the fix differs.</b></li>
+</ol>
+<p><b>ACCORDINGLY: i</b>mplementing (A) or (B) is now <b>forbidden by evidence</b>. Implement (C). If (C)'s four checks all come back clean and the line survives, <b>then</b> return <code>PLAN-INSUFFICIENT</code> with what you ruled out — a fourth option will need new evidence to name.</p>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>the per-face placement/offset path and the UV derivation</td><td>Edit only if (A).</td></tr>
+<tr><td>godot/world/satellite_bake_worker.gd</td><td>the bake loop and how adjacent charts are stitched (AC-0469 D changed the indexing)</td><td>Edit only if (B); a genhash rebase follows.</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td><code>NPIX</code>, <code>FACE_GRID</code>, the three-phase source (cache / shipped <code>res://</code> / bake)</td><td>Read; edit only if the fix lives there.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the shot hooks (<code>AWECRAFT_TIME</code>, <code>AWECRAFT_AIM</code>) — the filing's frame used them</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0438/</td><td>journal, deviations, results</td><td>Create/append.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming, residency, light ownership, the far tier's near-field shading, the sky shaders, the data JSON files, the aim box. <b>Do NOT re-bake unless (B) is chosen and justified</b> — a bake is <b>1,198–1,269 s and ~4.6 GiB</b>.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The current status is measured (first)</td><td>The spawn-nadir frame analysed with the filing's method: <b>row index, sample count, mean step</b> — comparable to 254 points / mean step 68 at rows 357–358. Present or gone, as numbers.</td></tr>
+<tr><td>The fix choice is justified</td><td>Which of (A) or (B), <b>with the distinguishing measurement stated</b>. Not "both were plausible so I did the cheap one".</td></tr>
+<tr><td>If fixed: before/after</td><td>The same numbers after, with a stated threshold (the filed signature is 68 units; acceptance is a step in the same class as the disc's natural variation).</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0438 --arms g0,genhash,satellite</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25 (<b>if (B) is chosen this MUST be rebased deliberately and the rebase recorded</b>), the <code>satellite</code> arm at standing values (<code>src=res</code>, <code>height_decode 12/12</code>).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>BLUR IS OFF BY DEFAULT (user ruling) and MUST NOT be enabled</b> — a 1–2 px seam is exactly what blur destroys. Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty.</p>
+<h2>6. Acceptance</h2><p>The seam re-measured on the current tree with the filing's method; if present, localised to geometry vs bake and fixed by exactly one named option with before/after numbers; if gone, cancelled with the measurement and attributed. Any genhash rebase deliberate and recorded.</p>
+<h2>7. Risks</h2><p>(1) Implementing both options, which makes the cause unidentifiable. (2) Defaulting to the bake-UV fix because it "feels more thorough" — it costs a re-bake and a genhash rebase, so it needs evidence. (3) Repeating the earlier pixel-inert pattern: <b>if the change does not move the measured step, revert and say so</b> rather than keeping it. (4) Blur in a test render hiding the seam. (5) Fixing a seam the bake rebuild already removed.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §4. No re-bake unless (B) is justified. No blur in renders.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>An earlier run proved a candidate fix pixel-inert and correctly reverted it; the only open question was renderer-specificity, which the user has now answered — the seam is real. The bake has been rebuilt (AC-0469 stage D) and re-shipped (AC-0478) since that diagnosis, so the measurement must be repeated before the fix is chosen.</p>
 </body></html>
