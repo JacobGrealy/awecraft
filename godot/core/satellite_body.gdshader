@@ -9,19 +9,29 @@
 //      fully established by the render edge (d >= u_render_edge). The
 //      rim therefore emerges exactly as it passes the fog wall, and the
 //      body's near region dissolves under the drawn disc on descent.
-//  (2) HAZE: two terms, each doing ONE job with its own driver
-//      (AC-0390 separated them - see the fragment-stage note):
-//      (a) haz_a - the LIMB haze, driven by the ray's path length
-//          through the air shell (the impact parameter): the limb is
-//          always hazy at EVERY render distance, and because the limb
-//          is where the disc meets the 100% fogged world, this term is
-//          also what keeps the edge continuous.
-//      (b) haz_d - the EDGE-CONTINUITY term, the only distance term:
-//          the complement of the existence ramp, 1 while the fragment
-//          still sits at/inside the world's fog window [u_fog_far,
-//          u_render_edge] (where the world renders as the fog colour)
-//          and 0 once it is fully established (d >= u_render_edge) -
-//          at every render distance by construction.
+//  (2) HAZE: ONE term (AC-0511 - the two-term model collapsed):
+//      (a) haz_a - the air column along the view ray: haz_a =
+//          clamp(d / u_air_cm, 0, 1), d the per-fragment camera
+//          distance, u_air_cm the sky's OWN limb normalization
+//          (2*sqrt(rout^2 - (R+SEA)^2), rout = R + A + 0.25A, A =
+//          Aero.atmosphere_height - the game's single-source
+//          atmosphere, pushed by satellite_body.gd). The column grows
+//          with the ACTUAL path through the air instead of the old
+//          (1-cosv)^2 grazing proxy, which saturated 324 m from the
+//          camera inside the A shell and painted the disc 3x (941 m)
+//          to 22x (300 m wall) too hazy (the AC-0511 measurement).
+//          1.0 at d = u_air_cm: the tangent chord - the rim stays
+//          fully hazy, the disc's edge stays continuous.
+//      (b) haz_d - REMOVED AC-0511. The EDGE-CONTINUITY term (1 - op)
+//          existed to paint the body 100% u_air exactly where the
+//          world rendered 100% env-fog colour (the AC-0399 seam
+//          bridge against the engine env fog). AC-0510 removed that
+//          fog, so the window [u_fog_far, u_render_edge] now shows
+//          real near-tier terrain or the sky - there is nothing
+//          fog-coloured to bridge, and haz_d held the fade-in
+//          annulus at 100% air (the blue-chunk seam the user
+//          photographed). Its justification was deleted by a later
+//          ticket; the term is gone with it.
 //      AC-0384: both haze inputs and the distance were being evaluated
 //      with the wrong BUILTIN SPACES (Godot 4.7.1, verified in the
 //      engine source, forward_plus scene_forward_clustered.glsl):
@@ -74,9 +84,10 @@
 // far material that reads correctly from orbit.
 shader_type spatial;
 // AC-0384 r3: fog_disabled - the body's own op/haz model IS the fog-wall
-// bridge: existence ramps over the world's fog window and haz_d mixes the
-// rim toward u_air (== env.fog_light_color) exactly where the world is
-// 100% fog colour (header items (1) and (2)(b)). With the engine env fog
+// bridge: existence ramps over the world's fog window and the haze mixes
+// toward u_air (== env.fog_light_color) with the ray's air column (header
+// items (1) and (2); the haz_d 100%-fog bridge was removed AC-0511 with
+// the env fog, AC-0510). With the engine env fog
 // still applied, every fragment beyond fog_depth_end is repainted fog
 // colour by the engine - the established disc is erased and the user
 // sees a featureless fog-colour ball with only the fog_disabled cloud
@@ -100,6 +111,15 @@ uniform sampler2D tex : filter_linear_mipmap_anisotropic;
 uniform float u_fog_far : hint_range(0.0, 20000.0);
 uniform float u_render_edge : hint_range(0.0, 20000.0);
 uniform vec4 u_air : source_color;
+// AC-0511: the air-column normalization (metres of line-of-sight air at
+// the R + SEA disc tangent) - the SAME cm the sky's limb term normalizes
+// by (aero_sky_gradient sky_on: 2*sqrt(rout^2 - u_limb_radius^2),
+// rout = R + A + 0.25A; A = Aero.atmosphere_height, the game's
+// single-source atmosphere). Pushed per frame by satellite_body.gd;
+// the default is the A = 1200 value so the shader is sane unpushed.
+// haz_a = clamp(d / u_air_cm, 0, 1) - the body and the sky limb count
+// the same air.
+uniform float u_air_cm : hint_range(0.0, 100000.0) = 7273.5;
 uniform float u_day : hint_range(0.0, 2.0);
 uniform float u_day_gain : hint_range(0.0, 2.0);
 // direction FROM the surface TO the sun. World frame == body-local
@@ -199,37 +219,35 @@ void fragment() {
 	if (op <= 0.001) {
 		discard;
 	}
-	// TERM 1 - haz_a: the LIMB haze (the disc's edge is always hazy).
-	// In world space: (1 - cosv) is a monotone function of the ray's
-	// IMPACT PARAMETER (perpendicular distance from the planet centre
-	// to the view ray - the path length through the air shell): 0 at
-	// the disc centre (b = 0, the shortest path) and 1 at the limb
-	// (b = the body radius, the grazing ray's longest path). This is
-	// the physically right driver for the limb, and it is INDEPENDENT
-	// of the render distance: no matter how short the fog is set, the
-	// limb is fully hazy, which is what keeps the disc's edge
-	// continuous with the 100% fogged world just outside it.
-	float cosv = clamp(dot(normalize(cam_w - p_w), nrm), 0.0, 1.0);
-	float haz_a = pow(1.0 - cosv, 2.0);
-	// TERM 2 - haz_d: the EDGE-CONTINUITY term - the only distance
-	// term. It is the complement of the existence ramp (op above): 1
-	// while the fragment still sits at/inside the world's own fog
-	// window [u_fog_far, u_render_edge] (there the world renders as
-	// the fog colour, so the body must too - no pop at the fog wall or
-	// the disc's emerging edge) and 0 once it is fully established
-	// (d >= u_render_edge). Its window IS the world's fog window, so
-	// the continuity holds at EVERY render distance by construction.
-	// AC-0390: the old window was [u_render_edge, 4*u_render_edge] -
-	// it lingered the haze up to 4x the render edge, so at short
-	// render distances a fully-established orbital altitude (d > edge)
-	// still sat inside it and the WHOLE disc washed to the air colour
-	// (the user's "smooth pale ball"; disc-centre haze measured
-	// 0.0000 only at the arm's long settings, which is why that fix
-	// was declared good). One term was doing two jobs (limb haze AND
-	// edge continuity) that pull in opposite directions as the render
-	// distance shrinks; now each has its own driver.
-	float haz_d = 1.0 - op;
-	float haz = clamp(haz_a + haz_d, 0.0, 1.0);
+	// TERM 1 - haz_a: the air column along the view ray (AC-0511).
+	// d (above) is the true per-fragment camera->fragment path. The
+	// body's fragments render from d >= u_fog_far (op discards the
+	// rest) and the measured vantages are inside the A shell (A =
+	// Aero.atmosphere_height = h_full), so the path is in-shell air:
+	// haz_a = clamp(d / u_air_cm, 0, 1) grows with the ACTUAL depth
+	// through the atmosphere. u_air_cm is the sky's own limb
+	// normalization (the full chord at the R + SEA disc tangent), so
+	// the body and the sky limb count the same air. 1.0 at
+	// d = u_air_cm (the tangent chord) - the rim stays fully hazy.
+	// Replaces the (1-cosv)^2 grazing proxy, which saturated 324 m
+	// from the camera inside the shell and painted the disc 3x (941 m)
+	// to 22x (300 m wall) too hazy - the AC-0511 measurement. Above
+	// the A shell d over-counts the air a ray sweeps in space; the
+	// clamp bounds it (the authorized model, inside-shell exact).
+	float haz_a = (u_air_cm > 0.0) ? clamp(d / u_air_cm, 0.0, 1.0) : 0.0;
+	// TERM 2 - haz_d (the EDGE-CONTINUITY term, 1 - op) was REMOVED
+	// in AC-0511, not weakened. Its one job was to paint the body
+	// 100% u_air exactly where the world rendered 100% env-fog colour
+	// (AC-0390/AC-0399 - the seam bridge against the engine env fog).
+	// AC-0510 removed that fog THIS SESSION, so the window
+	// [u_fog_far, u_render_edge] now shows REAL near-tier terrain (or
+	// the sky, through the op fade) - there is nothing fog-coloured
+	// to bridge: the premise is gone, and no other job was listed.
+	// Kept, haz = clamp(haz_a + 1 - op, 0, 1) would still hold the
+	// fade-in annulus at 100% air regardless of the column fix (the
+	// blue-chunk seam the user photographed; wall haz 1.0 against the
+	// ~0.05 the column says). The haze is haz_a alone now.
+	float haz = haz_a;
 	float sun_l = clamp(dot(u_sun, nrm) * INV_BAKE_SUN_RADIAL, 0.0, 1.0);
 	// AC-0436: the moon's radial lambert (see the uniform block) - the same
 	// radial convention as the sun term (the body is the satellite LOD: its

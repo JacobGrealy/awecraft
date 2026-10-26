@@ -1,27 +1,41 @@
 meta:
-  updated_at: 2026-10-26T10:38
+  updated_at: 2026-10-26T13:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0511
 - AC-0480
 - AC-0484
 - AC-0485
+- AC-0512
+- AC-0513
 - AC-0486
 - AC-0487
 - AC-0488
 - AC-0489
 - AC-0490
+- AC-0514
 - AC-0491
 - AC-0492
 - AC-0493
 - AC-0494
 - AC-0495
 - AC-0496
+- AC-0515
+- AC-0516
+- AC-0517
+- AC-0518
+- AC-0519
+- AC-0520
+- AC-0521
+- AC-0522
+- AC-0523
+- AC-0524
+- AC-0525
 - AC-0497
 - AC-0498
 - AC-0499
+- AC-0526
 - AC-0500
 - AC-0501
 - AC-0502
@@ -34784,11 +34798,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 1
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-26T10:38
-  updated_at: 2026-10-26T10:38
-  completed_at: null
+  updated_at: 2026-10-26T13:58
+  completed_at: 2026-10-26T13:58
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -34840,6 +34854,1042 @@ intake:
     older notes), the Aero/haze push sites in `godot/world/world.gd`, and `godot/autoload/aero*.gd`. Refs:
     AC-0510 (the measurement that located this), AC-0399 (the haze mix repair), AC-0402 (the isolate-one-term
     method), AC-0483 (the sky horizon removal).
+
+
+
+    CLOSED (round 115). THE HUE WAS RIGHT AND THE MAGNITUDE WAS ~3x WRONG — and the fix turned the haze
+    from a saturating wash into a physical air column.
+
+    WHAT WAS ACTUALLY WRONG: `haz_a` used a `(1-cosv)^2` curve that SATURATED — reaching 100% air by 324
+    m — so the planet''s terrain was painted with a full air column at any viewing distance. The hue was
+    never the problem: `u_air` (208,241,251) is the sky''s own single-source horizon colour, the correct
+    Rayleigh hue, and the ticket explicitly fenced hue changes out. Replaced with **`haz_a = clamp(d /
+    u_air_cm, 0, 1)`**, so the air column grows with the actual depth through the atmosphere; the now-dead
+    `cosv` was removed.
+
+    THE SCALE IS THE GAME''S OWN CONSTANT, NOT A NEW MAGIC NUMBER, which was the plan''s explicit requirement:
+    **`u_air_cm` is pushed from `Aero.atmosphere_height()` as `2*sqrt((atmo_limb_radius + atmo_limb_falloff)^2
+    - (R+SEA)^2)`** — the sky-limb path length the atmosphere model already computes. (It is pushed in
+    `world/satellite_body.gd` `_tick_view`, not the `core/` path my plan guessed — deviation 8, another
+    stale anchor in my own plan, which is now three plans in a row to carry one.)
+
+    **`haz_d` WAS REMOVED, AND THE REASONING IS THE PART WORTH KEEPING:** its only job was bridging the
+    body to the ENGINE ENV FOG (AC-0399) — and **AC-0510 deleted that fog one round earlier, so the premise
+    was already gone.** Worse, keeping it would have DEFEATED the fix outright: with `haz = haz_a + (1-op)`
+    the annulus stays at 100% air regardless of what `haz_a` does. That is a term surviving its own justification,
+    and removing it is the same class of correction as the stale comments and the false "already removed"
+    premise earlier this session.
+
+    THE MEASURED RESULT, at the user''s 941 m nadir: solid reads **S0 (144.5, 210.2, 172.2) -> (154.5,
+    211.9, 179.3)** against a bypass of (106.7, 179.7, 86.6), and the per-bin lift now **follows d/7273.5
+    (R 49.8 -> 83.6 across the disc)** where before it saturated (14.2 -> 127.1). Rim haze **1.0 -> 0.37**,
+    nadir **0 -> 0.11**, area-mean **~0.25** — and the builder flagged that my plan''s 0.19 was a CHORD
+    value rather than an area mean (deviation 9), i.e. it corrected my number rather than matching it.
+
+    AT THE 300 m WALL: haze **100% -> 0.046-0.055**, and the body-only tier gap **Δluma 45.2** against
+    the predicted ~41.4, with the residue being REAL TERRAIN rather than atmosphere. The near-vs-solid
+    class reads 115.2 against 136.7 before, and the builder was careful about what that means: **~60%
+    of that class is raw-sky show-through** (deviation 10), so it is not all haze and should not be reported
+    as if it were.
+
+    FENCE HELD: the near tier is byte-identical, so the change touched the body only.
+
+    GATES: g0 rc=0 with **0 script AND 0 shader errors**, genhash **25/25**, lightstate leaks 0 with the
+    profile matching AC-0510. Both temporary bypasses were restored and the diff is the fix only.'
+  comments: []
+- id: AC-0512
+  title: handover-p0-post-fog-removal-coverage-and-geometric-error-baseline
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - measurement
+  created_at: 2026-10-26T13:23
+  updated_at: 2026-10-26T13:40
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the remaining pop-in and gaps measured after fog and mist are removed, so the
+    fix addresses the actual missing landscape rather than disguising it.
+
+
+    2) Technical Details
+
+    Handover slice H00. Depends on: AC-0510, AC-0485.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#baseline; docs/satellite-lod-handover-plan.html#verification;
+    docs/satellite-lod-handover-plan.html#budgets
+
+
+    Measurement only. Coordinate with the AC-0484/0485 generation/startup baseline without changing that
+    workload. Recheck satellite_body.gd::process_frame, satellite_body.gdshader::fragment, world.gd::_lod_tier_of,
+    _low_handoff and _ring_rebuild_sector. Record actual screenshot/reproduction pose, seed, accepted
+    generator version, settings, build and Windows GPU. Distinguish absent drawable chunks, distance discard,
+    source resource delay, geometry mismatch and endpoint colour mismatch. Measure signed satellite/detail
+    surface error and projected displacement on coast, cliff, home/face seams and all four near tiers.
+    Include a 5-second held-publication fixture and an injected missing-fallback negative control. Expected:
+    the exterior-gap counter rises in the negative control; instrumentation-off generation and mesh outputs
+    are unchanged; baseline reports actual values and variance, not invented thresholds. If AC-0510 already
+    satisfies the outcome, report that evidence and let the coordinator cancel unnecessary renderer work;
+    do not manufacture a reason for a rewrite. No renderer routing, fog restoration, generation optimization
+    or new geography.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+
+
+
+
+    Filing-time baseline clarification: AC-0510 is completed and AC-0511 is the active body-haze follow-up.
+    Additional accepted prerequisite: AC-0511. Capture the baseline only after both accepted outcomes;
+    do not duplicate the active haze investigation or assume the original essay''s atmosphere survived
+    it. AC-0511 remains ahead of this series and its ticket/status are not modified by this filing.'
+  comments: []
+- id: AC-0513
+  title: handover-p0-hdr-depth-water-and-current-frame-render-feasibility
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - measurement
+  - design
+  created_at: 2026-10-26T13:23
+  updated_at: 2026-10-26T13:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want a transition technique proven to preserve depth, water and performance before
+    it replaces the working renderer.
+
+
+    2) Technical Details
+
+    Handover slice H01. Depends on: AC-0512.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#p0; docs/satellite-lod-handover-plan.html#pipeline;
+    docs/satellite-lod-handover-plan.html#blend; docs/satellite-lod-handover-plan.html#exceptions
+
+
+    Bounded isolated measurement fixture; production behavior unchanged. Apply the shared plan''s concrete
+    two-source HDR/depth prototype, not an implementer-selected architecture. Proposed anchors: new isolated
+    source/export/resolve fixtures using CompositorEffect, RenderSceneBuffersRD and the exact Godot 4.7.1
+    API. Prove same-frame SubViewport dependencies, pre-tonemap HDR, reverse-Z, actor occlusion in both
+    draw orders, main screen-depth readers, alpha-tested foliage, water/refraction channel choice, resize
+    and teardown. Expected linear 0/1 midpoint = 0.5 +/-0.002; selected depth error <=1 mm on the defined
+    10-100 m fixture; epoch mismatch 0 across 600 moving-camera frames; 100 resize/create/destroy cycles
+    with no errors or live-resource growth. Record actual GPU/export memory and timings; proposed budgets
+    are not measured facts. Return exact callback/API, formats, dependencies and water-depth contract
+    for a coordinator decision. A negative feasibility result is valid evidence: stop dependent renderer
+    tickets, revise/defer them explicitly, and let continent work continue. No production activation,
+    native renderer rewrite or independent design delegation.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0514
+  title: handover-p1-versioned-drawable-readiness-core-and-geography-contract
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:23
+  updated_at: 2026-10-26T13:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want finer terrain to take over only when its actual current geometry is ready, without
+    confusing the planet blueprint with what is on screen.
+
+
+    2) Technical Details
+
+    Handover slice H02. Depends on: AC-0512, AC-0490.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#ownership; docs/satellite-lod-handover-plan.html#mapping;
+    docs/satellite-lod-handover-plan.html#integration
+
+
+    Implement the inert pure readiness/transition core only; proposed godot/world/lod_handover.gd. Consume
+    AC-0490''s accepted world/recipe identity and surface/water descriptor without modifying generator
+    fields or adding a second geographic atlas. Define world_epoch, col_gen, data/fluid/light acceptance
+    evidence, selected versus published tier, required/published/authoritative-empty slab masks, publication/ring
+    revisions and reversal-safe transition state. Separate occupancy, complete authority and the independently
+    ramped void weight. CPU event replay must reject stale pool reuse/world changes, give queued/gen-only/slot-only
+    work zero authority, and preserve accepted old presentation during remesh. Expected: deterministic
+    replay, zero premature ownership, independently negative-tested generation/epoch rejection; inactive
+    output unchanged. No production event feeds, GPU resources, camera routing or expensive per-frame
+    world census. The core remains useful even if H01 rejects the two-source renderer.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0515
+  title: handover-p1-high-and-direct-face-published-geometry-events
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:23
+  updated_at: 2026-10-26T13:23
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want settled sim and high-detail terrain to become replacement-ready only when the
+    accepted mesh really becomes drawable.
+
+
+    2) Technical Details
+
+    Handover slice H03. Depends on: AC-0514, AC-0496.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#ownership; docs/satellite-lod-handover-plan.html#integration
+
+
+    Wire inert event feeds into the existing accepted high/full attach and direct face show paths in world.gd
+    and chunk.gd::high_slab_visible, plus eviction/pool reuse. Recheck c.apply_accs, existing settled-light
+    validation, _star_update_light_settled and face equivalents; do not assume a home light accessor applies
+    to every face. Publish existing generation/light tokens after acceptance/show, never at dispatch,
+    gen completion or before settled lighting. Define the complete required exterior slab set from actual
+    build masks, including boundary support; sampled-empty results are not complete void authority. Expected:
+    actual drawable-versus-record audit has zero premature publications, hidden/unlit/stale results remain
+    unowned, edits retain old presentation, pool-reuse negative control is rejected. Pure counters/events
+    only: no visible handover, worker scheduling, collision, mesh arrays or generator changes.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0516
+  title: handover-p1-medium-low-ring-publication-transactions
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want medium and low terrain to take over when the drawn batch exists, not when an off-screen
+    bookkeeping slot says it exists.
+
+
+    2) Technical Details
+
+    Handover slice H04. Depends on: AC-0515.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#ownership; docs/satellite-lod-handover-plan.html#integration
+
+
+    Add inert medium/low publication feed at world.gd::_ring_rebuild_sector and direct low acceptance.
+    Anchors: _low_handoff, _ring_step, _ring_rebuild_sector, chunk.gd::low_slab_visible and off-tree low
+    records. Capture exact member key/col_gen/stamp/tier/slab masks while merging; commit that membership
+    and revision only when the visible sector mesh assignment succeeds. Retain old published membership
+    during deferred or failed rebuild. Do not rescan newer slot flags after assignment. Expected: deliberately
+    delayed ring assignment grants zero premature ownership; published member/revision mismatches 0; stale-member
+    and interrupted-publication negative controls detected. No renderer routing or changed ring rebuild
+    rate, member classification, mesh values, generation or queue order.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0517
+  title: handover-p2-camera-aligned-hdr-depth-sources-and-gpu-lifecycle
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the satellite and finer terrain sampled from the same current camera, without
+    stale frames, resource leaks or extra simulation worlds.
+
+
+    2) Technical Details
+
+    Handover slice H05. Depends on: AC-0513, AC-0516.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#pipeline; docs/satellite-lod-handover-plan.html#rollback;
+    docs/satellite-lod-handover-plan.html#p2
+
+
+    Only implement the source/export resource subsystem selected by the coordinator from H01 evidence.
+    Proposed godot/core/lod_handover_renderer.gd, lod_source_export.gd and copy shader where proved necessary;
+    integrate lifecycle with scenes/main.gd behind a temporary developer selector defaulting to the accepted
+    post-AC-0510 baseline. Two cameras share the existing World3D and one immutable frame packet; no second
+    World/player/generation queue. Prove current-frame dependency, pre-tonemap scene-linear colour and
+    resolved depth, owned RD lifetime, transactional resize/new-world/teardown and headless short circuit.
+    Source sky may supply the main-matching background for known void; it is not terrain occupancy. Expected:
+    frame/projection mismatches 0, no stale world resources, 100 lifecycle cycles clean, inactive mode
+    allocates no buffers/viewports. Do not change main terrain masks or activate a new resolve yet; no
+    fog/mist restoration.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0518
+  title: handover-p2-terrain-layer-routing-and-ring-water-surface-split
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want one complete landscape while terrain sources are separated, with actors and transparent
+    water kept in their normal scene.
+
+
+    2) Technical Details
+
+    Handover slice H06. Depends on: AC-0517.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#pipeline; docs/satellite-lod-handover-plan.html#integration;
+    docs/satellite-lod-handover-plan.html#p2
+
+
+    Integrate the proved opaque debug resolve and layer routing only. Recheck centralized MeshInstance
+    checkout/reset, satellite face creation, high/cutout instances, ring construction and directly attached
+    mixed low meshes. Use the proved reserved layer contract (proposed layers 17/18/19, after auditing
+    masks). Layers are per instance, not per ArrayMesh surface: split opaque ring arrays from the existing
+    two water surfaces using already emitted arrays, and publish both assignments atomically. Keep actors,
+    held items, clouds and transparent fluids in the main view. Source variants must actually use opaque/alpha-test
+    pipelines, not assume ALPHA=1 is opaque. Expected debug sources red/green; no double-drawn terrain,
+    actor order invariant, valid selected depth and no full-world duplicate mask render. Default remains
+    accepted baseline; no appearance tuning, generation changes or final activation.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0519
+  title: handover-p3-live-chart-readiness-atlas-and-dirty-gpu-publication
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want replacement ownership to follow the actual terrain on every face, without seams,
+    stale chunks or per-frame world scans.
+
+
+    2) Technical Details
+
+    Handover slice H07. Depends on: AC-0518.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#mapping; docs/satellite-lod-handover-plan.html#ownership;
+    docs/satellite-lod-handover-plan.html#budgets
+
+
+    Implement the ephemeral readiness atlas and tested CPU/GPU address adapter, separate from the immutable
+    continent geography atlas/cache. Use live SphereMath world_to_face, cells/chunks_u/v, current runtime
+    keys, signed home adapter and actual mesh footprints, not dormant PlanetGrid grid_shape. Proposed
+    2048x1024 RGBA8 atlas with face tiles, nearest sampling, temporal R, separately ramped void G, published
+    tier B and validity A; reject unsupported dimensions. Identity validation remains CPU-side. Implement
+    dirty-page uploads and cross-chart neighbor/complete-footprint guards; no whole 8 MiB upload every
+    steady frame. Expected CPU/GPU ownership mismatch 0 on independent 12-face/seam/corner/partial-chunk/signed-home
+    fixtures; declared tie rule matches; stale epochs never publish; repeat-wrap negative control fails.
+    Do not yet activate visual blend or change geographic data.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0520
+  title: handover-p3-normalized-satellite-to-all-tier-colour-and-depth-resolve
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the continuous satellite landscape to gain sim, high, medium or low detail smoothly,
+    without opening a blue hole first.
+
+
+    2) Technical Details
+
+    Handover slice H08. Depends on: AC-0519.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#blend; docs/satellite-lod-handover-plan.html#p3;
+    docs/satellite-lod-handover-plan.html#atmosphere
+
+
+    Implement normalized scene-linear source resolve and readiness/spatial/temporal weights in the proved
+    renderer. Body fallback remains opaque when detail is missing; bypass independent distance-existence
+    holes only in the new path. Use the published tier, not desired tier. Start with the measured 350
+    ms trial ramp, reversal from the current value, and conservative 1-3 chunk spatial envelope; established
+    nearby sim must resolve fully. Select actual source depth deliberately; never average unrelated depths.
+    Replace, do not double-apply, the legacy high-column fade; preserve old internal-tier presentation
+    until a new tier publishes. Expected 0/.25/.5/.75/1 colour tests match normalized weights, midpoint
+    .5 +/- .002, missing-data exterior background pixels 0 with held publications, all four tiers tested,
+    no backside bleed. If projected geometry produces visible >1 px doubled silhouette in the defined
+    fixture, stop for coordinator-bounded refinement; never warp arbitrary cave/tree meshes. No fog, wash,
+    mist, generation or collision changes; keep new path developer-gated.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0521
+  title: handover-p3-complete-void-authority-caves-edits-and-interior-cameras
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want cave mouths, tunnels and dug holes to remain open instead of being sealed by a
+    satellite terrain skin.
+
+
+    2) Technical Details
+
+    Handover slice H09. Depends on: AC-0520.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#ownership; docs/satellite-lod-handover-plan.html#blend;
+    docs/satellite-lod-handover-plan.html#exceptions
+
+
+    Implement full-authority suppression and interior-camera behavior using accepted complete slab/neighbor
+    evidence. Initial void authority only for proved complete full/high representations; coarse sampled-empty
+    is not authority. Start a separate void retirement ramp when completeness first becomes true, even
+    when occupied pixels already finished blending. Resolve a valid empty ray toward the same-camera sky
+    sample and then discard terrain depth; use legitimate detailed walls behind a coarse satellite hill
+    without exposing unrelated backside terrain. Test cave mouth to sky and to another wall, narrow shaft,
+    tunnel beneath a hill, edit/remesh, and ready camera inside a cave. Expected satellite intrusion in
+    fully authoritative void fixtures 0; no resets to baked pre-edit terrain; no new collision/travel
+    permission from visual fallback. Keep forced eviction/world resets atomic. No geometry morph, permanent
+    shell, radius or generator changes.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0522
+  title: handover-p5-water-shoreline-and-underwater-depth-integration
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - fluids
+  created_at: 2026-10-26T13:24
+  updated_at: 2026-10-26T13:24
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want oceans and shores to remain continuous during landing while keeping translucent
+    water and underwater views correct.
+
+
+    2) Technical Details
+
+    Handover slice H10. Depends on: AC-0521, AC-0494, AC-0495, AC-0496.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#exceptions; docs/satellite-lod-handover-plan.html#pipeline;
+    docs/satellite-lod-handover-plan.html#verification
+
+
+    Implement H01''s coordinator-approved water coverage/base-colour and depth contract using AC-0494/0495
+    canonical visible-water decisions. Anchors: existing ring/direct low wv/wn/wc/wu/wi surfaces, _ring_water_material,
+    chunk animated water/bf materials and fluid_anim shaders. Do not infer authority from water alpha
+    or satellite height alpha. A water backing must not write a fake opaque ocean surface into the main
+    depth or self-occlude transparent water; use only the separately proved channel/depth policy. Animated
+    fluids follow the same handover value, rather than retaining the old first-enable exception. Expected
+    no ocean-to-sky gaps, shoreline mismatch, opaque-ocean regression, self-occlusion or underwater cull/refraction
+    regression; existing fluid logic gates unchanged. Report any additional channel memory. No fluid simulation,
+    density, water topology or generation changes.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0523
+  title: handover-p5-foliage-actors-clouds-and-transparent-depth-acceptance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  created_at: 2026-10-26T13:25
+  updated_at: 2026-10-26T13:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want trees, flowers, actors and clouds to keep their shape and correct visibility while
+    terrain detail changes beneath them.
+
+
+    2) Technical Details
+
+    Handover slice H11. Depends on: AC-0522.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#exceptions; docs/satellite-lod-handover-plan.html#verification
+
+
+    Finish cutout/thin/transparent presentation integration without changing vegetation placement or density
+    (AC-0501 owns that fix). Recheck chunk cutout/flower/fluid variants, main actors/held items/particles,
+    cloud materials and current depth-copy consumers. Source cutouts use real alpha testing; transparent
+    parts use owner handover weight in the main pass. Terrain resolve retains normal depth tests and writes
+    selected real depth, not quad depth; no actor belongs in the terrain source. Expected nearer actor
+    remains unchanged before/after resolve in both draw orders at 50% blend; leaf silhouette uses no bounding-box
+    authority, close canopy remains readable, particles and clouds occlude correctly, held item unchanged,
+    depth readers see the completed terrain resolve. No fog/limb redesign, entity AI, vegetation generation
+    or fluid logic.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0524
+  title: handover-p4-no-fog-source-colour-parity-and-endpoint-acceptance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - verification
+  created_at: 2026-10-26T13:25
+  updated_at: 2026-10-26T13:41
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the satellite landscape to become detailed terrain without a blue veil, a brightness
+    flash or a different atmosphere around loaded chunks.
+
+
+    2) Technical Details
+
+    Handover slice H12. Depends on: AC-0523, AC-0510.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#atmosphere; docs/satellite-lod-handover-plan.html#verification;
+    docs/satellite-lod-handover-plan.html#p4
+
+
+    Appearance proof and narrowly specified colour-domain correction only. AC-0510''s no-depth-fog/no-mist
+    removal supersedes the original handover essay''s altitude-aware fog proposal: Fterrain remains 0;
+    never reinstate fog, haz_d or a wash to conceal missing chunks. Keep accepted sky/planet-limb/cloud
+    behavior unless separately authorized. Recheck baked satellite RGB decode versus height data, lit
+    satellite versus unshaded near endpoints, source HDR exports and single final tone mapping. Measure
+    matched grass/snow/sand/water at day/dusk/night, ground and altitude; identify endpoint error before
+    any bounded correction. Expected normalized linear midpoint correct, no double companding, no forced
+    blue intermediate or ground degradation; Windows Forward+ descent/ascent evidence. Do not retune palette,
+    moon gain, bake recipe or add a new Options switch. A large geometry/lighting redesign requires another
+    plan, not scope creep.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+
+
+
+
+    Filing-time appearance clarification: consume the accepted AC-0511 body-haze outcome as well as AC-0510
+    fog/mist removal. Do not preserve a pre-AC-0511 blue body term by accident, reopen the completed fog
+    removal, or duplicate the active body-haze investigation. Re-read the accepted source and the updated
+    shared roadmap before the bounded colour-parity plan.'
+  comments: []
+- id: AC-0525
+  title: handover-p6-combined-continent-flight-and-delayed-streaming-acceptance
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - verification
+  created_at: 2026-10-26T13:25
+  updated_at: 2026-10-26T13:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want proof that orbit, descent, coastline, caves and ground detail describe one continuously
+    visible continent even while chunks arrive late.
+
+
+    2) Technical Details
+
+    Handover slice H13. Depends on: AC-0524, AC-0496.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#verification; docs/satellite-lod-handover-plan.html#p6;
+    docs/satellite-lod-handover-plan.html#coordination
+
+
+    Integration acceptance before the AC-0497 continent seam/promotion milestone, not a new terrain algorithm.
+    Reuse the accepted AC-0496 geography and H00 reproduction metadata. Test all four near tiers, all
+    charts/seams, 5-second publication holds, negative fallback removal, ring lag, edits/caves/water,
+    camera offsets, fast turns, vertical flight, resize/world changes and actor transparency. Expected
+    missing-data exterior background pixels 0 (explicit silhouette AA exclusions only), fully authoritative
+    void intrusion 0, source/camera epoch mismatches 0; negative control must raise the gap count. Record
+    120/300/700/1600/2600 m ladder plus actual user pose, R4/24/50, day/dusk/night and no-fog output.
+    G0 census AND exit, shaderforce and same-generator genhash/standing gates per current HARNESS. Pass
+    gives candidate evidence for combined testing, not production default activation. If the renderer
+    is infeasible/unaccepted, explicitly defer its tranche and let AC-0497 validate/activate continent
+    geography on the accepted post-AC-0510 presentation; never make new geography depend on speculative
+    renderer success.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0526
+  title: handover-p6-combined-cpu-gpu-memory-budget-and-production-rollout
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels:
+  - lod
+  - satellite
+  - continents
+  - performance
+  - verification
+  created_at: 2026-10-26T13:25
+  updated_at: 2026-10-26T13:25
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '1) User Story
+
+    As a player, I want the smooth landscape transition enabled only when it is correct and affordable
+    alongside the faster continent generator.
+
+
+    2) Technical Details
+
+    Handover slice H14. Depends on: AC-0525, AC-0497, AC-0499.
+
+    Plan sections: docs/satellite-lod-handover-plan.html#budgets; docs/satellite-lod-handover-plan.html#rollback;
+    docs/satellite-lod-handover-plan.html#p6; docs/satellite-lod-handover-plan.html#coordination
+
+
+    Final cost/rollout gate after AC-0499 generation go/no-go and before climate expansion. Separate generator
+    CPU/startup/chunks-per-second improvements from source/export/resolve GPU cost; compare the same accepted
+    generator, content, views, settings and hardware with handover off/on. Record CPU p95, GPU timestamps,
+    source/export/atlas/internal-target VRAM, AA/resolution, uploads and render-only retention. Trial
+    budgets from the essay: <=0.5 ms presentation CPU p95 R24, <=1.5 ms added GPU p95 1080p target Windows
+    GPU, <=128 MiB incremental VRAM 1080p /256 MiB 1440p; these are proposed, not measured guarantees.
+    Hard requirements: no steady extra frame latency, no full-world per-frame scan/readback, no leaked
+    resources or added physics residency. Default activation only after H13, Windows appearance and agreed
+    budget evidence; inactive developer path short-circuits resources and uses the post-AC-0510 no-fog
+    baseline. Update ARCHITECTURE and preserve cheap counters. AC-0503 rechecks combined behavior with
+    final climate/biomes; optional hydrology parity must retain it. No generation optimizations or permanent
+    old-generator product mode.
+
+
+    Shared roadmap: docs/satellite-lod-handover-plan.html#coordination; docs/continent-biome-generation-plan.html#handover-coordination.
+
+    This is one bounded intake ticket, not permission to implement the whole essay. All tickets start
+    OPEN; queue placement is execution order, and prerequisites must be accepted before implementation.
+    A negative renderer feasibility result must not block continent geography: coordinator revises or
+    explicitly defers renderer-dependent queued work, preserving existing continent order. No implementation
+    starts during this filing operation.
+
+
+    AC-0510 supersedes the original essay''s fog-restoration/altitude-fog proposal: no depth fog, mist,
+    wash or blue handover bridge may be reintroduced. Temporary developer A/B isolation uses the accepted
+    post-removal baseline; no new player-facing switch is authorized. No terrain generation, grid/radius,
+    save/cache format, collision, simulation, light-settle safety or streaming queue changes in these
+    rendering tickets. Recheck live source anchors before execution; the coordinator writes a bounded
+    plan with exact gates, not the implementer. New arms require harness_data.yaml plus generated HARNESS
+    documentation; architecture updates accompany implemented structural changes. Genhash comparisons
+    use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
+    hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
+    platform; numerical budgets remain proposals until measured.
 
     '
   comments: []

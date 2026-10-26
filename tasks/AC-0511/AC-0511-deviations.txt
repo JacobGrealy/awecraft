@@ -1,0 +1,114 @@
+AC-0511 deviations from plan.html
+
+1. STALE ANCHOR — the fix step is PLAN-INSUFFICIENT (measurement completed).
+   Plan §4's table row assigns "the body's haze, haz_d, AC-0399's reversed-mix
+   repair" to godot/core/lod_avg.gdshader, and the ticket spec repeats "the
+   shader is core/lod_avg.gdshader (the body's shader)". That file no longer
+   carries haz_d: AC-0404 removed the far tier's hand-rolled haze bridge
+   (lod_avg.gdshader header lines 22-38 document it: "AC-0404 (bridge removed,
+   'fog only')"); the file is 113 lines and contains no haz_d, no u_air, no
+   haze term at all. The body's haze terms live in
+   godot/core/satellite_body.gdshader — haz_a (the limb/air-column term) at
+   line 213, haz_d (the edge-continuity term) at line 231, the mix
+   ALBEDO = mix(base, u_air.rgb, haz) at line 266, the op ramp at 176-178.
+   satellite_body.gdshader is NOT in the plan's §4 permission table. Consequence:
+   the isolation measurement was executed there (the plan's own method —
+   "bypass it, re-render, compare the same pixels" — is only executable on the
+   file that carries the term), via temporary one-line bypasses that were fully
+   restored (git diff on both shaders is empty at gate time); the FIX was not
+   implemented, because (a) its file is outside §4 and (b) the weaken curve
+   (the air-column normalization + the A push) is a design decision the plan
+   does not make. The exact proposed mechanism is in AC-0511-results.html §6.
+   Per the builder contract this is reported, not invented around.
+
+2. Plan §4 names "godot/autoload/aero*.gd (the Aero helpers)". The Aero class
+   lives at godot/core/aero.gd (class_name Aero, line 1), not under autoload/
+   (there are no aero* files there). Read-only; no edit was needed — the
+   single-source colour constants (fog_display_srgb :235-242, DAY_HORIZON
+   (223,246,251), HAZE (186,233,250), ATMOSPHERE_HEIGHT 1200.0) are correct
+   and consistent with every measured value.
+
+3. First s0n300 render was a vantage slip: the render.sh vantage case for
+   300 m omitted AWECRAFT_AIR_NADIR=1, so it rendered at pitch-30 (RESULT
+   line: nadir=false, aim (-0.867,-0.498,-0.001)) instead of the AC-0510
+   frontier nadir frame. Caught on the RESULT line before any analysis;
+   re-rendered at true nadir (aim (-0.002,-1.000,-0.002), nadir=true) and the
+   bad frame was overwritten. All reported 300 m numbers come from the
+   re-render; the re-rendered frame reproduces AC-0510's frontier class means
+   exactly (near (71.3,119.7,49.8) / annulus (114.7,152.4,115.7) / solid
+   (214.5,248.2,248.2)).
+
+4. Temporary isolation edits (the plan's AC-0402 method requires bypassing the
+   term in the shader that carries it — no push in world.gd/aero.gd can bypass
+   a shader-body term): S1 godot/core/satellite_body.gdshader:232
+   "float haz = clamp(haz_a + haz_d, 0.0, 1.0);" -> "float haz = 0.0;" (bypasses
+   the body's whole air mix — at 941 m haz_d is identically 0 (d >= 400 =
+   render_edge), so S1 there isolates haz_a alone); S2
+   godot/core/aero_sky_gradient.gdshader sky() — the sky_off/sky_on branch
+   replaced by "vec3 col = vec3(0.5, 0.5, 0.5);" (the whole sky pass —
+   background, limb glow, sun disc, and any ambient — to neutral). One shader
+   touched per run, per the fence; both fully restored, verified by empty
+   git diff before the final gate set.
+
+5. The S0 baseline was re-rendered from the current working tree rather than
+   reusing AC-0510's after-PNGs: another session works in this repo
+   concurrently (godot/core/aero.gd and godot/ARCHITECTURE.md were dirty at
+   start). Each render logs a git-state fingerprint (render-*.log line 1:
+   s0/s1/s2 states 972676.../10ea00.../d66360...). The 941 m S0 class means
+   reproduce AC-0510's after values exactly (nadir sky (75.0,122.3,137.3) /
+   solid (152.7,210.5,169.4); pitch sky (27.7,62.2,78.0) / solid
+   (141.8,205.2,154.0)), so the measured baseline is the shipped state.
+
+6. At 300 m part of the "solid" class is not the body: the body mesh is the
+   displaced-terrain patch (SATDIAG aabb_geom 2958x1772x5901, not the full
+   sphere), so outside generated terrain there is no body geometry and the sky
+   background shows through. The S0 solid mean (214.5,248.2,248.2) is a blend
+   of hazed body terrain (u_air (208,241,251) single-source) and raw sky
+   (horizon colour (223,246,251) -> ~ (215,247,250) through the pipeline) —
+   near-identical by construction (Aero.fog_display derives from the horizon).
+   The per-pixel regime analysis (results §5) splits the two; it is not a
+   haze effect (the S1/S2 deltas separate them: sky-leak pixels change under
+   S2, not S1; opaque hazed-body pixels change under S1, not S2).
+
+7. lightstate: no re-baseline. wash_detected false = standing; leaks 0 in all
+   grid cells; worst=null. Machine-timing fields moved inside their documented
+   classes: demoted 1 (standing 41; the AC-0311 note records a same-build run
+   reading 1/3), stragglers 3 (standing 0), ab vc_diff 4 (standing 1-2),
+   arr_diff_cells 1 (the one-cell class holds), low_on_high_n 0, hole_traj
+   126 flat (no drift). Same profile as AC-0510's run on this build.
+
+--- round 116 (resume, fix run) ---
+
+8. Plan §4 names "godot/core/satellite_body.gd" as the push site. The script
+   lives at godot/world/satellite_body.gd (core/ holds the shader only). Same
+   anchor-staleness class as deviations 1-2 (aero.gd was also mis-located as
+   autoload/). The push went into godot/world/satellite_body.gd _tick_view:
+   u_air_cm computed once per frame next to RB/ff/edge and pushed in the
+   existing per-material loop. No behavioural consequence.
+
+9. The plan's expected "941 m disc mean haze 0.55 -> ~0.19" is a chord-end
+   value, not an area mean: the new haz_a = d/u_air_cm spans 0.107 (nadir,
+   d = 779) to 0.374 (rim, d = 2721) over the 941 m disc, area-mean ~0.25.
+   The per-t-bin lift (results §9 table) matches d/7273.5 exactly in shape
+   (gentle, monotone, no saturation), so the authorised mechanism is in
+   force; the mean moved 0.55 -> ~0.25, not 0.19, and the disc's AVERAGE
+   pixel lift is nearly unchanged (R 74->65, B 126->124) because the
+   interior GAINED haze (0 -> 0.11, where the old (1-cosv)^2 was zero)
+   exactly what the rim LOST (1.0 -> 0.37). The rim — the user's
+   "chunks load in blue" edge — is 3x weaker; the nadir is now 0.11 instead
+   of 0. The total haze budget followed the real air column. Reported, not
+   massaged.
+
+10. The 300 m near-vs-solid-class delta-luma is 115.2 after (136.7 before),
+    not the predicted ~41.4, because the solid class at 300 m is ~60%
+    raw-sky show-through (deviation 6: the body mesh is a terrain patch,
+    not the full sphere) and the sky there is the air colour with or
+    without the body haze. The body-only tier gap (near vs the body-mask
+    pixels, the apples-to-apples comparison, the method behind the 41.4)
+    is 45.2 — within ~4 of the prediction, the excess being the 5% haze on
+    real terrain. Both numbers are reported (results §9).
+
+11. lightstate: no re-baseline (deviation 7 stands): wash_detected false =
+    standing; leaks 0 in all grid cells; machine-timing classes within their
+    documented ranges (demoted 1, stragglers 3, vc_diff 4, hole_traj 96
+    flat) — same profile as AC-0510 and round 115 on this build.

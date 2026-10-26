@@ -1,0 +1,156 @@
+{
+ "vantage": ".scratch/AC-0511-gates/render-s0p941.log",
+ "alt": 941.0,
+ "nadir": false,
+ "fog_far": 332.0,
+ "render_edge": 400.0,
+ "u_air_srgb": [
+  208,
+  241,
+  251
+ ],
+ "pos": [
+  10.1420736312866,
+  940.9794921875,
+  10.1420736312866
+ ],
+ "class_means_S0": {
+  "sky": [
+   27.7,
+   62.2,
+   78.0,
+   661700
+  ],
+  "solid": [
+   141.8,
+   205.2,
+   154.0,
+   259900
+  ]
+ },
+ "class_means_S1_body_raw": {
+  "sky": [
+   20.9,
+   57.7,
+   67.4,
+   661700
+  ],
+  "solid": [
+   102.6,
+   179.9,
+   83.6,
+   259900
+  ]
+ },
+ "class_means_S2_sky_neutral": {
+  "sky": [
+   158.5,
+   160.7,
+   160.6,
+   661700
+  ],
+  "solid": [
+   141.8,
+   205.2,
+   154.0,
+   259900
+  ]
+ },
+ "body_pixels_changed_by_S1": 224199,
+ "body_S0_mean": [
+  126.6,
+  201.4,
+  148.3,
+  224199
+ ],
+ "body_S1_mean": [
+  61.0,
+  158.9,
+  35.5,
+  224199
+ ],
+ "body_haze_contribution_S0_minus_S1": [
+  65.58,
+  42.52,
+  112.8,
+  224199
+ ],
+ "body_haze_by_class": {
+  "near": null,
+  "annulus": null,
+  "solid": [
+   54.57,
+   35.22,
+   97.89,
+   186670
+  ],
+  "sky_edge": [
+   120.36,
+   78.87,
+   186.99,
+   37529
+  ]
+ },
+ "pixels_changed_by_S2": 616000,
+ "sky_bg_S0_mean": [
+  27.7,
+  62.2,
+  78.0,
+  661700
+ ],
+ "sky_bg_S2_mean": [
+  158.5,
+  160.7,
+  160.6,
+  661700
+ ],
+ "sky_bg_contribution_S0_minus_S2": [
+  -140.52,
+  -105.82,
+  -88.75,
+  616000
+ ],
+ "showthrough_annulus_S0_mean": null,
+ "showthrough_annulus_S2_mean": null,
+ "showthrough_annulus_S0_minus_S2": null,
+ "solid_ambient_S0_minus_S2": null,
+ "near_ambient_S0_minus_S2": null,
+ "tier_S0": {
+  "near": null,
+  "annulus": null,
+  "solid": [
+   141.8,
+   205.2,
+   154.0,
+   259900
+  ],
+  "sky": [
+   27.7,
+   62.2,
+   78.0,
+   661700
+  ]
+ },
+ "tier_S1_body_raw": {
+  "near": null,
+  "annulus": null,
+  "solid": [
+   102.6,
+   179.9,
+   83.6,
+   259900
+  ],
+  "sky": [
+   20.9,
+   57.7,
+   67.4,
+   661700
+  ]
+ },
+ "near_invariance": {
+  "S0_minus_S1_max": 0,
+  "S0_minus_S2_max": 0,
+  "S0_minus_S1_mean": 0.0,
+  "S0_minus_S2_mean": 0.0
+ }
+}

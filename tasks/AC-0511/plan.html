@@ -1,0 +1,62 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0511 body haze blue tint</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0511 — the blue at altitude is the body's own haze, and it survived the fog removal</h1>
+<p>Coordinator contract. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>Isolate the term with pixels</b>, and check BOTH directions — too much atmosphere and too little are both defects.</p>
+<h2>1. How we got here (the measurement that located this)</h2>
+<p>AC-0510 removed the fog and the wash as instructed. Then it measured the user's own vantage: <b>at 941 m the frames are BYTE-IDENTICAL with fog and wash both off</b>, because the fog window holds no ground at that altitude. So:</p>
+<ul>
+<li>The user photographed <b>LODs that load in looking blue while the satellite LOD does not</b>.</li>
+<li>That blue is <b>NOT fog and NOT wash</b> — both are gone and the pixels did not move.</li>
+<li>What remains is <b>the PLANET BODY'S OWN HAZE plus the SKY</b>: the <code>haz_d</code> air-column/rim term AC-0399 repaired in <code>core/lod_avg.gdshader</code>, which AC-0510 fenced and did not touch.</li>
+</ul>
+<h2>2. Establish the mechanism before changing anything</h2>
+<ol>
+<li><b>2a WHICH TERM MAKES THE BLUE.</b> Candidates: the body's <code>haz_d</code> air-column term; the sky gradient behind the disc (<code>core/aero_sky_gradient.gdshader</code> — <b>NOTE: AC-0483 removed its synthetic horizon this session, so re-read it rather than trusting older notes</b>); or a combination. <b>Isolate ONE TERM AT A TIME</b> — bypass it, re-render, compare the same pixels. That is the AC-0402 method and it is expected here. Report the pixel values for each isolated state.</li>
+<li><b>2b IS WHAT REMAINS DEFENSIBLE?</b> A planet seen from 941 m <b>does</b> have real aerial perspective, so "there is some haze" is not automatically a defect. Measure the <b>magnitude and hue</b> of the tint against the near-field ground colour and state whether it is physically plausible or over-strong/mis-hued. <b>AC-0510 removed the fog and the aerial perspective got STRONGER at 300 m (contrast 7.75 → 17.97)</b>, so at 941 m the current risk may be <b>TOO LITTLE atmosphere rather than too much</b> — <b>check BOTH directions and do not assume the user wants it all removed.</b> The user's words were that the LODs look blue <em>while the satellite does not</em> — that is a <b>MISMATCH</b> complaint, not necessarily a "no atmosphere" request.</li>
+<li><b>2c DO THE TWO TIERS STILL DIFFER?</b> The original complaint is an asymmetry: near LODs blue, satellite not. <b>Measure both in the same frame</b> and report whether they are now treated identically. <b>If they differ, THAT is the defect regardless of magnitude</b> — and unifying them is the fix, not desaturating one of them.</li>
+</ol>
+<h2>3. The requirement</h2>
+<p>From the user's standing position: <b>no atmospheric treatment should make the world look like a different place depending on how far away it is.</b> The tiers must read as ONE world. So the target is <b>consistency</b>, and only secondarily a specific haze strength.</p>
+<h2>3a. ⚠ REPAIR (round 115) — THE MEASUREMENT IS DONE; ONLY THE FIX NEEDS AUTHORISING</h2>
+<p>A medium run measured everything and correctly returned <code>PLAN-INSUFFICIENT</code> because the fix's file was outside this plan's fence. Its findings, which are the substance of this ticket:</p>
+<ul>
+<li><b>THE TERM IS <code>haz_a</code> IN <code>core/satellite_body.gdshader</code> (:213), not in <code>lod_avg.gdshader</code> — <code>lod_avg</code> has been HAZE-FREE since AC-0404.</b> My anchor was stale; the repair records the real site so nobody looks in the wrong file again.</li>
+<li><b>ISOLATION</b> at the 941 m nadir, 477,777 px (91% of the disc): <b>S0 (144.5, 210.2, 172.2) → bypass (70.5, 160.1, 45.9)</b>; the haze contributes <b>(+74.1, +50.1, +126.4)/255</b>, and <b>(+122, +85, +183)</b> at the rim. At 941 m <code>haz_d</code> is ≡ 0, so <b>it is <code>haz_a</code> ALONE</b>. The sky is a separate background blue that tints <b>no</b> terrain (0 terrain px changed when it was isolated), so it is not part of the fix.</li>
+<li><b>THE TIERS DO DIFFER, measured in one frame at 300 m:</b> near <b>(71.3, 119.7, 49.8)</b> against satellite solid <b>(214.5, 248.2, 248.2)</b> — <b>Δluma 136.7</b>. That is the user's mismatch complaint in numbers.</li>
+<li><b>THE HUE IS CORRECT AND THE MAGNITUDE IS NOT.</b> <code>u_air</code> (208,241,251) is the sky's own single-source horizon colour — the right Rayleigh hue. But the haze is <b>~3x too strong at 941 m</b> (<code>haz</code> 0.55 against the game's own sky-model air column of ~0.19) and <b>~22x at the 300 m wall</b> (100% against 0.046 — <code>haz_a</code> saturates at 324 m). <b>Both directions were checked: the risk is TOO MUCH atmosphere, not too little</b>, because the sky is already ~80% space and the near field has been crisp since AC-0510.</li>
+</ul>
+<p><b>THEREFORE THE FIX IS AUTHORISED, AND IT IS A WEAKENING:</b></p>
+<ol>
+<li><b>Make <code>haz_a</code> physical: <code>haz_a = clamp(d / u_air_cm, 0, 1)</code></b> instead of its current saturating curve, so the air column grows with actual depth through the atmosphere rather than reaching 100% at 324 m.</li>
+<li><b>Push <code>u_air_cm = 7273.5 m</code> from <code>Aero.atmosphere_height()</code></b> — use the game's OWN existing atmospheric constant rather than a new magic number. Add the push site and say where it went.</li>
+<li><b>Decide the <code>haz_d</code> WALL BRIDGE explicitly.</b> AC-0399's <code>haz_d</code> rim existed partly to bridge the seam with the ENGINE env fog — and <b>AC-0510 removed that fog this session, so the premise is GONE.</b> So state what <code>haz_d</code> is still for: if it now bridges nothing, say so and remove it or say why it stays. Do not leave a term whose justification was deleted by a later ticket.</li>
+<li><b>Expected outcome to verify, not assume:</b> wall haze 100% → ~5%, and the tier gap <b>Δluma 136.7 → ~41.4</b>, where the residue is <b>real terrain rather than atmosphere</b>. If the measured result differs from that, report the actual numbers.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td><b>THE REAL SITE (added by the §3a repair): <code>haz_a</code> :213, <code>haz_d</code> :231, the mix :266</b></td><td>Edit: the weaken curve (see §3a).</td></tr>
+<tr><td>godot/core/lod_avg.gdshader</td><td><b>STALE ANCHOR — this file has been HAZE-FREE since AC-0404.</b> Kept in the table only so nobody looks here again</td><td>Do NOT edit.</td></tr>
+<tr><td>godot/autoload/aero.gd</td><td><code>atmosphere_height()</code> — the source of the physical air-column scale <code>u_air_cm = 7273.5 m</code></td><td>Add the push (see §3a).</td></tr>
+<tr><td>godot/core/aero_sky_gradient.gdshader</td><td>the sky (<b>re-read — AC-0483 rewrote it this session: 459 → 332 lines, 3 uniforms removed</b>)</td><td>Edit only if 2a names it.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the haze/air uniform push sites</td><td>Read; edit only if a push is the cause.</td></tr>
+<tr><td>godot/autoload/aero*.gd</td><td>the Aero helpers that compute the air colour / haze constants</td><td>Read; edit only if the constant is the cause.</td></tr>
+<tr><td>tasks/AC-0511/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation, streaming residency rules, light ownership, the bake assets, the planet body's geometry or silhouette, the cloud volume, the data JSON files, the aim box. <b>Do not reinstate fog or wash</b> — AC-0510 removed them by user ruling and their return is not this ticket's business.</p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The term is isolated (the point)</td><td>Pixel values at the same vantage with each candidate term bypassed in turn, and a statement of which one produces the blue.</td></tr>
+<tr><td>The tier comparison is measured</td><td>Near-LOD and satellite pixel values <b>in the same frame</b>, before any change, saying whether they differ and by how much.</td></tr>
+<tr><td>The judgement is argued, not asserted</td><td>Whether the remaining haze is defensible aerial perspective or a defect, <b>with the magnitude and hue and a physical-plausibility argument</b> — and explicitly whether the fix is to strengthen, weaken, or merely <b>unify</b> the tiers.</td></tr>
+<tr><td>If changed: before/after</td><td>The same pixel numbers, with a stated threshold. <b>A capture alone is not evidence.</b></td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0511 --arms g0,genhash,lightstate</code> — g0 zero SCRIPT ERROR and zero <b>SHADER</b> ERROR (a shader edit's most likely failure), genhash 25/25, lightstate invariants (leaks 0).</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>BLUR IS OFF BY DEFAULT (user ruling) — do not enable it; it would destroy exactly the tint measurement this ticket needs.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>6. Acceptance</h2><p>The blue-producing term isolated with pixels; the tier asymmetry measured in one frame; a defensibility judgement with magnitude, hue and a physical argument; and either a fix (strengthen / weaken / unify) with before/after numbers or a documented finding that the remaining haze is correct and the asymmetry is elsewhere.</p>
+<h2>7. Risks</h2><p>(1) Assuming "blue = too much atmosphere" when the user's complaint is a <b>mismatch</b> between tiers. (2) Removing all haze and flattening the planet, which AC-0510's own numbers warn against (contrast already rose 7.75 → 17.97 at 300 m). (3) Trusting pre-AC-0483 notes about the sky shader. (4) Editing both shaders at once, making the cause unidentifiable. (5) A shader compile error that only G0 catches.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §4. No reinstating fog or wash. No editing both shaders in one run.</li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0510 removed fog and wash and proved by byte-identical frames at 941 m that neither caused the blue the user photographed; AC-0399 repaired the body's haze mix; AC-0483 removed the sky's synthetic horizon. The remaining candidates are the body's <code>haz_d</code> and the sky behind it.</p>
+</body></html>

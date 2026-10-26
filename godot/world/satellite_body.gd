@@ -966,6 +966,16 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 	_last_ppos = ppos  # AC-0384 diagnostic: cached for the _process report
 	var h_band: float = (ppos + Vector3(0.0, R, 0.0)).length() - R
 	var RB: float = R + float(SEA)
+	# AC-0511: the body's haz_a air-column normalization (u_air_cm) -
+	# the SAME cm the sky's limb term normalizes by (aero_sky_gradient
+	# sky_on): 2*sqrt(rout^2 - (R+SEA)^2) with rout = R + A + 0.25A.
+	# All from Aero's single-source atmosphere (atmosphere_height, env
+	# AWECRAFT_ATMO; the atmo_limb_radius/atmo_limb_falloff helpers that
+	# already feed the sky uniforms) - no new magic number (7273.5 m at
+	# the default A = 1200). Pushed to the materials in the loop below;
+	# the shader's haz_a = clamp(d / u_air_cm, 0, 1).
+	var _rout := Aero.atmo_limb_radius(R) + Aero.atmo_limb_falloff()
+	var u_air_cm := 2.0 * sqrt(maxf(_rout * _rout - RB * RB, 0.0))
 	var ff: float = DayNight.fog_far(render_radius, fog_pct)
 	var edge: float = (float(render_radius) + 1.0) * 16.0
 	# Derived thresholds (no constants - spec precision (a)):
@@ -1073,10 +1083,12 @@ func _tick_view(ppos: Vector3, day_t: float, render_radius: int, fog_pct: float)
 		for m in shader_mats:
 			m.set_shader_parameter("u_fog_far", ff)
 			m.set_shader_parameter("u_render_edge", edge)
-			# AC-0390: the old u_clear_dist (4*edge) uniform is gone -
-			# the shader's edge-continuity term is now the complement of
-			# the existence ramp, windowed by (u_fog_far, u_render_edge)
-			# exactly like the world's own fog.
+			# AC-0390: the old u_clear_dist (4*edge) uniform is gone.
+			# AC-0511: the air-column normalization (see the derivation
+			# above) - the body's haz_d edge-continuity term was removed
+			# with the engine env fog (AC-0510), so the haze is
+			# haz_a = clamp(d / u_air_cm, 0, 1) alone.
+			m.set_shader_parameter("u_air_cm", u_air_cm)
 			m.set_shader_parameter("u_air", u_air)
 			m.set_shader_parameter("u_day", 0.18 + 0.82 * day)
 			m.set_shader_parameter("u_day_gain", 0.82 * day)

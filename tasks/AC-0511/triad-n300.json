@@ -1,0 +1,199 @@
+{
+ "vantage": ".scratch/AC-0511-gates/render-s0n300.log",
+ "alt": 300.0,
+ "nadir": true,
+ "fog_far": 332.0,
+ "render_edge": 400.0,
+ "u_air_srgb": [
+  208,
+  241,
+  251
+ ],
+ "pos": [
+  8.82633399963379,
+  299.982421875,
+  8.82633399963379
+ ],
+ "class_means_S0": {
+  "annulus": [
+   114.7,
+   152.4,
+   115.7,
+   142314
+  ],
+  "near": [
+   71.3,
+   119.7,
+   49.8,
+   61086
+  ],
+  "solid": [
+   214.5,
+   248.2,
+   248.2,
+   718200
+  ]
+ },
+ "class_means_S1_body_raw": {
+  "annulus": [
+   114.4,
+   152.0,
+   115.2,
+   142314
+  ],
+  "near": [
+   71.3,
+   119.7,
+   49.8,
+   61086
+  ],
+  "solid": [
+   178.8,
+   222.7,
+   210.6,
+   718200
+  ]
+ },
+ "class_means_S2_sky_neutral": {
+  "annulus": [
+   87.9,
+   115.6,
+   80.1,
+   142314
+  ],
+  "near": [
+   70.2,
+   118.1,
+   48.8,
+   61086
+  ],
+  "solid": [
+   162.1,
+   178.8,
+   179.0,
+   718200
+  ]
+ },
+ "body_pixels_changed_by_S1": 243796,
+ "body_S0_mean": [
+  193.2,
+  240.0,
+  241.7,
+  243796
+ ],
+ "body_S1_mean": [
+  87.9,
+  164.6,
+  130.7,
+  243796
+ ],
+ "body_haze_contribution_S0_minus_S1": [
+  105.27,
+  75.42,
+  110.93,
+  243796
+ ],
+ "body_haze_by_class": {
+  "near": [
+   2.14,
+   3.22,
+   2.42,
+   137
+  ],
+  "annulus": [
+   49.65,
+   68.35,
+   69.84,
+   944
+  ],
+  "solid": [
+   105.55,
+   75.48,
+   111.15,
+   242715
+  ],
+  "sky_edge": null
+ },
+ "pixels_changed_by_S2": 608160,
+ "sky_bg_S0_mean": null,
+ "sky_bg_S2_mean": null,
+ "sky_bg_contribution_S0_minus_S2": null,
+ "showthrough_annulus_S0_mean": [
+  220.2,
+  249.1,
+  252.3,
+  52112
+ ],
+ "showthrough_annulus_S2_mean": [
+  147.1,
+  149.0,
+  155.0,
+  52112
+ ],
+ "showthrough_annulus_S0_minus_S2": [
+  73.11,
+  100.16,
+  97.3,
+  52112
+ ],
+ "solid_ambient_S0_minus_S2": [
+  67.83,
+  89.78,
+  89.49,
+  554991
+ ],
+ "near_ambient_S0_minus_S2": [
+  64.34,
+  91.9,
+  56.66,
+  1057
+ ],
+ "tier_S0": {
+  "near": [
+   71.3,
+   119.7,
+   49.8,
+   61086
+  ],
+  "annulus": [
+   114.7,
+   152.4,
+   115.7,
+   142314
+  ],
+  "solid": [
+   214.5,
+   248.2,
+   248.2,
+   718200
+  ],
+  "sky": null
+ },
+ "tier_S1_body_raw": {
+  "near": [
+   71.3,
+   119.7,
+   49.8,
+   61086
+  ],
+  "annulus": [
+   114.4,
+   152.0,
+   115.2,
+   142314
+  ],
+  "solid": [
+   178.8,
+   222.7,
+   210.6,
+   718200
+  ],
+  "sky": null
+ },
+ "near_invariance": {
+  "S0_minus_S1_max": 181,
+  "S0_minus_S2_max": 102,
+  "S0_minus_S1_mean": 0.0318894673083849,
+  "S0_minus_S2_mean": 1.6006286219428347
+ }
+}
