@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-27T01:07
+  updated_at: 2026-10-27T04:40
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0512
 - AC-0513
 - AC-0486
 - AC-0487
@@ -35058,15 +35057,15 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - lod
   - satellite
   - continents
   - measurement
   created_at: 2026-10-26T13:23
-  updated_at: 2026-10-26T13:40
-  completed_at: null
+  updated_at: 2026-10-27T04:40
+  completed_at: 2026-10-27T04:40
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -35124,7 +35123,65 @@ intake:
     Filing-time baseline clarification: AC-0510 is completed and AC-0511 is the active body-haze follow-up.
     Additional accepted prerequisite: AC-0511. Capture the baseline only after both accepted outcomes;
     do not duplicate the active haze investigation or assume the original essay''s atmosphere survived
-    it. AC-0511 remains ahead of this series and its ticket/status are not modified by this filing.'
+    it. AC-0511 remains ahead of this series and its ticket/status are not modified by this filing.
+
+
+    CLOSED (round 120). THE FIVE-WAY CLASSIFICATION WAS DONE PER GAP, AND IT SAYS THE GAPS ARE MOSTLY
+    **COLOUR**, NOT MISSING GEOMETRY — which redirects the handover series.
+
+    THE CLASSIFICATION (air pose, frame 560, counted per pixel):
+
+    - **(1) ABSENT DRAWABLE CHUNKS: 49,656 px**, and every one sits on a **tier-3 NO-DATA chunk** (a 960-chunk
+    ring under the annulus). So this cause is real and precisely located.
+
+    - **(2) DISTANCE DISCARD: 0** — no tier-4 data exists past the edge yet.
+
+    - **(3) SOURCE RESOURCE DELAY: 0 visible** (2 delay chunks project below the frame).
+
+    - **(4) GEOMETRY MISMATCH: 0 gap pixels** in the image (census-side only).
+
+    - **(5) ENDPOINT COLOUR MISMATCH: 151,371 px — 61.4% OF THE EXTERIOR READS AS SKY WHILE THE BODY IS
+    DRAWN.** Traced to **AC-0511''s haze endpoint**.
+
+    THAT LAST NUMBER IS THE TICKET: the largest apparent "gap" is not absent landscape at all, it is the
+    body being drawn in a colour the sky also uses, so it disappears into it. Building more chunks would
+    not have fixed it, and the fog that used to hide it was masking a colour identity rather than a hole.
+    Anyone who had skipped the classification and gone straight to "fill the gaps" would have optimised
+    the wrong 61%.
+
+    SIGNED AND PROJECTED ERROR ON THE NAMED CASES, which is what makes the (4) signature concrete: **cliff
+    −7.6 to −8 m, projecting to 11.9-14.5 px**; coast **−4 to +1 m, under 7 px**; and two systematic terms
+    worth more than any single case — **a −1 m chart bias (p50 −1.0) and a 2 m z-fight inset**. A systematic
+    chart bias is a different class of defect from a local mismatch, and it should be checked before any
+    local fix.
+
+    THE TWO FIXTURES BOTH DID THEIR JOB: the **5 s held publication** (start frame 300, end hold_n=127)
+    showed **458 px of suppressed slabs at s300**, recovering to 490 px by s301 against a 40 px no-hold
+    base — i.e. cause (3) isolated by construction, as the fixture was designed to do. And **the negative
+    control ROSE: the exterior-gap counter went 49,656 -> 296,362, a 6.0x rise whose delta is exactly
+    the 246,706-px exterior the body covered, with the missing-chunk component identical in both arms.**
+    The counter can see this class of defect; that was not previously established because **no exterior-gap
+    counter existed at all** — the builder had to create one, which is worth recording since the measurement
+    depended on new instrumentation being proved sensitive in the same run.
+
+    ONE SUB-TICKET CAME BACK PLAN-INSUFFICIENT, CORRECTLY: the **face-seam case could not be measured
+    from the intended vantage** — at 498 m altitude the minimum hit distance is 498 m against an edge
+    at 400 m, so the chunk seam is never in-frame (measured min t 509 m, zero face chunks ever created).
+    Rather than report a number from a vantage that cannot show the thing, the builder said so and put
+    the correction in the protocol. It did, however, measure a **BODY-CHART SEAM 8x LUMINANCE STEP at
+    the line** — recorded below because it matters elsewhere.
+
+    RELEVANT TO AC-0438 (currently blocked): this run independently observed an **8x luminance step at
+    the body-chart seam**. AC-0438''s line sits at face 1''s final texel-column band and has survived
+    wrap, mip, anisotropy and UV-overshoot elimination. A seam step of that magnitude at the chart boundary
+    is the strongest independent corroboration that ticket has had, and whoever resumes it should start
+    here.
+
+    HONESTY AND GATES: genhash **25/25 byte-identical to the AC-0510 reference with envs both off and
+    on**; **mesh output was NOT byte-compared and that gap is stated rather than glossed** (deviation
+    8). g0 **0 script / 0 shader**, residency leak False/STABLE, GATE_EXIT=0. All five anchors rechecked
+    and reported before measuring. Every figure is llvmpipe/development-only with `AC-0512-windows-protocol.md`
+    handing the Windows re-take over.'
   comments: []
 - id: AC-0513
   title: handover-p0-hdr-depth-water-and-current-frame-render-feasibility

@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0512 handover coverage baseline</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0512 — measure the pop-in and gaps that fog was hiding</h1>
+<p>Coordinator contract (written by me; filed by another agent). <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>MEASUREMENT ONLY.</b> The deliverable is a <b>diagnosis of what the gaps actually are</b>, not a fix.</p>
+<h2>1. Why this exists now</h2>
+<p><em>"I want the remaining pop-in and gaps measured after fog and mist are removed, so the fix addresses the actual missing landscape rather than disguising it."</em></p>
+<p><b>AC-0510 removed the fog and the mist one round before and MEASURED WHAT THEY WERE HIDING:</b> per-chunk slab edges at the frontier (wall-jump <b>9.5 → 20.0</b> mean, max 153 → 249) and part of the aerial perspective (contrast 7.75 → 17.97). It reported those as findings and did <b>not</b> restore the fog. This ticket is the follow-up: <b>work out what those gaps ARE</b> before anyone tries to close them.</p>
+<h2>2. THE CORE TASK — distinguish five different things that all look like "a gap"</h2>
+<p>The filing names five causes, and confusing them is how a fix gets built for the wrong one:</p>
+<ol>
+<li><b>ABSENT DRAWABLE CHUNKS</b> — the geometry was never built.</li>
+<li><b>DISTANCE DISCARD</b> — it was built and then culled by distance.</li>
+<li><b>SOURCE RESOURCE DELAY</b> — the data exists but the draw is late (published but not yet drawn).</li>
+<li><b>GEOMETRY MISMATCH</b> — both surfaces draw but their heights disagree (a step or a lip).</li>
+<li><b>ENDPOINT COLOUR MISMATCH</b> — the geometry agrees but the colours do not.</li>
+</ol>
+<p><b>For each observed gap, say WHICH of the five it is, with the evidence that discriminates it.</b> A gap that exists in the geometry stream but not in the image is (2) or (3); one visible in both but with matching colour is (4); one with matching silhouette but a colour step is (5); one with nothing behind it is (1). <b>This classification IS the deliverable</b>, and it must be per-gap, not an aggregate impression.</p>
+<h2>3. What to measure</h2>
+<ul>
+<li><b>SIGNED surface error and PROJECTED displacement</b> between the satellite tier and the detail tier — signed, because a step up and a step down are different bugs and a magnitude would hide which. Projected, because a 1 m error seen at 900 m is a different defect from 1 m at 30 m.</li>
+<li><b>On all of these cases, named by the filing:</b> <b>coast</b>, <b>cliff</b>, <b>home/face seams</b>, and <b>all four near tiers</b>. The seam case matters especially — this session has already found a kilometres-scale face-boundary bug (AC-0482) that the home face could not show.</li>
+<li><b>The AC-0510 frontier numerics</b> as the starting point (wall-jump 9.5 → 20.0, contrast 7.75 → 17.97), so the new work extends a measured baseline rather than replacing it.</li>
+</ul>
+<h2>4. The two fixtures the filing requires (both are gates, not extras)</h2>
+<ol>
+<li><b>A 5-SECOND HELD-PUBLICATION FIXTURE.</b> Hold publication for a known interval and observe what the player sees during it. That isolates <b>source resource delay (3)</b> from the geometric causes — the data exists but is deliberately late, so anything visible during the hold is cause (3) by construction.</li>
+<li><b>AN INJECTED MISSING-FALLBACK NEGATIVE CONTROL.</b> <b>Expected: the exterior-gap counter RISES.</b> This is the meter-sensitivity proof, and it is mandatory for the same reason it was mandatory in AC-0484, AC-0485 and AC-0527 — <b>an instrument never shown to be able to register the defect is not evidence</b>. If the counter does <b>not</b> rise when the fallback is removed, the counter cannot measure this class of defect at all and that is the finding.</li>
+</ol>
+<h2>5. Anchors to recheck (do not trust the filing's line references)</h2>
+<table><tr><th>Anchor</th><th>Why</th></tr>
+<tr><td><code>satellite_body.gd::process_frame</code></td><td>where the satellite tier publishes/draws per frame</td></tr>
+<tr><td><code>satellite_body.gdshader::fragment</code></td><td>the satellite tier's own shading path (<b>AC-0511 changed the body's haze terms this session</b> — re-read, do not assume)</td></tr>
+<tr><td><code>world.gd::_lod_tier_of</code></td><td>the tier decision</td></tr>
+<tr><td><code>world.gd::_low_handoff</code></td><td>the handover rule (AC-0451: the near field draws until the body actually covers it)</td></tr>
+<tr><td><code>world.gd::_ring_rebuild_sector</code></td><td>the ring rebuild</td></tr>
+</table>
+<p><b>Three of my plans this session had stale anchors</b> (a haze term that had moved, a shader that had been rewritten, a file that had shrunk by 42 lines), so <b>locate by symbol and report what you found before measuring.</b></p>
+<h2>6. Metadata to record with every trial</h2>
+<p>The filing is specific: <b>actual screenshot/reproduction pose, seed, accepted generator version, settings, build, and the Windows GPU.</b> On this box the GPU clause becomes "llvmpipe proxy, development-only" — <b>label it and hand the Windows run over</b>, as AC-0484 and AC-0485 did.</p>
+<h2>7. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/world/world.gd</td><td><code>_lod_tier_of</code>, <code>_low_handoff</code>, <code>_ring_rebuild_sector</code> (grep)</td><td>Edit only to add a <b>default-off</b> instrument/fixture.</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td><code>process_frame</code></td><td>Edit only for the held-publication fixture, default-off.</td></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>the fragment path (<b>re-read — AC-0511 changed the haze</b>)</td><td>READ ONLY unless an instrument needs it.</td></tr>
+<tr><td>docs/satellite-lod-handover-plan.html</td><td>baseline, verification, budgets</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0512/</td><td>journal, deviations, results, protocol</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation behaviour, meshing, lighting, residency rules, the bake assets, the fog/wash (removed — <b>do not reinstate</b>), the body's haze (AC-0511 set it), the data JSON files, the aim box. <b>Instrumentation and fixtures must be inert when off.</b></p>
+<h2>8. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The five-way classification (the point)</td><td>Each observed gap attributed to one of the five causes <b>with the discriminating evidence</b> — per gap, not an aggregate.</td></tr>
+<tr><td>Signed, projected error measured</td><td>Signed surface error and projected displacement on <b>coast, cliff, home/face seams and all four near tiers</b>, extending AC-0510's frontier numbers rather than replacing them.</td></tr>
+<tr><td>The held-publication fixture works</td><td>A 5 s hold observed and reported, isolating cause (3) by construction.</td></tr>
+<tr><td>The negative control RISES (mandatory)</td><td>With the fallback missing, the <b>exterior-gap counter rises</b>. <b>Quote the before/after counter values.</b> If it does not rise, say so plainly — that means the counter cannot see this class of defect.</td></tr>
+<tr><td>Instruments are inert when off</td><td><b>Instrumentation-off generation and mesh outputs are UNCHANGED</b> — state genhash 25/25 and say whether mesh output was compared too.</td></tr>
+<tr><td>Metadata complete and labelled</td><td>Pose, seed, generator version, settings, build recorded; GPU marked llvmpipe/development-only with the Windows protocol handed over.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0512 --arms g0,genhash,residency</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25, residency leak false / stable.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>Blur is OFF by user ruling — do not enable it; it would erase exactly the 1-pixel seams being measured.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>, ~1200 s each, SERIAL — <b>plan the render set before starting rather than re-rendering speculatively</b>. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start, and <b>treat a contended timing trial as invalid rather than averaging it in</b>.</p>
+<h2>9. Acceptance</h2><p>Every observed gap classified into one of the five causes with discriminating evidence; signed and projected error measured on the named terrain cases and all four near tiers; the 5 s held-publication fixture reported; the missing-fallback negative control demonstrably raising the gap counter (or a plain statement that it cannot); instruments inert when off with outputs unchanged; full metadata, development-only labelling and a Windows handover.</p>
+<h2>10. Risks</h2><p>(1) Aggregating the gaps instead of classifying them, which makes the later fix a guess. (2) Reporting an unsigned magnitude, hiding whether the surface is high or low. (3) A negative control that does not rise, quietly not mentioned. (4) Reinstating fog to make the picture look better — <b>forbidden</b>. (5) Trusting stale anchors. (6) Re-rendering speculatively at ~20 min a shot. (7) Presenting llvmpipe numbers as the product.</p>
+<h2>11. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No fixes, no behaviour changes, no reinstating fog/wash. Only default-off instrumentation and fixtures.</li>
+<li>If the plan cannot be applied — an anchor is gone, a fixture cannot be built, or a cause cannot be discriminated — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT with what you did establish. Do not invent a measurement.</li>
+</ul></div>
+<h2>12. Resume point</h2><p>Handover slice H00, depending on AC-0510 (which removed fog/mist and measured the frontier edges they had been hiding: wall-jump 9.5 → 20.0) and AC-0485 (startup/cache baseline: warm ≈ cold, 94% of wall time is pacing). AC-0451's handover rule says the near field draws until the body covers it, and its earlier measurement found the aerial see-through was mostly UNBUILT CHUNKS rather than the handover — cause (1) in this ticket's taxonomy.</p>
+</body></html>

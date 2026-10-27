@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>AC-0512 H00 — frontier gap diagnosis (results)</title>
+<style>
+body{font:14px/1.45 -system-ui,"Segoe UI",sans-serif;margin:2em auto;max-width:1100px;color:#1a1a1a}
+table{border-collapse:collapse;margin:1em 0}td,th{border:1px solid #999;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#eee}code,pre{background:#f4f4f4;padding:1px 4px}pre{padding:8px;overflow-x:auto}
+.ok{color:#0a0}.bad{color:#a00}.warn{color:#a60}
+h2{border-bottom:2px solid #333;margin-top:2em}
+</style></head><body>
+
+<h1>AC-0512 · handover slice H00 — frontier gap diagnosis</h1>
+<p><b>Role: MEASUREMENT ONLY.</b> No generation/meshing/lighting/residency/bake/fog/aim-box code changed.
+Deliverable: a per-gap diagnosis of the frontier gaps into the five causes, with the two mandatory
+fixtures (held publication, injected missing fallback) and the AC-0510 frontier numerics re-measured
+on the same pose. Contract: <code>tasks/AC-0512/plan.html</code>; deviations:
+<code>AC-0512-deviations.txt</code>; Windows re-take protocol:
+<code>AC-0512-windows-protocol.md</code>.</p>
+
+<p class="warn"><b>GPU clause — every number on this page is llvmpipe proxy, development-only.</b>
+The proxy renders the geometry/layout correctly but the shipped Forward+ look is a Windows fact.
+Re-take procedure: <code>AC-0512-windows-protocol.md</code>.</p>
+
+<h2>1 · Gates</h2>
+<table>
+<tr><th>Gate</th><th>Requirement</th><th>Result</th></tr>
+<tr><td>(a) per-gap five-way attribution</td><td>every gap pixel classified (1)–(5) with evidence</td>
+<td class="ok">PASS — §4; detector in <code>.scratch/AC-0512/gaps.py</code>, per-pixel census lookup, 40 evidence samples per case in <code>.scratch/AC-0512-gates/analysis-&lt;case&gt;.json</code></td></tr>
+<tr><td>(b) signed + projected numbers, named cases</td><td>err = sat_h − (top+1) m; px = err/d·(H/2)/tan(fov/2); coast / cliff / seam; tiers 0–3</td>
+<td class="ok">PASS — §6. Tiers with samples: 0, 1 (air cases), 0, 4 (seam census); tiers 2–3 hold no data in the census at these poses (the visible frontier sits on the tier-3 <i>no-data</i> ring, §4), so no 2/3 rows exist to report.</td></tr>
+<tr><td>(c) held publication observed</td><td>5 s window, suppressed count logged, before/after frame</td>
+<td class="ok">PASS — §5. START frame 300 / END suppressed <b>127</b>; s300/s301/final snaps diffed.</td></tr>
+<tr><td>(d) negative-control before/after quoted</td><td>exterior gap counter must rise</td>
+<td class="ok">PASS — §4.3. BEFORE (base) <b>49,656</b> → AFTER (bodyoff) <b>296,362</b> (6.0×; the rise is exactly the exterior area the body covered).</td></tr>
+<tr><td>(e) instrumentation-off generation + mesh unchanged</td><td>genhash 25/25; state whether mesh output compared</td>
+<td class="ok">PASS (stated limitation). genhash 25/25 byte-identical to the AC-0510 reference, run both with the envs OFF (gate) and ON (test5). <b>Mesh output NOT separately byte-compared</b> — the off path is one bool check per frame + one if in <code>threadmesh_handoff</code>; genhash covers the generated data. Deviation 8.</td></tr>
+<tr><td>(f) metadata complete and labelled</td><td>pose per trial, seed, generator, settings, build, GPU label</td>
+<td class="ok">PASS — §3.</td></tr>
+<tr><td>(g) <code>gate_run.py AC-0512 --arms g0,genhash,residency</code></td><td>g0 zero SCRIPT/SHADER ERROR; genhash 25/25; residency leak false/stable</td>
+<td class="ok">PASS, GATE_EXIT=0 (job bash-1523).</td></tr>
+</table>
+<table>
+<tr><th>arm</th><th>rc</th><th>script/shader errors</th><th>detail</th><th>time</th><th>log</th></tr>
+<tr><td>g0</td><td class="ok">0</td><td>0 / 0</td><td>ok=true</td><td>3 s</td><td><code>.scratch/AC-0512-gates/g0-r1.log</code></td></tr>
+<tr><td>genhash</td><td class="ok">0</td><td>0 / 0</td><td>25/25 hashes, diff-identical to the AC-0510 reference</td><td>4 s</td><td><code>.scratch/AC-0512-gates/genhash-r1.log</code></td></tr>
+<tr><td>residency</td><td class="ok">0</td><td>0 / 0</td><td>leak=<b>False</b>, verdict <b>STABLE</b>, home evictions 220 (normal churn), face evictions 0, 408 frames, steady face 74 / home 93</td><td>17 s</td><td><code>.scratch/AC-0512-gates/residency-r1.log</code></td></tr>
+</table>
+
+<h2>2 · Anchor recheck (all five intact, current tree)</h2>
+<table>
+<tr><th>Anchor</th><th>Location</th><th>State</th></tr>
+<tr><td>body per-frame driver <code>process_frame</code></td><td><code>godot/world/satellite_body.gd:827</code> (called from world.gd:6455/6461)</td><td class="ok">intact</td></tr>
+<tr><td>body shader fragment (AC-0511 haz_a-only)</td><td><code>godot/core/satellite_body.gdshader:205</code> — <code>op = smoothstep(u_fog_far, u_render_edge, d)</code> at :218, <code>haz = haz_a</code> at :250</td><td class="ok">intact</td></tr>
+<tr><td><code>_lod_tier_of</code></td><td><code>godot/world/world.gd:2006</code></td><td class="ok">intact</td></tr>
+<tr><td><code>_low_handoff</code></td><td><code>godot/world/world.gd:3039</code></td><td class="ok">intact</td></tr>
+<tr><td><code>_ring_rebuild_sector</code></td><td><code>godot/world/world.gd:1816</code></td><td class="ok">intact</td></tr>
+<tr><td>face-seam fallback D2 <code>_patch_edge_ring</code></td><td><code>godot/world/world.gd:15920</code> (was :15575 before this ticket's default-off instrumentation block — shifted, not modified)</td><td class="ok">intact</td></tr>
+</table>
+<p>There is <b>no pre-existing exterior-gap counter</b> in the engine — the meter in §4.3 was built for this
+ticket (in Python, <code>gaps.py</code>; no engine code involved).</p>
+
+<h2>3 · Trial metadata</h2>
+<table>
+<tr><th></th><th>base</th><th>hold</th><th>bodyoff</th><th>seam</th></tr>
+<tr><td>flow / envs</td><td><code>AIR_ALT=300 AIR_PITCH=30 AC0512=1</code></td><td>base + <code>AC0512_HOLD=5000 AC0512_HOLD_AT=300 SNAP_STEPS=300,301,600</code></td><td>base + <code>SAT_BODY=0</code></td><td><code>AC0512=1 AIM=2890,500,0,-1.5708,-0.52</code></td></tr>
+<tr><td>pose (measured, RESULT / census)</td><td colspan="3" style="text-align:center">pos [8.826, 299.982, 8.826], aim [−0.86704, −0.49823, −0.001026], up [−0.49823, 0.86704, 0.00178], fov 99 — identical across the three air runs</td><td>pos [2974.42, −625.34, −1.25] (flat ≈ 2890, radial alt 498 m), measured basis fwd [0.322, −0.947, −0.0004] / up [0.947, 0.322, −0.0006], fov <b>99.0</b> (converged; the 91.89 figure from the pose census was the pre-kick value)</td></tr>
+<tr><td>RESULT fog / edge</td><td colspan="4" style="text-align:center">fog_far 332 / render_edge 400 (R24/F83), R 4000, spawn [8.5, 141, 8.5]</td></tr>
+<tr><td>census at</td><td>frame 560 (late; drain cap)</td><td>holdend (frame ≈312, hold_n=127) + late 560</td><td>frame 560 (late)</td><td>wall pose+10.5 s (drain cap, aim flow = 600 physics frames @ 60 Hz; the band never settled — “SNAPDRAIN not fully drained after 600 frames”)</td></tr>
+<tr><td>render</td><td colspan="4" style="text-align:center">xvfb + llvmpipe (Vulkan lvp_icd), 1280×720, seed 44 (res:// bake, body LOADED 0.5–1.3 s), <b>GPU: llvmpipe proxy, development-only</b>, blur OFF (user ruling), CLOUDS=0, TIME=0.5, RADIUS=24, FOG_PCT=83, SNAP_DRAIN=600</td></tr>
+</table>
+<p>Build: checkout <code>8f45f96</code> + the uncommitted worktree of this session (the other session's
+dirty files untouched; no git ops). Generator identity: genhash 25/25, byte-identical to the AC-0510
+reference. All four renders rc=0, 0 SCRIPT/SHADER ERROR, SNAP + RESULT present
+(<code>.scratch/AC-0512-gates/render-&lt;case&gt;.log</code>).</p>
+
+<h2>4 · The diagnosis — per-gap five-way</h2>
+<p><b>Detector</b> (deviation 10): presence/absence is GEOMETRIC truth (fixture state + the in-engine
+census), never observed colour — the body's haze endpoint is deliberately sky-matched (AC-0511), so a
+colour test cannot discriminate body-present from body-absent in the solid region. Per pixel the census
+says: data? tier? drawn? signed sat−detail error? The census is the per-column truth; the image only
+supplies the geometry (ray per pixel vs the planet sphere) and the class (near t&lt;332 / annulus
+332–400 / solid ≥400).</p>
+
+<h3>4.1 Air pose (base / hold / bodyoff — identical world: 1401 home chunks, 0 face)</h3>
+<table>
+<tr><th>Class</th><th>pixels</th><th>share of hit</th></tr>
+<tr><td>sky (ray miss)</td><td>486,998</td><td>—</td></tr>
+<tr><td>near (t &lt; 332)</td><td>36,286</td><td>8.3 %</td></tr>
+<tr><td>annulus (332 ≤ t &lt; 400)</td><td>83,924</td><td>19.3 %</td></tr>
+<tr><td>solid (t ≥ 400)</td><td>314,392</td><td>72.3 % (AC-0510 measured 74.75 % of disc — same pose, build drift)</td></tr>
+</table>
+<p><b>Streaming state at frame 560</b> (all three air censuses data-identical — the body does not affect
+streaming): 145 data chunks (41 tier 0 + 104 tier 1, the ~7×7 patch around spawn), a <b>960-chunk
+tier-3 ring with NO DATA</b> (taxi 17–24), 296 tier-4 chunks (no data), 2 tier-1 delay chunks
+(cols −1,5 / 0,5, top 126). The visible annulus (t 332–400 ↔ taxi ≈ 21–25) sits exactly on that
+no-data tier-3 ring.</p>
+<table>
+<tr><th>Cause</th><th>base px</th><th>Evidence (per gap)</th></tr>
+<tr><td><b>(1) absent drawable chunks</b></td><td class="bad"><b>49,656</b> (near 3,994 + annulus 45,662)</td><td>every one of them lands on a tier-3 chunk with <code>has_data=false</code> — “col cx,cz: tier 3, NO DATA (never built)”. The streaming frontier (tier 1) is ~12 chunks inside the visible annulus (tier 3); the body stands in behind (visible where its chart is saturated: the 45,662-px annulus band in base.png), or the body itself is sky-like there.</td></tr>
+<tr><td>(2) distance discard</td><td>0</td><td>no visible gap pixel sits on a tier-4 chunk <i>with data</i> (discard counter = 0). (2) is invisible at this pose by construction: the tier-4 data itself has not been streamed yet — the designed discard can only show once data exists past the edge.</td></tr>
+<tr><td>(3) source resource delay</td><td>0 visible</td><td>the two delay chunks (cols −1,5 / 0,5, tier 1, top 126) project to screen <b>y = 791 / 891 — below the 720 px frame</b> at this pose (verified by ray projection), so they contribute no visible gap. (3) is demonstrated by the fixture instead: §5 (458 px of slab-level absence at s300, recovered).</td></tr>
+<tr><td>(4) geometry mismatch</td><td>0 gap px (but present in the census, §6)</td><td>no drawn visible column disagrees with the satellite by ≥0.75 m at a <i>gap</i> pixel (drawn columns are not gaps — they render in both A and B). The (4) signature lives in the census itself: cliff columns err −8 m (§6).</td></tr>
+<tr><td><b>(5) endpoint colour mismatch</b></td><td class="warn"><b>151,371</b> solid px (61.4 % of the 246,706-px exterior)</td><td>exterior pixels that <b>read as sky while the body is drawn</b> (op = 1 past the edge): the AC-0511 haze endpoint + sky-coloured chart regions (snow/ice/sea). Geometry present, colour absent. In bodyoff the same region is 100 % sky by the fixture — the two are indistinguishable by colour, which is exactly the (5) class.</td></tr>
+</table>
+<p>hold final frame: identical split (49,656 / 0 / 0 / 0 / 151,371). hold at s300: 151,345 sky-like +
+the 458-px suppressed-slab set (§5).</p>
+
+<h3>4.2 Seam case (home/face boundary vantage)</h3>
+<p class="warn"><b>PLAN-INSUFFICIENT: the seam fixture as planned cannot place the home/face <i>chunk</i>
+seam in the near band.</b> plan.html seam line (“flat 2890 m from the pole, 500 m altitude, facing the
+edge”): at 498 m radial altitude the minimum possible hit t is the altitude itself — <b>498 m &gt;
+render_edge 400 m</b>, so no near-field chunk can ever be in frame. Measured: <b>min hit t in the seam
+frame = 509 m</b>; 100 % of the frame is solid (body). The chunk-system patch edge (flat 3136) projects
+to t ≈ 560–700 m — body territory. A pose that brings the boundary inside t &lt; 400 (lower altitude and/or
+closer flat) is required to measure the chunk seam; stated for the Windows re-take
+(<code>AC-0512-windows-protocol.md</code>).</p>
+<p>What the seam frame DID establish (all measured):</p>
+<table>
+<tr><th>Finding</th><th>Number</th></tr>
+<tr><td>frame content</td><td>min t 509 m; near/annulus band (t &lt; 400): <b>0 pixels</b>; the drawn 5×5 home patch (19 drawn chunks) is below the frame</td></tr>
+<tr><td>face chunks at the vantage</td><td><b>0 in the chunk dict</b> (late census: 2802 home / 0 face; nodata 1064, delay 22, discard 41, drawn 19) — the edge-crossing ensure (world.gd:16206–16211) arms when the player's home column reaches the edge column; the player sits at col 180, edge ≈ 196</td></tr>
+<tr><td>the visible vertical line (x ≈ 640)</td><td>= the home/face boundary (chunk patch edge flat 3136 and the 45° chart line both project there — the vantage faces the edge straight on) rendered <b>in the body</b>: both sides of the line are the satellite chart</td></tr>
+<tr><td>body-chart seam discontinuity</td><td>4-px crossing jump |ΔL|: mean <b>51.35</b> / p95 137.26 / max 177.79 vs the 6.60 / 18.89 / 107.07 baseline at x=500 — an 8× luminance step at the line; 1-px adjacent contrast at the line: left side 10.11 vs right side 52.98</td></tr>
+<tr><td>home-side edge columns (cx 190–196)</td><td>no data in the census (the edge strip is inside the 1064-chunk no-data ring) — the near-field side of the seam has not been streamed either</td></tr>
+<tr><td>seam census error rows</td><td>tier 0: n 9,456, err mean −3.36, min −8, max +1; tier 4: n 40, mean −1.6; cliff (step ≥24): n 6, all err −8, px 3.11</td></tr>
+</table>
+<p>Seam classification of its gap set: the (t &lt; edge &amp; ~terrain) gap set is <b>empty</b> (no near-band
+pixels at all); the exterior (t ≥ edge) is the body by design in this case (body ON) — its chart-seam
+step above is the (4)/(5)-class signature at the boundary, measured at pixel level, with the geometry
+half (home side) carried in the census rows.</p>
+
+<h3>4.3 Negative control — the exterior-gap counter (gate d)</h3>
+<table>
+<tr><th></th><th>BEFORE (base, body on)</th><th>AFTER (bodyoff, SAT_BODY=0)</th><th>Δ</th></tr>
+<tr><td><b>exterior_gap_counter</b></td><td><b>49,656</b></td><td><b>296,362</b></td><td class="ok">+246,706 (6.0×) — the counter RISES, by exactly the exterior-absent area</td></tr>
+<tr><td>exterior absent area (t ≥ edge)</td><td>246,706 (body present — not counted)</td><td>246,706 (body removed by the fixture — counted)</td><td>—</td></tr>
+<tr><td>missing-chunk pixels (t &lt; edge, no drawn chunk)</td><td>49,656</td><td>49,656</td><td>identical — the fixture touches only the body, not the chunks</td></tr>
+<tr><td>sky-like exterior (reads as sky, supplementary)</td><td>151,371 (61.4 %)</td><td>246,706 (100 %)</td><td>the (5) endpoint measurement</td></tr>
+</table>
+<p>Interpretation: with the fallback injected, the exterior surface is absent over 296,362 silhouette
+pixels — 69.5 % of the 425,058-px hit region — while before the injection the body covered that whole
+exterior and only the 49,656 missing-chunk pixels below the edge were true gaps. The body <i>is</i> the
+exterior fallback, quantified.</p>
+
+<h2>5 · Held-publication fixture (gate c — isolates cause 3)</h2>
+<table>
+<tr><th>Measure</th><th>Value</th></tr>
+<tr><td>window</td><td>START frame 300 (logged), END at 5000 ms wall — suppressed publications <b>hold_n = 127</b> (logged; data/mat entries pass, only mesh attach is suppressed — <code>threadmesh_handoff</code> gate, world.gd)</td></tr>
+<tr><td>s300 vs s301 (adjacent, in-window)</td><td>13 px differ (max Δ 30) — the frame is frozen while publishes are held</td></tr>
+<tr><td>s300 vs base (no-hold steady state)</td><td><b>458 px</b> (max Δ 24) — the suppressed slabs: 458 px of near surface absent during the window, inside drawn chunks (slab-level, cause 3 by construction of the gate)</td></tr>
+<tr><td>s301 vs final (s600)</td><td>490 px — the held attaches land after the window closes</td></tr>
+<tr><td>final vs base</td><td>40 px (max Δ 80) — steady state recovered; the hold delayed, never lost</td></tr>
+<tr><td>holdend census (frame ≈312)</td><td>nodata 960 / delay 2 / discard 0 / drawn 143 — identical to the no-hold baseline at the same frame: at chunk granularity the 127 suppressed slab publishes re-attach within ~12 frames (124/127), so the chunk counters don't move; the 458 px are the slab-level analogue, measured by the frame diff</td></tr>
+</table>
+
+<h2>6 · Signed satellite−detail error + projected displacement (gate b)</h2>
+<p>err = sat_h − (top+1) m (satellite-tier height vs the detail column top+1); px = |err|/d · (H/2)/tan(fov/2)
+at the sample's distance. Census-derived, per sample column (air cases: tier 0–1 all 256/9 samples; the
+identical numbers in base/hold/bodyoff = same world).</p>
+<table>
+<tr><th>case</th><th>n</th><th>err mean / p50 / p05 / p95</th><th>min / max</th><th>neg / zero / pos</th><th>px mean / p95 / max</th></tr>
+<tr><td>air · tier 0</td><td>10,347</td><td>−1.21 / −1.0 / −6.0 / 0.0</td><td>−8 / +1</td><td>7083 / 3220 / 44</td><td>2.31 / 11.85 / 16.27</td></tr>
+<tr><td>air · tier 1</td><td>25,822</td><td>−1.55 / −1.0 / −7.0 / 0.0</td><td>−8 / +12</td><td>17301 / 8363 / 158</td><td>2.68 / 12.40 / 18.73</td></tr>
+<tr><td>air · <b>coast</b> (|top−126| ≤ 3, tid ∉ {water 5, lava 24})</td><td>1,208</td><td>−1.12 / — / −2.0 / 0.0</td><td>−4 / +1</td><td>—</td><td>1.84 / — / 6.88</td></tr>
+<tr><td>air · <b>cliff</b> (neighbour chunk-centre step ≥ 24)</td><td>39</td><td>−7.56 / — / −8.0 / −6.9</td><td>−8 / −6</td><td>—</td><td>11.86 / — / 14.45</td></tr>
+<tr><td>seam census · tier 0</td><td>9,456</td><td>−3.36 / −2.0 / −8.0 / 0.0</td><td>−8 / +1</td><td>7663 / 1690 / 103</td><td>1.34 / 3.18 / 3.19</td></tr>
+<tr><td>seam census · tier 4</td><td>40</td><td>−1.60 / −1.0 / −8.0 / 0.0</td><td>−8 / 0</td><td>29 / 11 / 0</td><td>0.16 / 0.80 / 0.82</td></tr>
+<tr><td>seam · cliff (step ≥ 24)</td><td>6</td><td>−8.0 / — / −8.0 / −8.0</td><td>−8 / −8</td><td>—</td><td>3.11 / — / 3.11</td></tr>
+</table>
+<p><b>Read</b>: (i) a systematic −1 m bias — the satellite chart sits ~1 m <i>below</i> the detail
+top+1 median in both tiers (err p50 = −1.0; ~31 % of samples exactly −1, ~31 % exactly 0 — the body
+mesh additionally sits 2 m radially inside for the z-fight fix, so the <i>visible</i> body runs ~2–3 m
+low against the detail surface at flat ground); (ii) cliffs disagree by 7.6–8 m (satellite lower) — the
+1024² chart undersamples steep walls: that is the (4) geometry-mismatch signature, projected 11.9–14.5 px
+at air distances, 3.1 px at seam distances; (iii) coasts agree within −4…+1 m (&lt;7 px) — the (5)
+endpoint class dominates the flat/sea frontier, where the visible problem is the sky-like haze, not
+height.</p>
+
+<h2>7 · AC-0510 frontier numerics, re-measured on the same pose (gate: extend)</h2>
+<p>Definitions taken verbatim from <code>.scratch/AC-0510/frontier.py</code>: wall jump = 1-px horizontal
+|ΔL| where BOTH pixels are near/annulus and the right pixel's t ∈ [ff−3, ff+6]; contrast = 1-px
+horizontal |ΔL| over same-class hits, binned on the midpoint t; luma = Rec.709. The AC-0510 “after-pitch”
+case used this same pose (air alt 300, pitch 30, R24/F83); the AC-0512 images are <i>not</i>
+byte-identical to the AC-0510 PNGs (build drift between Oct 26 and today), so the deltas below are
+build drift + the AC-0511 haze change, on one pose.</p>
+<table>
+<tr><th>measure (t band)</th><th>AC-0510 after</th><th>AC-0512 base</th><th>AC-0512 bodyoff</th><th>note</th></tr>
+<tr><td>wall jump (≈329–338 m band) mean / p95 / max, n=1,574</td><td>20.0 / 69.0 / 249.3</td><td>23.21 / 110.16 / 205.64</td><td>23.21 / 110.16 / 205.64</td><td>the chunk-edge jump at the fog wall: p95 worse (69 → 110), max better (249 → 206); bodyoff ≈ base → the jump is a chunk-edge (near-field) artifact, body-independent</td></tr>
+<tr><td>contrast 300–400</td><td>17.97</td><td>15.65</td><td>15.50</td><td>annulus: dominated by the same chunk-edge structure; base−bodyoff Δ ≈ 0.15 = the body fade-in share</td></tr>
+<tr><td>contrast 400–800</td><td>0.813</td><td>1.068</td><td>0.186</td><td>body region: base−bodyoff Δ = 0.88 = the body texture contribution</td></tr>
+<tr><td>contrast 800–1600</td><td>0.276</td><td>1.040</td><td><b>0.0</b></td><td>the cleanest A/B proof: with the body removed the far band is smooth sky (exactly 0.0), so the entire 1.04 in base is body texture. The AC-0511 change (haz_d removed, haz = haz_a alone) makes the body read <i>more</i> textured at far range than AC-0510's 0.276 — 4× more contrast, i.e. the haze wash is lighter and the chart texture shows through. (5)-class material for the Windows re-take.</td></tr>
+</table>
+
+<h2>8 · Inertness</h2>
+<p>With every <code>AWECRAFT_AC0512_*</code> env unset the added cost is one bool check per frame
+(<code>_ac0512_holding</code>) plus one early-return if in <code>threadmesh_handoff</code> — no data path
+touched. Evidence: g0 clean, genhash 25/25 byte-identical to the AC-0510 reference both with the envs
+OFF (gate arm) and ON (test5, 0 SCRIPT/SHADER ERROR). Mesh byte-identity not separately compared —
+deviation 8. <code>satellite_body.gd</code> has NO edits (the negative control reuses the pre-existing
+<code>AWECRAFT_SAT_BODY=0</code>, deviation 1). <code>harness.gd</code> untouched.</p>
+
+<h2>9 · Files</h2>
+<table>
+<tr><th>File</th><th>What</th></tr>
+<tr><td><code>tasks/AC-0512/base.png</code>, <code>hold.png</code>, <code>hold_s300.png</code>, <code>hold_s301.png</code>, <code>hold_s600.png</code>, <code>bodyoff.png</code>, <code>seam.png</code>, <code>seam_placed.png</code></td><td>the measured frames (llvmpipe proxy, development-only)</td></tr>
+<tr><td><code>.scratch/AC-0512-gates/{g0,genhash,residency}-r1.log</code>, <code>summary.txt</code></td><td>gate arms (g)</td></tr>
+<tr><td><code>.scratch/AC-0512-gates/render-{base,hold,bodyoff,seam}.log</code></td><td>render logs (RESULT, AC0512 census/hold lines, SNAP)</td></tr>
+<tr><td><code>.scratch/AC-0512-gates/{base,hold,bodyoff,seam}/census-*.json</code></td><td>the in-engine censuses (pose / late / holdend)</td></tr>
+<tr><td><code>.scratch/AC-0512-gates/analysis-{base,bodyoff,hold,hold_s300,seam}.json</code></td><td>per-gap attribution, counters, frontier numerics, error tables (machine-readable)</td></tr>
+<tr><td><code>godot/world/world.gd</code> (the AC-0512 block before <code>_process</code>, ~lines 5980–6210; the handoff gate in <code>threadmesh_handoff</code>)</td><td>default-off census + held-publication fixture; inert when unset (§8)</td></tr>
+<tr><td><code>.scratch/AC-0512/gaps.py</code>, <code>.scratch/AC-0512/render.sh</code>, <code>.scratch/AC-0512/pylibs/</code></td><td>the Python instrument (ray classes, gap detector, sky model, frontier stats) and the render recipe</td></tr>
+<tr><td><code>tasks/AC-0512/AC-0512-deviations.txt</code></td><td>13 deviations, logged as they happened</td></tr>
+<tr><td><code>tasks/AC-0512/AC-0512-windows-protocol.md</code></td><td>the Windows re-take: what to re-take, invariants, interpretation, and the seam-pose correction (§4.2)</td></tr>
+</table>
+
+<p><b>Bottom line</b>: at the measured frontier (air 300 m / 30°, R24/F83, frame 560), the visible gaps
+are (1) <b>absent drawable chunks — 49,656 px</b>, the tier-3 no-data ring the streaming frontier has not
+reached; (5) <b>endpoint colour mismatch — 151,371 px</b> of body exterior that reads as sky (the AC-0511
+haze endpoint, 61.4 % of the exterior; 4× the far-range chart contrast of AC-0510); (2)/(3)/(4) have
+zero <i>visible</i> gap pixels at this pose (the two delay chunks are off-screen; the (4) signature is
+census-side: cliffs 7.6–8 m low). The negative control proves the body is the exterior fallback: the
+counter rises 49,656 → 296,362 when it is removed. The held publication isolates (3) at slab level:
+458 px absent in-window, fully recovered, steady state unchanged. The seam subcase is
+PLAN-INSUFFICIENT as planned (§4.2) and its body-chart seam is measured (8× luminance step at the line,
+0 face chunks ever created at the vantage).</p>
+
+</body></html>

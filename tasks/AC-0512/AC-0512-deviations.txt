@@ -1,0 +1,112 @@
+AC-0512 deviations from the plan (plan.html), logged as they happened:
+
+1. MISSING-FALLBACK NEGATIVE CONTROL — no new code in satellite_body.gd.
+   The plan's file table allowed satellite_body.gd edits "only for the
+   held-publication fixture"; instead the control reuses the EXISTING
+   AWECRAFT_SAT_BODY=0 A/B env (body off from t=0), which is exactly an
+   injected missing fallback. The BEFORE/AFTER counter comparison pairs
+   the base render (body on) with the bodyoff render (body off) at the
+   same pose/seed/settings/drain depth.
+   Rationale: fewer lines, no new default-off surface in the body.
+
+2. HELD-PUBLICATION POSITION — AWECRAFT_AC0512_HOLD_AT (new env, default 0
+   = "from the first air pose", as the plan says). The hold render uses
+   HOLD_AT=300 because at the proxy machine's frame rate (2.5-7 fps) a
+   5 s window is shorter than the frames where attach is actually
+   pending; at frame 0 the world has just started (25 chunks, no data,
+   nothing to hold). The 5 s duration is unchanged; the start position
+   is the only freedom the plan leaves open ("the first ~5 s" vs "a
+   known interval"). Hold START/END are logged with the suppressed
+   publication count (hold_n).
+
+3. LATE-CENSUS TRIGGER — superseded mid-run (see 13): originally
+   AWECRAFT_AC0512_LATE (frame count, default 560); the aim-flow drain
+   counts PHYSICS frames (60 Hz -> 10 s) while the census tick counts
+   IDLE frames (a few per second on the proxy), so a frame-count
+   fallback was unreachable there. Final trigger: band-ready mirror of
+   main._await_world_build, with the drain cap as fallback in its own
+   units per flow (aim: 10.5 s wall after pose; air: 560 idle frames).
+
+4. CENSUS DIRECTORY — AWECRAFT_AC0512_DIR (new env, default
+   .scratch/AC-0512-gates). The plan's census path is a fixed name per
+   tag; four serial renders would overwrite each other's JSON. Each
+   render now writes into .scratch/AC-0512-gates/<case>/.
+
+5. FIRST RENDER PASS LOST ITS CENSUS — the first pass (02:11-02:21)
+   wrote all four censuses to the shared default dir; each later run
+   overwrote the earlier tags. The PNGs from that pass are retained
+   (deterministic re-renders are byte-identical in content) but the
+   analysis uses the SECOND pass's per-case censuses. The first pass is
+   kept as a consistency check: its per-run counter lines (greppable in
+   the render logs) are identical run-to-run (1401 home / 960 nodata /
+   2 delay / 143 drawn at frame 560 in all three air runs).
+
+6. SEAM POSE — AWECRAFT_AIM=2890,500,0,-1.5708,-0.52. The plan says
+   "~250 m inside the +x patch edge" (hw=3141.6 -> fx≈2890); flat
+   y=500 gives radial altitude ~498 m (the body is well above h_first).
+   Yaw -pi/2 aims at the +x boundary (verified in the frame: the
+   boundary line runs down the middle of the image). The exact
+   yaw->forward convention is NOT re-derived in Python: the census
+   records the measured camera basis rows (forward/up) and the pixel
+   analysis consumes those.
+
+7. PROXY MACHINE SPEED — renders took 40 s - 4 min per case (not the
+   ~20-25 min AC-0510 saw): the box is less loaded now; frame rate
+   2.5-7 fps. All timings in the report are quoted from the logs;
+   nothing was re-timed against AC-0510.
+
+8. MESH-OUTPUT COMPARISON — genhash (25/25) compares GENERATED DATA
+   hashes (terrain/light per seed), not mesh bytes. Mesh output was
+   NOT separately byte-compared: with the envs unset the added code is
+   one bool check per frame plus one if in threadmesh_handoff (no data
+   path touched), and genhash 25/25 byte-identical (also verified WITH
+   the instrumentation ON) shows the generation side is untouched.
+   Stated as a limitation, per the gate.
+
+9. HEADLESS AIR TEST HANG — AWECRAFT_CAM=air under --headless hangs in
+   the final Debug.snap await (frame_post_draw never fires headless)
+   after RESULT; the census/pose/hold logic itself verified fine
+   headless. Not a fixture defect; the xvfb renders exit clean (rc=0,
+   SNAP + RESULT lines present).
+
+10. GAP-DETECTOR DESIGN (Python instrument, gaps.py) — the plan's
+    implicit "sky-looking pixels" test cannot work as a body-presence
+    test: the body's haze endpoint is deliberately sky-matched
+    (AC-0511 edge continuity), so an observed-colour counter cannot
+    discriminate body-present from body-absent in the solid region
+    (it reads sky in BOTH frames). The final detector is therefore:
+      - GEOMETRIC negative-control meter: pixels where the exterior
+        surface is ABSENT = (t >= edge) only when the body is off
+        (fixture truth) + the census ~drawn-chunk pixels below the
+        edge. Colours are never used for presence/absence.
+      - CENSUS terrain mask per pixel (the chunk has a drawn slab)
+        + a SKY MODEL (chamfer-propagated colour from the bodyoff
+        exterior + space) to attribute the (5) signature: exterior
+        pixels that read as sky while the body is present (61.4% of
+        the exterior in base).
+    The sky model's seed (bodyoff t>=edge + space) is true sky by
+    construction (no body, no chunks past the edge, CLOUDS=0).
+
+11. DELAY CHUNKS OFF-SCREEN — the only two (3)-class chunks in the
+    census (cols -1,5 and 0,5; tier 1, top 126) project to screen
+    y=791/891 at the air pose — below the 720 px frame — so they
+    contribute ZERO visible gap pixels. (3) is instead demonstrated by
+    the held-publication fixture: 458 px of near surface absent at
+    s300 (suppressed slabs), recovered by the final frame, steady
+    state byte-equivalent to the no-hold base (40 px drift).
+
+12. SLOT-WAIT SELF-DEADLOCK — render.sh's `while pgrep -f '[g]odot'`
+    slot guard matches ANY process whose command line contains
+    "godot", including the bash -c WRAPPER of a background job whose
+    embedded command text names the engine. A parse-check + render
+    chained in one wrapper deadlocked the render in the wait loop for
+    50 min (no godot was ever started). Fix: launch render.sh as a
+    plain command (wrapper cmdline = "bash .../render.sh <case>").
+    Lesson harvested for OPS at closeout: slot guards must match the
+    engine binary path, not the string "godot".
+
+13. SEAM LATE-CENSUS RE-RENDER — the first seam pass (run-3) has only
+    the pose census (the frame-count fallback, deviation 3, never
+    fired there). Re-rendered with the wall-clock trigger (deviation
+    3 final form); the new census-late.json is the analysis input for
+    the seam case.

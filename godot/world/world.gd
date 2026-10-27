@@ -6078,10 +6078,347 @@ func _ac0401_push() -> void:
 		_ac0436_star_lift = star_lift_v
 
 
+# ---------------------------------------------------------------------------
+# AC-0512 (measurement only; DEFAULT OFF — inert when off)
+#
+# Gap diagnosis after the AC-0510 fog removal. The deliverable is a
+# per-gap classification into five causes:
+#   (1) absent drawable chunks  — no data, never built
+#   (2) distance discard        — data exists, tier 4 (past the render edge)
+#   (3) source resource delay   — data exists, the draw is late/not attached
+#   (4) geometry mismatch       — both tiers draw, heights disagree
+#   (5) endpoint colour mismatch — geometry agrees, the colours do not
+#
+# Env (all optional; unset = the block below is a single bool check):
+#   AWECRAFT_AC0512=1         enable the census + the hold fixture.
+#   AWECRAFT_AC0512_HOLD=<ms> the 5 s HELD-PUBLICATION fixture: inside this
+#                             wall-clock window from the first air pose,
+#                             threadmesh_handoff consumes each mesh result
+#                             WITHOUT attaching (the slab stays PENDING and
+#                             the lane re-dispatches after release). Data
+#                             lands as normal (the mat/data entries pass),
+#                             only the draw is late — cause (3) by
+#                             construction.
+#   (The missing-fallback negative control reuses the existing
+#    AWECRAFT_SAT_BODY=0 body A/B env in satellite_body.gd — no new code.)
+#
+# The census walks the live chunks at the pose (tag "pose") and at frame 560
+# (tag "late"): per-column top H, the satellite-tier H at the same point,
+# the SIGNED satellite-minus-detail error (m), the draw tier, the data /
+# mesh state, plus the exterior-gap counters — written to
+# .scratch/AC-0512-gates/census-<tag>.json. Pure observation: it reads
+# state and writes no render state.
+# ---------------------------------------------------------------------------
+var _ac0512 := false
+var _ac0512_init := false
+var _ac0512_pose_ms := -1
+var _ac0512_hold_ms := 0
+var _ac0512_hold_n := 0
+var _ac0512_hold_at := 0  # the hold start (frames since the pose), env AWECRAFT_AC0512_HOLD_AT
+var _ac0512_hold_started := false
+var _ac0512_hold_ended := false
+var _ac0512_hold_t0 := -1
+var _ac0512_frames := -1
+var _ac0512_alt := -1.0  # the pose-trigger altitude (m), env AWECRAFT_AC0512_ALT (default 250)
+var _ac0512_census_done: Array = []
+
+func _ac0512_init_now() -> void:
+	if _ac0512_init:
+		return
+	_ac0512_init = true
+	_ac0512 = OS.get_environment("AWECRAFT_AC0512") != ""
+	if _ac0512:
+		_ac0512_hold_ms = int(OS.get_environment("AWECRAFT_AC0512_HOLD").to_float())
+		_ac0512_hold_at = int(OS.get_environment("AWECRAFT_AC0512_HOLD_AT").to_float())
+		print("AC0512 on: census + fixtures armed (hold=%d ms, start at frame %d)" % [_ac0512_hold_ms, _ac0512_hold_at])
+
+func _ac0512_holding() -> bool:
+	# The 5 s window, wall-clock. With AWECRAFT_AC0512_HOLD_AT the window
+	# opens at that frame since the pose (so it lands where attach is
+	# actually pending on the slow proxy machine); by default it opens at
+	# the pose. The frame rate here (0.25-0.5 fps) makes 5 s about one
+	# frame — the hold-end census + the step snaps around the window are
+	# the observables.
+	if not _ac0512 or _ac0512_hold_ms <= 0 or _ac0512_pose_ms < 0 or _ac0512_hold_ended:
+		return false
+	if _ac0512_hold_at > 0 and _ac0512_frames < _ac0512_hold_at:
+		return false
+	if not _ac0512_hold_started:
+		# The first handoff of the opening frame starts the window; the
+		# opening frame's remaining handoffs are suppressed too (the frame
+		# reads as held, deterministically).
+		_ac0512_hold_started = true
+		_ac0512_hold_t0 = Time.get_ticks_msec()
+		print("AC0512 hold START (frame %d, window %d ms)" % [_ac0512_frames, _ac0512_hold_ms])
+	if Time.get_ticks_msec() - _ac0512_hold_t0 >= _ac0512_hold_ms:
+		_ac0512_hold_ended = true
+		print("AC0512 hold END (suppressed %d publications) — census holdend" % _ac0512_hold_n)
+		_ac0512_census("holdend")
+		return false
+	return true
+
+func _ac0512_band_ready() -> bool:
+	# main._await_world_build's exit condition, mirrored (the snapshot
+	# fires when this is true for the drain point = the current anchor).
+	var pcx: int = int(last_pcx)
+	var pcz: int = int(last_pcz)
+	for key in chunks:
+		var cc: Node3D = chunks[key]
+		if absi(cc.cx - pcx) <= render_radius and absi(cc.cz - pcz) <= render_radius and not cc.mesh_built:
+			return false
+	return true
+
+func _ac0512_tick() -> void:
+	if not _ac0512:
+		return
+	if _ac0512_alt < 0:
+		_ac0512_alt = 250.0 if OS.get_environment("AWECRAFT_AC0512_ALT") == "" \
+				else OS.get_environment("AWECRAFT_AC0512_ALT").to_float()
+	if _ac0512_pose_ms < 0:
+		var pl = Game.player
+		if pl != null and Game.planet_R > 0.0:
+			var hb: float = (pl.position + Vector3(0.0, Game.planet_R, 0.0)).length() - Game.planet_R
+			if hb > _ac0512_alt:
+				_ac0512_pose_ms = Time.get_ticks_msec()
+				_ac0512_frames = 0
+				print("AC0512 pose reached (radial alt %.0f m) — hold window %d ms" % [hb, _ac0512_hold_ms])
+				_ac0512_census("pose")
+	else:
+		_ac0512_frames += 1
+		if not _ac0512_census_done.has("late") and _ac0512_frames > 30:
+			# The primary trigger mirrors main._await_world_build's exit
+			# condition (the band fully mesh_built) so the census records
+			# the world state the snap actually shows. The fallback is the
+			# drain cap, in its own units per flow: the air branch drains
+			# 600 IDLE frames (this counter — slow on the proxy), the
+			# aim-flow drain counts PHYSICS frames (60 Hz -> 10 s wall).
+			var cap_ok := false
+			if OS.get_environment("AWECRAFT_AIM") != "":
+				cap_ok = (Time.get_ticks_msec() - _ac0512_pose_ms) >= 10500
+			else:
+				cap_ok = _ac0512_frames >= 560
+			if _ac0512_band_ready() or cap_ok:
+				_ac0512_census("late")
+
+func _ac0512_census(tag: String) -> void:
+	if _ac0512_census_done.has(tag):
+		return
+	_ac0512_census_done.append(tag)
+	var t0 := Time.get_ticks_usec()
+	var R: float = Game.planet_R
+	var sat = satellite
+	var sat_loaded := sat != null and int(sat.phase) == int(SatelliteBody.Phase.LOADED)
+	var hgrids: Array = (sat._hgrid_load if sat_loaded else [])
+	var npx: int = int(SatelliteBody.NPIX)
+	var anchorx: int = int(last_pcx)
+	var anchorz: int = int(last_pcz)
+	var home_out: Array = []
+	var face_out: Array = []
+	var n_nodata := 0
+	var n_delay := 0
+	var n_discard := 0
+	var n_drawn := 0
+	var taxi_max := 0
+	var n_home := 0
+	var n_face := 0
+	var sat_h_at := func(fx: float, fz: float) -> int:
+		# The satellite-tier H (m above the R sphere) at a flat point —
+		# the SAME chart mapping + bilinear the displaced mesh uses
+		# (world_to_face + SatelliteBakeWorker.hgrid_sample).
+		if not sat_loaded:
+			return -1
+		var pp: Vector3 = SphereMath.home_point(fx, fz, R)
+		var rr: Dictionary = SphereMath.world_to_face(pp, R)
+		var f2: int = int(rr["face"])
+		if f2 >= hgrids.size():
+			return -2
+		var hg: PackedInt32Array = hgrids[f2]
+		if hg.size() != npx * npx:
+			return -3
+		return int(roundf(SatelliteBakeWorker.hgrid_sample(hg, float(rr["u"]), float(rr["v"]), npx)))
+	var pose_pl = Game.player
+	var pose_rec := [
+		pose_pl.position.x, pose_pl.position.y, pose_pl.position.z,
+		pose_pl._yaw, pose_pl._pitch] if pose_pl != null else []
+	var camn = pose_pl.get_node_or_null("Camera3D") if pose_pl != null else null
+	pose_rec.append(float(camn.fov) if camn != null else 0.0)
+	# The MEASURED camera basis (the forward = -basis.z and up = basis.y
+	# world rows) — the aim-flow camera converges over frames, so the
+	# Python pixel analysis consumes these, not a yaw/pitch re-derivation.
+	if camn != null:
+		var bt: Basis = camn.global_transform.basis
+		pose_rec.append([-bt.z.x, -bt.z.y, -bt.z.z])
+		pose_rec.append([bt.y.x, bt.y.y, bt.y.z])
+	for key in chunks:
+		var c: Node3D = chunks[key]
+		var face: int = int(c.face)
+		var cx: int = int(c.cx)
+		var cz: int = int(c.cz)
+		var has_data: bool = int(c.top) >= 0
+		var hi_n := 0
+		var lo_n := 0
+		var si_n: int = int(c.data.size()) if has_data else 0
+		for si in si_n:
+			var s = c.slabs[si]
+			if s != null and s.mesh_instance != null and s.mesh_instance.visible:
+				hi_n += 1
+			var li2 := int(c.low_slabs.find(si))
+			if li2 >= 0 and li2 < c.low_instances.size() \
+					and c.low_instances[li2] != null and c.low_instances[li2].visible:
+				lo_n += 1
+		var drawn: bool = hi_n > 0 or lo_n > 0
+		if face > 1:
+			# Face chunk: the seam-side record (center column only; the
+			# satellite H comes from the chunk's own chart transform).
+			n_face += 1
+			if has_data:
+				var ct_f: int = mini(int(c.top), int(Data.HEIGHT) - 1)
+				var top_f := -1
+				var tid_f := 0
+				for yyf in range(ct_f, -1, -1):
+					var idf: int = int(c.get_local(8, yyf, 8))
+					if idf != 0:
+						top_f = yyf
+						tid_f = idf
+						break
+				var shf := -9
+				if sat_loaded and face < hgrids.size():
+					var hgcf: PackedInt32Array = hgrids[face]
+					if hgcf.size() == npx * npx:
+						var Bcf: Transform3D = SphereMath.face_chunk_transform(face, cx, cz, R)
+						var rcf: Dictionary = SphereMath.world_to_face(Bcf.origin, R)
+						shf = int(roundf(SatelliteBakeWorker.hgrid_sample(hgcf, float(rcf["u"]), float(rcf["v"]), npx)))
+				var errf: int = -9
+				if shf > 0 and top_f >= 0:
+					errf = shf - (top_f + 1)
+				face_out.append([face, cx, cz, 1, top_f, tid_f, hi_n, lo_n, shf, errf])
+			else:
+				face_out.append([face, cx, cz, 0, -1, 0, 0, 0, -1, -9])
+			continue
+		n_home += 1
+		var tier: int = _lod_tier_of(cx - anchorx, cz - anchorz)
+		var taxi: int = absi(cx - anchorx) + absi(cz - anchorz)
+		if taxi > taxi_max:
+			taxi_max = taxi
+		if tier <= 3:
+			if not has_data:
+				n_nodata += 1
+			elif not drawn:
+				n_delay += 1
+			else:
+				n_drawn += 1
+		elif has_data:
+			n_discard += 1
+		if not has_data:
+			home_out.append([cx, cz, tier, 0, -1, hi_n, lo_n, -1, []])
+			continue
+		# Column tops (one C++ row read per y; stops once every column
+		# has a top). tier 0-1: all 256; tier 2: 9 samples; tier 3: 1;
+		# tier 4: 1 (the discard bookkeeping needs only the centre).
+		var ct: int = mini(int(c.top), int(Data.HEIGHT) - 1)
+		var col_top: Array = []
+		for li in 256:
+			col_top.append(-1)
+		var remaining := 256
+		for yy in range(ct, -1, -1):
+			if remaining <= 0:
+				break
+			var rowb: PackedByteArray = c.row_bytes(yy)
+			for li in 256:
+				if int(col_top[li]) < 0 and int(rowb[li]) != 0:
+					col_top[li] = yy
+					remaining -= 1
+		# Coarse detail height (what the tier-2/3 avg surface draws):
+		# tier 2 = the 8x8 block around the centre, tier 3 = the whole
+		# 16x16 chunk; the per-column tops are the finest data.
+		var coh := -1
+		if tier == 2:
+			var s8 := 0
+			var n8 := 0
+			for lx8 in range(4, 12):
+				for lz8 in range(4, 12):
+					var t8: int = int(col_top[lz8 * 16 + lx8])
+					if t8 >= 0:
+						s8 += t8
+						n8 += 1
+			if n8 > 0:
+				coh = s8 / n8
+		elif tier == 3:
+			var s16 := 0
+			var n16 := 0
+			for l16 in 256:
+				var t16: int = int(col_top[l16])
+				if t16 >= 0:
+					s16 += t16
+					n16 += 1
+			if n16 > 0:
+				coh = s16 / n16
+		var samp: Array = []
+		if tier <= 1:
+			for li in 256:
+				samp.append([li])
+		elif tier == 2:
+			samp = [[68], [8], [23], [104], [119], [0], [15], [16], [31]]
+		elif tier == 3:
+			samp = [[68]]
+		else:
+			samp = [[68]]
+		for si_s in samp.size():
+			var se: Array = samp[si_s]
+			var li: int = int(se[0])
+			var lx: int = li % 16
+			var lz: int = li / 16
+			var topc: int = int(col_top[li])
+			if topc < 0:
+				continue
+			var tidc: int = int(c.get_local(lx, topc, lz))
+			var fx: float = float(cx) * 16.0 + float(lx) + 0.5
+			var fz: float = float(cz) * 16.0 + float(lz) + 0.5
+			var sh: int = sat_h_at.call(fx, fz)
+			var errc: int = -9
+			if sh > 0:
+				errc = sh - (topc + 1)
+			samp[si_s] = [li, topc, tidc, sh, errc]
+		home_out.append([cx, cz, tier, 1, int(c.top), hi_n, lo_n, coh, samp])
+	var out := {
+		"tag": tag, "frames": _ac0512_frames, "ms": int((Time.get_ticks_usec() - t0) / 1000),
+		"wall_t0_ms": _ac0512_pose_ms,
+		"R": R, "SEA": int(Data.SEA), "HEIGHT": int(Data.HEIGHT),
+		"render_radius": int(render_radius),
+		"medium_start_r": int(medium_start_r), "low_start_r": int(low_start_r),
+		"band0_r": int(band0_r),
+		"fog_far": float(sat.last_fog_far) if sat != null else 0.0,
+		"render_edge": float(sat.last_render_edge) if sat != null else 0.0,
+		"anchor": [anchorx, anchorz], "taxi_max": taxi_max,
+		"satellite_loaded": sat_loaded,
+		"body_visible": bool(sat.visible) if sat != null else false,
+		"pose": pose_rec,
+		"counters": {
+			"nodata": n_nodata, "delay": n_delay, "discard": n_discard,
+			"drawn": n_drawn, "home_chunks": n_home, "face_chunks": n_face,
+			"hold_n": _ac0512_hold_n,
+		},
+		"home": home_out, "face": face_out,
+	}
+	var cdir: String = OS.get_environment("AWECRAFT_AC0512_DIR")
+	if cdir == "":
+		cdir = "/home/angrygiant/github_projects/AweCraft/.scratch/AC-0512-gates"
+	var pth := cdir + "/census-%s.json" % tag
+	var f2 := FileAccess.open(pth, FileAccess.WRITE)
+	if f2 != null:
+		f2.store_string(JSON.stringify(out))
+		f2.close()
+		print("AC0512 census %s: %d home + %d face chunks, %d ms, counters=%s" % [
+			tag, n_home, n_face, int((Time.get_ticks_usec() - t0) / 1000), str(out["counters"])])
+	else:
+		print("AC0512 census %s: CANNOT WRITE %s" % [tag, pth])
+
 func _process(_delta: float) -> void:
 	var pf0 := Time.get_ticks_usec()
 	_wprof_begin_frame()  # AC-0251: the frame sample commits at _wprof_end_frame(pf0)
 	_sw_frame += 1  # AC-0339: the settle-wait frame counter (before the idle return)
+	_ac0512_init_now()  # AC-0512: read the envs once (inert when off)
+	_ac0512_tick()  # AC-0512: pose/hold/census driver (inert when off)
 	_game_tick_accumulate(_delta)  # AC-0158: 20 Hz game tick (simulation clock)
 	_drain_save_queue()  # AC-0155: amortized full-column writes (1-2/frame)
 	# AC-0186: the continue-path window trigger (the real menu flow's
@@ -8325,6 +8662,14 @@ func _tm_retrigger(key: String, c: Node3D, e: Dictionary) -> void:
 		_enqueue_build(int(e["cx"]), int(e["cz"]))
 
 func threadmesh_handoff(e: Dictionary, res) -> void:
+	# AC-0512 (default OFF): the held-publication fixture. Inside the hold
+	# window the MESH results are consumed WITHOUT attaching — the slab
+	# stays PENDING (no terminal mark) and the lane re-dispatches after
+	# release. Data entries (the mat/materialization landings) pass: only
+	# the draw is late — cause (3) by construction. Inert when off.
+	if _ac0512_holding() and not bool(e.get("mat", false)):
+		_ac0512_hold_n += 1
+		return
 	var key: String = e["key"]
 	if bool(e.get("low", false)):
 		# AC-0236 part 2: the low-lane attach (its own bookkeeping — the
