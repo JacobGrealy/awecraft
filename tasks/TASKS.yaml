@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-26T20:20
+  updated_at: 2026-10-26T20:58
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0527
 - AC-0484
 - AC-0485
 - AC-0512
@@ -35954,11 +35953,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-26T20:20
-  updated_at: 2026-10-26T20:20
-  completed_at: null
+  updated_at: 2026-10-26T20:58
+  completed_at: 2026-10-26T20:58
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -36004,5 +36003,47 @@ intake:
     `godot/HARNESS.md` (generated). Refs: AC-0480 (the halo change and its measurements), AC-0509 (the
     negative-control pattern), AC-0326/AC-0327 (expectations corrected, not code).
 
-    '
+
+
+    CLOSED (round 117). THE ARM NOW ASSERTS AN INVARIANT INSTEAD OF A TRIPLE, AND ITS NEGATIVE CONTROL
+    PROVABLY REJECTS THE PRE-FIX RULE.
+
+    WHAT IT ASSERTED BEFORE: the binary rule `exp = 15 if bot > fh else 0`, checked as `world._halo_sky_for
+    != exp` plus literal `== 15 / == 0` spot-checks on a straddling pair. That is why AC-0480 turned it
+    red — the expectation had been frozen to an implementation detail, so a correct improvement read as
+    a failure.
+
+    WHAT IT ASSERTS NOW, in three parts: (a) **MONOTONE per slab** — the halo never rises going down;
+    (b) the **AT cell is graded STRICTLY between its neighbours** (so the middle level is real, not coincidental);
+    (c) **BOUNDED STEP on the run''s LEVEL SET** — the luminance ratio between adjacent distinct levels
+    is at most `_HALO_STEP_MAX = 3.0`, measured on the far-LOD luminance `L = 0.20 + 0.80*mix(20/255,
+    1, a/15)`.
+
+    THE THRESHOLD HAS A STATED DERIVATION RATHER THAN A FEELING: 3.0 gives **20% headroom over the worst
+    post-fix step (2.50x)** while staying **21% below the pre-fix 3.81x regression** — so it tolerates
+    the next re-tune but cannot pass the bug it exists to catch.
+
+    THE MOST VALUABLE FINDING IS A CORRECTION TO MY OWN PLAN: I asked for a **per-cell** bounded step,
+    and the measurement proved that impossible — **85 of 226 slabs step 0 to 15 across two cells at mid-cell
+    terrain tops, IDENTICALLY pre- and post-fix**, so no per-cell threshold can satisfy both the green
+    and the negative-control gate. The assertion therefore had to be written on the **level set** instead
+    (deviation 1). Had the builder implemented my literal instruction, the arm would have been unpassable
+    for a reason unrelated to the defect — which is exactly the shape of gate this project keeps having
+    to repair.
+
+    THE NEGATIVE CONTROL FAILS, AND ITS OUTPUT IS QUOTED RATHER THAN ASSERTED: `rejects_pre_fix: true,
+    accepts_post_fix: true, levels_pre_fix [0,15], levels_post_fix [0,8,15]`, with `pre_fails: [{"why":
+    "step between levels 0 and 15: L ratio 3.81 > 3.00"}]`. So the arm **names the exact violation** when
+    fed the old binary rule, and accepts the current three-level one. That is the difference between a
+    gate and decoration, and it is the seventh time this session has demanded this proof.
+
+    GREEN ON THE CURRENT TREE: halo **ok:true** with `invar_bad 0`, `payload_bad 0`, `levels [0,8,15]`,
+    `at_cols 351`, `slabs 226/226`, plus g0 **0 script / 0 shader** errors and genhash **25/25** — `all
+    arms ok`.
+
+    STANDING ROW AND DOC IN SYNC: `harness_data.yaml`''s halo row updated (tests, result_fields, envs,
+    notes), `HARNESS.md` **re-rendered** through `harness_doc.py` with `--check` clean — not hand-edited.
+
+    PRODUCT UNTOUCHED: the diff is `harness.gd`, `harness_data.yaml` and the generated `HARNESS.md`. No
+    render, no blur, no world change. This ticket changed the TEST, which was its whole remit.'
   comments: []

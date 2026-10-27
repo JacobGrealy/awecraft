@@ -1,0 +1,47 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0527 sync halo arm</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0527 — the halo arm is red because the code got better</h1>
+<p>Coordinator contract. <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>Fix the expectation, and make the new assertion survive the next re-tune.</b></p>
+<h2>1. What changed and what is now stale</h2>
+<p>AC-0480 changed the far tier's halo sky from a <b>BINARY</b> lit/unlit split to <b>THREE LEVELS</b>: <b>15 above, 8 at the bottom-equals-terrain-top case, 0 below</b> (<code>world.gd _halo_sky_for</code>). That turned a <b>~3.8× brightness step</b> at every lit/unlit cell edge into graded <b>1.5× / 2.5×</b> steps, which is what removed the visible line (the re-lit class measured <b>0.263 → 0.655</b>).</p>
+<p><strong>The harness's halo arm at <code>harness.gd:12800</code> still encodes the TWO-LEVEL rule and will therefore read RED.</strong> This is a test that is wrong <b>because the code got better</b> — the same class as AC-0326, AC-0327 and AC-0409, all resolved by correcting the <b>expectation</b> rather than the code.</p>
+<h2>2. The assertion to write — durable, not literal</h2>
+<p><b>Do NOT hardcode 15/8/0.</b> Assert the invariant the fix was actually about:</p>
+<ul>
+<li><b>MONOTONE:</b> the halo value is non-increasing with depth below the terrain top (it can never rise as you go down).</li>
+<li><b>BOUNDED STEP:</b> the ratio between adjacent levels is bounded by a stated threshold — the fix's whole point is that <b>no step is ~3.8× any more</b>. Pick the threshold from the measured post-fix values (1.5× / 2.5×) with headroom, and say what you picked and why.</li>
+</ul>
+<p>A monotonicity-plus-bounded-step assertion survives the next re-tune; a hardcoded triple does not, and would need this same ticket again.</p>
+<h2>3. What to do</h2>
+<ol>
+<li><b>3a LOCATE THE ARM BY SEARCH</b> (<code>:12800</code> is nominal — the file moves; it has moved repeatedly this session). Read what it currently asserts and report it before changing anything.</li>
+<li><b>3b REWRITE the assertion</b> as §2 describes.</li>
+<li><b>3c ADD THE NEGATIVE CONTROL</b> — the part that makes it a gate rather than decoration: <b>feeding it the PRE-FIX values (binary 15/0) must FAIL it.</b> AC-0509's <code>aimface</code> arm is the model: its NEGCTRL <b>rejects</b> the recorded pre-fix kilometre numbers with 9 fails. Use an env-gated negative path (e.g. <code>AWECRAFT_AC0527_NEG=1</code>) the way that arm does.</li>
+<li><b>3d UPDATE the standing row</b> in <code>godot/harness_data.yaml</code> if the arm's recorded values change, then <code>python3 tasks/scripts/harness_doc.py --render</code> — <b>never hand-edit HARNESS.md</b> — and confirm <code>--check</code> is clean.</li>
+<li><b>3e VERIFY BOTH DIRECTIONS:</b> the arm reads <b>GREEN</b> on the current tree, and <b>RED</b> under the negative control.</li>
+</ol>
+<h2>4. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/scenes/harness.gd</td><td>the halo arm (~:12800 nominal, <b>LOCATE BY SEARCH</b> — the file is 38,000+ lines and moves)</td><td>Edit: the assertion + negative control.</td></tr>
+<tr><td>godot/harness_data.yaml</td><td>the arm's standing row</td><td>Edit if values change.</td></tr>
+<tr><td>godot/HARNESS.md</td><td>GENERATED</td><td><b>Re-render only</b> via <code>harness_doc.py --render</code>.</td></tr>
+<tr><td>godot/world/world.gd</td><td><code>_halo_sky_for</code> — the 3-level rule, for reference</td><td>READ ONLY. Do not change the product.</td></tr>
+<tr><td>tasks/AC-0527/</td><td>journal, deviations, results</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> <code>world.gd</code>'s halo logic, the C++ emitter, generation, streaming, residency, light, the far tier's shading, the bake assets, the data JSON files, the aim box. <b>This ticket changes the TEST, not the product.</b></p>
+<h2>5. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The arm is GREEN on the current tree</td><td><code>python3 tasks/scripts/gate_run.py AC-0527 --arms halo,g0,genhash</code> — halo <code>ok:true</code>, g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25.</td></tr>
+<tr><td>The negative control FAILS (the point)</td><td>With the pre-fix binary values fed in, the arm reports <b>not-ok and names the violation</b> (the monotonicity or step-ratio breach). <b>Quote the actual failure output.</b> An arm that passes both ways would be exactly the "test that cannot fail" this project keeps catching.</td></tr>
+<tr><td>The doc is in sync</td><td><code>harness_doc.py --check</code> clean.</td></tr>
+<tr><td>The assertion is durable</td><td>State the threshold you chose for the step ratio and why, so the next re-tune does not need this ticket again.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>Blur is OFF by default (user ruling) — do not enable it.</b> <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>6. Acceptance</h2><p>The arm asserts monotonicity and a bounded step ratio rather than a hardcoded triple; it is green on the current tree; the negative control demonstrably fails on the pre-fix values; the standing row and generated doc are in sync.</p>
+<h2>7. Risks</h2><p>(1) Hardcoding 15/8/0, which breaks again at the next re-tune and needs this ticket twice. (2) An arm that passes with the pre-fix values too — the exact failure mode this project has now caught six times. (3) Hand-editing HARNESS.md. (4) Changing the product instead of the test.</p>
+<h2>8. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No edits outside §4. <b>The product must not change in this ticket.</b></li>
+<li>If the plan cannot be applied — anchor missing, symbol absent, steps contradict, or a design decision this plan does not make — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT. Do not invent the design.</li>
+</ul></div>
+<h2>9. Resume point</h2><p>AC-0480 replaced the binary halo with three levels and measured the cliff re-lit class 0.263 → 0.655; the arm still encodes the binary rule. AC-0509's aimface arm is the negative-control model to copy.</p>
+</body></html>

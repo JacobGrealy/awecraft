@@ -12506,8 +12506,138 @@ func _bs_acc_cmp_loose(gm: Dictionary, rm: Dictionary) -> Dictionary:
 #       again — the re-lower debt (_low_relower_owed) reaches the far
 #       column: the low is re-emitted at the current data_gen, visible,
 #       and the high keeps resident.
+# AC-0527: the DURABLE invariant that replaces this arm's stale two-level
+# literal. Pre-AC-0480 the arm expected the far-tier halo sky to be the
+# BINARY split (15 above the terrain top / 0 at-or-below, and == checks on
+# the spot-check pair). AC-0480 graded the sky (3 levels), so the arm's
+# expectation is what was wrong — and the durable form of the invariant
+# the fix was actually about is two, not the triple:
+#   (a) MONOTONE — the sky value never RISES as you go down: in every
+#       (x,z) column it is non-decreasing with cell bottom (cy 0 = the
+#       slab's BOTTOM, the deepest cell). Checked per cell.
+#   (b) BOUNDED STEP — in shader LUMINANCE the ratio between adjacent
+#       LEVELS (the distinct values the sky uses) never exceeds
+#       _HALO_STEP_MAX: the fix's whole point is that no step is ~3.8x
+#       any more. This is the LEVEL-SET form on purpose: a per-CELL step
+#       is not the invariant — when the terrain top lands mid-cell (the
+#       top does not coincide with a grid-cell bottom), that column
+#       legitimately steps 0 -> 15 across two cells (the graded middle
+#       level is simply not in that column), pre-fix AND post-fix. The
+#       pre-fix rule's level set is {0, 15} = a 3.81x step; the post-fix
+#       rule's is {0, 8, 15} = 2.50x / 1.52x. Checked on the level set
+#       of the whole run (and per recorded array in the NEGCTRL), plus
+#       at the sampled raw-H column: a terrain top that DOES coincide
+#       with a cell bottom (the AT cell — the terrain-top cell itself)
+#       must be GRADED, strictly between its below/above neighbours
+#       (equality with either neighbour IS the hard step).
+# The luminance is the far LOD's own path (lod_avg_seam.gdshader,
+# u_day = 1): m_direct = mix(20/255, 1.0, a/15), L = 0.20 + 0.80*m_direct.
+# Measured (AC-0480): the pre-fix binary 15/0 steps L 0.263 -> 1.0 =
+# 3.81x — the visible line; the post-fix 15/8/0 steps 0.263 -> 0.655 ->
+# 1.0 = 2.50x / 1.52x (the re-lit class). _HALO_STEP_MAX = 3.0: 20%
+# headroom above the worst post-fix level step (2.50) so the next
+# re-tune stays green, and still 21% below the pre-fix 3.81 regression
+# so the binary rule can never pass this arm again.
+const _HALO_STEP_MAX: float = 3.0
+
+func _halo_sky_L(a: int) -> float:
+	# the far LOD sky luminance at day = 1 (lod_avg_seam.gdshader).
+	var m: float = (20.0 / 255.0) + (1.0 - 20.0 / 255.0) * float(a) / 15.0
+	return 0.20 + 0.80 * m
+
+func _halo_distinct_levels(sky: PackedByteArray) -> Array:
+	var seen: Dictionary = {}
+	for i in range(sky.size()):
+		seen[int(sky[i])] = true
+	var lv: Array = seen.keys()
+	lv.sort()
+	return lv
+
+# AC-0527: the bounded-step check on a set of DISTINCT sky levels (sorted
+# ascending): the luminance ratio between adjacent levels must never
+# exceed _HALO_STEP_MAX. L(0) = 0.2627 > 0, so no division by zero.
+func _halo_levels_ok(levels: Array) -> Dictionary:
+	var fails: Array = []
+	for i in range(1, levels.size()):
+		var lo: int = int(levels[i - 1])
+		var hi: int = int(levels[i])
+		var r: float = _halo_sky_L(hi) / _halo_sky_L(lo)
+		if r > _HALO_STEP_MAX:
+			fails.append({"why": "step between levels %d and %d: L ratio %.2f > %.2f" % [lo, hi, r, _HALO_STEP_MAX]})
+	return {"ok": fails.size() == 0, "fails": fails}
+
+# AC-0527: the invariant verdict on ONE slab's G^3 sky payload (index
+# cy*G*G + cz*G + cx; cy 0 = the slab's bottom — the deepest cell).
+func _halo_sky_verdict(sky: PackedByteArray, G: int, slab_name: String) -> Dictionary:
+	var fails: Array = []
+	if sky.size() != G * G * G:
+		return {"ok": false, "fails": [{"slab": slab_name, "why": "bad_size %d != %d" % [sky.size(), G * G * G]}]}
+	for cz in range(G):
+		for cx in range(G):
+			var prev_a := -1
+			for cy in range(G):
+				var a: int = int(sky[cy * G * G + cz * G + cx])
+				if prev_a >= 0 and a < prev_a:
+					if fails.size() < 8:
+						fails.append({"slab": slab_name, "cell": [cx, cy, cz], "why": "monotone: value rises going down (a %d above a %d)" % [prev_a, a]})
+				prev_a = a
+	return {"ok": fails.size() == 0, "fails": fails}
+
 func _halo_test(spawn: Vector3) -> void:
 	var t0 := Time.get_ticks_msec()
+	# AC-0527 NEGCTRL (AWECRAFT_AC0527_NEG=1, the AC-0509 aimface model —
+	# fast, no world): the invariants must REJECT the RECORDED
+	# pre-AC-0480 BINARY sky (15 above / 0 at-or-below — its level set is
+	# {0, 15}, the 3.81x L step that WAS the visible line) and ACCEPT the
+	# recorded post-AC-0480 graded sky (15 above / 8 at / 0 below — level
+	# set {0, 8, 15}, steps 2.50x / 1.52x). A gate that accepts the
+	# binary sky is a BLIND instrument: the arm fails.
+	if OS.get_environment("AWECRAFT_AC0527_NEG") == "1":
+		var ng := 8
+		var pre: PackedByteArray = PackedByteArray()
+		pre.resize(ng * ng * ng)
+		var post: PackedByteArray = PackedByteArray()
+		post.resize(ng * ng * ng)
+		for cy in range(ng):
+			for cz in range(ng):
+				for cx in range(ng):
+					# the recorded slab: the terrain top sits at the cell
+					# bottom of cy 4 (CB = 2) — cy 0-3 below, cy 4 AT,
+					# cy 5-7 above.
+					pre[cy * ng * ng + cz * ng + cx] = 15 if cy > 4 else 0
+					if cy > 4:
+						post[cy * ng * ng + cz * ng + cx] = 15
+					elif cy == 4:
+						post[cy * ng * ng + cz * ng + cx] = 8
+		var pre_lv: Array = _halo_distinct_levels(pre)
+		var post_lv: Array = _halo_distinct_levels(post)
+		var pre_v: Dictionary = _halo_sky_verdict(pre, ng, "negctrl_pre_fix")
+		var pre_s: Dictionary = _halo_levels_ok(pre_lv)
+		var post_v: Dictionary = _halo_sky_verdict(post, ng, "negctrl_post_fix")
+		var post_s: Dictionary = _halo_levels_ok(post_lv)
+		var pre_fails: Array = []
+		pre_fails.append_array(pre_v.get("fails", []))
+		pre_fails.append_array(pre_s.get("fails", []))
+		var post_fails: Array = []
+		post_fails.append_array(post_v.get("fails", []))
+		post_fails.append_array(post_s.get("fails", []))
+		var pre_ok: bool = bool(pre_v.get("ok", false)) and bool(pre_s.get("ok", false))
+		var post_ok: bool = bool(post_v.get("ok", false)) and bool(post_s.get("ok", false))
+		var nres: Dictionary = {
+			"negctrl": {
+				"ran": true,
+				"rejects_pre_fix": not pre_ok,
+				"accepts_post_fix": post_ok,
+				"levels_pre_fix": pre_lv,
+				"levels_post_fix": post_lv,
+				"pre_fails": pre_fails,
+				"post_fails": post_fails,
+			},
+			"ok": (not pre_ok) and post_ok,
+			"ms": Time.get_ticks_msec() - t0,
+		}
+		Debug.result({"halo": nres})
+		return
 	var H := int(Data.HEIGHT)
 	var io: Variant = ChunkIO.io_cpp()
 	var mc: Variant = _ChunkScriptM.mesh_cpp()
@@ -12720,14 +12850,18 @@ func _halo_test(spawn: Vector3) -> void:
 				and a_inner_mism == 0,
 	}
 	# ---- (b) BANDS B/C (tier 2 = 8x8, tier 3 = 4x4 — AC-0312): NOT
-	# seeded + applied low == fresh emit on the ARM-RECOMPUTED heightmap
-	# sky AT THE SLAB'S LIVE GRID + the rule spot-checked on raw H.
+	# seeded + applied low == fresh emit on the PRODUCT sky AT THE SLAB'S
+	# LIVE GRID + the AC-0527 invariants (the stale two-level literal is
+	# gone): MONOTONE per slab, the AT cell graded strictly against the
+	# arm's raw-H read, and the BOUNDED STEP on the run's level set.
 	var b_cols := 0
 	var b_unseeded := 0
 	var b_slabs := 0
 	var b_slabs_ok := 0
 	var b_payload_bad := 0
-	var b_rule_bad := 0
+	var b_invar_bad := 0  # AC-0527: per-slab invariant failures (replaces b_rule_bad)
+	var b_levels: Dictionary = {}  # AC-0527: distinct sky values across the run (the level set)
+	var b_at_cols := 0  # AC-0527: columns whose terrain top sits on a cell bottom (the AT cells)
 	var b_fail: Array = []  # AC-0283 P3: the first few compare failures (report)
 	var b_missing: Array = []  # AC-0283 P3: columns still missing at sample time
 	var b_total := 0
@@ -12777,9 +12911,10 @@ func _halo_test(spawn: Vector3) -> void:
 			for si in range(c.data.size()):
 				if not c.far and (c.data[si] == null or si > (int(c.top) >> 4)):
 					continue
-				# the ARM-RECOMPUTED sky payload (independent of the
-				# world._halo_sky_for path — the cross-check) at the
-				# slab's live grid.
+				# the arm's OWN heightmap read: the footprint-max terrain
+				# top grid (input to the raw-H spot-check below — the sky
+				# payload itself is the PRODUCT's _halo_sky_for, gated by
+				# the invariants).
 				var fh := PackedByteArray()
 				fh.resize(G * G)
 				for gz in range(G):
@@ -12791,21 +12926,46 @@ func _halo_test(spawn: Vector3) -> void:
 								if int(hsrc[r0 + lx]) > m2:
 									m2 = int(hsrc[r0 + lx])
 						fh[gz * G + gx] = m2
-				var exp := PackedByteArray()
-				exp.resize(G * G * G)
-				var y0 := si * 16
-				for cy in range(G):
-					for cz in range(G):
-						for cx in range(G):
-							exp[cy * G * G + cz * G + cx] = 15 if y0 + cy * CB > int(fh[cz * G + cx]) else 0
-				if world._halo_sky_for(c, si) != exp:
+				# AC-0527: the AT census — the columns whose terrain top
+				# coincides with a cell bottom (the terrain-top cell
+				# exists in this grid). Evidence the bounded-step check
+				# below is non-vacuous for this run.
+				var y0s := si * 16
+				for fi in range(G * G):
+					var fhc: int = int(fh[fi])
+					if fhc >= y0s and fhc < y0s + G * CB and (fhc - y0s) % CB == 0:
+						b_at_cols += 1
+				var prod_sky: PackedByteArray = world._halo_sky_for(c, si)
+				if prod_sky.size() != G * G * G:
 					b_payload_bad += 1
-				# the rule spot-check against the RAW heightmap: the
-				# footprint-max terrain top fhv at (hx, hz) splits the
-				# slab — the topmost cell AT OR BELOW it (bottom <= fhv)
-				# is dark, the cell directly above (bottom > fhv) is lit.
-				# (The quad rule uses the cell BOTTOM: a cell straddling
-				# the surface is dark.)
+					continue
+				# AC-0527: the DURABLE invariants replace the stale
+				# two-level literal (15-above/0-at-or-below + the ==
+				# checks). Per slab: the MONOTONE verdict (never rises
+				# going down — _halo_sky_verdict). The BOUNDED STEP is
+				# the LEVEL-SET form (see _halo_levels_ok — a per-cell
+				# step is not the invariant: a mid-cell terrain top
+				# legitimately steps 0 -> 15 across two cells, pre-fix
+				# AND post-fix), applied to the run's level set below.
+				var inv: Dictionary = _halo_sky_verdict(prod_sky, G, "%d,%d:%d" % [cx0 + dx, cz0 + dz, si])
+				if not bool(inv.get("ok", false)):
+					b_invar_bad += 1
+					for f in inv.get("fails", []):
+						if b_fail.size() < 8:
+							b_fail.append(f)
+				for i in range(prod_sky.size()):
+					b_levels[int(prod_sky[i])] = true
+				# the spot-check against the RAW heightmap (AC-0527
+				# form): the footprint-max terrain top fhv at (hx, hz).
+				# When fhv coincides with a cell BOTTOM (rel % CB == 0)
+				# that cell IS the terrain-top cell (the AT cell) — the
+				# exact cell AC-0480 graded: pre-fix it was 0 (a hard
+				# 3.81x step to the cell above — the visible line),
+				# post-fix it is the middle level. The durable
+				# assertion: its value must be STRICTLY between its
+				# below and above neighbours — equality with either
+				# neighbour IS the hard step (the binary regression,
+				# caught locally against the arm's own raw-H read).
 				var hx := int((dx * 7 + si * 5) % 16)
 				if hx < 0:
 					hx += 16
@@ -12816,27 +12976,18 @@ func _halo_test(spawn: Vector3) -> void:
 				var czi := hz / CB
 				var fhv: int = int(fh[czi * G + cxi])
 				var rel: int = fhv - si * 16
-				if rel < 0:
-					# the whole slab sits above the terrain top — every
-					# cell is lit.
-					if int(exp[0 + czi * G + cxi]) != 15:
-						b_rule_bad += 1
-				elif rel / CB >= G - 1:
-					# the terrain top is at or above this slab's top —
-					# every cell is at or below it (dark).
-					if int(exp[0 + czi * G + cxi]) != 0:
-						b_rule_bad += 1
-				else:
-					var cy0: int = rel / CB  # topmost cell with bottom <= fhv
-					if int(exp[cy0 * G * G + czi * G + cxi]) != 0:
-						b_rule_bad += 1
+				if rel >= 0 and rel % CB == 0 and rel / CB < G - 1:
+					var cy0: int = rel / CB  # the AT cell: bottom == fhv
+					var a_at: int = int(prod_sky[cy0 * G * G + czi * G + cxi])
+					var a_below: int = -1
+					if cy0 >= 1:
+						a_below = int(prod_sky[(cy0 - 1) * G * G + czi * G + cxi])
+					var a_above: int = int(prod_sky[(cy0 + 1) * G * G + czi * G + cxi])
+					if (a_below >= 0 and a_at <= a_below) or a_at >= a_above:
+						b_invar_bad += 1
 						if b_fail.size() < 8:
-							b_fail.append({"slab": "%d,%d:%d" % [cx0 + dx, cz0 + dz, si], "why": "cy0_dark", "fhv": fhv, "rel": rel, "cy0": cy0, "exp": int(exp[cy0 * G * G + czi * G + cxi])})
-					if cy0 + 1 <= G - 1 and int(exp[(cy0 + 1) * G * G + czi * G + cxi]) != 15:
-						b_rule_bad += 1
-						if b_fail.size() < 8:
-							b_fail.append({"slab": "%d,%d:%d" % [cx0 + dx, cz0 + dz, si], "why": "cy1_lit", "fhv": fhv, "rel": rel, "cy0": cy0, "exp": int(exp[(cy0 + 1) * G * G + czi * G + cxi])})
-				# the applied low mesh == the fresh emit on the arm's sky.
+							b_fail.append({"slab": "%d,%d:%d" % [cx0 + dx, cz0 + dz, si], "why": "spot: AT cell not graded (a %d; below %s; above %d)" % [a_at, "%d" % a_below if a_below >= 0 else "-", a_above], "fhv": fhv, "rel": rel, "cy0": cy0})
+				# the applied low mesh == the fresh emit on the product sky.
 				var lia: int = c.low_slabs.find(si)
 				var mi: MeshInstance3D = c.low_instances[lia] if lia >= 0 and lia < c.low_instances.size() else null
 				if mi == null or mi.mesh == null or int(mi.mesh.get_surface_count()) == 0:
@@ -12854,7 +13005,7 @@ func _halo_test(spawn: Vector3) -> void:
 					# AC-0284b: the far column's fresh emit = the H-driven
 					# emitter on the payload (the applied mesh is this
 					# same emit — the worker's ore/veg precomputes
-					# reproduced; the sky is the arm's exp).
+					# reproduced; the sky is the product's prod_sky).
 					var ore2 := PackedByteArray()
 					if int(c.far_hmax) > si * 16 + 3 and si <= 3:
 						ore2 = WorldGen.gen_cpp().stone_ore_slab(int(c.cx), int(c.cz), int(Game.world_seed), int(Data.HEIGHT), si)
@@ -12869,9 +13020,9 @@ func _halo_test(spawn: Vector3) -> void:
 					# _far_floor_y(), -1 while the toggle is off), not a
 					# hard-coded SEA (the stale-expectation class AC-0329
 					# found: the arm red, the game path fine).
-					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), exp, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(world._far_floor_y()))
+					fresh = mc.h_avg_emit(c.far_h, c.far_biome, c.far_top, ore2, veg2, si, G, world._lod_fcc_get(), prod_sky, int(Data.SEA), int(Data.HEIGHT), -1, -1, 0.0, int(world._far_floor_y()))
 				else:
-					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), exp, -1, -1, 0.0, int(world._far_floor_y()))
+					fresh = mc.low_emit_avg(mc.slab_copy(c.data), si, G, world._lod_fcc_get(), prod_sky, -1, -1, 0.0, int(world._far_floor_y()))
 				if bool(fresh.get("empty", false)):
 					if int(applied["q"]) != 0:
 						if b_fail.size() < 4:
@@ -12884,13 +13035,26 @@ func _halo_test(spawn: Vector3) -> void:
 					b_slabs_ok += 1
 				elif b_fail.size() < 4:
 					b_fail.append({"slab": "%d,%d:%d" % [cx0 + dx, cz0 + dz, si], "why": "fields", "cmp": cmp, "aq": int(applied["q"]), "fq": int(fresh.get("q", -1))})
+	# AC-0527: the BOUNDED STEP on the RUN's level set — the distinct
+	# sky values the product used. Applied only when the run actually
+	# has AT cells (b_at_cols > 0): a graded product whose terrain tops
+	# all land mid-cell legitimately shows only {0, 15} here, and the
+	# step check would be a false red. Pre-fix the AT cells exist and
+	# are 0, so the level set is {0, 15} = a 3.81x step -> red.
+	var b_lv: Array = (b_levels.keys() as Array)
+	b_lv.sort()
+	var b_step: Dictionary = _halo_levels_ok(b_lv)
+	if b_at_cols == 0:
+		b_step = {"ok": true, "fails": []}
 	out["b"] = {
 		"cols": b_cols, "unseeded": b_unseeded, "slabs": b_slabs, "slabs_ok": b_slabs_ok,
-		"payload_bad": b_payload_bad, "rule_bad": b_rule_bad, "fail": b_fail,
+		"payload_bad": b_payload_bad, "invar_bad": b_invar_bad,
+		"levels": b_lv, "at_cols": b_at_cols, "step_fails": b_step.get("fails", []),
+		"fail": b_fail,
 		"missing_n": int(b_missing.size()),
 		"band0_r": int(world.band0_r), "render_radius": int(world.render_radius), "b_total": int(b_total),
-		"ok": b_unseeded == b_cols and b_payload_bad == 0 and b_rule_bad == 0 \
-				and b_slabs_ok == b_slabs and b_slabs > 0,
+		"ok": b_unseeded == b_cols and b_payload_bad == 0 and b_invar_bad == 0 \
+				and bool(b_step.get("ok", false)) and b_slabs_ok == b_slabs and b_slabs > 0,
 	}
 	# ---- (b1) BAND A (tier 1 — AC-0312): the far columns materialized to
 	# the 16x16x16 fill slabs, unseeded, with the cached sky eff
