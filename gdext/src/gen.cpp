@@ -322,6 +322,11 @@
 #include <cstring>
 #include <functional> // AC-0292: build_field_eval_c's per-point expression
 #include <vector>
+#ifdef AC0484_GEN_TIMING
+#include <fstream> // AC-0484: the per-call record file (default-off flag)
+#include <mutex>
+#include <thread>
+#endif
 
 #include "awe_common.h"
 
@@ -1607,6 +1612,102 @@ static inline long long now_us() {
 	return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+
+// ---------------------------------------------------------------------------
+// AC-0484: NEGATIVE CONTROL + per-call record for the gen timers.
+// MEASUREMENT ONLY, compiled in ONLY with AC0484_GEN_TIMING (the SConstruct
+// opt-in, default off — the plain build compiles none of this and stays
+// bit-reproducible). The stage counters above are the standing AC-0237
+// instrument (always on, process-wide); this block only (a) proves they can
+// register a difference — AC0484_INJECT_US = a known delay (microseconds)
+// slept inside generate_flat/generate_resl, which the recorded per-call
+// wall must absorb or the instrument is not evidence — and (b) stores one
+// JSON line per generate_* call (seq, cx, cz, skip, wall_us, and this
+// call's per-stage us = the before/after delta of the cumulative counters)
+// to the file named by AC0484_TIMING_FILE (absent/unset = no records, the
+// injection still applies). wall_us INCLUDES the injected delay.
+// ---------------------------------------------------------------------------
+#ifdef AC0484_GEN_TIMING
+// (the <fstream>/<mutex>/<thread> includes are at the top of the file —
+// they must NOT be pulled in from inside namespace awegen)
+struct Ac0484Stages {
+	long long field_us, heights_us, scan_us, fill_us, veg_us, pallet_us,
+			carve_us, aquifer_us, drip_us;
+};
+
+static Ac0484Stages ac0484_snapshot() {
+	Ac0484Stages s;
+	s.field_us = g_t_field_us.load(std::memory_order_relaxed);
+	s.heights_us = g_t_heights_us.load(std::memory_order_relaxed);
+	s.scan_us = g_t_scan_us.load(std::memory_order_relaxed);
+	s.fill_us = g_t_fill_us.load(std::memory_order_relaxed);
+	s.veg_us = g_t_veg_us.load(std::memory_order_relaxed);
+	s.pallet_us = g_t_pallet_us.load(std::memory_order_relaxed);
+	s.carve_us = g_t_carve_us.load(std::memory_order_relaxed);
+	s.aquifer_us = g_t_aquifer_us.load(std::memory_order_relaxed);
+	s.drip_us = g_t_drip_us.load(std::memory_order_relaxed);
+	return s;
+}
+
+static Ac0484Stages ac0484_diff(const Ac0484Stages &a, const Ac0484Stages &b) {
+	Ac0484Stages d;
+	d.field_us = b.field_us - a.field_us;
+	d.heights_us = b.heights_us - a.heights_us;
+	d.scan_us = b.scan_us - a.scan_us;
+	d.fill_us = b.fill_us - a.fill_us;
+	d.veg_us = b.veg_us - a.veg_us;
+	d.pallet_us = b.pallet_us - a.pallet_us;
+	d.carve_us = b.carve_us - a.carve_us;
+	d.aquifer_us = b.aquifer_us - a.aquifer_us;
+	d.drip_us = b.drip_us - a.drip_us;
+	return d;
+}
+
+static std::mutex g_ac0484_mu;
+static std::ofstream g_ac0484_file;
+static bool g_ac0484_file_seen = false;
+static long long g_ac0484_inject_us = -1; // -1 = env not read yet
+static long long g_ac0484_seq = 0;
+
+static long long ac0484_inject() {
+	if (g_ac0484_inject_us < 0) {
+		const char *p = std::getenv("AC0484_INJECT_US");
+		g_ac0484_inject_us = (p != nullptr && *p != '\0') ? std::atoll(p) : 0;
+		if (g_ac0484_inject_us < 0)
+			g_ac0484_inject_us = 0;
+	}
+	if (g_ac0484_inject_us > 0)
+		std::this_thread::sleep_for(std::chrono::microseconds(g_ac0484_inject_us));
+	return g_ac0484_inject_us;
+}
+
+static void ac0484_record(int cx, int cz, int skip, long long wall_us,
+		const Ac0484Stages &s, long long inject_us) {
+	if (g_ac0484_inject_us < 0) // ensure the env was read (inject() may not have run)
+		ac0484_inject();
+	{
+		std::lock_guard<std::mutex> lk(g_ac0484_mu);
+		if (!g_ac0484_file_seen) {
+			g_ac0484_file_seen = true;
+			const char *p = std::getenv("AC0484_TIMING_FILE");
+			if (p != nullptr && *p != '\0')
+				g_ac0484_file.open(p, std::ios::app);
+		}
+		if (!g_ac0484_file.is_open())
+			return;
+		g_ac0484_seq += 1;
+		g_ac0484_file << "{\"seq\":" << g_ac0484_seq
+				<< ",\"cx\":" << cx << ",\"cz\":" << cz << ",\"skip\":" << skip
+				<< ",\"wall_us\":" << wall_us << ",\"inject_us\":" << inject_us
+				<< ",\"field_us\":" << s.field_us << ",\"heights_us\":" << s.heights_us
+				<< ",\"scan_us\":" << s.scan_us << ",\"fill_us\":" << s.fill_us
+				<< ",\"veg_us\":" << s.veg_us << ",\"pallet_us\":" << s.pallet_us
+				<< ",\"carve_us\":" << s.carve_us << ",\"aquifer_us\":" << s.aquifer_us
+				<< ",\"drip_us\":" << s.drip_us << "}\n";
+		g_ac0484_file.flush();
+	}
+}
+#endif // AC0484_GEN_TIMING
 
 // ---------------------------------------------------------------------------
 // AC-0291 — the VORONOI AQUIFERS (minecraft.wiki/w/Cave §Aquifer — the Java
@@ -4422,12 +4523,22 @@ public:
 	// p_keep[si] != 0); an EMPTY array = the full column, bit-identical
 	// to the pre-AC-0237 output (the genhash A==B gate relies on it).
 	PackedByteArray generate_flat(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0) const {
+#ifdef AC0484_GEN_TIMING
+		long long _ac0484_t0 = now_us();
+		Ac0484Stages _ac0484_pre = ac0484_snapshot();
+#endif
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
 		std::vector<uint8_t> f = awegen::gen_flat(p_cx, p_cz, p_s, p_h, p_sea, p_skip, keep, nullptr, p_face, p_R);
 		PackedByteArray out;
 		out.resize((int)f.size());
 		if (!f.empty())
 			std::memcpy(out.ptrw(), f.data(), f.size());
+#ifdef AC0484_GEN_TIMING
+		Ac0484Stages _ac0484_post = ac0484_snapshot();
+		long long _ac0484_inj = ac0484_inject();
+		ac0484_record(p_cx, p_cz, p_skip, now_us() - _ac0484_t0,
+				ac0484_diff(_ac0484_pre, _ac0484_post), _ac0484_inj);
+#endif
 		return out;
 	}
 
@@ -4453,6 +4564,10 @@ public:
 	// skip != 0 and the size is exactly 1024; an absent/undersized
 	// payload keeps the legacy un-carved fill (never an error).
 	Array generate_resl(int p_cx, int p_cz, int p_s, int p_h, int p_sea, int p_skip, PackedByteArray p_keep, int p_face = 0, double p_R = 4000.0, PackedByteArray p_pay = PackedByteArray()) const {
+#ifdef AC0484_GEN_TIMING
+		long long _ac0484_t0 = now_us();
+		Ac0484Stages _ac0484_pre = ac0484_snapshot();
+#endif
 		if (p_skip == 2) {
 			std::vector<uint8_t> pay = awegen::gen_far(p_cx, p_cz, p_s, p_h, p_sea, p_face, p_R);
 			Array resl;
@@ -4476,6 +4591,13 @@ public:
 			fp["bm"] = pb;
 			fp["top"] = pt;
 			resl.append(fp);
+#ifdef AC0484_GEN_TIMING
+			// the FAR path — the far stage (g_t_far_us) is outside the nine
+			// snapshot counters; record the wall with zero stage deltas
+			long long _ac0484_inj_f = ac0484_inject();
+			ac0484_record(p_cx, p_cz, p_skip, now_us() - _ac0484_t0,
+					ac0484_diff(_ac0484_pre, _ac0484_pre), _ac0484_inj_f);
+#endif
 			return resl;
 		}
 		const uint8_t *keep = p_keep.size() > 0 ? (const uint8_t *)p_keep.ptr() : nullptr;
@@ -4520,6 +4642,12 @@ public:
 			fp["top"] = pt;
 			resl.append(fp);
 		}
+#ifdef AC0484_GEN_TIMING
+		Ac0484Stages _ac0484_post = ac0484_snapshot();
+		long long _ac0484_inj = ac0484_inject();
+		ac0484_record(p_cx, p_cz, p_skip, now_us() - _ac0484_t0,
+				ac0484_diff(_ac0484_pre, _ac0484_post), _ac0484_inj);
+#endif
 		return resl;
 	}
 

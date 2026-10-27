@@ -1,0 +1,98 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0484 results — native generation cost baseline</title><style>body{font:15px/1.5 system-ui;max-width:900px;margin:24px auto;padding:0 16px}h2{font-size:17px;margin-top:22px;border-bottom:1px solid #ddd;padding-bottom:4px}table{border-collapse:collapse;font-size:13px;margin:10px 0}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f0f0f0}code,pre{font:13px/1.4 ui-monospace,Menlo,monospace}pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}.dev{background:#fff3cd;border-left:4px solid #b8860b;padding:.6rem 1rem}.note{font-size:13px;color:#555}td.ok{color:#0a0;font-weight:bold}td.bad{color:#a00;font-weight:bold}</style></head><body>
+<h1>AC-0484 — native generation cost baseline (measurement only)</h1>
+<div class="dev"><b>DEVELOPMENT-ONLY — every number on this page is from the Linux box (Intel i5-9400F, software GL/llvmpipe), not the shipped Windows product.</b> No optimisations, no feature removals, no speedup claims, no atlas layout. Deliverables: a ranked, truthful cost breakdown + a reusable protocol (<a href="protocol.html">protocol.html</a>) + the fixed corpus (<a href="corpus.txt">corpus.txt</a>). Windows native timing is handed over as a protocol, not faked (protocol §8).</div>
+
+<h2>1. Gates</h2>
+<table><tr><th>Arm</th><th>rc</th><th>script err</th><th>ok</th><th>Headline (all values greppable in .scratch/AC-0484-gates/)</th></tr>
+<tr><td><code>g0</code> (gate_run, default .so)</td><td>0</td><td>0</td><td class="ok">true</td><td>bare headless load, 3 s</td></tr>
+<tr><td><code>genhash</code> (gate_run, default .so)</td><td>0</td><td>0</td><td class="ok">true</td><td>25/25 <code>GENHASH</code> lines = the standing reference (<code>.scratch/AC-0311-gates/p2_genhash_r1.log</code>); GENMS 130/142 (in-box machine spread 126–138)</td></tr>
+<tr><td><code>colbytes</code> (gate_run, default .so)</td><td>0</td><td>0</td><td class="ok">true</td><td>25 columns, 902 ms total (36.1 ms/col), bytes_avg 2070, codec v4</td></tr>
+<tr><td>driver <code>negctrl</code> (instrumented .so)</td><td>0</td><td>0</td><td class="ok">true</td><td>5000 µs injected → per-call wall median 5346 → 10399 µs (delta <b>5053 µs</b>); stage-sum unchanged (5156 vs 5226) — the timer registers a difference</td></tr>
+<tr><td>driver <code>trials</code> (instrumented .so)</td><td>0</td><td>0</td><td class="ok">true</td><td>125 samples (5 interleaved trials × 25 chunks); trial medians 5329–5350 µs (0.4% spread — interleaving holds); driver GENHASH 25/25 = reference</td></tr>
+<tr><td>production run (default .so, battery=player)</td><td>0</td><td>0</td><td class="ok">true</td><td>170 worker gens / 134 mesh builds / 107 light seeds / 103 distinct chunks streamed; 0 SCRIPT ERROR</td></tr>
+<tr><td>instrument-off identity</td><td>—</td><td>—</td><td class="ok">true</td><td>default rebuild <b>bit-reproducible</b>: md5 <code>8feae1e8c330dbff38058a9ed9ae168b</code> = the pre-AC-0484 .so (build.log); genhash 25/25 ×2 + = reference</td></tr>
+</table>
+<p class="note">G0 over ALL measurement logs (driver ×2, prod, colbytes, genhash ×2): 0 SCRIPT ERROR / 0 SHADER ERROR lines.</p>
+
+<h2>2. Metadata (4a — a timing table without this is not reproducible)</h2>
+<pre>
+revision    7731c0d (AC-0527 tip; the other session's dirty files untouched)
+build       template_release, -O2 -ffp-contract=off (SCons v4.11.1, the .scratch venv —
+            SCons is not on PATH; same toolchain — the default rebuild is bit-identical)
+.so md5     instrumented 23533acb… / default 8feae1e8… (build.log); AC0484_GEN_TIMING flag
+            OFF for: genhash, colbytes, the production run. ON for: the driver runs.
+hardware    Intel Core i5-9400F @ 2.90 GHz, 6 cores, 64 GB RAM, Linux (llvmpipe — not the product)
+workers     driver: 1 (serial, the point — queue wait = 0 by construction, stated below)
+            production: 2 gen / 4 mesh (the 40/60 auto-split of 6 cores), threadgen loading cap 8
+settings    seed 44, HEIGHT 384, SEA 126, render radius 4, face 0 / R 4000, skip 0 / keep empty
+            (full column), shipped DEFAULTS (AWECRAFT_IGNORE_SETTINGS=1 on the battery path),
+            blur OFF (user ruling), planet_R 4000
+corpus      C1 gen 25 chunks (corpus.txt); C2 production = the streamed set of one
+            battery=player boot (103 distinct chunks); C3 colbytes' own 25-column ring
+contention  every run logged a snapshot (*/.env files): other_engine=none in all; loadavg
+            0.72–1.17 (a quiet box, no other engine, top procs = our own sandbox shells).
+            NO trial was discarded; nothing was averaged in under contention.
+</pre>
+
+<h2>3. The ranked cost breakdown — generation, per stage (corpus C1, 125 per-chunk samples, 5 interleaved trials)</h2>
+<p>Attribution: the standing AC-0237 cumulative stage counters in <code>gdext/src/gen.cpp</code>, diffed around each <code>generate_resl</code> call (single-threaded driver → exact). Per-chunk µs; “n&gt;0” = chunks where the stage actually ran.</p>
+<table><tr><th>#</th><th>Stage (gen.cpp counter)</th><th>median µs</th><th>p95 µs</th><th>p99 µs</th><th>spread (max−min)</th><th>n&gt;0</th><th>% of stage-sum</th></tr>
+<tr><td>1</td><td>field — the coarse 3D field builds (7 surface/cave/biome/ore fields)</td><td>1888</td><td>1940</td><td>2024</td><td>197</td><td>125</td><td>36.1%</td></tr>
+<tr><td>2</td><td>scan — the top-down density evaluation (the vanilla density router per column)</td><td>1592</td><td>1662</td><td>1692</td><td>180</td><td>125</td><td>30.5%</td></tr>
+<tr><td>3</td><td>fill — the per-cell emit incl. ores/biome rules</td><td>1142</td><td>1198</td><td>1218</td><td>226</td><td>125</td><td>21.9%</td></tr>
+<tr><td>4</td><td>pallet — palettize_slabs (the slab encoding of the gen output)</td><td>256</td><td>280</td><td>294</td><td>77</td><td>125</td><td>4.9%</td></tr>
+<tr><td>5</td><td>drip — the post-carve speleothem/clay pass (deep decoration)</td><td>225</td><td>241</td><td>246</td><td>49</td><td>125</td><td>4.3%</td></tr>
+<tr><td>6</td><td>aquifer — the Voronoi aquifer per-chunk table build</td><td>49</td><td>55</td><td>65</td><td>22</td><td>125</td><td>0.9%</td></tr>
+<tr><td>7</td><td>heights — surface_h + col_heights_pass (the 256-column height/biome table)</td><td>34</td><td>37</td><td>42</td><td>23</td><td>125</td><td>0.7%</td></tr>
+<tr><td>8</td><td>veg — trees + flowers</td><td>15</td><td>25</td><td>27</td><td>21</td><td>125</td><td>0.3%</td></tr>
+<tr><td>9</td><td>carve — the classic carver (sparse: 124/125 ran; the one 0 = no feature chunk)</td><td>7</td><td>108</td><td>165</td><td>168</td><td>124</td><td>0.1%</td></tr>
+<tr><td colspan="2"><b>stage sum / whole-call wall / unattributed gap</b></td><td><b>5226</b></td><td>5376</td><td>5502</td><td>444</td><td>—</td><td>100%</td></tr>
+</table>
+<p class="note">Whole-call <code>generate_resl</code> wall (worker-equivalent, serial): median <b>5345</b>, p95 5512, p99 5621, spread 461 µs. The stages explain 97.8% of it; the 119 µs median gap is call setup/marshalling outside the counted passes (stated, not hidden). Plan-stage mapping: surface_h + col_heights_pass → #7; field construction → #1; carved_top_pass exists only on the far/veg-cells lane (not in this corpus) — on the FULL path the carved top is computed inside #2/#9; aquifer/decoration/encoding → #6/#8/#5/#4. <b>Nothing was removed to make these look better</b>: the genhash 25/25 against the standing reference is the proof the cave/aquifer/carver/drip/decoration features are all intact.</p>
+
+<h2>4. The other four buckets (separated, with attribution)</h2>
+<table><tr><th>Bucket</th><th>median</th><th>p95</th><th>p99</th><th>max</th><th>n</th><th>Attribution (stated per the plan)</th></tr>
+<tr><td><b>Queue wait</b></td><td>0 ms</td><td>1 ms</td><td>1 ms</td><td>1 ms</td><td>170</td><td>production run (2 gen workers, r4 spawn + walk): the worker's start time minus the entry's enqueue time (the pre-existing <code>TGENW wait</code> field, ms resolution). At steady state with 2 workers the gen lane is not the bottleneck — the wait is ≤1 ms. The driver's serial design makes queue wait 0 <b>by construction</b>, so the §3 stage numbers carry zero queue wait.</td></tr>
+<tr><td><b>Generation (worker wall)</b></td><td>5 ms</td><td>6 ms</td><td>9 ms</td><td>9 ms</td><td>170</td><td>production <code>TGENW wms</code> at the worker call site — the real <code>generate_resl</code> under 2-way concurrency + the mesh lane on the shared cores (ms resolution; the p99 9 ms tail is core contention, not a gen stage). Cross-checks §3: serial driver 5.345 ms vs 2-worker median 5 ms.</td></tr>
+<tr><td><b>Meshing</b></td><td>3278 µs</td><td>4911 µs</td><td>6205 µs</td><td>7133 µs</td><td>134</td><td>one <code>build_accs</code> high-path build at the mesh-lane call site (new <code>TMESHW</code> print, timing-gated). INCLUDES the per-slab static light pull (the C++ build self-lights via <code>awelight::pull</code>) — that pull is not separable from this call without new instrumentation; said here, not hidden. The low-LOD lane (<code>low_emit_avg</code>) is a separate cheaper emit, NOT in this number.</td></tr>
+<tr><td><b>Lighting (landing seed)</b></td><td>2434 µs</td><td>2714 µs</td><td>2839 µs</td><td>2861 µs</td><td>107</td><td>the starlight engine's whole-column seed at landing (new <code>STSEED</code> print around <code>star.seed_column</code>, timing-gated). The engine's flood steps are frame-budgeted ongoing work (the per-frame budget is the live contract), not a per-chunk landing cost.</td></tr>
+<tr><td><b>I/O + data-lane light</b></td><td colspan="4">902 ms / 25 columns = 36.1 ms/column (bytes_avg 2070, v4 codec)</td><td>25</td><td>the standing <code>colbytes</code> arm (corpus C3): full-column <code>compute_light_flat_chunk_pull</code> + palettize + <code>encode_column</code> — the data-lane static pull (far heavier than the per-slab pull inside the mesh build) + the save encode. Disk writes are periodic (the save lane), bounded by ≈2 KB/chunk.</td></tr>
+</table>
+<p class="note">Reading the separation: at the per-chunk scale the whole pipeline is ≈ 5.3 ms generation + 3.3 ms meshing (incl. its light pull) + 2.4 ms light seed + (save-encode + data-lane pull only when that lane runs) + ≤1 ms queue wait. Generation is the LARGEST single bucket and its top-3 stages (field 36% / scan 31% / fill 22% = 88% of generation) are the honest targets for the series — but meshing + the data-lane pull are the same order of magnitude, and the queue wait is a non-issue at r4 with 2 workers.</p>
+
+<h2>5. The timer negative control (4d)</h2>
+<pre>
+injected delay (AC0484_INJECT_US, inside generate_resl after the work): 5000 us
+base    (trial 0, no injection, 25 samples): wall median 5346 us
+injected (25 samples):                        wall median 10399 us
+observed delta:                               5053 us  (+0.9% over the injection)
+stage-sum median, injected run:               5156 us  (vs 5226 base — inside the spread)
+VERDICT: the per-call wall registers the known delay almost exactly AND the stage
+counters do NOT absorb it — both the wall clock and the stage diff are proven
+sensitive. An instrument never shown to be sensitive is not evidence; this one is.</pre>
+
+<h2>6. Instrument-off identity (4e)</h2>
+<pre>
+default rebuild (flag off) .so md5 8feae1e8c330dbff38058a9ed9ae168b
+= the PRE-instrument .so (bit-reproducible, the AC-0480 pattern)
+genhash run 1 vs run 2:      25/25 byte-identical (GENMS 130 / 142)
+genhash run 1 vs the standing reference (.scratch/AC-0311-gates/p2_genhash_r1.log): 25/25
+the driver's own corpus output (generate_flat over C1): 25/25 = the same reference
+features intact: caves, aquifer, carver, drip, decoration — all inside those hashes</pre>
+
+<h2>7. Deviations (full text: AC-0484-deviations.txt)</h2>
+<p class="note">(1) slot test tightened to the engine binary path (the bare-word test self-locked once on our own grep string); (2) the C++ per-stage counters already existed (AC-0237, always-on) — the flag adds only the negative-control injection + the per-call record; (3) production run = battery=player (a bare headless run stops at the menu; battery=settings exits before streaming); (4) SCons via the .scratch venv (not on PATH); (5) Windows not run here — handed over as protocol §8.</p>
+
+<h2>8. Files</h2>
+<pre>
+gdext/src/gen.cpp        the AC0484_GEN_TIMING block (negative control + per-call JSONL record,
+                         default-off; includes + 3 call-site wraps in generate_flat/generate_resl)
+gdext/SConstruct         the AC0484_GEN_TIMING=1 opt-in define (default off)
+godot/world/world.gd     2 timing-gated prints at the call sites (TMESHW mesh lane,
+                         STSEED light seed) — inert unless AWECRAFT_TIMING=1
+tasks/AC-0484/           corpus.txt, protocol.html, AC-0484-results.html,
+                         AC-0484-deviations.txt, continuity.md
+.scratch/AC-0484/        driver.gd, run_engine.sh, run_envlog.sh, parse.py, ac0484_stats.json
+.scratch/AC-0484-gates/  every log + the stats json + build.log (all numbers above are greppable there)
+</pre>
+</body></html>

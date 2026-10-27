@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0484 — the generation-cost measurement protocol</title><style>body{font:15px/1.5 system-ui;max-width:66rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.35rem .5rem}table{border-collapse:collapse}code{background:#eee}.dev{background:#fff3cd;border-left:4px solid #b8860b;padding:.6rem 1rem}ol li,ul li{margin:.3rem 0}</style></head><body>
+<h1>AC-0484 — the generation-cost measurement protocol</h1>
+<p>The reusable procedure for measuring <b>where the native generation time actually goes</b>, split from meshing / lighting / I/O / queue wait. Written so a later ticket in the continent series — and the user on <b>Windows</b> — can re-run it exactly. The Linux numbers in <a href="AC-0484-results.html">AC-0484-results.html</a> are the first run of this protocol.</p>
+<div class="dev"><b>DEVELOPMENT-ONLY.</b> Linux headless numbers (including every number this protocol produces on this box) are development evidence on a box that renders through llvmpipe. <b>Shipping Windows is the acceptance platform</b> (the shared plan, §08: “Linux headless runs are development evidence, not a substitute”). Label every quoted figure accordingly. No speedup claims and no atlas layout are decided by any run of this protocol — it only produces a baseline.</div>
+
+<h2>0. What is being separated (the one fatal error to avoid)</h2>
+<p>Total per-chunk cost is a sum of five buckets that must never be blended: <b>generation</b> (the C++ native stages), <b>meshing</b>, <b>lighting</b>, <b>I/O</b>, and <b>queue wait</b> (time a request sits before a worker starts it). A number like “a chunk costs 29 ms” is useless if it silently includes queue wait or mesh time (AC-0474’s “the fill stalls” was an instrument watching one lane while the other landed 16,320 chunks). This protocol measures each bucket with its OWN clock at its OWN call site, and states the attribution below.</p>
+
+<h2>1. The buckets and how each is attributed</h2>
+<table><tr><th>Bucket</th><th>What is timed</th><th>Attribution method</th><th>Instrument</th></tr>
+<tr><td><b>generation — per stage</b></td><td>the nine C++ stage passes of <code>generate_resl</code> (the worker’s exact call): field construction, column heights (surface_h + col_heights_pass), the top-down density scan, the cell fill, decoration (trees/flowers), encoding (palettize_slabs), the carver, the aquifer, the drip pass</td><td>the standing AC-0237 process-wide cumulative counters in <code>gdext/src/gen.cpp</code>, diffed <b>around each call</b> (snapshot before / after) — exact in the single-threaded driver; the per-call record is written to a JSONL file by the AC-0484 build flag</td><td><code>AweGen.gen_timing()</code> + the <code>AC0484_GEN_TIMING</code> build block (gen.cpp, default OFF)</td></tr>
+<tr><td><b>generation — whole call</b></td><td>the full <code>generate_resl</code> wall time, worker-side equivalent</td><td>wall clock around the call, both in the driver (GDScript µs) and in production (the existing <code>TGENW wms</code> print at the worker call site)</td><td>driver <code>SMP</code> lines; world.gd <code>TGENW</code> (pre-existing)</td></tr>
+<tr><td><b>queue wait</b></td><td>time between the chunk request being enqueued and the worker starting it</td><td><code>wt − tenq</code> inside world.gd: the entry’s enqueue timestamp vs the worker’s start timestamp — the existing <code>TGENW wait</code> field (ms resolution)</td><td>world.gd <code>TGENW wait</code> (pre-existing, <code>AWECRAFT_TIMING=1</code>)</td></tr>
+<tr><td><b>meshing</b></td><td>one <code>AweMesh.build_accs</code> high-path build (slab decode + bake box + snap + ro scan + greedy emit, <b>including the per-slab static light pull</b> — the C++ build self-lights through <code>awelight::pull</code>; that pull is NOT separable from this call without new instrumentation, and this protocol does not add it)</td><td>wall clock around the build_accs call in the mesh-lane worker (<code>TMESHW wus</code>, added by this ticket, inert unless <code>AWECRAFT_TIMING=1</code>). The low-LOD lane (<code>low_emit_avg</code>) is a separate, cheaper emit and is NOT in this number — state that when quoting.</td><td>world.gd <code>TMESHW</code> (this ticket)</td></tr>
+<tr><td><b>lighting</b></td><td>the starlight engine’s whole-column seed at landing (<code>star.seed_column</code>)</td><td>wall clock around the seed at the landing call site (<code>STSEED wus</code>, added by this ticket, inert unless <code>AWECRAFT_TIMING=1</code>). The engine’s later flood steps are frame-budgeted ongoing work, not part of the per-chunk landing cost — the per-frame budget is the live contract, not a per-chunk number.</td><td>world.gd <code>STSEED</code> (this ticket)</td></tr>
+<tr><td><b>I/O + data-lane light</b></td><td>per chunk: the full-column static light pull (<code>compute_light_flat_chunk_pull</code>) + palettize + <code>encode_column</code> (v4 codec)</td><td>the standing <code>AWECRAFT_LOGIC=colbytes</code> arm over its fixed 25-column set (C3) — the data-lane pull + the save encode. Actual disk writes are periodic (the save lane), not per-frame; the encode size (≈2 KB/chunk median) bounds them.</td><td>harness <code>colbytes</code> arm (pre-existing)</td></tr>
+</table>
+
+<h2>2. The fixed corpus</h2>
+<p>Pin the exact requests BEFORE measuring; write them down; never let a re-run measure different work. See <a href="corpus.txt">corpus.txt</a> for the pinned sets:</p>
+<ul>
+<li><b>C1 — generation:</b> 25 full-column <code>generate_resl(cx, cz, 44, 384, 126, 0, empty, 0, 4000)</code> requests, (cx,cz) over the genhash arm’s own 5×5 window — so the measured work and the byte-identity gate cover the same geography. One unrecorded warmup pass, then the trials.</li>
+<li><b>C2 — production pipeline:</b> one real boot, seed 44, the harness battery’s <code>player</code> mode (new world, spawn recenter, sim-band wait, scripted walk) with <code>AWECRAFT_TIMING=1</code>. The streamed set is whatever the scheduler enqueues; record it from the TGENW lines.</li>
+<li><b>C3 — I/O:</b> the standing colbytes arm (25 columns, seed 44, the arm’s fixed ring).</li>
+</ul>
+
+<h2>3. The trial design (5 INTERLEAVED, not back-to-back)</h2>
+<ol>
+<li><b>At least five trials per bucket that is re-measurable in-process</b> (the C1 driver). Run <b>at least five paired/interleaved trials</b> and more if variance obscures the outcome (shared plan §08).</li>
+<li><b>Interleaved means:</b> for corpus position i, its five samples are ADJACENT calls (global k = 5·i + tr). Back-to-back trials let thermal / page-cache drift masquerade as variance (trial 1 cold, trial 5 warm). Interleaved, drift hits every trial evenly, and the per-chunk spread becomes a real per-chunk effect size. (This project was bitten by single-sample thresholds: an earlier p95 was fitted to two samples on an arm that wanders 37–40.)</li>
+<li><b>Report median, p95, p99 AND the spread</b> (min–max) per stage, per-chunk sample counts (n, and n&gt;0 for stages that are sparse — the carver is ~15%/chunk), plus per-trial aggregates (their spread shows the interleaving worked: at 7731c0d the five trial medions were 5329–5350 µs, a 0.4% spread).</li>
+<li><b>Contention is disqualifying, not averageable.</b> Before every engine call record: date, loadavg, the top processes, and whether another engine is running (the slot guard). A contended trial is <b>invalid</b> — drop it and say so; never average it in. Timing runs are the most contention-sensitive work on a shared box.</li>
+</ol>
+
+<h2>4. The timer negative control (an instrument never shown to be sensitive is not evidence)</h2>
+<ol>
+<li>Build with <code>AC0484_GEN_TIMING=1</code> (SConstruct opt-in, default off — the plain build is bit-identical, verified by md5 against the pre-instrument build).</li>
+<li>Run the driver once with <code>AC0484_INJECT_US=5000</code>: a known 5000 µs delay slept inside <code>generate_resl</code>, AFTER the work.</li>
+<li>Pass = the per-call WALL grows by ≈ the injected amount (observed at 7731c0d: median 5346 → 10399 µs, delta 5053 µs) AND the stage counters do NOT absorb it (stage-sum stays ~5.2 ms) — the injection lands in the wall, not in the work, so both the wall clock and the stage diff are proven to register differences.</li>
+<li>No pass on the control = no evidence from the measurement; fix the instrument before quoting anything.</li>
+</ol>
+
+<h2>5. Output identity (the instrumentation must be inert when off)</h2>
+<ol>
+<li>Rebuild WITHOUT the flag; the <code>.so</code> must be <b>bit-reproducible</b> against the pre-instrument build (md5) — the AC-0480 pattern. At 7731c0d it was: <code>8feae1e8…</code> both sides.</li>
+<li>Run <code>AWECRAFT_LOGIC=genhash</code> twice; both runs must print <b>25/25 identical</b> <code>GENHASH</code> lines, and they must equal the standing reference set in <code>godot/HARNESS.md</code> §3 (at 7731c0d: <code>.scratch/AC-0311-gates/p2_genhash_r1.log</code>). The hash set bakes in caves, aquifer, carver, drip, decoration — 25/25 against the reference is the “features intact” proof. Never rebase a surprise mismatch: it is a finding.</li>
+</ol>
+
+<h2>6. The metadata block (a timing table without it is not reproducible)</h2>
+<p>Record with every result: git revision; build (target, flags, the instrumentation flag on/off, the <code>.so</code> md5); CPU model + core count; memory; worker counts (gen/mesh, and whether auto-split); the settings in force (seed, HEIGHT/SEA, render radius, blur OFF, default-settings loader); the corpus id; the contention snapshot of the run; and the engine version.</p>
+
+<h2>7. The runs, in order (Linux)</h2>
+<pre>
+# 1. instrumented build (the driver measurements)
+AC0484_GEN_TIMING=1 &lt;scons&gt; -C gdext platform=linux target=template_release
+cp gdext/bin/libchunkio.so godot/bin/libchunkio.so
+
+# 2. negative control, then the 5 interleaved trials (driver; corpus C1)
+bash .scratch/AC-0484/run_engine.sh negctrl
+bash .scratch/AC-0484/run_engine.sh trials
+
+# 3. default build (everything else runs INSTRUMENT-OFF)
+&lt;scons&gt; -C gdext platform=linux target=template_release
+cp gdext/bin/libchunkio.so godot/bin/libchunkio.so    # md5 must match the pre-instrument .so
+
+# 4. output identity (genhash 25/25 x2 vs the standing reference)
+python3 tasks/scripts/gate_run.py AC-NNNN --arms g0,genhash
+
+# 5. production buckets (corpus C2) + I/O (C3)
+bash .scratch/AC-0484/run_engine.sh prod      # AWECRAFT_TIMING=1 AWECRAFT_BATTERY=player
+python3 tasks/scripts/gate_run.py AC-NNNN --arms colbytes
+</pre>
+<p>(The runners slot-guard on the engine binary path, memory-cap the engine, record the contention snapshot, and never kill a process they did not start. The driver and runners live in <code>.scratch/AC-0484/</code> — copy them for the next ticket or into the Windows box; they are plain bash + one GDScript SceneTree script with no repo dependencies.)</p>
+
+<h2>8. Running it on Windows (the handover)</h2>
+<p>This ticket did NOT run the Windows numbers — the acceptance platform needs its own execution window. To run the protocol there:</p>
+<ol>
+<li><b>Build:</b> <code>python3 -m SCons -C gdext platform=windows target=template_release</code> (the MinGW cross path works from Linux too — gdext/AGENTS.md), or the native Windows build. Do it TWICE: once plain (record the .dll md5), once with <code>AC0484_GEN_TIMING=1</code>.</li>
+<li><b>Engine:</b> the Windows 4.7.1 engine + the game export or the editor with <code>--path</code>. The driver is a headless SceneTree script: <code>godot.exe --headless --path &lt;game&gt; -s &lt;absolute&gt;\driver.gd</code> with <code>AC0484_TRIALS=5</code> and <code>AC0484_TIMING_FILE</code> set. (If <code>-s</code> does not load the GDExtension in a given engine build, the fallback is a temporary harness arm calling the same driver body — add and REMOVE it in the same task, harness.gd stays pristine after.)</li>
+<li><b>Runs:</b> the same five runs in §7 (negctrl / trials / identity / prod / colbytes). The prod run needs the shipped build, not the cross-build, for honest product numbers.</li>
+<li><b>Quiet box:</b> a Windows dev box is usually quieter than a shared Linux one — still record the contention snapshot per run; the rule (contended = invalid) does not relax.</li>
+<li><b>Report:</b> the same table shape, same statistics, same attribution text, and the same label: <b>the Linux column stays development-only</b>; the Windows column is the acceptance data. No speedup claim until the series’ optimization tickets have re-run this protocol and shown a repeatable reduction beyond run-to-run noise on the same corpus.</li>
+</ol>
+
+<h2>9. What a result of this protocol is allowed to say</h2>
+<ul>
+<li>“Stage X is N% of generation” (ranked, per the measured stages) — with the metadata block attached.</li>
+<li>“Generation costs A; meshing B; lighting C; I/O D; queue wait E — measured separately this way.”</li>
+<li>Nothing else. No “we should remove Y to be faster”, no “the new generator will be 20% faster”, no atlas layout. Those belong to the tickets that cite this baseline.</li>
+</ul>
+</body></html>

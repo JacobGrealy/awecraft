@@ -1,0 +1,55 @@
+# AC-0484 — the FIXED REPRESENTATIVE REQUEST CORPUS (part of the protocol).
+# Every trial, and every future re-run, must measure exactly this work.
+# DEVELOPMENT-ONLY numbers (Linux/llvmpipe box) are produced from it.
+
+## C1 — the generation corpus (the per-stage table's work)
+
+25 full-column generation requests, the EXACT call the threadgen worker
+makes for a home chunk (godot/world/world.gd `_threadgen_worker`, home path):
+
+    AweGen.generate_resl(cx, cz, 44, 384, 126, 0, PackedByteArray(), 0, 4000.0)
+
+i.e. (cx, cz, seed, HEIGHT, SEA, skip, keep) with the C++ defaults
+(face=0, R=4000):
+
+The 25 requests (every (cx, cz) with cx, cz in {-2,-1,0,1,2}), in row order:
+  (-2,-2) (-1,-2) (0,-2) (1,-2) (2,-2)
+  (-2,-1) (-1,-1) (0,-1) (1,-1) (2,-1)
+  (-2, 0) (-1, 0) (0, 0) (1, 0) (2, 0)
+  (-2, 1) (-1, 1) (0, 1) (1, 1) (2, 1)
+  (-2, 2) (-1, 2) (0, 2) (1, 2) (2, 2)
+
+Pinned constants (in force at measurement, 7731c0d):
+  seed   44          (the harness default; Game.new_world(44))
+  HEIGHT 384         (autoload/data.gd)
+  SEA    126         (autoload/data.gd)
+  skip   0           (the FULL column — no lazy-skip, no band-A, no far)
+  keep   empty       (no vertical-window keep mask — the full column)
+  face   0, R 4000   (the home pair, the planet default)
+  settings: shipped defaults (blur OFF by user ruling; the battery path
+            loads defaults via AWECRAFT_IGNORE_SETTINGS=1)
+  warmup: 1 unrecorded pass over the corpus before trial 1
+  trials: 5, INTERLEAVED (chunk i's 5 samples are adjacent calls k = 5i+tr)
+
+The corpus is the genhash arm's own 5x5 window — the standing
+byte-identity gate's geography, so "the measured work" and "the gated
+output" are the same 25 chunks.
+
+## C2 — the production-pipeline corpus (queue wait / mesh / light)
+
+One real game boot, seed 44: `AWECRAFT_BATTERY=player` (harness battery —
+`Game.new_world(44)`, recenter at the deterministic spawn, wait for the
+sim band, the scripted walk). The streamed chunk set is whatever the
+scheduler enqueues (this run: 103 distinct chunks, 170 worker gens).
+Recorded from the TGENW lines of .scratch/AC-0484-gates/prod.log.
+Worker settings in force: 2 gen workers / 4 mesh workers (the 40/60
+auto-split of this box's 6 cores), render radius 4.
+
+## C3 — the I/O + data-lane light corpus (the colbytes arm)
+
+The standing `AWECRAFT_LOGIC=colbytes` arm: 25 real columns at seed 44
+((0,0) + a golden-angle ring of radius 24 chunks — the arm's own fixed
+set), each: compute_light_flat_chunk_pull + palettize + encode_column
+(v4 codec). This is the data-lane static light pull + the save encode —
+the per-chunk I/O-adjacent cost that the mesh lane does NOT pay a second
+time (build_accs re-pulls per slab, the C++ pull kernel inside the mesh).

@@ -6550,6 +6550,8 @@ func _star_seed_column(c: Node3D) -> void:
 	var _t1s := Time.get_ticks_usec()
 	star_seed_count[key] = int(star_seed_count.get(key, 0)) + 1
 	star_seed_us[key] = int(star_seed_us.get(key, 0)) + (_t1s - _t0s)
+	if timing:
+		print("STSEED %d,%d wus=%d" % [cx, cz, _t1s - _t0s])  # AC-0484: the light-seed call site (inert unless AWECRAFT_TIMING=1)
 	star_owed[key] = true
 
 # Re-land CHANGED slabs of an existing column (a regen merge / an
@@ -8085,8 +8087,11 @@ func _tm_worker_run(skey: int) -> void:
 	# black cap renders them on the main thread.
 	# AC-0331: the last arg = the far-tier mesh floor (-1 for every
 	# non-band-A entry — the real band never floors).
+	var _ac0484_mt0 := Time.get_ticks_usec()  # AC-0484: the mesh-lane call site (inert unless AWECRAFT_TIMING=1)
 	var res: Dictionary = mc.build_accs(entry["data"], entry["fl"], int(entry["cx"]), int(entry["cz"]), entry["nbs"], entry["ctx"], entry["ms"], entry["eff"], int(entry.get("si0", 0)), int(entry.get("si1", -1)), int(entry.get("d_off", 0)), Lighting._att, Lighting._glow, entry.get("mask", PackedByteArray()), int(entry.get("yfloor", -1)))
 	mesh_cpp_builds += 1
+	if timing:
+		print("TMESHW %d,%d si=%d,%d wus=%d" % [int(entry["cx"]), int(entry["cz"]), int(entry.get("si0", 0)), int(entry.get("si1", -1)), Time.get_ticks_usec() - _ac0484_mt0])
 	if timing:
 		_tm_concur -= 1
 	if bool(entry.get("epool", false)):

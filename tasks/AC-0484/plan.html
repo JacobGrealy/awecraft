@@ -1,0 +1,58 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0484 native generation cost baseline</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0484 — where the native generation time actually goes (measurement only)</h1>
+<p>Coordinator contract (written by me; the ticket was filed by another agent). <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>MEASUREMENT ONLY — no optimisations, no planet changes, no speedup claims.</b> The deliverable is a ranked, reproducible bottleneck table plus a reusable protocol.</p>
+<h2>1. The requirement, from the filing</h2>
+<p><em>"generation improvements should address the work that actually costs time, without removing caves, decoration or other features to make the numbers look better."</em> So the output is a <b>truthful cost breakdown</b> of native generation, split from everything that is <b>not</b> generation.</p>
+<h2>2. What must be separated (this is the hard part, not the timing)</h2>
+<p>Total frame cost is a sum of things that must not be blended: <b>generation</b>, <b>meshing</b>, <b>lighting</b>, <b>I/O</b>, and <b>queue wait</b>. A number like "a chunk costs 29 ms" is useless if it silently includes queue wait or mesh time — and this session has already been burned by exactly that class of measurement (AC-0474's "the fill stalls" was an instrument watching one lane while the other landed 16,320 chunks). <b>Report each bucket separately, and state how you attributed time to it.</b></p>
+<h2>3. The stages to instrument (anchor by symbol, do not read the monoliths whole)</h2>
+<table><tr><th>Stage</th><th>Where</th></tr>
+<tr><td><code>surface_h</code></td><td><code>gdext/src/gen.cpp</code></td></tr>
+<tr><td><code>col_heights_pass</code></td><td><code>gdext/src/gen.cpp</code></td></tr>
+<tr><td>field construction</td><td><code>gdext/src/gen.cpp</code></td></tr>
+<tr><td><code>carved_top_pass</code></td><td><code>gdext/src/gen.cpp</code></td></tr>
+<tr><td>aquifer / decoration / encoding</td><td><code>gdext/src/gen.cpp</code></td></tr>
+<tr><td>worker calls into those</td><td><code>godot/world/world.gd</code></td></tr>
+</table>
+<p><b>Read ranges, not files.</b> <code>gen.cpp</code> is a monolith; grep for the anchors and read around them. Also <b>recheck the shared plan's baseline anchors</b> (<code>docs/continent-biome-generation-plan.html</code> — sections phase-0, performance, baseline) rather than assuming they still match the code.</p>
+<h2>4. The method (the filing specifies it; follow it exactly)</h2>
+<ol>
+<li><b>4a METADATA, RECORDED.</b> Revision, build type, hardware, worker count, and <b>the settings in force</b>. A timing table without these is not reproducible.</li>
+<li><b>4b A FIXED REPRESENTATIVE REQUEST CORPUS.</b> Pin the exact set of chunk requests used, so every trial and every future re-run measures the same work. <b>Write the corpus down</b> — it is part of the reusable protocol.</li>
+<li><b>4c AT LEAST FIVE INTERLEAVED TRIALS</b>, reporting <b>median, p95, p99 AND the spread</b>. <b>Interleaved</b> matters: running five trials back-to-back lets thermal or page-cache drift masquerade as variance. This project has repeatedly been bitten by single-sample thresholds (an earlier p95 was fitted to two samples on an arm that wanders 37–40), so the spread is part of the finding.</li>
+<li><b>4d NEGATIVE CONTROL FOR THE TIMER.</b> Prove the counters <b>can register a difference</b>: instrument something known-costly and show the number moves, or inject a known delay and show it appears. <b>An instrument never shown to be sensitive is not evidence</b> — this is the same rule that made the halo arm's negative control mandatory last round.</li>
+<li><b>4e GENHASH 25/25 WITH THE INSTRUMENT OFF.</b> The instrumentation must not change output: with it disabled, genhash must read <b>25/25 byte-identical</b>. <b>Output and enabled features must be unchanged</b> — no cave, decoration or feature removed to flatter the numbers (the filing is explicit).</li>
+</ol>
+<h2>5. Honesty requirements the filing calls out</h2>
+<ul>
+<li><b>LINUX NUMBERS ARE DEVELOPMENT-ONLY</b> and must be labelled as such, in the results page and wherever they are quoted. This box renders through llvmpipe and is not the product.</li>
+<li><b>Windows native timing may need its own execution window</b> — if it cannot be done here, say so and hand the user a protocol they can run, rather than dressing Linux numbers as product numbers.</li>
+<li><b>NO speedup claim and NO atlas layout frozen here.</b> This ticket produces a baseline and a protocol; the following tickets use them.</li>
+</ul>
+<h2>6. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>gdext/src/gen.cpp</td><td>the six named stages — <b>grep, read ranges only</b></td><td>Edit: temporary instrumentation, kept behind a default-off build flag.</td></tr>
+<tr><td>godot/world/world.gd</td><td>the worker call sites into those stages</td><td>Edit only if a call-side timestamp is needed.</td></tr>
+<tr><td>docs/continent-biome-generation-plan.html</td><td>phase-0, performance, baseline sections</td><td>READ ONLY (recheck anchors).</td></tr>
+<tr><td>tasks/AC-0484/</td><td>journal, deviations, results, the protocol, the corpus</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> generation <i>behaviour</i> (no optimisation, no removed features), meshing, lighting, residency, the bake assets, the sky/body shaders, the fog/wash (removed), the data JSON files, the aim box. <b>Instrumentation must be inert when off.</b></p>
+<h2>7. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>The stages are separated (the point)</td><td>Per-stage elapsed costs with <b>sample/call counts</b>, and generation reported <b>separately from meshing, lighting, I/O and queue wait</b>, with the attribution method stated.</td></tr>
+<tr><td>Five interleaved trials with distribution</td><td><b>median / p95 / p99 / spread</b> per stage, over a <b>written, fixed request corpus</b>, with the metadata block.</td></tr>
+<tr><td>The timer is proved sensitive</td><td>A negative control showing the counters <b>can</b> move — describe the injection and the observed delta.</td></tr>
+<tr><td>Output unchanged</td><td>Instrument-off <b>genhash 25/25 byte-identical</b>; features intact (caves, decoration, everything the filing forbids removing).</td></tr>
+<tr><td>The deliverable is reusable</td><td>A <b>protocol</b> a later ticket (or the user on Windows) can follow: corpus, metadata fields, trial count, statistics, and the negative control.</td></tr>
+<tr><td>Numbers are labelled</td><td>Every figure marked <b>development-only (Linux/llvmpipe)</b>; Windows handed over as a protocol rather than faked.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>A rebuild of the gdext lane is required</b> for C++ instrumentation — the pattern is <code>SCons -C gdext platform=linux target=template_release</code> plus the <code>libchunkio.so</code> copy (AC-0480 used exactly this and got a clean bit-reproducible rebuild). <b>Blur is OFF by default — do not enable it.</b> <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty, and note that <b>timing runs are especially sensitive to a busy box</b>: record whether anything else was running, and treat a contended trial as invalid rather than averaging it in.</p>
+<h2>8. Acceptance</h2><p>A ranked per-stage cost table over five interleaved trials on a written corpus, with generation separated from meshing/lighting/IO/queue wait; a timer negative control; instrument-off genhash 25/25; unchanged features; every number labelled development-only; and a reusable protocol for the Windows run.</p>
+<h2>9. Risks</h2><p>(1) <b>Blending queue wait or mesh time into "generation"</b> — the one fatal error here. (2) Five back-to-back trials instead of interleaved, turning drift into false variance. (3) An instrument never shown to be sensitive. (4) Instrumentation that changes output or drops a feature. (5) Presenting Linux numbers as product numbers. (6) Timing on a box contended by the parallel session. (7) Reading <code>gen.cpp</code> whole and burning the context budget.</p>
+<h2>10. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No optimisations, no feature removal, no speedup claims, no atlas layout decisions. No edits outside §6.</li>
+<li>If the plan cannot be applied — an anchor is gone, a stage no longer exists, or the corpus cannot be pinned — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT with what you did establish. Do not invent a measurement.</li>
+</ul></div>
+<h2>11. Resume point</h2><p>First ticket of the continent series (filed by another agent, planned by me). It is a baseline: the later tickets in the series depend on knowing where the time actually goes, and the filing is explicit that nothing may be removed to improve the numbers.</p>
+</body></html>

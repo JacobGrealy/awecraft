@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-26T20:58
+  updated_at: 2026-10-26T22:08
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0484
 - AC-0485
 - AC-0512
 - AC-0513
@@ -32900,7 +32899,7 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - worldgen
   - continents
@@ -32908,8 +32907,8 @@ intake:
   - measurement
   - design
   created_at: 2026-10-25T14:41
-  updated_at: 2026-10-25T14:47
-  completed_at: null
+  updated_at: 2026-10-26T22:08
+  completed_at: 2026-10-26T22:08
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -32960,7 +32959,57 @@ intake:
     order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
     is dependency order; blocked status still prevents starting a downstream piece before prerequisite
     acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
-    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.
+
+
+    CLOSED (round 118). A MEASUREMENT BASELINE, AND THE RANKING IS CLEAN ENOUGH TO ACT ON — which is the
+    point of phase 0.
+
+    THE RANKED GENERATION TABLE (µs/chunk, 125 samples, FIVE INTERLEAVED TRIALS, seed 44, full column;
+    each cell is median/p95/p99):
+
+    **field 1888/1940/2024 · scan 1592/1662/1692 · fill 1142/1198/1218** · pallet 256/280/294 · drip 225/241/246
+    · aquifer 49/55/65 · heights 34/37/42 · veg 15/25/27 · carve 7/108/165 (n>0 in 124 of 125).
+
+    Stage-sum median **5226 µs** against whole-call wall **5345 µs** — **97.8% of the call is attributed**,
+    so the breakdown is not a partial guess. And the headline: **88% OF GENERATION IS field + scan + fill.**
+    Those three are where any later optimisation must aim.
+
+    THE SEPARATION WAS DONE AND IS THE MOST IMPORTANT PART: generation is the standing AC-0237 counters
+    diffed around each `generate_resl` under a single-threaded driver, so it is EXACT rather than sampled.
+    Separately measured: **queue wait (enqueue -> worker start) median 0 ms, p95 1 ms — a non-issue at
+    2 workers on r4**, which retires a plausible-sounding suspect by measurement; **worker gen wall median
+    5 ms, p99 9 ms**; **meshing median 3278 µs** (and the builder stated honestly that this INCLUDES its
+    internal per-slab light pull and cannot be separated without editing mesh.cpp — a caveat rather than
+    a silent blend; the low-LOD lane is excluded); **lighting seed median 2434 µs**; and **I/O 36.1 ms
+    per column at 2070 B average**, which on its face dwarfs the generation numbers and is worth the next
+    ticket''s attention.
+
+    THE TIMER IS PROVEN SENSITIVE RATHER THAN ASSUMED: injecting 5000 µs moved the wall median **5346
+    -> 10399 µs — an observed delta of 5053 µs — while the stage-sum was unchanged**, so the wall and
+    stage clocks respond to an injected delay and the stage clocks do not double-count it. That is the
+    negative control the plan demanded, and it is what separates a measurement from a plausible table.
+
+    THE INSTRUMENT IS PROVABLY INERT WHEN OFF: a **flag-off rebuild is BIT-IDENTICAL to the pre-AC-0484
+    .so** (same md5), and instrument-off **genhash reads 25/25 byte-identical** across runs, with caves,
+    aquifer, carver, drip and decoration all intact. Nothing was removed to flatter the numbers — the
+    filing''s explicit prohibition.
+
+    NO TRIAL WAS CONTENDED: every run''s envlog shows `other_engine=none` at loadavg 0.72-1.17, so nothing
+    was discarded and no average is polluted by the parallel session. One runner self-locked on the **`pgrep`-word
+    trap** (its own grep string matched) — fixed and logged as deviation 1, which is the fourth time that
+    trap has bitten someone.
+
+    HONESTY: **every figure is labelled development-only (Linux/llvmpipe)** and Windows timing was NOT
+    run here — `tasks/AC-0484/protocol.html` §8 hands over the exact build/driver/run sequence instead
+    of dressing Linux numbers as product numbers. No speedup claim, no atlas layout frozen.
+
+    DELIVERED FOR REUSE: `protocol.html` (the method a later ticket or the user on Windows can follow)
+    and `corpus.txt` (the pinned request corpus, so re-runs measure the same work).
+
+    GATES: per-stage plus five-way separation, median/p95/p99/spread with metadata, the control delta,
+    genhash 25/25 with a bit-reproducible rebuild, protocol and corpus written, development-only labels
+    — all satisfied; gate_run g0/genhash/colbytes all ok.'
   comments: []
 - id: AC-0485
   title: continent-p0-cold-warm-startup-and-cache-inventory

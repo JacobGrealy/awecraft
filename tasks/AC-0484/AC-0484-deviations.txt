@@ -1,0 +1,61 @@
+AC-0484 deviations from plan.html (measurement-only ticket; no behaviour changed):
+
+1. SLOT TEST TIGHTENED. The plan's slot test `pgrep -af '[g]odot'` matches ANY command
+   line containing the word — including our own greps of log files (the plan itself names
+   this trap). It bit this run once: a grep pattern containing the word made the runner's
+   slot guard wait 25 minutes against our own shell. The runner therefore guards on the
+   ENGINE BINARY PATH (`pgrep -af 'tools/godot/godot'`) — the single engine location every
+   session uses (godot/OPS.md §1; gate_run.py resolves the same path) — and the envlog
+   still records the bare-word matches for transparency. Strictly narrower in the only way
+   that matters (a real engine always carries the path in argv); no engine can hide from it
+   on this box.
+
+2. PER-STAGE COUNTERS WERE NOT ADDED — THEY EXIST. The plan's stage table assumed the
+   instrumentation; the standing AC-0237 phase-0 cumulative stage counters (field/heights/
+   scan/fill/veg/pallet/carve/aquifer/drip) are already always-on in gdext/src/gen.cpp and
+   exposed via AweGen.gen_timing(). The AC0484_GEN_TIMING build flag therefore adds only
+   what was missing: the negative-control delay injection (AC0484_INJECT_US) and the
+   per-call JSONL record (AC0484_TIMING_FILE), which diffs the standing counters around
+   each call. Default-off, and the default rebuild is bit-identical (md5) to the
+   pre-instrument .so — the "inert when off" gate is proven at the binary level.
+
+3. QUEUE WAIT USED THE PRE-EXISTING FIELD. The plan allows world.gd edits "only if a
+   call-side timestamp is needed." The worker entry already carries its enqueue timestamp
+   and the TGENW print already reports `wait` (worker start − enqueue), so no new
+   timestamp was needed for queue wait. The two prints that WERE added (TMESHW around the
+   mesh-lane build_accs call, STSEED around the starlight seed) are both behind the
+   existing AWECRAFT_TIMING=1 gate (inert when off) — the minimal call-site set.
+
+4. PRODUCTION RUN = battery=player. A bare `godot --headless` run stops at the menu (no
+   world streams), and the battery `settings` mode runs its body standalone before the
+   world streams (measured: BATTMODE settings ms=99, zero streamed chunks). The battery
+   `player` mode (new world, spawn recenter, sim-band wait, scripted walk) is the
+   standing smoke path that actually exercises the production pipeline; its streamed set
+   (103 distinct chunks) is recorded as corpus C2.
+
+5. SCons IS NOT ON PATH on this box (pip is PEP-668-blocked; AC-0403 hit the same wall
+   and built manually with g++). This run used the SCons v4.11.1 venv under
+   .scratch/scons_target (`PYTHONPATH=.scratch/scons_target python3
+   .scratch/scons_target/bin/scons -C gdext platform=linux target=template_release`) —
+   the same SConstruct, same flags, and the bit-reproducible default rebuild proves the
+   toolchain matches the one that built the pre-AC-0484 .so.
+
+6. THE MESH BUCKET INCLUDES THE PER-SLAB LIGHT PULL (stated, not hidden). build_accs
+   self-lights through awelight::pull, so the "meshing" number (median 3278 us) includes
+   the static light pull that happens inside the mesh build. Separating it would need new
+   C++ instrumentation in mesh.cpp (outside this ticket's file list); the attribution
+   says so in both the results page and the protocol. The data-lane full-column pull is
+   measured separately (colbytes, 36.1 ms/column) and is NOT double-counted into meshing.
+   The low-LOD lane (low_emit_avg) is a separate, cheaper emit and is NOT in the mesh
+   number — stated when quoting.
+
+7. WINDOWS WAS NOT RUN HERE. Per the plan: Windows native timing may need its own
+   execution window; rather than dressing Linux numbers as product numbers, the Windows
+   handover is protocol.html §8 (build both .dll variants, the driver via -s or a
+   temporary harness arm, the same five runs, the same statistics, the same label).
+
+8. COLBYTES CORPUS IS THE ARM'S OWN. The I/O bucket (C3) uses the standing colbytes arm's
+   fixed 25-column ring (spawn + golden-angle ring at radius 24 chunks), not the C1 5x5
+   window — the arm is a standing instrument and its corpus is pinned by it; the I/O
+   bucket is a scale, not a per-stage table, so the geography difference is immaterial
+   (stated in corpus.txt).
