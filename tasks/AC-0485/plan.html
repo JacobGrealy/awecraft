@@ -1,0 +1,64 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0485 cold/warm startup and cache inventory</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0485 — what startup and the caches actually cost, in bytes and seconds</h1>
+<p>Coordinator contract (written by me; filed by another agent). <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>MEASUREMENT ONLY — no new cache, no eviction, no behaviour change, no optimistic extrapolation.</b></p>
+<h2>1. The requirement</h2>
+<p><em>"faster generation to mean getting into and exploring a world sooner, rather than waiting through a new bake or accumulating large hidden caches."</em> So this ticket answers two questions with numbers: <b>how long from launch to playable</b>, and <b>how many bytes the caches hold</b> — by family, not as one total.</p>
+<h2>2. ⚠ A NUMBER THAT WILL DOMINATE EVERYTHING — check it first and build the report around it</h2>
+<p><b>AC-0469 stage D measured the existing far-tier bake at 1.62 GiB of records and 4.60 GiB PEAK RSS, taking 1,198–1,269 s per seed.</b> The shared plan's provisional targets quoted in this ticket are <b>a 3-second atlas, 8 MiB of disk, 16 MiB resident and 64 MiB of scratch.</b></p>
+<p><b>Those two sets of numbers differ by roughly two to three ORDERS OF MAGNITUDE.</b> So the inventory's most likely finding is not a marginal overrun — it is that the <b>existing far-tier cache is 100–200× the provisional disk target before anything new is added</b>. <b>State that explicitly and early</b>, with the measured bytes, because it reframes the whole series: either the provisional targets describe a different artefact than what ships, or the shipping bake cannot meet them. <b>Reconciling that gap is a coordinator/design decision, not the builder's — measure it, quantify it, and stop.</b></p>
+<h2>3. What to inventory (bytes AND peak memory, BY CACHE FAMILY)</h2>
+<ul>
+<li><b>Cache ownership:</b> <code>godot/autoload/save.gd</code> — who owns what is written, and where. <b>Recheck the exact paths before running</b>; the filing says to, and this session has had three plans with stale anchors.</li>
+<li><b>Far/orbital cache consumers:</b> <code>godot/world/world.gd</code> — what actually reads the far tier's data at runtime (the three-phase source: <code>user://</code> cache, shipped <code>res://</code> textures, bake — <b>note AC-0478 regenerated the shipped textures this session</b>).</li>
+<li><b>Per family:</b> existing far-tier data, temporary files, <b>and DUPLICATE data</b> — duplicates are explicitly called out and are the cheapest win to find, so look for them (e.g. the same bake stored both in <code>user://</code> and shipped in <code>res://</code>).</li>
+<li><b>Combined current disk footprint</b> — one reconciled total, plus the per-family breakdown that sums to it.</li>
+</ul>
+<h2>4. What to time</h2>
+<ol>
+<li><b>4a COLD CREATION</b> — first launch with no cache present, to playable.</li>
+<li><b>4b WARM STARTUP</b> — subsequent launch with the cache present.</li>
+<li><b>4c FIRST DRAWABLE AND FIRST PLAYABLE FOOTPRINT</b> — two distinct moments; report both.</li>
+<li><b>4d FIXED TRAVEL / PROMOTION SCENARIOS</b> — pinned movements, so the numbers are comparable.</li>
+<li><b>4e SEPARATE generation from I/O, mesh and lighting wait</b> explicitly, as AC-0484 did, and reuse its attribution method (counters around the driver, single-threaded where exactness matters).</li>
+</ol>
+<h2>5. The method</h2>
+<ul>
+<li><b>AT LEAST FIVE PAIRED TRIALS</b> — paired, so cold/warm and generation/wait can be compared within a trial rather than across drift. <b>Report median, p95, p99 AND spread.</b></li>
+<li><b>CACHE-STATE METADATA</b> recorded with every trial: what was present before, what the run created, what it read. A timing without the cache state is unreproducible.</li>
+<li><b>REUSE AC-0484's PROTOCOL AND CORPUS</b> (<code>tasks/AC-0484/protocol.html</code>, <code>corpus.txt</code>) and its revision — the filing names it as a dependency. Say where you deviated and why.</li>
+<li><b>A TIMER/METER NEGATIVE CONTROL</b>, as AC-0484 did: prove the instruments can register a difference (its 5000 µs injection moved the wall median 5346 → 10399). An instrument never shown to be sensitive is not evidence.</li>
+</ul>
+<h2>6. Windows versus Linux — the honesty clause</h2>
+<p><b>"Measure ... on the target Windows machine, with Linux proxy evidence labeled separately."</b> This box is Linux and cannot run the product. <b>So: do the Linux proxy work, LABEL EVERY FIGURE as proxy/development-only, and hand over a protocol for the Windows run — do not present Linux numbers as product numbers.</b> AC-0484 established exactly this pattern and its <code>protocol.html</code> §8 is the model to follow.</p>
+<h2>7. The deliverable the filing asks for</h2>
+<p><b>"Logs sufficient to set the shared plan's provisional 3-second atlas / 8-MiB disk / 16-MiB resident / 64-MiB scratch and global-cache targets against real hardware."</b> So the report must be <b>structured so a target can be set from it</b>: for each provisional target, the measured current value and the multiple. <b>That comparison is the deliverable</b> — not a recommendation about what the target should be, which is a design decision above this ticket.</p>
+<h2>8. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/autoload/save.gd</td><td>save/cache ownership and paths</td><td>READ ONLY (measurement ticket).</td></tr>
+<tr><td>godot/world/world.gd</td><td>far/orbital cache consumers, the three-phase source</td><td>READ ONLY.</td></tr>
+<tr><td>godot/world/satellite_body.gd</td><td>the <code>user://</code> cache key and the shipped <code>res://</code> path (AC-0478 regenerated those textures)</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0484/protocol.html, corpus.txt</td><td>the prerequisite's method and corpus</td><td>READ; reuse.</td></tr>
+<tr><td>docs/continent-biome-generation-plan.html</td><td>phase-0, performance, budgets</td><td>READ ONLY.</td></tr>
+<tr><td>tasks/AC-0485/</td><td>journal, deviations, results, protocol delta</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> any cache implementation, any eviction policy, generation behaviour, meshing, lighting, residency, the bake assets, the shaders, the data JSON files. <b>NO new cache, NO eviction change, NO behaviour change, NO optimistic extrapolation.</b> Existing output and queue must be unchanged.</p>
+<h2>9. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>Bytes by family, with the total reconciling</td><td>Per-family bytes and peak memory, a combined disk footprint, <b>and duplicates called out</b> — with the families summing to the total.</td></tr>
+<tr><td>Five paired trials with distribution</td><td>Cold creation, warm startup, first drawable, first playable and the travel/promotion scenarios, each with <b>median/p95/p99/spread</b> and the cache-state metadata.</td></tr>
+<tr><td>Waits separated</td><td>Generation vs I/O vs mesh vs lighting wait, with the attribution method stated.</td></tr>
+<tr><td>The target comparison exists</td><td>For each provisional target (3 s atlas, 8 MiB disk, 16 MiB resident, 64 MiB scratch), <b>the measured current value and the multiple</b> — including the likely multi-order-of-magnitude gap flagged in §2.</td></tr>
+<tr><td>The meter is proved sensitive</td><td>A negative control with the injection and the observed delta.</td></tr>
+<tr><td>Numbers are labelled</td><td>Every figure marked <b>development-only (Linux proxy)</b>; the Windows protocol handed over.</td></tr>
+<tr><td>Nothing changed</td><td><code>python3 tasks/scripts/gate_run.py AC-0485 --arms g0,genhash</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25. <b>No behaviour change means the tree's product code should be untouched.</b></td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>BLUR IS OFF by user ruling — do not enable it.</b> <b>Cold-start trials need the cache DELETED between runs</b> — state exactly what you deleted and from where, and be careful to delete only cache paths, never a ticket folder or a build output you cannot regenerate. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty, record whether anything else was running, and treat a contended trial as <b>invalid rather than averaging it in</b> (timing runs are especially sensitive).</p>
+<h2>10. Acceptance</h2><p>A per-family byte and peak-memory inventory that reconciles to a combined disk footprint with duplicates identified; five paired trials covering cold creation, warm startup, first drawable, first playable and pinned travel, with distribution statistics and cache-state metadata; waits separated across generation/IO/mesh/lighting; a proven-sensitive meter; every figure labelled development-only with a Windows protocol; and an explicit measured-versus-provisional target table.</p>
+<h2>11. Risks</h2><p>(1) Reporting one total instead of families, which hides the duplicate and the far-tier dominance. (2) <b>Deleting the wrong thing between cold trials</b> — a build output or another session's work. (3) Presenting Linux proxy numbers as product numbers. (4) Extrapolating a target rather than measuring the current multiple. (5) Timing on a contended box. (6) Not noticing the §2 magnitude gap and instead reporting a tidy table that looks fine.</p>
+<h2>12. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No cache, eviction or behaviour changes. No edits outside §8. No extrapolation.</li>
+<li>If the plan cannot be applied — anchor missing, a cache family unidentifiable, or the corpus cannot be pinned — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT with what you did establish. Do not invent a measurement.</li>
+</ul></div>
+<h2>13. Resume point</h2><p>Second ticket of the continent series; AC-0484 delivered the generation baseline (88% of generation in field+scan+fill, queue wait a non-issue, I/O 36.1 ms/column) and a reusable protocol this ticket reuses. The existing far-tier bake's measured size is the number most likely to invalidate the plan's provisional budgets.</p>
+</body></html>

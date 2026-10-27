@@ -1,0 +1,99 @@
+AC-0485 deviations (final)
+==========================
+
+1. Cold-state definition and the per-call /tmp caveat.
+   user:// = /tmp/dsh_home/.local/share/AweCraft (probed in-engine; project.godot
+   use_custom_user_dir + custom_user_dir_name "AweCraft"). Cold runs delete
+   EXACTLY that dir (path asserted canonical in the runner). It holds only
+   engine/game state (cfg, saves, chunkdir, satellite cache, logs) — never a
+   ticket folder, build output or another session's work.
+   NEW: /tmp is a fresh tmpfs per bash call on this box (marker test: a file
+   written in one call is gone in the next). Consequences, all handled:
+   (a) every PAIR (cold, warm) was run inside ONE bash call so the warm half
+       actually sees the cold half's user:// state; (b) mwarm-r1 (run as a
+       separate call) found an EMPTY user dir — its pre-state snapshot proves
+       it was a second cold, not a warm: INVALID as a warm, recorded in §9,
+       excluded from the warm set (the 5 valid pairs are r2–r6); (c) the
+       "reboot-wiped" assumption in the filing is actually "per-call-wiped" —
+       a fresh user:// is even easier to reproduce than the filing expected.
+   At session start the user dir did not exist at all; the .godot import
+   cache did not either — the g0 gate created it. ALL trials run PCK-equivalent
+   (import cache present), which matches the Windows product (the PCK ships
+   imported textures); a first boot on a truly fresh dev machine would pay the
+   one-time import cost on top (dev-box-only, excluded from every figure).
+
+2. The battery (C2) is not the cache-relevant product path.
+   Battery runs hold Save.active_slot = -1, so _io_read_enqueue returns false
+   and the column cache is INERT there by code. The product path where the
+   caches matter is the menu flow (Play -> new world / continue), so the A
+   pairs use AWECRAFT_MENU_BOOT=1 — the real launch->playable path. The
+   battery keeps its AC-0484 role: wait buckets + the pinned travel walk.
+   The plan left the corpus shape open (it named C2 for wait attribution,
+   which the battery still provides).
+
+3. First D attempt (bake-r1, battery + AWECRAFT_SEED=45) was INVALID for
+   three independent reasons, all observed in the log/state:
+   (a) the battery arm self-exits after its ~115 s scripted walk — the ~21-min
+       bake never completed (engine exited rc=0 at ~118 s, no
+       "bake: payload done" / "SATELLITE bake done" in the log);
+   (b) the battery path opens no loading window (loading_active false), so the
+       AC0414 bake-before-load HOLD never engaged — there is no
+       "new-world first playable" moment in that flow (no AC0414 line in log);
+   (c) the RSS sampler (pgrep | head -1) matched the `timeout` wrapper, not
+       the engine (flat 3,728 kB rss line).
+   Superseded by bake2 (the D numbers in the results page): menu flow, two
+   stages in ONE bash call — stage 1 menu cold writes the engine's own
+   settings (seed 44); stage 2 sets the settings seed to 45 (the product's own
+   "new seed" path via user://awecraft.cfg, the same file the in-game options
+   write) and removes the slot save so Play takes the new-world branch.
+   The RSS sampler now matches /proc/<pid>/comm == "godot" (verified: the
+   trajectory climbs with the payload).
+   Also noted: the menu flow reads its new-world seed from Settings
+   (user://awecraft.cfg), NOT from AWECRAFT_SEED (that env only feeds the
+   direct-boot path, main.gd:864) — hence the cfg edit in stage 2.
+
+4. A runs are BOUNDED (120 s timeout, rc=124 by design): the menu-flow game
+   has no self-quit. The milestones land ~11 s in and the save is written at
+   playable; the bounded tail is idle streaming (which is also why the whole
+   A-run gen counts are ~1,500: 41 full diamond gens + ~1,450 far-fill).
+
+5. Per-moment RSS was not sampled on the A runs (only on the D run, 5 s
+   cadence). "First drawable / first playable footprint" is reported as the
+   two distinct MOMENTS (time from launch); the D run carries the peak-RSS
+   family numbers. (The planet-body LOADED line logs the texture format, so
+   the texture resident cost is exact: 12 × 1024² × 4 B = 49,152,000 B.)
+
+6. The negative control is a pre-engine SLEEP in the stamped child, not an
+   LD_PRELOAD shim. The shim was investigated and set aside after two
+   failures:
+   (a) v1 (dlsym in the preload constructor): segfault at exec (rc=139) —
+       the constructor runs before libc init;
+   (b) v2 (raw SYS_openat, path match "AweCraft/godot"): NEVER FIRES — strace
+       proves the engine opens project.godot with a DIRECT openat(2) syscall
+       (bypassing libc's symbol entirely; all libc open() traffic is /sys CPU
+       scans), and the shim fired in BOTH the `timeout` wrapper and the engine
+       (LD_PRELOAD is inherited by both processes), so the injected total
+       would be ambiguous.
+   The sleep wrapper (bash -c "(sleep S; exec engine) | stamp") is a single
+   known injection; the actual sleep is self-reported in-log
+   (@AC0485-INJECT measured_us) because sleep(1) adds 2–12 ms of
+   fork/exec/jitter on this box (nominal 5000 µs measured 11,114.9 µs;
+   nominal 50,000 µs measured 55,960.4 µs). A first placement ("sleep; A | B")
+   delayed the pipe SETUP and hence the meter's own origin — a no-op control
+   — caught on the first sanity run; the sleep now sits inside the pipe's left
+   subshell, after stamp.py starts. Result: t0 moved +14,220 / +59,080 µs for
+   the two injections (≈ injection + a constant 3.1 ms exec overhead); the
+   engine-internal (t0-relative) timeline moved none — the meter is sensitive
+   1:1. AC-0484 precedent (in-process 5000 µs injection moved the wall median
+   5,346 → 10,399 µs) remains valid context.
+
+7. Contention: shared box (another session working in this repo). Per-run
+   loadavg 0.73–2.52 recorded; no other engine in the slot in any run (slot
+   guard + other_engine=none in every envlog). The spread columns are the
+   drift witness. The word_godot_match field in envlogs can count the
+   invoking shell's own string; the authoritative check is other_engine and
+   the bracketed engine-path guard.
+
+8. All Linux figures are DEVELOPMENT-ONLY (llvmpipe, 6-core i5-9400F). No
+   extrapolation to Windows is made or implied; the acceptance run is the
+   Windows protocol (separate file).

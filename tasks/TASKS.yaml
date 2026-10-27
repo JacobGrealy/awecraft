@@ -1,10 +1,9 @@
 meta:
-  updated_at: 2026-10-26T22:08
+  updated_at: 2026-10-27T01:07
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0485
 - AC-0512
 - AC-0513
 - AC-0486
@@ -33018,15 +33017,15 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels:
   - worldgen
   - continents
   - performance
   - measurement
   created_at: 2026-10-25T14:41
-  updated_at: 2026-10-25T18:18
-  completed_at: null
+  updated_at: 2026-10-27T01:07
+  completed_at: 2026-10-27T01:07
   waiting_on: null
   parent_id: null
   notes: '1) User Story
@@ -33077,7 +33076,60 @@ intake:
     order. This supersedes intake text saying unqueued or do not queue until prerequisites. Queue order
     is dependency order; blocked status still prevents starting a downstream piece before prerequisite
     acceptance. Release each dependency block when its recorded prerequisites pass. First series ticket
-    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.'
+    is AC-0484; last is AC-0508. No implementation was started by ticketing or scheduling.
+
+
+    CLOSED (round 119). THE INVENTORY IS DONE, AND THREE FINDINGS MATTER MORE THAN THE BYTES — one of
+    them corrects my own plan.
+
+    **FINDING 1 — WARM STARTUP IS NOT FASTER THAN COLD.** Cold playable **10,611 ms** (p95 10,842, spread
+    385, n=6) against warm **10,602 ms** (spread 191, n=5), with paired per-trial deltas of **+14 / +13
+    / +1 / -109 / -1 ms**. So **the cache buys essentially nothing at startup** — the save JSON is read
+    and it does not move the time to playable. The user''s stated goal ("getting into and exploring a
+    world sooner") is therefore **not currently gated on cache warmth at all**, which redirects the rest
+    of the series away from caching and toward whatever the 10.6 s actually contains (first-drawable planet
+    body 8,985 ms, first ground 4,049 ms).
+
+    **FINDING 2 — THE WALL TIME IS PACING, NOT COMPUTE.** Per column: gen ~4 ms + mesh ~3.3 ms + light
+    ~2.4 ms ≈ **9.7 ms of compute against ~170 ms of wall** — so roughly **94% of the column''s wall time
+    is frame-budget pacing**, with queue wait median **0 ms**. Any plan that optimises generation to speed
+    up world arrival is therefore attacking ~6% of the problem. That is the single most decision-relevant
+    number in this ticket and it is exactly the kind of thing a baseline is meant to reveal before effort
+    is spent.
+
+    **FINDING 3 — A DELIBERATE HOLD DOMINATES NEW-SEED STARTUP.** New-seed first-playable is **46.87 s**,
+    of which **42.00 s is the AC-0414 hold** and only ~1.2 s is work. So for a new seed the experience
+    is a fixed wait by design, not a cost being measured.
+
+    THE INVENTORY, BY FAMILY, SUMMING EXACTLY: F1 saves **836 B/slot**; F2 columns **0 B** (an edited
+    column ≈ 2,070 B); **F3a shipped far-tier 10,834,903 B (10.33 MiB, seed 44)**; **F3b baked far-tier
+    10,736,864 B** (seed 45, in `user://`, **+1 copy per non-canonical world with NO EVICTION**); **F3c
+    in-memory payload 1,740,519,424 B (1.62 GiB, NOT on disk)**; F4 engine cfg+logs **372 KB/launch, unbounded**.
+    Combined: **1 world no-bake 372,747 B (0.36 MiB)**; **+1 bake 13,413,471 B (12.79 MiB)** — and the
+    families sum to the totals rather than being asserted near them. **A DUPLICATE WAS FOUND AND CALLED
+    OUT: F3b(seed 44) is byte-equivalent to F3a**, i.e. the same bake can exist both shipped and in the
+    user cache.
+
+    **MY §2 FRAMING WAS PARTLY WRONG AND THE MEASUREMENT CORRECTED IT.** I predicted the provisional budgets
+    would be exceeded by 100-200x on DISK. In fact **the on-disk cache is only 1.3x the 8 MiB target**
+    — comfortably close. The orders-of-magnitude gap is elsewhere: **in-memory payload is 207x the 8 MiB
+    figure, incremental scratch is 4,201 MiB = 66x, and the bake wall is 1,274.3 s against a 3 s atlas
+    target = 425x.** So the targets are not "wrong about disk", they are **mixing a disk budget with in-memory
+    and wall-clock quantities** — a units confusion rather than an overrun. Quantified, not reconciled:
+    reconciling is a design decision above this ticket, which is what the plan said to do.
+
+    METHOD AND HONESTY: **five paired trials** (n=6 cold, n=5 warm) with median/p95/spread and cache-state
+    metadata, reusing AC-0484''s protocol and revision. **The meter is proved sensitive with a PASS: injections
+    of 11,114.9 µs and 55,960.4 µs produced t0 shifts of +14,220 and +59,080 µs — 1:1 plus a constant
+    3.1 ms exec overhead — while the engine-internal timeline stayed unmoved**, which is the right shape
+    (the meter sees the injection, the engine does not). An LD-PRELOAD route was documented and **abandoned**
+    because the engine uses direct `openat(2)` syscalls — recorded rather than silently dropped. **Three
+    trials were declared INVALID AND NOT AVERAGED** (a per-call /tmp wipe, a bake run with a self-exit
+    and a sampler bug, and the shim negative controls). Every figure is **development-only (Linux llvmpipe)**
+    and `AC-0485-windows-protocol.html` hands the Windows run over rather than faking it.
+
+    GATES: g0 **0 script / 0 shader**, genhash **25/25 byte-identical** to both AC-0484 references, colbytes
+    ok — and the product code was NOT touched, which is the whole point of a measurement ticket.'
   comments: []
 - id: AC-0486
   title: continent-p1-spherical-land-ocean-topology-prototype
