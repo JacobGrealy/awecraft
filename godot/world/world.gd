@@ -1616,6 +1616,12 @@ func _lod_avg_mat() -> ShaderMaterial:
 		# render state, not a uniform — the switch is a shader swap on
 		# the material, see _ac0446_apply_shader).
 		_ac0446_apply_shader()
+		# AC-0480 r3: the seam-lattice probe (the AWECRAFT_FARSEAM pattern,
+		# env-gated, 0 = inert). 1.0 paints the band's 16 m CHUNK planes
+		# magenta in lod_avg_seam.gdshader (the chunk-grid reference for
+		# the intra-tier seam ticket); the default 0.0 skips the shader
+		# block entirely (bit-identical).
+		_lod_avg_material.set_shader_parameter("u_debug", 1.0 if OS.get_environment("AWECRAFT_LATTICE_DEBUG") == "1" else 0.0)
 	return _lod_avg_material
 
 # AC-0446: the far-seam parity shader swap (Settings "far_seam", default
@@ -2214,6 +2220,60 @@ func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int, yfloor := -1) 
 	# fi0/1 (±X): u=z, v=y; fi2/3 (±Y): u=x, v=z; fi4/5 (±Z): u=x, v=y.
 	var u_ax: Array = [2, 2, 0, 0, 0, 0]
 	var v_ax: Array = [1, 1, 2, 2, 1, 1]
+	# AC-0480: the 3x3 CELL SMOOTHING — the C++ avg_grid_emit mirror
+	# (harness-only twin; the ladder A/B must stay green). Each solid
+	# cell's per-face colour becomes the plain average over the solid
+	# cells of its 3x3 face-plane neighborhood (du on the u axis, dv
+	# on the v axis; the count normalizes — an island cell is
+	# unchanged). The merge key and the emitted quad colour read the
+	# smoothed values; the solid masks (geometry) are untouched.
+	var scols := PackedFloat32Array()
+	scols.resize(G * G * G * 18)
+	for scy in range(G):
+		for scz in range(G):
+			for scx in range(G):
+				var sidx: int = scx + scz * G + scy * G * G
+				if int(s[sidx]) == 0:
+					continue
+				for sf in range(6):
+					var ua2: int = int(u_ax[sf])
+					var va2: int = int(v_ax[sf])
+					var saccr := 0.0
+					var saccg := 0.0
+					var saccb := 0.0
+					var scnt := 0
+					for sv in range(-1, 2):
+						for su in range(-1, 2):
+							var sx := scx
+							var sy := scy
+							var sz := scz
+							if ua2 == 0:
+								sx += su
+							elif ua2 == 1:
+								sy += su
+							else:
+								sz += su
+							if va2 == 0:
+								sx += sv
+							elif va2 == 1:
+								sy += sv
+							else:
+								sz += sv
+							if sx < 0 or sx >= G or sy < 0 or sy >= G or sz < 0 or sz >= G:
+								continue
+							var nidx2: int = sx + sz * G + sy * G * G
+							if int(s[nidx2]) == 0:
+								continue
+							scnt += 1
+							var no2: int = nidx2 * 18 + sf * 3
+							saccr += cols[no2]
+							saccg += cols[no2 + 1]
+							saccb += cols[no2 + 2]
+					var sins: float = 1.0 / float(scnt)
+					var so2: int = sidx * 18 + sf * 3
+					scols[so2] = saccr * sins
+					scols[so2 + 1] = saccg * sins
+					scols[so2 + 2] = saccb * sins
 	for fi in range(6):
 		var n: Vector3i = VoxelMath.FACES[fi].n
 		var nax := 0
@@ -2251,9 +2311,11 @@ func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int, yfloor := -1) 
 					var idx: int = int(cc[0]) + int(cc[2]) * G + int(cc[1]) * G * G
 					if int(s[idx]) != 0:
 						if _avg_neighbor_solid(g, grids, si, cc, n, nax, G) == 0:
-							var cr: float = cols[idx * 18 + fi * 3 + 0]
-							var cg: float = cols[idx * 18 + fi * 3 + 1]
-							var cb: float = cols[idx * 18 + fi * 3 + 2]
+							# AC-0480: the merge key reads the SMOOTHED face
+							# colour (the C++ scols mirror above).
+							var cr: float = scols[idx * 18 + fi * 3 + 0]
+							var cg: float = scols[idx * 18 + fi * 3 + 1]
+							var cb: float = scols[idx * 18 + fi * 3 + 2]
 							var q := int(cr * 31.0) * 1024 + int(cg * 31.0) * 32 + int(cb * 31.0)
 							keyv = q * 16 + (k + 1)
 						break
@@ -2305,9 +2367,11 @@ func _avg_emit_slab(g: Dictionary, grids: Array, si: int, G: int, yfloor := -1) 
 				# merged cell shares the quantized key — the sub-quantized
 				# difference is invisible and keeps the twins byte-stable).
 				var oidx: int = int(cc0[0]) + int(cc0[2]) * G + int(cc0[1]) * G * G
-				var qcr: float = cols[oidx * 18 + fi * 3 + 0]
-				var qcg: float = cols[oidx * 18 + fi * 3 + 1]
-				var qcb: float = cols[oidx * 18 + fi * 3 + 2]
+				# AC-0480: the quad colour = the SMOOTHED origin-cell
+				# face colour (the C++ scols mirror above).
+				var qcr: float = scols[oidx * 18 + fi * 3 + 0]
+				var qcg: float = scols[oidx * 18 + fi * 3 + 1]
+				var qcb: float = scols[oidx * 18 + fi * 3 + 2]
 				# AC-0252: av is a PackedVector3Array, so av.size() is the
 				# VERTEX count already (the C++ twin's flat-float av needs the
 				# /3; this twin must not). The quad's first vertex index.
@@ -2794,19 +2858,23 @@ func _halo_hmap_get(c: Node3D) -> PackedByteArray:
 	return c.hmap
 
 # AC-0283 P3: the per-slab halo SKY payload (64 bytes for the 4x4x4 grid,
-# cell order cy*16 + cz*4 + cx): a 4x4x4 cell is lit (15) iff it sits
-# STRICTLY above the terrain top over its whole 4x4 x/z footprint (the
-# quad rule — the max of H over the footprint, one compare per cell),
-# else 0. Computed at dispatch on the main thread (H is known the moment
+# cell order cy*16 + cz*4 + cx): 3-LEVEL since AC-0480 (Option A part 2) —
+# 15 = the cell sits STRICTLY above the terrain top over its whole x/z
+# footprint (the quad rule — the max of H over the footprint, one compare
+# per cell), 8 = the cell AT the terrain top (bottom == top: half
+# sky-exposed — the graded middle; the old binary split 0-else lit WAS the
+# ~4x per-cell brightness step, the user's far-expanse lattice), 0 =
+# below. Computed at dispatch on the main thread (H is known the moment
 # the data lands — the halo dispatch needs no engine settle). The
 # worker's low_emit_avg writes each quad's origin-cell sky into the
 # vertex alpha (the lod_avg shader multiplies it into the brightness).
 func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
 	# AC-0312: G follows the live band tier — band B (tier 2) emits the
 	# 8x8 avg, so its per-cell sky is G=8 (512 B); band C (tier 3) keeps
-	# G=4 (64 B). The quad rule is unchanged: a grid cell is lit (15)
-	# iff its BOTTOM sits strictly above the max terrain top over its
-	# x/z footprint, else 0. (Band A / real / data-only — no avg sky.)
+	# G=4 (64 B). The quad rule (3-LEVEL since AC-0480): 15 iff the
+	# cell's BOTTOM sits strictly above the max terrain top over its
+	# x/z footprint, 8 iff it sits AT the top (the graded middle),
+	# else 0. (Band A / real / data-only — no avg sky.)
 	var G := 4
 	var t := _lod_tier_of(int(c.cx) - last_pcx, int(c.cz) - last_pcz)
 	if t == 2:
@@ -2848,7 +2916,20 @@ func _halo_sky_for(c: Node3D, si: int) -> PackedByteArray:
 	for cy in range(G):
 		for cz in range(G):
 			for cx in range(G):
-				outf[cy * G * G + cz * G + cx] = 15 if y0f + cy * CB > int(fh[cz * G + cx]) else 0
+				# AC-0480: the 3-LEVEL halo sky (the plan §3a, Option A
+				# part 2) — the binary lit/unlit split hard-stepped ~4x
+				# (L 1.0 vs 0.263) at every lit/unlit cell edge, and that
+				# step WAS the user's dense far-expanse lattice. Now:
+				# 15 = the cell strictly ABOVE the terrain top (the old
+				# lit, unchanged), 8 = the cell AT the terrain top
+				# (bottom == top: the terrain-top cell, half sky-exposed —
+				# the graded middle), 0 = below (the old unlit, unchanged).
+				# The shader's mix(20/255, u_day, a) turns the 3.8x step
+				# into graded 1.5x / 2.5x steps (a/15 = 0.533 -> m_direct
+				# 0.569 -> L 0.655 at u_day 1).
+				var bot: int = y0f + cy * CB
+				var htop: int = int(fh[cz * G + cx])
+				outf[cy * G * G + cz * G + cx] = 15 if bot > htop else (8 if bot == htop else 0)
 	return outf
 
 func _low_dispatch_slab(c: Node3D, si: int) -> int:

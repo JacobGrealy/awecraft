@@ -44,3 +44,118 @@
 - GATE (c) — fresh start: settings state space = {user://awecraft.cfg, AWECRAFT_FARSEAM env (world.gd:4138-4140, applies only if set), code DEFAULTS}. load_settings (settings.gd:498-506) returns DEFAULTS verbatim when no cfg exists. All six run-2 renders asserted CFG_FILES_BEFORE=0 AND CFG_FILES_AFTER=0 (the game writes no cfg in a render session) and the default runs logged FARSEAM_ENV=<unset>. In a fresh boot the ONLY possible value of far_seam is the code default, now true. (Note: a user with a SAVED explicit far_seam=false keeps it until they toggle — inherent to any default flip; fresh installs see ON.)
 - CAPTURES (tasks/AC-0480/): ac0480-fpv-horizon-day-after.png (A2, default ON), ac0480-nadir-r9-off/-on/-forcedon.png (+_s600/_s1200/_s1800, the identical triple), ac0480-seam-defaulton-day.png (G, fresh default ON), ac0480-seam-forcedoff-day.png (H, forced OFF). LOGS (.scratch/AC-0480-gates/): shotA2-after-r2.log, shotD/E/F-nadir-r9-*.log, shotG-seam-defaulton.log, shotH-seam-forcedoff.log, measure-seam-r2.log, measure-ab-r2.log, measure-ab2-r2.log, measure-ab3-r2.log, measure-parity-r2.log, analyze-a2-after-r2.log, summary.json + per-arm r2 logs (g0-r2, genhash-r1, residency-r2, lightstate-r2).
 - DURABLE NOTES for closeout: (1) on this box the low-lane band-B mesh is NOT materialisable at the user's R24 A2 vantage within any practical drain (reproduced 4x across run 1 + run 2; 600/1800/2400/9000 frames) — in-session 1->2 re-measurements at that vantage cannot prove the parity fix; AC-0446's in-repo gated numbers (re-verified exact today) remain the authoritative before/after; (2) the aim-box fixes AC-0479/AC-0482 re-positioned AWECRAFT_AIM poses relative to pre-2026-10-25 captures — historical shot recipes (e.g. AC-0446's) no longer aim at their original terrain, so measurement boxes from old tickets must be re-located in new frames; (3) two 1200 s renders of the same recipe on llvmpipe land in DIFFERENT mid-streaming build states (complementary presence/absence pixel pairs) — A/B pairs on mid-build frames confound the behaviour diff with build drift; only regions where both frames carry the same surface type are comparable.
+## RUN — $(date) — AC-0480 (round 3: REOPENED — user rejected the tier-boundary close; the real defect is a dense seam GRID INSIDE the high-LOD tier. Plan rewritten; measure the seam lattice vs the chunk grid, then fix at the source.)
+
+### Round 3 (REOPENED) — the intra-tier seam lattice: MEASURED + code-located; the plan's leading mechanism REFUTED
+- **The one number that decides it (gate a):** the far tier's (band B, the user's "high lod") seam
+  lattice is the tier's own **2 m averaging cell** (8×8×8 per 16-block slab, `mesh.cpp low_emit_avg`
+  G=8/CELLB=2; the `ladder` arm's "band B = 8×8 avg slabs" is the harness confirmation), i.e.
+  **2 m = 1/8 of the 16 m chunk** — 8 cells per chunk per axis. NOT on the chunk grid → plan 4c
+  applies (state what the spacing is; do not force the quantization theory). The 16 m chunk grid is
+  re-confirmed present in the near tier (run-1's 1-px dip class) as the reference.
+- **What each cell boundary carries (the step):** (1) a per-cell FLAT COLOUR = the 8-block
+  face-colour average (raw, `mesh.cpp:2924-2926`), merged only across cells whose colours agree
+  within the 1/31 merge step (`q=(int)(cr*31)*1024+…`, `mesh.cpp:2869`); (2) a per-cell BINARY SKY
+  (the halo light, `_halo_sky_for` world.gd:2810-2841, dispatched for tier≥2 at :2916 — 15 iff the
+  2×2 footprint sits above the terrain top, else 0) → in `lod_avg_seam.gdshader:124-125`
+  `m_direct=mix(20/255,u_day,COLOR.a)` so a lit↔unlit cell boundary is a ~4× brightness step
+  (L 1.0 vs 0.263 at u_day 1). Together: a hard colour+light step at every 2 m cell edge = the
+  dense plaid. Plus the ±6% **1.5 m world-anchored** noise (`:112-114`, `floor(v_world_pos*0.6667)`
+  — no per-chunk phase; verified in code AND in the marker frame: 127 px magenta only, the cyan/
+  yellow counts matched the real-scene colours in the no-probe frame).
+- **4c re-derivation (the plan's leading mechanism is REFUTED by the code):** the merge quantization
+  is a GLOBAL function of colour (no chunk offset — same colour → same bucket in every chunk); the
+  emitted colour is the unquantized origin-cell average; the real band's per-cell sky is a pure
+  function of the cell's own footprint (far H is byte-identical to the full path — farab); the home
+  warp `_warp_home_cell_point` (chunk.gd:1937-1940) is a pure function of world position (C0 at
+  chunk edges; 16·(c+1)==16c+16 exact in float). The ONLY chunk-relative term in the far tier is the
+  water-tile UV origin (31 px per G-block from the chunk's own corner, `mesh.cpp:2968-2971`) —
+  water only. So a 16 m chunk-boundary seam is structurally impossible in the opaque far tier; the
+  intra-tier lattice is the 2 m cell grid (world-anchored), 8× denser than chunks.
+- **4d (what each tier renders + the responsible difference):** NEAR/SIM (0-128 m) = per-block
+  voxel quads, per-block UVs into the block atlas (1 m features), `chunk_lit_opaque.gdshader`
+  (unshaded; tex × faceShade × (0.20+0.80·max(u_day·sky,blocklight)) + AC-0426/AC-0436 terms),
+  per-vertex 256-level light, NEAREST filtering. FAR (band B, 128-384 m) = no UVs; one flat colour
+  + one binary sky per 2 m cell; ±6% 1.5 m noise; env fog; fog-wall discard. Appearance deltas:
+  texture detail (1 m vs 2 m low-pass, structural), lighting (per-vertex 256-level vs per-cell
+  binary), colour averaging (per-cell flat + 1/31 merge steps), noise (1.5 m, far-only), mip/filter
+  (NEAREST atlas vs flat vertex colour). **Responsible for the user's seam: the per-cell (2 m)
+  representation itself — the flat colour + binary sky hard-stepping at every 2 m cell boundary.**
+  "Between chunks" is perception: the lattice is world-anchored 2 m, crossing chunk edges every 8th
+  line with no extra structure at the edge.
+- **Gate c (fix/before-after): a fix was NOT implemented this round — the plan's acceptance
+  alternative "a reported finding that names the real cause" is the delivered outcome.** Rationale:
+  (1) the proxy cannot materialise band B for a before/after (deviation 15, reproduced 3× this
+  round); (2) any real fix (e.g. 3×3 neighbour-cell colour+sky smoothing in `avg_grid_emit`, or a
+  coarser merge step) is a C++ mesh-lane change (rebuild owed: `python3 -m SCons -C gdext
+  platform=linux target=template_release`, + the GDScript twin's op-order mirror under
+  `-ffp-contract=off`) that TRADES the far tier's 2 m detail for smoothness — a look ruling the
+  coordinator/user should make, with verification on the user's machine (the only one that
+  materialises band B). Recommendation if it is green-lit: Option A = pre-smooth the per-cell face
+  colours + convert the binary sky to a 3-level (above/at/below the footprint max) before
+  quantize/merge (dissolves the 2 m step lattice into merged quads, keeps the 2 m sampling);
+  Option B (cheaper, coarser) = merge step 1/31 → 1/15.
+- **Gate d:** g0 rev 5 script 0 / shader 0; genhash 25/25 (my edits are material-parameter +
+  shader-probe — generation untouched); residency leak False / STABLE (face 74 / home 92,
+  keys_same). No C++ edit → no rebuild (stated).
+- Frames: `ac0480-lattice-before.png` (nadir-260, far_seam default), `ac0480-lattice-marker.png`
+  (same + probe), `ac0480-lattice-high.png` (nadir-390 + probe; band B = body/fog, 0 probe px).
+  Scripts: `.scratch/AC-0480-gates/shot-lattice{,-marker,-high}.sh`, `analyze-high.py`.
+- **DURABLE for closeout:** the band-B materialisation limit is now reproduced at 3 vantages
+  (118/248 m nadir + the A2 FPV of runs 1-2) — a "measure the far tier in-frame" instrument is
+  only possible via the u_debug probe locating whatever sliver materialised; any future far-tier
+  appearance ticket should budget for code-level measurement (emit/sky/warp audit) first, render
+  second.
+## RUN — Mon Oct 26 17:23:48 EDT 2026 — AC-0480 (round 4: RESUME — diagnosis delivered, no fix. AUTHORIZED FIX: Option A = 3x3 cell smoothing in the C++ far-tier emit + 3-level halo sky. Rebuild owed; band-B vantage hunt; instruments audit.)
+### RUN 4 final — the fix landed (Option A), gates green, evidence below the fold
+- **Code (post-fix state in the worktree; the .so is rebuilt + installed):**
+  1. `gdext/src/mesh.cpp` `avg_grid_emit` (shared tail of BOTH avg emitters): 3x3 CELL
+     SMOOTHING — each solid cell's per-face colour = the count-normalized average over the
+     solid cells of its 3x3 face-plane neighbourhood; merge key AND emitted quad colour read
+     the smoothed values; solid masks untouched; water keeps the origin cell's RAW colour.
+  2. `godot/world/world.gd` `_halo_sky_for` (~:2932): 3-LEVEL sky — 15 strictly above the
+     footprint-max terrain top, **8 AT the top (new graded middle)**, 0 below. No shader edit
+     needed (both far shaders consume COLOR.a linearly: a=8/15 -> L 0.655 at u_day 1).
+  3. `godot/world/world.gd` `_avg_emit_slab` (harness-only twin): the smoothing mirrored in
+     op order (keeps the ladder A/B green).
+  4. The round-3 instruments are KEPT, inert by default (`u_debug=0.0` skips the shader block;
+     the push is env-gated on AWECRAFT_LATTICE_DEBUG, unset by default); their over-promising
+     comments were corrected.
+- **Rebuild (stated):** `PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext
+  platform=linux target=template_release` (SCons 4.11.1 pip --target install — not on PATH;
+  full clean link, -O2 -ffp-contract=off) + the owed `cp gdext/bin/libchunkio.so
+  godot/bin/libchunkio.so`. Pre/post .so md5s: 48896687… / 8feae1e8… (bit-reproducible).
+  Log: `.scratch/AC-0480-gates/rebuild-r4.log`.
+- **Gates (all green, rev 4):** g0 rc0 script0/shader0 (the established 2-line --quit shape,
+  same as every accepted g0 in this folder); genhash **25/25, hashes byte-identical to the
+  run-2 baseline**; residency **leak False / STABLE** (face 74 / home 93, keys_same). Both
+  full-boot arms ran my world.gd edits (408 frames, 0 script errors).
+- **Measurement — band B IS drawn at the shot-G pose (R24, rows ~358-398); the A/B pair is
+  TIME-PINNED (AWECRAFT_TIME=0.5 both legs — the recipe never pinned the day-time, see
+  deviation 22):** prefix-t05 vs postfix-t05 = 1.18% frame diff (build-state noise), plateau
+  strip steps 7.4/171.8/149 vs 7.4/171.8/145 — IDENTICAL. Measured cause (deviation 23): the
+  visible band surface is the flat uniform sand plateau = one merged quad per face = a
+  no-op case for the fix (smoothing a constant = identity; its top is a=15 in both legs).
+  The fix's effect was therefore proven at the EMITTER + real-terrain level:
+  - Emitter A/B (synthetic mixed slab, the plaid's surface class): max adjacent-cell step
+    **0.580 -> 0.290 (-50%)**, 2 -> 5 distinct colours (interior values are exactly the 3x3
+    averages). `smooth-probe-{prefix,postfix}.log`
+  - Halo on real cliff chunks: the at-top class (bot == H) is non-vacuous (up to 31 cells/
+    slab) — those cells re-light **0.263 -> 0.655** (2.5x). `halo-probe-r4.log`
+- **Instruments kept** (see above); **nothing else touched** (no generation/streaming/
+  light-ownership/bake/haze/sky/fog/data/aim-box/near-tier changes; blur still OFF).
+- **Coordinator-owned fallout to sync (harness.gd — outside the builder fence):** the halo
+  arm's arm-recomputed payload (`:12800`) + spot-checks (`:12822-12852`) encode the pre-fix
+  binary rule and will read RED until synced to the 3-level rule (exact line in the results
+  page); `_lod_quad_color_check`'s raw-colour "want" will count quadcheck EVIDENCE mismatches
+  (not ok) on the smoothed band mesh; the ladder A/B, clutter arm and farab stay green by
+  construction.
+- **For the user (Windows):** the llvmpipe proxy's far band at the spawn is a no-op surface,
+  so the in-frame change is not visible HERE (stated plainly, not substituted with band A).
+  Check the far band over MIXED terrain (grass/dirt/stone, 100-200 m hover or the 941 m
+  flight): the 2 m plaid of hard steps should read as smoothly varying terrain; the old
+  top-vs-cliff 4x line should be a graded 2-step over ~4 m.
+- Frames: `ac0480-bandb-prefix-t05.png`, `ac0480-bandb-postfix-t05.png` (the A/B pair);
+  `ac0480-bandb-after-r4b.png` (post-fix, unpinned time — kept for the record);
+  `ac0480-after-R4-miss.png` (invalid R4 render — the missing AWECRAFT_RADIUS catch).
+- Deviations 17-24 appended. Results page: the "0a. Run 4" section.

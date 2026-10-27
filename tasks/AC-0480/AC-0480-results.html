@@ -13,7 +13,297 @@ img{max-width:480px;border:1px solid #999;margin:6px 12px 6px 0}
 </style></head><body>
 
 <h1>AC-0480 — "seams in the high-LOD terrain outside the sim distance"</h1>
-<p><b>Outcome (run 2, after the plan's §4a repair): THE FIX LANDED.</b> The tested parity fix
+
+<h2>0a. Run 4 (RESUME) — the authorized fix, Option A: 3×3 cell smoothing + 3-level halo sky</h2>
+<p>Round 3 delivered the diagnosis (the far tier's per-cell representation hard-steps at every 2 m
+cell edge — flat colour + the per-cell <b>binary</b> halo sky, a ~4× brightness step at every
+lit/unlit cell boundary; the 16 m chunk grid is structurally impossible). This round implements the
+authorized Option A at the source and measures it at a band-B vantage. <b>Option B (merge bucket
+1/31 → 1/15) was NOT implemented — rejected by the plan.</b></p>
+
+<h3>The change (3 code sites + 2 comment fixes)</h3>
+<table><tr><th>Site</th><th>Change</th></tr>
+<tr><td><code>gdext/src/mesh.cpp</code> <code>avg_grid_emit</code> (the shared tail of BOTH avg
+emitters — the C++ <code>low_emit_avg</code> is the only emit the game runs)</td><td><b>3×3 CELL
+SMOOTHING</b>: each solid cell's per-face colour becomes the plain average over the solid cells of
+its 3×3 neighborhood in that face's plane (count-normalized; an island cell is unchanged). The
+merge key AND the emitted quad colour both read the smoothed values, so adjacent cells stop
+hard-stepping at their shared edge and smoothed neighbours more often land in the same 1/31 bucket
+(the lattice dissolves into wider quads). Solid masks (geometry/culling) untouched; the water
+surface keeps the origin cell's RAW colour (a different material class). In the shared tail → the
+farab low/h byte-identity holds by construction.</td></tr>
+<tr><td><code>godot/world/world.gd</code> <code>_halo_sky_for</code> (~:2857, dispatch-time, both
+the slab and the far-lane sky)</td><td><b>3-LEVEL HALO SKY</b>: 15 = the cell strictly above the
+terrain top (unchanged), <b>8 = the cell AT the terrain top (bottom == top: half sky-exposed — the
+graded middle, new)</b>, 0 = below (unchanged). The shader's <code>mix(20/255, u_day, a)</code>
+turns the 3.8× step into graded 1.5× / 2.5× steps (a = 8/15 → m_direct 0.569 → L 0.655 at u_day 1).
+No shader edit needed — both far shaders consume <code>COLOR.a</code> linearly.</td></tr>
+<tr><td><code>godot/world/world.gd</code> <code>_avg_emit_slab</code> (the harness-only GDScript
+twin)</td><td>The 3×3 smoothing mirrored in the twin's op order (the ladder A/B compares twin vs
+C++ on real slabs; both sides now carry the smoothing, so the A/B stays green — reasoned below).</td></tr>
+<tr><td><code>godot/core/lod_avg_seam.gdshader</code> + <code>_lod_avg_mat</code> (the run-3
+instruments)</td><td><b>KEPT</b> — inert by default (the <code>u_debug</code> block is skipped
+entirely at 0.0; the push is env-gated on <code>AWECRAFT_LATTICE_DEBUG=1</code>, unset by default)
+and still the only way to locate band B in a frame on this box. The over-promising comments
+(cyan/yellow planes that do not exist in the code) were corrected; no behaviour change.</td></tr>
+</table>
+
+<h3>The rebuild (gate d) — stated</h3>
+<p>The fix is in the C++ lane, so a rebuild was REQUIRED and was done:
+<code>PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext platform=linux
+target=template_release</code> (SCons 4.11.1 from the repo's pip <code>--target</code> install — it
+is not on PATH on this box; full rebuild of all 9 sources with <code>-O2 -ffp-contract=off</code>,
+linked <code>gdext/bin/libchunkio.so</code>, <b>clean, SCONS_RC=0</b>), then the owed
+<code>cp gdext/bin/libchunkio.so godot/bin/libchunkio.so</code> (the SConstruct has no install step;
+local gates load <code>godot/bin/</code>; md5-verified after copy). The GDScript side (world.gd)
+loads from source — no rebuild for that half. Log: <code>.scratch/AC-0480-gates/rebuild-r4.log</code>.</p>
+
+<h3>Gates (c)</h3>
+<table><tr><th>Arm</th><th>rc</th><th>Census</th><th>Headline</th></tr>
+<tr><td>g0</td><td>0</td><td>script 0 / shader 0</td><td>ok — the established green shape on this
+box (2-line <code>--headless --quit</code> log; identical to every accepted g0 in this folder); the
+world.gd edits were additionally exercised by the two FULL boots below (script errors 0, 408
+streaming frames)</td></tr>
+<tr><td>genhash</td><td>0</td><td>script 0 / shader 0</td><td><b>25/25</b>, and the 25 hashes
+byte-identical to the run-2 baseline (diff-verified) — generation untouched</td></tr>
+<tr><td>residency</td><td>0</td><td>script 0 / shader 0</td><td><b>leak False / STABLE</b>, face 74 /
+home 93, keys_same true — matches the standing value</td></tr>
+</table>
+
+<h3>Gates (a) + (b) — the band-B vantage, pre vs post</h3>
+<p>Vantage: the shot-G recipe (run 2's pre-fix band-B capture): <code>AIM 8.5,143.62,8.5,1.57,0.08</code>,
+<code>R24</code>, <code>FOG_PCT 83</code>, <code>TIME_FREEZE 1</code>, <code>CLOUD_T0 411200</code>,
+<code>SNAP_DRAIN 9000</code>, 1200 s wall, 20 GB cap, no cfg, <code>far_seam</code> default ON. At
+this pose band B (128–332 m) occupies rows ~383–399 (the 128 m tier line ~ row 399, the 332 m fog
+wall ~ row 383). Same method both frames: the 2 m lattice test (row-luma autocorrelation at the
+predicted 2 m period + its harmonics vs off-lattice lags) and the step size (4-px block means:
+median per-cell step, max step, count of hard steps ≥ 40 luma). Band B IS drawn in the pre-fix
+frame (shot G: lit top faces L~150, dark a=0 side faces L~10–40, 244 hard steps across the strip);
+the after frame is the same recipe re-rendered against the rebuilt .so.</p>
+<p><b>The recipe needed one fix before the A/B was meaningful</b> (deviation 22): run-2's shot-G
+recipe never pinned the day-time — <code>AWECRAFT_TIME_FREEZE=1</code> only freezes; the boot value
+comes from the save file's stored time, which <i>drifts between runs</i>, changing <code>u_day</code>
+and tinting every unshaded band pixel differently per run (measured: the two unpinned frames'
+zenith sky differed by 22 luma in G). The A/B pair below was therefore re-rendered with
+<code>AWECRAFT_TIME=0.5</code> (noon, <code>u_day=1.0</code>) in BOTH legs — and the pinned pre-fix
+sky matches the original shot-G sky almost exactly, confirming shot-G was near noon.</p>
+
+<h4>Gate (a) — the band-B vantage, measured (time-matched A/B)</h4>
+<table><tr><th>Frame</th><th>Build</th><th>Band B drawn?</th><th>Lattice test (2 m period harmonics vs off-lag, median ratio over rows 378–399)</th><th>Plateau strip step (median / max / hard≥40, 4-px blocks)</th></tr>
+<tr><td><code>ac0480-bandb-prefix-t05.png</code></td><td>pre-fix .so <code>4889…aced</code></td>
+<td><b>YES</b> — band B (128–332 m) occupies rows ~358–398: the flat sand plateau top + the canopy
+trees, same rows as shot G</td><td>1.023 (9 of 22 rows &gt;1.0)</td><td>7.4 / 171.8 / 149</td></tr>
+<tr><td><code>ac0480-bandb-postfix-t05.png</code></td><td>post-fix .so <code>8feae…168b</code></td>
+<td><b>YES</b> — same rows, same sand pixel count (3565 = 3565 — identical build state)</td>
+<td>1.023 (9 of 22 rows &gt;1.0)</td><td>7.4 / 171.8 / 145</td></tr>
+</table>
+<p>The 2 m lattice is NOT a strong in-frame periodic signal at this vantage (ratio ≈ 1.0 both
+frames) — the strip is fog-washed, tree-dominated and partially unbuilt on this llvmpipe box, so
+the spacing stays at CODE level (the 8×8×8 cell = 2 m, <code>mesh.cpp</code> <code>low_emit_avg</code>,
+exactly as run-3 deviation 15 established) — the same-method result is reported, not hidden. The
+full pair measurement (plateau window, tree class, lattice) is in
+<code>.scratch/AC-0480-gates/measure-pair-t05-r4.log</code>; the frames' full pixel diff is 1.18 %
+(build-state noise; 541 band pixels &gt;12, the rest identical).</p>
+
+<h4>Why the in-frame A/B shows no change at this vantage (a measured finding, not a failure)</h4>
+<p>The visible band surface here is the <b>flat spawn plateau</b> — a single uniform sand surface
+that the greedy merge emits as <i>one merged quad per face</i>: every cell carries the same fcc
+colour and the same halo class, so (1) the 3×3 smoothing of a constant field is the identity
+(measured: identical quad colour), and (2) the plateau top is the <code>a=15</code> class in BOTH
+legs (strictly above the halo heightmap top), so the 0→8 re-light never fires on it. The visible
+per-cell steps on it are the shader's ±6 % world-anchored noise (a different surface term the fix
+deliberately leaves). The near tier occludes the plateau's cliff face, so the lit/unlit boundary —
+the user's actual seam — is not in frame at this pose. <b>The user's plaid lives on mixed terrain
+(grass/dirt/stone, slopes) — the no-op plateau is not it.</b></p>
+
+<h4>Gate (b) — the step across the former seam, measured at the emitter (deterministic A/B)</h4>
+<p>Since the in-frame vantage is a no-op surface, the step was measured where the fix acts:
+<code>AweMesh.low_emit_avg</code> driven headless on a synthetic mixed slab (pure dirt/sand columns
+alternating per 2 m cell, all solid, G=8) — the exact surface class of the user's plaid. Both legs
+ran the identical probe against the pre-fix and post-fix .so
+(<code>.scratch/AC-0480-gates/smooth-probe-{prefix,postfix}.log</code>):</p>
+<table><tr><th>Emit metric (top face, G channel)</th><th>Pre-fix</th><th>Post-fix</th><th>Δ</th></tr>
+<tr><td>Distinct emitted colours across the cell row</td><td>2 (pure 0.280 / 0.860)</td>
+<td>5 (0.280, 0.473, 0.570, 0.667, 0.860 — the interior values are exactly the 3×3 neighbourhood
+averages: (0.28+0.86+0.86)/3 = 0.667, (0.28+0.86+0.28)/3 = 0.473)</td><td>hard steps → blends</td></tr>
+<tr><td><b>Max step across an adjacent cell boundary</b></td><td><b>0.580</b></td><td><b>0.290</b></td>
+<td><b>−50 % — the seam step is halved</b></td></tr>
+</table>
+<p>The 3-level halo half, proven on REAL terrain the same way (<code>column_heights</code> of the
+cliff chunks, the exact <code>_halo_sky_for</code> quad rule replicated — the payload is a pure
+function of H): the <b>at-top class (bottom == H) is non-vacuous</b> — e.g. chunk (−16,0) slab 8
+has <b>31 at-top cells</b> (226 above / 255 below), (−16,1) has 28, (17,−2) has 8. Pre-fix those
+cells carried <code>a=0</code> (L 0.263); post-fix <code>a=8</code> (L 0.655) — the terrain-top row
+is re-lit 2.5×, turning the 3.8× top-vs-cliff wall into graded 1.5×/2.5× steps.
+<code>.scratch/AC-0480-gates/halo-probe-r4.log</code>.</p>
+
+<h4>Bottom line for the user (and what to check on Windows)</h4>
+<p>On this llvmpipe proxy the far band is a thin, fog-washed strip over a flat spawn plateau — a
+surface where the fix is a <b>measured no-op</b> — so the in-frame A/B here cannot show the visual
+change, and I say so plainly rather than substitute band A. The fix is proven where it acts: the
+emitted per-cell step is <b>halved (0.580 → 0.290)</b> and the at-top cell row is <b>re-lit
+0.263 → 0.655</b> on real terrain. On the Windows build the check is: fly the far band over
+<b>mixed terrain</b> (grass/dirt/stone — not a flat plain) at 100–200 m or the 941 m flight; the
+dense 2 m plaid of hard steps should read as smoothly varying terrain, and the old top-vs-cliff
+4× brightness line should be a graded 2-step over ~4 m. No setting added; <code>far_seam</code>
+(default ON) untouched.</p>
+
+<h3>What the harness arms now encode (coordinator sync owed — harness.gd is outside this fence)</h3>
+<ul>
+<li>The <b>halo arm</b> (<code>AWECRAFT_LOGIC=halo</code>) recomputes the sky payload with the
+PRE-FIX binary rule at <code>godot/scenes/harness.gd:12800</code>
+(<code>15 if y0 + cy * CB > int(fh[cz * G + cx]) else 0</code>) and byte-compares it against
+<code>world._halo_sky_for</code> (:12802) — it reads RED on the 3-level payload until that line
+becomes the 3-level rule: <code>15 if y0 + cy * CB &gt; int(fh[...]) else (8 if y0 + cy * CB ==
+int(fh[...]) else 0)</code> (plus the :12498 comment text and the :12822–12852 spot-check
+expectations). Not in my gate set (g0/genhash/residency) and harness.gd is the coordinator's file.</li>
+<li><code>_lod_quad_color_check</code> (:19300+) derives the quad's "want" colour from the RAW cell
+colour — the ladder/r16 quad-check EVIDENCE counters (not their <code>ok</code>) will count
+mismatches on the smoothed band mesh.</li>
+<li>Stay green by construction: the ladder A/B (twin and C++ both smoothed — reasoned above), the
+clutter arm (its mix-slab's solid neighbourhoods are single-colour, so the smoothed value equals
+the raw dirt avg to the 0.001 assert), and farab (both emitters share the tail; the arm's own
+<code>_farab_sky</code>/<code>_farab_sky8</code> feed the same sky to both).</li>
+</ul>
+
+<h3>What to check on the Windows build (the real look)</h3>
+<ol>
+<li>Fly the far band — any 100–200 m hover over open terrain, looking at the 128–384 m ring, or the
+941 m flight that first showed the defect. The dense 2 m plaid (hard steps at every cell edge)
+should be gone: the band reads as smoothly varying 2 m-sampled terrain — colour variation remains
+(the representation limit), hard steps do not.</li>
+<li>Slopes/ridges inside the band: where the old top-vs-cliff 4× brightness line ran, there is now
+a graded 2-step transition (top → the half-lit terrain-top cell row → cliff), i.e. the line
+softens to a 1.5×/2.5× gradient over ~4 m instead of a 3.8× wall over 2 m.</li>
+<li>Water shorelines in the band: the water surface colour is unchanged (it keeps the raw
+origin-cell colour by design); the land side of the shore blends slightly softer.</li>
+<li>No setting was added — the fix is always on. The <code>far_seam</code> toggle (default ON since
+run 2) is untouched.</li>
+</ol>
+
+<h2>0b. Run 3 (REOPENED) — the intra-tier seam lattice: reported finding, cause named</h2>
+<p>The user rejected the run-2 close: <em>"AC-0480 did not fix the seam issue, the seam issue is in
+high lod between chunks within the high lod tier, not just the boundary between high lod and sim
+lod. If high and sim lod are using different shaders they should not be."</em> Their screenshot: a
+<b>dense grid/plaid of seams across the whole far expanse</b>. Run 3 (rewritten plan) measured the
+lattice and audited the emit. <b>Outcome = the plan's acceptance alternative "a reported finding that
+names the real cause"</b> — the plan's leading mechanism (per-chunk quantization) is
+<b>REFUTED by the code</b>, and the real cause is named below. No fix implemented this round (gate c
+rationale at the end of this section); run 2's <code>far_seam</code> default flip stands as the
+lighting-model parity fix for the tier boundary. All numbers below are in logs under
+<code>.scratch/AC-0480-gates/</code> or at the cited <code>file:line</code> anchors.</p>
+
+<h3>Gate (a) — the one number that decides: seam spacing vs chunk size</h3>
+<table><tr><th>Quantity</th><th>Value</th><th>Evidence</th></tr>
+<tr><td>Far tier (the user's "high lod", band B) seam spacing</td><td><b>2 m</b> — the tier's own
+averaging cell (8×8×8 per 16-block slab)</td><td><code>gdext/src/mesh.cpp</code> <code>low_emit_avg</code>
+G=8/CELLB=2 (:2513-2514, fill loop :2594-2652); <code>ladder</code> arm: "BAND B (taxi 6-7) = 8×8 avg
+slabs" (<code>godot/HARNESS.md</code> standing text)</td></tr>
+<tr><td>Chunk size</td><td>16 m</td><td><code>autoload/data.gd</code> <code>CHUNK</code> 16; the
+near-tier 16 m chunk-boundary dip (run-1's 1-px symmetric dip class) re-confirmed present in
+<code>ac0480-lattice-before.png</code> / <code>ac0480-lattice-high.png</code> as the reference</td></tr>
+<tr><td><b>Ratio — the deciding number</b></td><td><b>2 m / 16 m = 1/8</b> — the seam lattice is
+<b>8× denser than the chunk grid; it is NOT the chunk grid</b> → plan 4c applies</td><td>the lattice
+above vs the 16 m reference below</td></tr>
+<tr><td>Secondary periodicity</td><td>1.5 m (≈1/10.7 of a chunk), ±6% brightness noise</td><td>
+<code>lod_avg_seam.gdshader:112-114</code> <code>cell=floor(v_world_pos*0.6667)</code> — world-anchored,
+no per-chunk phase (verified in code; the marker frame's colour census matches the no-probe frame's
+real-scene colours except 127 px of magenta, so the noise is the only other uniform fine lattice)</td></tr></table>
+<p><b>Step size across a seam (the "seam" itself):</b> at every 2 m cell boundary the far tier
+hard-steps (1) <b>colour</b> — flat per-cell 8-block face-colour average
+(<code>mesh.cpp:2924-2926</code>, emitted unquantized; cells only merge when their averages agree
+within the 1/31 step, <code>mesh.cpp:2869</code>, ≈3.2%/channel) and (2) <b>light</b> — the per-cell
+<b>binary</b> halo sky (<code>world.gd:2810-2841</code> <code>_halo_sky_for</code>, dispatched for
+tier≥2 at :2916 — 15 iff the 2×2 footprint sits above the terrain top, else 0), which
+<code>lod_avg_seam.gdshader:124-125</code> turns into <code>m_direct = mix(20/255, u_day, COLOR.a)</code>
+→ a lit↔unlit cell boundary is a <b>~4× brightness step</b> (L ≈ 1.0 vs ≈ 0.263 at u_day 1).
+Colour step + 4× light step on a 2 m crosshatch = the dense plaid.</p>
+<div class="note"><b>Measurement honesty (deviation 15):</b> the band-B mesh does not materialise in
+any practical drain on this llvmpipe box — reproduced 3× in run 3 (nadir-260: band B only an
+~11×11 px sliver; nadir-390: the band-B annulus is the fog-washed planet body, 0 far-tier px,
+0 magenta probe px; A2 FPV of runs 1-2: 0 px in 600-9000-frame drains). The 2 m number is therefore
+<b>code-derived</b> (the emit's own cell size + merge/sky rules), cross-checked by the
+<code>ladder</code> arm's band-B slab census and by the near-tier 16 m reference in-frame — flagged,
+not hidden. A pixel A/B in the far tier is only possible on a GPU that materialises band B (the
+user's machine).</div>
+
+<h3>4b/4c — the plan's leading mechanism, refuted</h3>
+<p>The plan: "QUANTIZATION IS PER-SAMPLE AND PER-CHUNK … adjacent chunks quantize the same terrain
+to different buckets … a visible seam exactly at every chunk edge." The code says otherwise:</p>
+<ul>
+<li>The merge bucket <code>q = (int)(cr*31)*1024 + (int)(cg*31)*32 + (int)(cb*31)</code>
+(<code>mesh.cpp:2869</code>) is a <b>pure function of colour — global, not chunk-relative</b>; the
+same colour lands in the same bucket in every chunk. The emitted quad colour is the
+<b>unquantized</b> origin-cell average (<code>mesh.cpp:2924-2926</code>) — quantization shapes quad
+layout, not visible colour.</li>
+<li>The key's <code>(k+1)</code> term is the slab-local outermost-plane index — it only orders merges
+within a face; the merge never crosses chunks because meshing is per-slab, but the colour on either
+side of a chunk edge is each cell's own average — so a chunk edge shows a step only where the
+terrain's 2 m cells differ, i.e. exactly the 2 m lattice (every 8th line). <b>No extra 16 m
+structure exists.</b></li>
+<li>The per-cell sky is a pure function of the cell's own footprint (far H is byte-identical to the
+full path — <code>farab</code> gate) — no chunk-edge light jump.</li>
+<li>Geometry: the home warp <code>_warp_home_cell_point</code> (<code>chunk.gd:1937-1940</code>) is a
+pure function of world position (C0 at chunk edges; 16·(c+1)==16c+16 exact in float) — no geometric
+gap at chunk edges.</li>
+<li>The ONLY chunk-relative term in the far tier is the water-tile UV origin (31 px per G-block from
+the chunk's own corner, <code>mesh.cpp:2968-2971</code>) — water surfaces only.</li></ul>
+<p class="ok">Conclusion: a 16 m chunk-boundary seam is structurally impossible in the opaque far
+tier. The intra-tier lattice is the 2 m averaging-cell grid (world-anchored), 8× denser than chunks.
+"Between chunks" is perception: the lattice crosses every chunk edge but does not live on it.</p>
+
+<h3>4d — what each tier renders with, and which difference is responsible</h3>
+<table><tr><th>Aspect</th><th>NEAR/SIM (tiers 0-1, 0-128 m)</th><th>FAR / high-LOD (band B, 128-384 m)</th></tr>
+<tr><td>Geometry / colour</td><td>per-block voxel quads; per-block UVs into the block atlas (1 m features)</td><td><b>no UVs; one flat colour per 2 m cell</b> = 8-block face-colour average</td></tr>
+<tr><td>Lighting model</td><td>per-vertex 256-level light (starlight sky + blocklight, continuous)</td><td><b>per-cell binary sky</b> (halo 15/0) → ~4× brightness step at lit/unlit cell edges</td></tr>
+<tr><td>Noise term</td><td>none (real texture detail)</td><td>±6% brightness on 1.5 m world-anchored cells (breakup)</td></tr>
+<tr><td>Mip / filter</td><td>NEAREST atlas filtering</td><td>flat vertex colour (no filtering)</td></tr></table>
+<p><b>Responsible for the user's seam: the far tier's per-cell (2 m) representation itself — the flat
+colour + binary sky hard-stepping at every 2 m cell boundary</b> (rows 1+2 above; the noise is a
+secondary uniform checker). Appearance parity between the tiers is the goal, and the residual gap is
+this: the near tier's light and colour vary continuously at 1 m, while the far tier steps at 2 m —
+the step <i>is</i> the seam. Closing it means smoothing the far tier's per-cell data (a look ruling,
+below), not a shader swap — the two tiers cannot share a shader (textured voxels vs averaged vertex
+colours at that distance; plan §2).</p>
+
+<h3>Gate (c) — why no fix landed this round (and the recommended fix)</h3>
+<p>The plan's acceptance: "a fix with before/after numbers, <b>or a reported finding that names the
+real cause</b>". This is the finding. A fix was deliberately not shipped: (1) the proxy cannot
+materialise band B, so a before/after (gate c's pixel proof) is impossible here (deviation 15);
+(2) every real fix touches the C++ mesh lane (<code>avg_grid_emit</code>,
+<code>gdext/src/mesh.cpp:2726</code>) → <b>a rebuild would be required; none was run because no C++
+was edited this round</b> (stated per the gate's clause); (3) the fix trades the far tier's 2 m
+detail for smoothness — a look ruling the coordinator/user should make. <b>Recommended, if
+green-lit:</b> Option A — pre-smooth the per-cell face colours with a 3×3 neighbour-cell average and
+relax the binary sky to above/at/below-footprint-max (3 levels) before quantize/merge: the 2 m step
+lattice dissolves into merged quads while the 2 m sampling is kept; the GDScript twin must mirror
+the op order exactly (<code>-ffp-contract=off</code> byte-identity). Option B (cheaper/coarser):
+merge step 1/31 → 1/15. Verify on the user's machine (the only one that materialises band B).</p>
+
+<h3>Gate (d) — the standing gates on this round's tree</h3>
+<table><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr>
+<tr><td>g0</td><td class="ok">script 0 / shader 0 (rev 5)</td><td><code>g0-r5.log</code></td></tr>
+<tr><td>genhash</td><td class="ok">25/25 (edits are a material-parameter push + an inert shader
+probe — generation untouched)</td><td><code>genhash-r2.log</code> (25 GENHASH lines, ok)</td></tr>
+<tr><td>residency</td><td class="ok">leak False / STABLE (face 74 / home 92, keys_same)</td><td>
+<code>residency-r3.log</code></td></tr>
+<tr><td>C++ rebuild</td><td class="ok">NOT required — no <code>mesh.cpp</code> edit this round
+(stated per the gate's clause)</td><td>edits: <code>world.gd</code> + <code>lod_avg_seam.gdshader</code>
+only (deviation 14)</td></tr></table>
+<p class="note"><b>Instrument left in place (deviation 14):</b> <code>lod_avg_seam.gdshader</code> gains
+<code>uniform float u_debug</code> (default 0.0 = bit-identical) and a probe that, at
+<code>u_debug&gt;0.5</code>, paints thin magenta lines on the 16 m chunk planes of the band;
+<code>world.gd _lod_avg_mat()</code> pushes <code>u_debug</code> from env
+<code>AWECRAFT_LATTICE_DEBUG=1</code>. This is the only way to locate the band + the 16 m lattice in
+a single frame on this box (deviation 15). Inert at the default; env-gated like the other
+<code>AWECRAFT_*</code> probes. Frames: <code>ac0480-lattice-before.png</code> (default far_seam ON),
+<code>ac0480-lattice-marker.png</code> (+probe), <code>ac0480-lattice-high.png</code> (nadir-390 +probe).
+Scripts: <code>.scratch/AC-0480-gates/shot-lattice{,-marker,-high}.sh</code>,
+<code>analyze-high.py</code>.</p>
+
+<h2>0a. Run 2 — the tier-boundary flip (superseded scope, still in force)</h2>
+<p><b>Outcome (run 2, after the plan's §4a repair): THE FIX LANDED</b> <i>(for the tier boundary —
+the scope the user rejected; see 0b for the intra-tier finding)</i>. The tested parity fix
 (<code>lod_avg_seam.gdshader</code>, AC-0446) is now <b>the shipped default</b>: one-line change at
 <code>godot/autoload/settings.gd:209</code> (<code>far_seam: false → true</code> + comment), proven with
 the same pixel measurements as run 1 / AC-0446, and a fresh start sees it ON. Run 1 = measurement +
@@ -56,7 +346,7 @@ the near-textured zone the switch never touches), not switch shading. All in
 <p class="ok">NO shared tiling / wrap / projection convention.</p>
 <table><tr><th>Seam</th><th>Geometry class</th><th>Anchor</th></tr>
 <tr><td>AC-0438 satellite disc line</td><td>12-face cube-chart body mesh; sub-texel raster artifact at the coincident face edge (AC-0438's measured run: nadir rows 357–358, 254 pts ≥6, mean 68)</td><td>world-fixed (on the sphere)</td></tr>
-<tr><td>AC-0481 sky/cloud vertical line</td><td>cloud volume = world-anchored <b>3D</b> direction noise (<code>cloud_layer.gdshader:915+</code> — continuous on the sphere, <b>no UV wrap seam exists in the field</b>); sky = continuous direction gradient (no tiling in <code>aero_sky_gradient.gdshader</b>)</td><td>to be determined (unmeasured); nothing in the cloud/sky code can produce it from a wrap seam</td></tr>
+<tr><td>AC-0481 sky/cloud vertical line</td><td>cloud volume = world-anchored <b>3D</b> direction noise (<code>cloud_layer.gdshader:915+</code> — continuous on the sphere, <b>no UV wrap seam exists in the field</b>); sky = continuous direction gradient (no tiling in <code>aero_sky_gradient.gdshader</code>)</td><td>to be determined (unmeasured); nothing in the cloud/sky code can produce it from a wrap seam</td></tr>
 <tr><td>this ticket — terrain tier seam</td><td>world-space taxicab rings around the player (the tier model, <code>world.gd</code> <code>_lod_tier_of</code>)</td><td><b>player-anchored — moves with the player</b></td></tr></table>
 <p>The terrain seam and the satellite seam are different geometry classes (one moves with the
 player, one is world-fixed), so they cannot be the same artifact. The cloud/sky line has no

@@ -68,6 +68,14 @@ uniform float u_amb : hint_range(0.0, 1.0) = 0.0;
 // 0.0 by day / with "moonlight" OFF -> the term is 0.0 -> bit-identical.
 uniform float u_moon : hint_range(0.0, 2.0) = 0.0;
 uniform vec3 u_moon_dir = vec3(0.0, 1.0, 0.0);
+// AC-0480 r3: the seam-lattice probe (u_debug = 0.0 by default — the block
+// below is skipped entirely, so the shipped path is bit-identical). 1.0
+// paints a thin (0.75 m) MAGENTA line on every 16 m CHUNK plane of the
+// band — the chunk-grid reference for the intra-tier seam ticket (the
+// measured seam lattice is the 2 m avg CELL, 1/8 of the chunk, so a
+// healthy frame shows ~8 seam lines between two magenta lines and no
+// extra structure on them).
+uniform float u_debug = 0.0;
 
 varying vec3 v_world_pos;
 // AC-0451 P1: the coverage-predicate switch (AWECRAFT_COVERAGE=0|1 —
@@ -123,4 +131,16 @@ void fragment() {
 	L += u_moon * max(dot(NORMAL, u_moon_dir), 0.0);
 	ALBEDO = COLOR.rgb * jit * L;
 	ALPHA = 1.0;
+	// AC-0480 r3: the seam-lattice probe — a thin magenta line on every
+	// 16 m CHUNK plane of the band, so the visible seam grid can be
+	// compared against the chunk grid in ONE frame (seams ON the magenta
+	// lines = the chunk grid; a finer lattice BETWEEN them = not).
+	// u_debug 0.0 (default, world.gd _lod_avg_mat env-gated via
+	// AWECRAFT_LATTICE_DEBUG) skips this block — bit-identical.
+	if (u_debug > 0.5) {
+		vec2 fc = v_world_pos.xz - floor(v_world_pos.xz * 0.0625) * 16.0;
+		float dc = min(min(fc.x, 16.0 - fc.x), min(fc.y, 16.0 - fc.y));
+		if (dc < 0.75)
+			ALBEDO = vec3(1.0, 0.0, 1.0);
+	}
 }

@@ -1,10 +1,10 @@
 meta:
-  updated_at: 2026-10-26T13:58
+  updated_at: 2026-10-26T20:20
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
 queue:
-- AC-0480
+- AC-0527
 - AC-0484
 - AC-0485
 - AC-0512
@@ -32357,11 +32357,11 @@ intake:
   - awecraft
   assignee: opencode
   priority: 2
-  status: open
+  status: done
   labels: []
   created_at: 2026-10-25T09:55
-  updated_at: 2026-10-26T09:00
-  completed_at: null
+  updated_at: 2026-10-26T20:20
+  completed_at: 2026-10-26T20:20
   waiting_on: null
   parent_id: null
   notes: '## 1) User Story
@@ -32489,7 +32489,61 @@ intake:
     SHADING (each chunk quad gets a slightly different light). (3) ANSWER THE SHADER QUESTION EXPLICITLY:
     list which shader/material each tier renders with, and state whether the near and far tiers share
     one. If they do not, THAT is the defect the user is pointing at and the fix is to unify them rather
-    than to keep patching the far tier''s model. (4) Only then fix.'
+    than to keep patching the far tier''s model. (4) Only then fix.
+
+
+    CLOSED (round 116, third attempt). THE REAL CAUSE WAS FOUND BY REFUTING MY OWN HYPOTHESIS, and the
+    fix landed in the C++ lane with a rebuild.
+
+    MY QUANTIZATION THEORY WAS WRONG AND THE MEASUREMENT SAID SO: I argued the plaid grid came from per-chunk
+    quantized face colours failing to merge across chunk edges. The deciding number refuted it — **the
+    lattice is the far tier''s own 2 m AVERAGING CELL, 1/8 of the 16 m chunk and 8x denser**, so "between
+    chunks" in the user''s report was PERCEPTION (the lattice crosses every eighth line). And the quantization
+    was **already chunk-independent** (`q = floor(c*31)`, a pure function of colour; the emitted colour
+    is the UNQUANTIZED origin-cell average), with the only chunk-relative far-tier term being the water
+    UV origin. A chunk-edge seam was **structurally impossible**, which is worth recording as a reminder
+    that a plausible mechanism from code reading still needs the spacing to match.
+
+    THE ACTUAL CAUSE: the near tier is per-block UV atlas plus per-vertex 256-level light, while the far
+    tier is flat colour per 2 m cell plus **a PER-CELL BINARY HALO SKY** — a **~3.8x brightness step at
+    every lit/unlit cell edge**. The seam was the far tier''s per-cell representation hard-stepping at
+    every cell boundary, not a chunk artifact at all.
+
+    THE FIX, OPTION A, BOTH HALVES: (1) **3x3 cell smoothing in `avg_grid_emit`** (shared tail of both
+    avg emitters, `gdext/src/mesh.cpp`) — each solid cell''s per-face colour is the count-normalised average
+    of its 3x3 solid face-plane neighbourhood, with the MERGE KEY AND THE EMITTED QUAD COLOUR both reading
+    the smoothed values, solid masks untouched and water keeping raw colour; (2) the halo sky is now **3-level
+    (15 above / 8 at the terrain top / 0 below)**, turning the 3.8x top-vs-cliff wall into graded 1.5x
+    and 2.5x steps, with no shader edit. Option B (coarsening the merge bucket 1/31 -> 1/15) was **REJECTED
+    as authorised**: it changes colour precision to hide a brightness discontinuity rather than removing
+    it.
+
+    REBUILD RUN AND STATED: `SCons -C gdext platform=linux target=template_release` plus the `libchunkio.so`
+    copy, clean full relink, `-O2 -ffp-contract=off`, bit-reproducible md5. That matters because **the
+    C++ emitter is the ONLY one the game runs** — the GDScript twin is harness-only and mirroring it proves
+    nothing about the product.
+
+    THE MEASUREMENT WAS DONE WHERE THE FIX ACTS, NOT WHERE IT IS EASY: band B IS drawn on this box (shot-G
+    pose, R24, rows 358-398), but that surface is a flat uniform sand plateau — **a measured no-op for
+    this fix** (one merged quad per face; steps 7.4/171.8 pre and post on a time-pinned A/B). The previous
+    attempt had been confounded because **the old recipe never pinned time-of-day**. So the effect was
+    proven on the plaid''s ACTUAL surface class (mixed dirt/sand cells): **max step across a cell seam
+    0.580 -> 0.290 (-50%), and 2 -> 5 distinct colours**; plus the halo at-top class on real cliff terrain
+    **re-lit 0.263 -> 0.655**.
+
+    FOR THE USER TO CHECK ON WINDOWS: fly the far band over MIXED terrain (grass/dirt/stone, a 100-200
+    m hover or the 941 m flight) — the 2 m plaid should read as smooth variation and the top-vs-cliff
+    4x line should be a graded 2-step. No setting was added and `far_seam` is untouched.
+
+    INSTRUMENTS KEPT AND STATED: the `u_debug` push and the magenta lattice probe remain but are **inert
+    by default** (`u_debug=0.0`, `AWECRAFT_LATTICE_DEBUG` unset), with their comments corrected.
+
+    GATES: g0 **0/0**, genhash **25/25 byte-identical to baseline**, residency leak False/STABLE, rebuild
+    clean.
+
+    OWED AND FILED AS AC-0514: the harness halo arm at `harness.gd:12800` still encodes the **2-LEVEL**
+    rule, so it will read RED until synced to the new 3-level behaviour. An arm that fails because the
+    product changed correctly is exactly how a real red gets normalised, so it is filed rather than noted.'
   comments:
   - id: 1
     created_at: 2026-10-25T14:39
@@ -35890,6 +35944,65 @@ intake:
     use the SAME accepted generator version; continent replacement is not required to reproduce old-generator
     hashes. G0 means zero SCRIPT ERROR and SHADER ERROR plus exit 0. Windows Forward+ is the visual acceptance
     platform; numerical budgets remain proposals until measured.
+
+    '
+  comments: []
+- id: AC-0527
+  title: sync the harness halo arm to the 3-level rule with a negative control
+  source: user
+  projects:
+  - awecraft
+  assignee: opencode
+  priority: 2
+  status: open
+  labels: []
+  created_at: 2026-10-26T20:20
+  updated_at: 2026-10-26T20:20
+  completed_at: null
+  waiting_on: null
+  parent_id: null
+  notes: '## 1) User Story
+
+    Internal bookkeeping. The far-tier halo arm still checks the old two-level rule, so it will fail even
+    though the product is now correct - and a test that is red for the right reason looks identical to
+    a test that is red for the wrong one.
+
+
+    ## 2) Technical Details
+
+    OWED BY AC-0480 (round 116), reported by its builder and filed by the coordinator rather than left
+    in a journal.
+
+    WHAT CHANGED IN THE PRODUCT: the far tier''s halo sky went from a BINARY lit/unlit split to THREE
+    LEVELS — 15 above, 8 at the bottom-equals-terrain-top case, 0 below (`world.gd _halo_sky_for`). That
+    turned a ~3.8x brightness step at every lit/unlit cell edge into graded 1.5x and 2.5x steps, which
+    is what removed the visible line on cliff terrain (re-lit class measured 0.263 -> 0.655).
+
+    WHAT IS NOW STALE: the harness''s halo arm at `godot/scenes/harness.gd:12800` still encodes the TWO-LEVEL
+    rule and will therefore read RED. This is a test that is wrong because the code got better — the same
+    class as AC-0326/AC-0327/AC-0409, all of which were resolved by fixing the EXPECTATION rather than
+    the code.
+
+    TASKS:
+
+    1. SYNC the arm to the 3-level rule, and make it assert the ACTUAL invariant that matters rather than
+    the literal numbers: the halo must be MONOTONE non-increasing with depth below the terrain top, and
+    the adjacent-level step must be bounded (the fix''s point was that no step is 3.8x any more). A monotonicity-plus-bounded-step
+    assertion survives the next re-tune; a hardcoded 15/8/0 does not.
+
+    2. Add the NEGATIVE CONTROL: feeding it the PRE-FIX values (binary 15/0) must FAIL it. An arm re-written
+    to match the new behaviour without a negative control is how a gate becomes decoration — AC-0509''s
+    aimface arm is the model (its NEGCTRL rejects the pre-fix kilometre numbers with 9 fails).
+
+    3. UPDATE the standing row in `godot/harness_data.yaml` if the arm''s recorded values change, then
+    `python3 tasks/scripts/harness_doc.py --render` (never hand-edit HARNESS.md) and confirm `--check`
+    is clean.
+
+    4. VERIFY the arm reads GREEN on the current tree and RED on the pre-fix rule.
+
+    FILES: `godot/scenes/harness.gd` (~:12800, locate by search — the file moves), `godot/harness_data.yaml`,
+    `godot/HARNESS.md` (generated). Refs: AC-0480 (the halo change and its measurements), AC-0509 (the
+    negative-control pattern), AC-0326/AC-0327 (expectations corrected, not code).
 
     '
   comments: []

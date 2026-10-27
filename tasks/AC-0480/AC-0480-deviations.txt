@@ -93,3 +93,116 @@ AC-0480 deviations (measurement conditions vs user-repro conditions)
     world.gd:1621-1622 and 5567-5568 still say "default OFF". menu.gd:109
     and 643 do the same. Behaviour is correct (the DEFAULTS dict is the
     single source); the comment drift is noted for the closeout harvest.
+
+## RUN 3 (round 3 — REOPENED: the intra-tier seam GRID, not the tier boundary)
+13. No C++ change this round, so NO rebuild was owed or run (gate d's
+    rebuild clause is conditional on a mesh.cpp edit; the only edits are
+    world.gd + lod_avg_seam.gdshader, both loaded from source at runtime).
+14. MEASUREMENT INSTRUMENT LEFT IN PLACE (inert, env-gated, documented):
+    (a) godot/core/lod_avg_seam.gdshader — new uniform `u_debug` (default
+    0.0) + an end-of-fragment block that, only when u_debug>0.5, paints a
+    thin (0.75 m) MAGENTA line on every 16 m CHUNK plane of the band
+    (the chunk-lattice probe for 4a). At u_debug=0 the block is skipped —
+    bit-identical output. (b) godot/world/world.gd `_lod_avg_mat()` —
+    pushes u_debug = 1.0 iff the env AWECRAFT_LATTICE_DEBUG=1, else 0.0
+    (the same env-gated probe pattern as the other AWECRAFT_* knobs).
+    Rationale: the band-B mesh does not materialise in any practical
+    drain on this llvmpipe box (deviation 15), so the probe is the only
+    way to re-locate the band + the 16 m lattice in a future frame in ONE
+    shot; it costs nothing at the default. Kept, not a behaviour change.
+15. The band-B (far) mesh could not be directly measured on this box in
+    round 3 — reproduced the run-1/run-2 limitation at THREE vantages:
+    nadir-260 (eye ~118 m above the top=140 ground: the frame's ground
+    extent is 0-160 m, the band-B ring 128-384 m reaches only the frame
+    corners), nadir-390 (eye ~248 m above ground: the band-B annulus is
+    the white fog-washed planet BODY, 0 far-tier px), and the first
+    marker frame (band-B present only in a ~11x11 px lake-rim sliver).
+    AWECRAFT_LATTICE_DEBUG=1 (the magenta chunk-plane probe) read 0 px in
+    the nadir-390 frame (no band-B surface to paint) and ~127 px (that
+    sliver) in the nadir-260 frame. The DECIDING NUMBER is therefore
+    code-derived (the band-B emit's own cell size + merge/sky rules in
+    gdext/src/mesh.cpp low_emit_avg / world.gd _halo_sky_for), not a
+    pixel measurement; the near-tier 16 m chunk-boundary dip (run 1's
+    llvmpipe mesh-edge class) was re-confirmed present in both nadir
+    frames as the 16 m reference. This is flagged, not hidden.
+16. The near-tier dark grid I first chased (the ~40-43 px lattice in the
+    nadir-260 green expanse) is the NEAR tier (tier 0/1, 0-128 m,
+    textured) — NOT the user's defect. At the nadir-260 eye (~118 m above
+    ground) the frame's ground extent is 0-160 m, so the expanse is
+    tier-0/band-A; the far tier is only the outer rim. The user's seam is
+    in the FAR tier (band B), which is why the far vantage + the code
+    audit are the right instruments, not the near-tier pixel forensics.
+17. RUN 4 (the fix round): the AFTER frame (ac0480-bandb-after-r4.png) used
+    the EXACT shot-G recipe (AIM 8.5,143.62,8.5,1.57,0.08, FOG_PCT 83,
+    TIME_FREEZE=1, CLOUD_T0=411200, SNAP_DRAIN 9000, 1200 s, 20 GB cap,
+    TM_HO=50, no cfg, no AWECRAFT_FARSEAM — default ON) so the pre/post
+    comparison is code-only. Known confound (run 2's G/H lesson, kept in
+    force): two 1200 s renders of the same recipe land in different
+    mid-streaming build states (the drain is not fully drained); band-B
+    coverage in the after frame may differ from shot G's, so the
+    pre/post pixel comparison is restricted to surface classes present
+    in BOTH frames, and that is stated where used.
+18. RUN 4: the SCons toolchain is NOT on PATH on this box — the repo
+    carries a pip --target install at .scratch/scons-target (scons
+    4.11.1); the working rebuild command is
+    `PYTHONPATH=.scratch/scons-target python3 -m SCons -C gdext
+    platform=linux target=template_release`, followed by the owed
+    `cp gdext/bin/libchunkio.so godot/bin/libchunkio.so` (the SConstruct
+    has no install step; the local gates load godot/bin/).
+19. RUN 4: the halo arm (AWECRAFT_LOGIC=halo, coordinator-owned
+    harness.gd) encodes the PRE-FIX binary sky rule in its ARM-RECOMPUTED
+    payload (harness.gd ~12800: `15 if y0 + cy*CB > fh else 0`) and
+    compares it BYTE-EXACT against world._halo_sky_for (~12802). With the
+    authorized 3-level rule (bottom == fh -> 8), the arm's payload check
+    reads RED until the arm's recompute is synced to the 3-level rule —
+    harness.gd is outside this builder's fence (implement.md), so the
+    exact sync line is reported in the results page for the coordinator.
+    Same class: _lod_quad_color_check's "want" is the RAW cell colour
+    (harness.gd ~19300+), so the ladder/r16 quad-check EVIDENCE counters
+    (not their ok) will count mismatches on the smoothed band mesh.
+    The ladder A/B (twin vs C++), the clutter arm and farab stay green
+    (both sides changed identically / masks untouched — reasoned in the
+    results page).
+20. RUN 4: the g0 arm's green shape on this box is a 2-line log (engine
+    banner only, `--headless --quit`, rc 0, census 0/0) — identical to
+    every previously-accepted g0 in this ticket's folder (g0-r1..r6);
+    genhash and residency ran FULL boots (SATDIAG + RESULT lines present)
+    with my world.gd edits loaded and 408 frames of streaming, script
+    errors 0.
+21. RUN 4: the band-B lattice test (2 m period harmonics vs off-lattice
+    lags) reads ~1.0 (no strong periodic signal) on the PRE-fix shot-G
+    frame at this vantage — the strip (rows 383-399, 128-332 m) is
+    fog-washed, tree-dominated and partially unbuilt here, so the 2 m
+    spacing is established at CODE level (the 8x8x8 cell, 2 m, mesh.cpp
+    low_emit_avg/avg_grid_emit) exactly as run 3's deviation 15 did; the
+    in-frame evidence that moved pre/post is the STEP SIZE (gate b),
+    measured with the same method on both frames.
+22. RUN 4: the shot-G recipe never pinned the DAY-TIME. AWECRAFT_TIME_FREEZE=1
+    only freezes the clock; the boot value comes from AWECRAFT_TIME (main.gd:138)
+    or, when unset, the SAVE FILE's stored time (main.gd:715) — which drifts
+    between runs, changing u_day and tinting every unshaded band pixel per run
+    (measured: two unpinned frames' zenith sky differed 22 luma in G while their
+    plateaus measured identical — the A/B was confounded). The clean A/B pair
+    (ac0480-bandb-{prefix,postfix}-t05.png) was re-rendered with
+    AWECRAFT_TIME=0.5 (noon, u_day=1) in BOTH legs; the pinned pre-fix sky
+    matches the original shot-G sky almost exactly (shot-G ran near noon by
+    luck). Any future brightness A/B on this box MUST pin AWECRAFT_TIME.
+23. RUN 4: the in-frame band-B A/B at the spawn vantage is a MEASURED NO-OP,
+    and that is expected, not a failure: the visible band surface is the flat
+    uniform sand plateau, which the greedy merge emits as one quad per face
+    (same fcc + same halo class in every cell) — 3x3 smoothing of a constant
+    is the identity, and its top is the a=15 class in both legs (strictly
+    above the halo heightmap top), so the 0->8 re-light never fires there;
+    the visible per-cell steps are the shader's ±6% noise (untouched by the
+    fix). The fix's effect was therefore proven at the EMITTER level
+    (deterministic A/B: max adjacent cell step 0.580 -> 0.290, 2 -> 5
+    distinct colours) and on real terrain (halo at-top class non-vacuous:
+    up to 31 cells/slab re-lit 0.263 -> 0.655). Logs:
+    .scratch/AC-0480-gates/smooth-probe-{prefix,postfix}.log,
+    halo-probe-r4.log, measure-pair-t05-r4.log.
+24. RUN 4: the probe scripts (smooth_probe.gd, halo_probe.gd, hm_dump.gd)
+    were run as godot -s standalone scripts (extends SceneTree) — the
+    GDExtension loads in that mode, so AweMesh/WorldGen/AweGen are callable
+    without the scene tree. Temp copies were kept OUT of the committed tree
+    (godot/ root clean at handoff); the canonical copies live in
+    .scratch/AC-0480-gates/.

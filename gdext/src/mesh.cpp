@@ -2835,6 +2835,71 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 	float y_max = -1e30f;
 	static const int UA[6] = {2, 2, 0, 0, 0, 0};
 	static const int VA[6] = {1, 1, 2, 2, 1, 1};
+	// AC-0480: the 3x3 CELL SMOOTHING (the plan §3a, Option A part 1).
+	// The far tier's flat per-cell colour hard-stepped at every 2 m cell
+	// edge — the user's dense far-expanse plaid IS the cell lattice
+	// (round-3 measurement: the quantization/merge theory was refuted;
+	// the seam is the per-cell representation itself). Each SOLID cell's
+	// per-face colour becomes the plain average over the solid cells of
+	// its 3x3 NEIGHBORHOOD in that face's plane (du on the u axis, dv
+	// on the v axis; the count normalizes, so an island cell is
+	// unchanged and a boundary cell blends toward its neighbor). The
+	// MERGE KEY and the EMITTED quad colour both read the smoothed
+	// values: adjacent cells stop hard-stepping at their shared edge,
+	// and the smoothed neighbours more often land in the same 1/31
+	// merge bucket, so the lattice dissolves into wider quads. The
+	// solid masks (the geometry + the culling) are untouched; the
+	// WATER surface keeps the origin cell's RAW colour (the translucent
+	// water material is a different surface class — the shore step is
+	// not the lattice). In the shared tail: both emitters get it, so
+	// the farab byte-identity holds by construction. The GDScript twin
+	// (_avg_emit_slab, harness-only) mirrors this op order.
+	float scols[512 * 18];
+	for (int scy = 0; scy < G; scy++) {
+		for (int scz = 0; scz < G; scz++) {
+			for (int scx = 0; scx < G; scx++) {
+				int sidx = scx + scz * G + scy * G * G;
+				if (grids_solid[1][sidx] == 0)
+					continue;
+				for (int sf = 0; sf < 6; sf++) {
+					float sacc[3] = {0.0f, 0.0f, 0.0f};
+					int scnt = 0;
+					for (int sv = -1; sv <= 1; sv++) {
+						for (int su = -1; su <= 1; su++) {
+							int sx = scx, sy = scy, sz = scz;
+							if (UA[sf] == 0)
+								sx += su;
+							else if (UA[sf] == 1)
+								sy += su;
+							else
+								sz += su;
+							if (VA[sf] == 0)
+								sx += sv;
+							else if (VA[sf] == 1)
+								sy += sv;
+							else
+								sz += sv;
+							if (sx < 0 || sx >= G || sy < 0 || sy >= G || sz < 0 || sz >= G)
+								continue;
+							int nidx2 = sx + sz * G + sy * G * G;
+							if (grids_solid[1][nidx2] == 0)
+								continue;
+							scnt++;
+							const float *nc = grids_cols[1] + nidx2 * 18 + sf * 3;
+							sacc[0] += nc[0];
+							sacc[1] += nc[1];
+							sacc[2] += nc[2];
+						}
+					}
+					float sins = 1.0f / (float)scnt;
+					float *so = scols + sidx * 18 + sf * 3;
+					so[0] = sacc[0] * sins;
+					so[1] = sacc[1] * sins;
+					so[2] = sacc[2] * sins;
+				}
+			}
+		}
+	}
 	for (int fi = 0; fi < 6; fi++) {
 		const int *n = FN[fi];
 		int nax = n[0] != 0 ? 0 : (n[1] != 0 ? 1 : 2);
@@ -2863,9 +2928,12 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 						if (fi == 2 && water_ok && top_water[idx] != 0) {
 							keyv = WATER_KEY;
 						} else {
-							float cr = grids_cols[1][idx * 18 + fi * 3 + 0];
-							float cg = grids_cols[1][idx * 18 + fi * 3 + 1];
-							float cb = grids_cols[1][idx * 18 + fi * 3 + 2];
+							// AC-0480: the merge key reads the SMOOTHED
+							// face colour (the 3x3 cell smoothing above
+							// — the smoothed neighbours merge).
+							float cr = scols[idx * 18 + fi * 3 + 0];
+							float cg = scols[idx * 18 + fi * 3 + 1];
+							float cb = scols[idx * 18 + fi * 3 + 2];
 							int q = (int)(cr * 31.0f) * 1024 + (int)(cg * 31.0f) * 32 + (int)(cb * 31.0f);
 							keyv = q * 16 + (k + 1);
 						}
@@ -2921,11 +2989,16 @@ static Dictionary avg_grid_emit(int G, float CELL, int si, int nsl,
 				// quad's alpha = the ORIGIN cell's heightmap sky (the halo
 				// band's light; 1.0 when p_sky is absent).
 				int oidx = cc0[0] + cc0[2] * G + cc0[1] * G * G;
-				float qcr = grids_cols[1][oidx * 18 + fi * 3 + 0];
-				float qcg = grids_cols[1][oidx * 18 + fi * 3 + 1];
-				float qcb = grids_cols[1][oidx * 18 + fi * 3 + 2];
-				float qca = sky_ok ? (float)skyp[oidx] / 15.0f : 1.0f;
 				bool is_water = (key2 == WATER_KEY);  // AC-0312
+				// AC-0480: the OPAQUE quad colour = the ORIGIN cell's
+				// SMOOTHED face colour (the 3x3 cell smoothing above);
+				// the WATER surface keeps the origin cell's RAW colour
+				// (a different material class — the shore step is not
+				// the cell lattice).
+				float qcr = is_water ? grids_cols[1][oidx * 18 + fi * 3 + 0] : scols[oidx * 18 + fi * 3 + 0];
+				float qcg = is_water ? grids_cols[1][oidx * 18 + fi * 3 + 1] : scols[oidx * 18 + fi * 3 + 1];
+				float qcb = is_water ? grids_cols[1][oidx * 18 + fi * 3 + 2] : scols[oidx * 18 + fi * 3 + 2];
+				float qca = sky_ok ? (float)skyp[oidx] / 15.0f : 1.0f;
 				int cb0 = (int)(is_water ? wv.size() : av.size()) / 3;
 				for (int j = 0; j < 4; j++) {
 					float cvx = FCV[fi][j][0];
