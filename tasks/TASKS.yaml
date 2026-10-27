@@ -1,5 +1,5 @@
 meta:
-  updated_at: 2026-10-27T04:40
+  updated_at: 2026-10-27T04:41
   schema: mirrors data/todo-backup/todos.yaml (awe-jarvis, private) — see AGENTS.md TASK PROTOCOL
   id_format: AC-NNNN (zero-padded); per-task folder tasks/<id>/ holds spec.html + <id>-results.html +
     screenshots
@@ -28814,7 +28814,7 @@ intake:
   status: blocked
   labels: []
   created_at: 2026-10-16T09:45
-  updated_at: 2026-10-26T09:01
+  updated_at: 2026-10-27T04:41
   completed_at: null
   waiting_on: null
   parent_id: null
@@ -29032,7 +29032,18 @@ intake:
     content, mips, wrap, aniso, UV overshoot, per-face clamp) and one run has measured what it tracks
     (face 1''s last texel column, non-local colours). Nobody has yet named what it IS. It should not be
     closed as "not reproducible" — the user sees it in the shipped product — and it should not absorb
-    more budget on llvmpipe guesses.'
+    more budget on llvmpipe guesses.
+
+
+
+    INDEPENDENT CORROBORATION FROM AC-0512 (round 120): a separate measurement run observed a BODY-CHART
+    SEAM WITH AN 8x LUMINANCE STEP at the line. AC-0438''s own forensics place the defect at face 1''s
+    final texel-column band, having eliminated wrap, mip level, anisotropy, UV overshoot and per-face
+    clamping. An 8x step measured independently at the chart boundary is the strongest corroboration this
+    ticket has, and whoever resumes it should START FROM THAT MEASUREMENT rather than re-deriving the
+    layer. AC-0512 also records a systematic -1 m chart bias (p50 -1.0) and a 2 m z-fight inset, either
+    of which could contribute to a step at a chart boundary and neither of which has been tested against
+    this line.'
   comments: []
 - id: AC-0439
   title: sky-is-blue-above-and-black-below-inside-the-atmosphere
