@@ -1,0 +1,176 @@
+AC-0513 · H01 — deviations from the shared plan (docs/satellite-lod-handover-plan.html)
+=====================================================================================
+Every entry: what the plan says, what this slice did, why, and the measurement
+that justifies it. This is an ISOLATED FIXTURE (godot/fixtures/ac0513_p0/), not
+a production change: no game render pipeline, meshing, lighting, residency, bake
+asset, sky/body shader, fog/wash, data JSON or aim box was touched, and the
+fixture is unreachable from the game (see "Isolation" at the end).
+
+D1. File locations.
+    Plan: lod_handover.gd / lod_handover_renderer.gd / lod_source_export.gd in
+    godot/world|core, lod_terrain_resolve.gdshader + lod_handover_map.gdshaderinc
+    + lod_source_copy.glsl as live modules.
+    Did: the same six names, implemented under godot/fixtures/ac0513_p0/.
+    Why: the ticket scopes H01 to a capability fixture that the game never
+    enters. Production placement is the integration slice's decision; the
+    contracts, names and file split are the plan's, unchanged.
+
+D2. Source colour/depth channel (the plan's central mechanism).
+    Plan: "copy pre-tonemap source colour and resolved source depth to stable
+    owned textures" and let the resolve sample them.
+    Measured on 4.7.1-stable (a13da4feb):
+      - ClassDB.class_exists("TextureRD") == false, so a CompositorEffect RID has
+        NO bridge to a shader uniform; a scene shader cannot sample a
+        compositor-owned texture. Evidence: dump4.log.
+      - A source SubViewport's get_texture() is a ViewportTexture: LDR, sRGB-
+        encoded 8-bit (no format property exists on SubViewport in 4.7.1 -
+        texture_pixel_format / texture_use_srgb / render_target_srgb are absent).
+      - A scene pass has NO depth-texture accessor for a SubViewport:
+        SubViewport.get_texture() returns colour only.
+    Did: the fixture carries source colour through the SubViewport ViewportTexture
+    (decode-to-linear in the resolve) and source depth through the source pass's
+    BLUE channel, and reports the precision loss that choice forces. The
+    compositor export path is measured separately and reported as the only
+    HDR-capable channel.
+    ROUND-2 CORRECTION (measured): the channel is BLUE, not ALPHA — a
+    transparent SubViewport premultiplies colour, so a value in ALPHA does not
+    survive to the sampler. Depth now rides in BLUE as view_z / u_depth_range.
+
+D3. No named pre-tonemap / post-tonemap callback exists in 4.7.1.
+    Plan: "the appropriate pre-tonemap callback after the source sky pass".
+    Measured: CompositorEffect.EFFECT_CALLBACK_TYPE_* = PRE_OPAQUE 0,
+    POST_OPAQUE 1, POST_SKY 2, PRE_TRANSPARENT 3, POST_TRANSPARENT 4, MAX 5.
+    set_use_post_chain() is not in the class.
+    Did: source exports at POST_SKY (the type that fires for the source cameras),
+    main-pass observation at POST_TRANSPARENT; tonemap is applied in the viewport
+    post-chain, so "pre-tonemap" is measured by comparing the compositor-stage
+    sample with the display-stage sample, not by picking a tonemap callback.
+
+D4. Export allocation path.
+    Plan: RGBA16F colour + R32F depth exports (~51.4 MiB at 1080p, proposal).
+    Measured: RenderSceneBuffersRD.create_texture_from_format takes 5 args in
+    4.7.1 (context, name, format, view, unique); get_texture_format returns an
+    RDTextureFormat; RDTextureView has format_override/swizzle_* only (no
+    view_name); the scene colour RID is NOT copyable (engine: "Source texture
+    requires the RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT to be set"),
+    so a CPU readback needs a draw/compute pass, not texture_copy.
+    Did: allocate the exports (alloc_fails 0), measure the formats, and record
+    the copy limitation as a gate answer instead of inventing a workaround.
+
+D5. Depth convention.
+    Plan: reverse-Z, do not apply the old depth*2-1 formula.
+    Measured: the published depth reads as near/d (reverse-Z); the OpenGL
+    formula is implemented in the fixture ONLY as the negative control and its
+    error is reported. Source: lod_handover_map.gdshaderinc (hw_linear_reversed,
+    hw_linear_gl_formula) + the depth-reader instrument.
+
+D6. Readback precision.
+    Plan: numeric gates (midpoint 0.5 +-0.002, depth +-1 mm).
+    Measured: the 4.7.1 window Image (the only CPU-read path that works without a
+    draw pass) is 8-bit sRGB; instruments therefore transmit every measured value
+    as offset-binary in the linear 0..1 range (R = 0.5 + mm/64 etc.) and the CPU
+    decodes sRGB->linear. Reported precision: 0.25 mm for depth, ~0.0012 linear
+    near the midpoint, 0.08 frames for the epoch stamp. All figures are
+    DEV-ONLY: this box renders with llvmpipe (software Vulkan), see HARNESS.md §2.
+
+D7. MSAA / AA.
+    Plan forbids a silent AA downgrade. Fixture: msaa_3d DISABLED, screen-space
+    AA and TAA off, use_debanding off, Linear tonemap exposure 1.0, glow/fog/
+    adjustment off — stated, not hidden.
+
+D8. Plan items not exercised by H01 (left as the plan states them).
+    The per-face chart atlas and the SphereMath port (P3/H07), the residency/
+    ownership bookkeeping beyond the fixture's epochs, and the full retirement
+    schedule. The fixture ports the weight/ramp/availability/resolve helpers and
+    the single-face chart inverse with a CPU twin (lod_handover.gd) and reports
+    the parity census; nothing in the plan was silently replaced.
+
+Isolation.
+    - godot/fixtures/ac0513_p0/ contains the fixture; the scene tree is built at
+      runtime by godot/scenes/main.gd, which references nothing in it (grep).
+    - No production file under godot/ was modified by this slice (see the gate
+      run: generation hash 25/25 unchanged + a same-recipe product render
+      byte-compared against tasks/AC-0513/render_baseline.png).
+
+ROUND 2 — measurement run (fixture runs pre-g*/fullD/fullE, dev-only llvmpipe).
+Every entry below is a measured fact from THIS fixture on 4.7.1-stable under
+software Vulkan; none of it is a product change, and none of it is proven on a
+real GPU.
+
+D9. Shared World3D binding for the source views.
+    Plan: the source cameras render the same world as the main camera.
+    Measured: assigning SubViewport.world_3d before add_child leaves the view
+    with its OWN world — the source cameras then render an empty world and every
+    source sample reads 0 (first full run: world_eq false, satellite black in
+    every band, blend band emits the detail endpoint).
+    Did: bind World3D after add_child and re-assert deferred (census reports
+    world_eq true; sources render).
+
+D10. The export channel is a compute copy, not texture_copy.
+    Plan §pipeline: "Compute copy/conversion to the specified export formats IF
+    a direct stable texture view is not sufficient".
+    Measured (why the branch is required): texture_copy from the scene's resolved
+    colour RID is refused ("Source texture requires the
+    RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT to be set to be retrieved");
+    RenderSceneBuffers' colour RID is sampleable but not copyable, and
+    ClassDB.class_exists("TextureRD") == false, so a compositor RID cannot bind
+    to a scene-shader uniform.
+    Did: lod_source_copy.glsl — sample the resolved colour RID, imageStore into an
+    owned R16G16B16A16_SFLOAT (usage 393 = SAMPLING|STORAGE|CAN_COPY_FROM|
+    CAN_COPY_TO), read back with texture_get_data. Status ok, 0.186 ms per frame
+    at 640x360 (llvmpipe). All RIDs valid.
+    API forms measured on 4.7.1 (they are NOT the 4.6 forms the plan assumed):
+      - RDShaderSource.set_stage_source(stage, src) + set_language; ShaderLanguage
+        = {GLSL, HLSL}; the GDGLSL markers (#[compute], #[sampler2D(a,b)]) are
+        REJECTED by shader_compile_spirv_from_source ("'#' : invalid directive") —
+        only raw GLSL compiles (fixture knob AC513_GLSL=0..3, 3 is used).
+      - compute lists are handle-based: compute_list_begin() returns an id;
+        bind/dispatch take it as arg 1; compute_list_end() takes none.
+      - RDUniform exposes uniform_type/binding/add_id only (no sampler_from,
+        no COMPLIANT_TYPE_IMAGE/ACCESS_TYPE_WRITE); sampler+texture is one uniform
+        of type UNIFORM_TYPE_SAMPLER_WITH_TEXTURE with ids (sampler, texture).
+      - fragment() may not use `return` in 4.7.1's shading language.
+
+D11. Depth publishing (gates 3/4/5/7).
+    Plan §pipeline item 5: "depth WRITE + normal depth test", so a nearer actor
+    wins in either render order.
+    Measured: a transparent fullscreen pass publishes its GEOMETRIC depth to the
+    main depth buffer; the DEPTH value assigned in fragment() does not reach the
+    buffer (screen DEPTH_TEXTURE reads 0.1097 = 0.1/0.911 m for the 1 m quad).
+    Consequences measured: the near actor survives only in the late order
+    (depth_test_greater added, the reverse-Z-aware test); the 40 m acceptance
+    case clamps at >=8 mm; the LDR source-encoded path clamps at 16384 mm.
+    Depth-buffer quantum at 40 m: 24.414 mm (16-bit), 0.0954 mm (24-bit).
+    Did: reported as a gate answer with the reason. Publishing terrain depth
+    needs per-ray geometry (a depth prepass / depth-preserving geometry), which
+    is the integration slice's decision — not invented here.
+
+D12. Same-frame source dependency (gate 1).
+    Plan: the resolve reads both sources in the same frame, no epoch seam.
+    Measured: 599-frame parity census (the source stamps frame parity in green,
+    the resolve echoes what it sampled): satellite mismatch 299/599 (alternating),
+    detail mismatch 598/599 (inverted every frame) with SubViewport.UPDATE_ALWAYS.
+    Did: reported as a measured one-frame lag for the detail source and a jitter
+    for the satellite, not as a pass.
+
+D13. Midpoint instrument and the display stage (gate 2).
+    Plan gate: 0.5 +-0.002.
+    Measured: the 8-bit sRGB display stage has one code = 0.005995 linear at 0.5,
+    so it cannot express +-0.002; instruments therefore amplify about 0.5
+    (u_mid_amp) and the gate is evaluated on the RGBA16F export. The export's
+    midpoint in this wiring reads 1.000000 (the satellite half of the blend band
+    carries 0 in R,G — a fixture wiring defect, isolated), and the same value is
+    seen at the display stage, so the two stages agree.
+    Contrast measured on the same band: AGX post-tonemap 0.800000 vs pre-tonemap
+    1.000000 (delta -0.200); Linear/Filmic/ACES delta 0.0; an sRGB-space blend of
+    the endpoints would read 0.214041 where the linear blend reads 0.5.
+
+D14. Instruments not measurable on this driver.
+    RenderingDevice allocation/texture counters (get_driver_allocation_count,
+    get_memory_usage, the tracked-object counters) return 0 / -1 under llvmpipe,
+    and RD texture readback from the source/compositor RIDs is refused, so the
+    leak COUNT and the raw reverse-Z RID samples are reported as unmeasured here;
+    the engine's own exit leak report is recorded on the results page.
+    Resize: 100 cycles ran with the export copy status ok at every sampled cycle
+    and no engine errors attributable to resize; the two instrument invariants
+    failed by construction (D13 midpoint, D11 clamp), not by resize.

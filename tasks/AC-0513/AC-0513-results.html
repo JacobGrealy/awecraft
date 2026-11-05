@@ -1,0 +1,175 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AC-0513 · P0 API capability fixture — measured verdicts</title>
+<style>
+ body{font:14px/1.55 system-ui,maxWidth:1080px;margin:24px auto;padding:0 18px;color:#151719}
+ h1{font-size:22px;margin-bottom:2px} h2{font-size:16px;margin-top:26px;border-bottom:1px solid #c9ccd1;padding-bottom:3px}
+ .dev{background:#fff4d6;border-left:4px solid #b58900;padding:10px 12px;margin:14px 0}
+ table{border-collapse:collapse;width:100%;margin:10px 0} th,td{border:1px solid #ccd0d5;padding:6px 8px;vertical-align:top;font-size:13px}
+ th{background:#eef0f2;text-align:left} .p{color:#0a6b2a;font-weight:600} .n{color:#8a1c1c;font-weight:600} .q{color:#8a5a00;font-weight:600}
+ code{background:#f2f3f5;padding:1px 4px;border-radius:3px;font-size:12.5px}
+ .sm{font-size:12px;color:#555} ul{margin:6px 0 6px 20px}
+</style>
+<h1>AC-0513 · P0 API capability fixture — nine measured verdicts</h1>
+<div class="sm">Fixture: <code>godot/fixtures/ac0513_p0/</code> · plan <code>tasks/AC-0513/plan.html</code> · shared plan <code>docs/satellite-lod-handover-plan.html</code> ·
+log <code>.scratch/AC-0513-gates/fixture-fullE.log</code> (authoritative), earlier variants <code>fixture-pre-g3/-g5</code>, <code>fixture-fullD.log</code>.</div>
+
+<div class="dev"><b>Every number on this page is development-only.</b> Godot <code>4.7.1.stable.official.a13da4feb</code>, Forward+ / Vulkan,
+run under <code>xvfb-run</code> with <b>llvmpipe software Vulkan</b> (<code>VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json</code>),
+one engine process at a time, <code>HOME=/tmp/dsh_home</code>, absolute engine path <code>~/tools/godot/godot</code>, run from the repo root.
+1250 fixture frames, base size 640×360 plus 100 resize cycles. Blur is off in every shader (no <code>blur</code>/<code>rb_blur</code>).
+Reverse-Z, CompositorEffect timing and depth-buffer behaviour on a <i>real</i> GPU are <b>not</b> proven here.</div>
+
+<h2>The nine capabilities</h2>
+<table>
+<tr><th>#</th><th>Capability</th><th>Verdict</th><th>Measured evidence (dev-only)</th></tr>
+<tr><td>1</td><td>Same-frame read of the two source SubViewports (no epoch seam)</td>
+ <td class="n">NOT proven — measured one-frame lag</td>
+ <td>600-frame parity census: each source stamps a per-frame parity in its green channel; the main pass echoes what it sampled.
+ <code>sat_mismatch 299/599</code> (parity flips on alternating frames), <code>det_mismatch 598/599</code> (parity inverted every frame).
+ Echo rows show the stamp arriving intact and alternating in lockstep with frame parity, so the content path is sound and the
+ <i>timing</i> is not: with <code>SubViewport.UPDATE_ALWAYS</code> the texture the main camera samples is one frame behind the frame
+ that produced it. The detail source is a steady one-frame seam; the satellite jitters.</td></tr>
+<tr><td>2</td><td>Pre-tonemap HDR read of the resolved colour</td>
+ <td class="q">CHANNEL proven, midpoint gate NOT met</td>
+ <td>The export channel works: compute copy of the main pass's resolved colour RID → owned
+ <code>R16G16B16A16_SFLOAT</code> (640×360, <code>usage_bits=393</code>) → <code>texture_get_data</code>.
+ <code>export_copy: status ok, frames 9, ms_avg 0.186 ms</code>; all RIDs valid (shader/pipeline/sampler/uniform set/dst).
+ Why a copy is needed (measured): <code>texture_copy()</code> from the scene colour RID is refused —
+ <i>"Source texture requires the RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT to be set"</i>;
+ <code>ClassDB.class_exists("TextureRD") == false</code> so a compositor RID has no scene-shader uniform bridge; a
+ <code>SubViewport</code> has no HDR texture format property in 4.7.1.</td></tr>
+<tr><td>3</td><td>Reverse-Z convention (no <code>depth*2-1</code>)</td>
+ <td class="p">convention proven · ≤1 mm gate NOT met</td>
+ <td>Published depth reads as <code>near/view_z</code>, clear 0 (<code>hw_linear_reversed</code>, <code>hw_view_z_to_reversed</code>).
+ Negative control (OpenGL formula) error <b>−16.384 m</b> at the 40 m case. Depth-buffer quantum at 40 m:
+ <b>24.41 mm</b> (16-bit), <b>0.0954 mm</b> (24-bit). The fixture's shader-assigned <code>DEPTH</code> never reaches the
+ main depth buffer from a transparent fullscreen pass (measured: the buffer holds the pass's <i>geometric</i> depth —
+ screen depth reads 0.1097 = <code>0.1/0.911 m</code> for a 1 m quad), so the reader measures ≥8 mm (the instrument's clamp).</td></tr>
+<tr><td>4</td><td>Actor occlusion in <i>both</i> draw orders</td>
+ <td class="n">NOT proven — order-dependent</td>
+ <td>With <code>depth_test_greater</code> (the reverse-Z-aware test): near actor (10 m) survives only in the late order
+ (<code>near_visible = ["actor_c_late_near"]</code>); far actor (60 m) is occluded in both (<code>far_occluded = early_far, late_far</code>).
+ Cause is measured by gate 3: the resolve's geometric depth (1 m quad) is what the depth test sees, so a fullscreen pass at a
+ fixed depth cannot own the terrain's depth in both orders.</td></tr>
+<tr><td>5</td><td>Depth readers in the main screen pass</td>
+ <td class="p">readers work</td>
+ <td>Two channels measured in the main pass: <code>DEPTH_TEXTURE</code> (hint) values
+ <code>[0.1097, 0, 0, 0.1097, 0, 0]</code> (reverse-Z, decodes to 0.911 m = the pass's own geometry) and the screen colour
+ channel (<code>u_enc</code> offset-binary encoding, decoded on the CPU). The instrument reconstructs
+ <code>z = near/raw</code> and reports mm; the numbers are limited by gate 3's finding, not by the reader.</td></tr>
+<tr><td>6</td><td>Alpha-tested foliage</td>
+ <td class="p">proven (cut-out + leaf)</td>
+ <td>4×4 cutout plane (<code>alpha_scissor_threshold 0.5</code>, no hint, no AA): the discarded cells expose the resolve behind
+ them (sample = satellite band colour <code>0,0,0</code>), the leaf cells reach the display with leaf colour
+ (<code>0.445, 0.212, 0.072</code> after the source-pass transfer) and their own depth
+ (reader: <code>0.046 mm</code> / <code>−2.14 mm</code> on the two sample rays). The fixture's leaf/hole labels are
+ inverted relative to the texture layout — reported as measured, not relabelled.</td></tr>
+<tr><td>7</td><td>Water / refraction channel</td>
+ <td class="q">channel works, precision is the limit</td>
+ <td>Water surface drawn in the main pass over the published depth; three cases measured
+ (<code>depth_probe</code>, <code>product_shape</code>, <code>behind</code>). Colour composite resolves
+ (encoded mm solved <code>−0.36 / +0.098 / +1.46 mm</code>), terrain reference colour
+ <code>0.25, 0.25, 0.314</code> vs behind-surface <code>0.156, 0.279, 0.397</code>; depth composite via the
+ screen channel lands on <code>−220 / −103 / +246 mm</code> — i.e. the refraction depth needs the gate-3 fix
+ (per-ray geometry), the colour half is fine.</td></tr>
+<tr><td>8</td><td>Window resize (100 cycles)</td>
+ <td class="q">100/100 cycles ran clean; instrument gates failed</td>
+ <td>100 cycles over 9 sizes ((640,400) … (1024,576), (320,180)): the export copy stayed
+ <code>status ok</code> at every sampled cycle (<code>checks[…,"ok"]</code>), no allocation growth observed, no engine
+ errors attributed to resize. The two instrument invariants failed by construction, not by resize:
+ midpoint (gate 2 wiring) and the depth sample clamped at 8 mm (gate 3). RD counters
+ (<code>get_driver_allocation_count</code> / texture memory) report 0/−1 on llvmpipe — unmeasured on this driver.</td></tr>
+<tr><td>9</td><td>Retirement / teardown</td>
+ <td class="p">proven for the scene side</td>
+ <td>After <code>retire()</code> + <code>queue_free()</code>: objects <b>1706 → 1683</b>, resources <b>27 → 26</b>,
+ exit clean (rc 0). RD-side counters return 0 on llvmpipe (unmeasured); the engine's own leak report at exit is listed below.</td></tr>
+</table>
+
+<h2>The decisive midpoint measurement (0.5 ± 0.002) and its post-tonemap / sRGB contrast</h2>
+<table>
+<tr><th>Stage measured</th><th>Value</th><th>Note</th></tr>
+<tr><td>Pre-tonemap export (RGBA16F compute copy), 0/1 blend band</td><td class="n">1.000000</td>
+ <td>gate 0.5 ± 0.002: <b>fail</b>. The band's satellite half reads 0 in R,G, so the resolve emits the detail endpoint.
+ Isolated to the fixture's band wiring (the satellite's band colour is black there), not to the export channel.</td></tr>
+<tr><td>Endpoints (T=0 / T=1) at the export</td><td>1.000000 / 1.000000</td><td>the 0 endpoint is not reachable in this wiring; HDR headroom sample <code>hdr_rd = 1.0</code>.</td></tr>
+<tr><td>Display stage (window viewport, 8-bit sRGB)</td><td>255/255 → 1.000000 linear</td>
+ <td>identical to the export, i.e. the two stages agree; amplifying the instrument by ×4 about 0.5 gives 0.625 display-side.</td></tr>
+<tr><td>Satellite-only band, pre-tonemap</td><td>0.5972</td><td>the LDR sRGB source transfer is visible end-to-end.</td></tr>
+<tr><td><b>What a post-tonemap blend would read</b></td><td>AGX: 0.800000 vs 1.000000 → <b>Δ −0.200</b></td>
+ <td>tonemap sweep (Linear / Filmic / AGX / ACES) on the same band: Linear, Filmic and ACES leave this band unchanged
+ (Δ 0.0), AGX pulls the display endpoint down by 0.2 — the blend must run pre-tonemap, and the fixture can now show the size of the difference.</td></tr>
+<tr><td><b>What an sRGB-space blend would read</b></td><td>0.214041</td>
+ <td>linear-decode of the encoded midpoint: <code>srgb_to_linear(0.5)</code>. Blending in the encoded domain reads 0.214 where the
+ linear blend gives 0.5 — the reason the resolve works in linear.</td></tr>
+<tr><td>8-bit quantum at the midpoint</td><td>0.005995 linear per code</td>
+ <td>the display stage cannot express a ±0.002 gate (1/255 = 0.006 at 0.5) — which is why the gate is measured on the
+ RGBA16F export, and why the instruments transmit offset-binary with amplification.</td></tr>
+</table>
+
+<h2>Depth: the self-defined acceptance case</h2>
+<div>Case: camera at the world origin looking along −Z, <code>near 0.1 / far 1000 / fov 75</code>; the resolve publishes the
+view depth of the detail plane face at <code>z = −40.000</code> (the depth-band centre ray); the main-pass screen-depth reader
+reconstructs <code>z = near / raw</code>; error = <code>|z − 40.000|</code> in mm.</div>
+<table>
+<tr><th>Quantity</th><th>Measured</th></tr>
+<tr><td>Reader error (5 samples)</td><td class="n">8.000 mm (instrument clamp at ±8 mm; true error is larger)</td></tr>
+<tr><td>Source-encoded path (blue channel, 8-bit)</td><td>16384 mm (clamped) — the LDR source channel cannot carry the 40 m case</td></tr>
+<tr><td>Negative control (OpenGL <code>depth*2-1</code>)</td><td>−16.384 m</td></tr>
+<tr><td>Depth-buffer quantum at 40 m</td><td>24.414 mm (16-bit) · 0.0954 mm (24-bit)</td></tr>
+<tr><td>Screen <code>DEPTH_TEXTURE</code> raw</td><td>0.109728 → 0.911 m = the pass's own geometry (reverse-Z confirmed)</td></tr>
+</table>
+<div><b>Why ≤1 mm was not met:</b> on this API/driver a transparent fullscreen pass publishes its <i>geometric</i> depth, not the
+<code>DEPTH</code> value its fragment assigns (measured above). Publishing the terrain's depth therefore needs the resolve to be
+drawn <i>at</i> the terrain depth per ray (depth-preserving geometry / a depth prepass), which is the integration slice's job.
+At 1 mm the 16-bit quantum (24.4 mm at 40 m) is the binding constraint; at 24-bit (0.0954 mm) it is not.</div>
+
+<h2>Measured 4.7.1 API facts the shared plan depends on</h2>
+<ul>
+<li>CompositorEffect callback types: <code>PRE_OPAQUE 0, POST_OPAQUE 1, POST_SKY 2, PRE_TRANSPARENT 3, POST_TRANSPARENT 4</code>;
+no <code>set_use_post_chain</code>. Source cameras fire <b>2</b>; the main camera fires <b>4</b>. Callback cost (llvmpipe):
+main 0.186 ms, sat 0.029 ms, det 0.018 ms per frame at 640×360.</li>
+<li><code>RDShaderSource</code> is <code>set_stage_source(stage, source)</code> + <code>set_language</code>, and
+<code>ShaderLanguage = {GLSL, HLSL}</code>: the GDGLSL markers (<code>#[compute]</code>, <code>#[sampler2D(a,b)]</code>) are
+<b>rejected</b> by <code>shader_compile_spirv_from_source</code> ("invalid directive" at the marker line) — raw GLSL compiles.</li>
+<li>Compute lists are <b>handle-based</b>: <code>compute_list_begin()</code> returns an id, <code>…_bind_compute_pipeline(id, pipeline)</code>
+and <code>…_dispatch(id,x,y,z)</code> take it, <code>compute_list_end()</code> takes none (4.6-style calls are engine errors).</li>
+<li><code>UniformType</code> has <code>SAMPLER_WITH_TEXTURE</code>/<code>IMAGE</code>; <code>RDUniform</code> exposes only
+<code>uniform_type/binding/add_id/clear_ids</code> (no <code>sampler_from</code>, no compliant-resource fields).</li>
+<li><code>RDTextureView</code> has no <code>view_name</code>; <code>RenderSceneBuffersRD.get_texture_format</code> is keyed by the
+<code>render_buffers</code> namespace only (querying an absent name is an engine error).</li>
+<li>A <code>SubViewport</code> in 4.7.1 has no texture-format property: its <code>get_texture()</code> is sRGB 8-bit, colour only
+(no depth accessor). Source depth must ride in a colour channel (fixture: blue; alpha is unusable — a transparent target premultiplies).</li>
+<li>A <code>SubViewport</code> must be assigned its shared <code>World3D</code> <b>after</b> <code>add_child</code>; assigning it in
+<code>_ready</code> leaves the view with its own world, and every source sample then reads 0 (measured on the first full run:
+<code>world_eq false</code>, sources black; after the fix <code>world_eq true</code> and the sources render).</li>
+</ul>
+
+<h2>Isolation — the product is untouched</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td>G0 (bare headless load, census 0/0)</td><td><b class="p">pass</b> — <code>gate_run.py AC-0513 --arms g0,genhash</code> → <code>g0 rc=0 script=0 shader=0 ok=true 4s</code> (clean load, census 0/0; log <code>.scratch/AC-0513-gates/g0-r1.log</code>, 2 lines).</td></tr>
+<tr><td>Generation hash 25/25</td><td><b class="p">25/25 unchanged</b> — <code>genhash-r1.log</code> (25 GENHASH lines, GENMS 138) is <b>byte-identical</b> to the current tree's reference sets: AC-0512, AC-0511, AC-0527 and AC-0485 all diff to 0 differing chunks. (It differs from the stale 2026-09 <code>AC-0367</code> reference, which later tickets rebased — checked and reported, not hidden.)</td></tr>
+<tr><td>Product render byte-compare (same recipe as <code>tasks/AC-0513/render_baseline.png</code>)</td><td><b class="q">differs — by the tree, not by this slice</b> — <code>.scratch/AC-0513-gates/render_post.png</code> (348115 B) vs <code>tasks/AC-0513/render_baseline.png</code> (348099 B): the baseline was captured 2026-10-27 and the tree has moved since — <code>tasks/scripts/render.py</code> (the capture recipe) and <code>godot/core/aero.gd</code> are modified vs HEAD by other sessions, so the PNG cannot be the isolation proof. The decisive evidence is genhash 25/25 above plus the reachability check below. <code>git status --porcelain</code>: this slice writes only untracked paths (<code>godot/fixtures/</code>, <code>tasks/AC-0513/</code>, <code>.scratch/AC-0513*</code>); no tracked file was touched.</td></tr>
+<tr><td>Reachability</td><td>grep over <code>godot/scenes/main.gd</code>, <code>godot/scenes/harness.gd</code> and <code>godot/project.godot</code> finds <b>no reference</b> to <code>fixtures/</code> or <code>ac0513</code>; <code>run/main_scene = res://scenes/main.tscn</code>. The fixture is entered only by naming its scene path in the fixture run script.</td></tr>
+<tr><td>Files written by this slice</td><td><code>godot/fixtures/ac0513_p0/*</code>, <code>tasks/AC-0513/{continuity.md,
+AC-0513-deviations.txt, AC-0513-results.html}</code>, <code>.scratch/AC-0513*</code>. No production file modified
+(no git operations, no TASKS.yaml edit, no new tickets).</td></tr>
+</table>
+
+<h2>What this slice does NOT settle</h2>
+<ul>
+<li>Behaviour on a real GPU (the dev box is llvmpipe software Vulkan): timing of CompositorEffect callbacks, depth-buffer
+format/quantum, and the reverse-Z behaviour of hardware drivers are unproven.</li>
+<li>The 0.5 ± 0.002 midpoint as a <i>passing</i> number: the channel to measure it exists and is precise; the fixture's band
+wiring must be repaired (the satellite half of the blend band reads 0), which is a fixture bug, not an API answer.</li>
+<li>A passing ≤1 mm depth gate: needs depth publishing at the terrain's own depth (see gate 3).</li>
+<li>Same-frame source dependency: the measured lag must be closed (scheduling / compositor ordering), and the same question on hardware is open.</li>
+<li>MSAA/TAA/AA interaction (all disabled and stated), the per-face chart atlas, residency bookkeeping, and the full retirement schedule (D8).</li>
+<li>Engine leak report at fixture exit (llvmpipe, after teardown): 56 Framebuffer + 67 Texture + Compute/Shader/Sampler RIDs and
+5 ObjectDB instances reported leaked by the engine at process exit — the fixture's <code>retire()</code> frees its own RIDs;
+the leaked set is the viewport/compositor set that only the engine owns at exit. RD allocation counters are unavailable here,
+so leak <i>counts</i> are dev-only and not comparable to a hardware run.</li>
+</ul>
+<div class="sm">Generated by the AC-0513 builder from <code>fixture-fullE.log</code> (1250 frames, phases: census 11.4 s, mid 10.4 s, tonemap 9.8 s,
+depth 8.4 s, actor 7.5 s, foliage 5.7 s, water 6.7 s, void 6.2 s, epoch 123.6 s, resize 84.9 s, teardown 1.1 s).</div>

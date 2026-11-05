@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0513 HDR/depth prototype feasibility</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}</style></head><body>
+<h1>AC-0513 — prove the HDR/depth transition works BEFORE it replaces the renderer</h1>
+<p>Coordinator contract (written by me; filed by another agent). <b>Medium</b> builder applies it with tasks/templates/implement.md. <b>AN ISOLATED FIXTURE, NOT A PRODUCTION CHANGE.</b> The deliverable is a feasibility verdict backed by measured proofs, and "this API cannot do X" is a perfectly good result.</p>
+<h2>1. The requirement</h2>
+<p><em>"a transition technique proven to preserve depth, water and performance before it replaces the working renderer."</em> So this ticket exists to <b>de-risk</b>: if the technique cannot do one of the nine things below in Godot 4.7.1, that must be discovered <b>here, in a fixture</b>, not after the working renderer has been replaced.</p>
+<h2>2. ⚠ USE THE SHARED PLAN'S CONCRETE PROTOTYPE, NOT ONE YOU INVENT</h2>
+<p>The filing is explicit: <b>"Apply the shared plan's concrete two-source HDR/depth prototype, not an implementer-selected architecture."</b> So <b>read <code>docs/satellite-lod-handover-plan.html</code> first</b> — sections <b>p0, pipeline, blend, exceptions</b> — and implement <b>the architecture described there</b>. If the plan's description is ambiguous or contradicts the 4.7.1 API, that is a <b>finding to report</b>, not an invitation to design your own.</p>
+<h2>3. The nine things that must be proved (each is a gate, not a checklist item)</h2>
+<ol>
+<li><b>Same-frame SubViewport dependencies</b> — the second source must be readable in the same frame it was rendered, not one frame stale.</li>
+<li><b>Pre-tonemap HDR</b> — the fixture must prove it is compositing <b>before</b> tonemapping (values above 1.0 survive to the blend). <b>This is the one most likely to fail silently</b>: a post-tonemap blend still "works" and looks plausible while destroying the whole point.</li>
+<li><b>Reverse-Z</b> — correct depth comparison under the engine's depth convention.</li>
+<li><b>Actor occlusion in BOTH draw orders</b> — test each order; a technique that only works in one is not usable.</li>
+<li><b>Main screen-depth readers</b> — whatever reads depth on the main screen continues to read it correctly.</li>
+<li><b>Alpha-tested foliage</b> — transparent cutout geometry must not break the depth composite.</li>
+<li><b>Water / refraction channel choice</b> — water reads a colour/depth channel for refraction; <b>prove which channel, and that the composite does not corrupt it</b>.</li>
+<li><b>Resize</b> — the technique must survive a window/resolution change (render-target recreation).</li>
+<li><b>Teardown</b> — clean destruction, no leaked resources or dangling buffers.</li>
+</ol>
+<h2>4. The numeric acceptance the filing specifies</h2>
+<ul>
+<li><b>Linear 0/1 midpoint = 0.5 ± 0.002.</b> Blend two sources whose linear values are exactly 0 and exactly 1 and measure the midpoint. <b>This single number is the proof that the blend is linear and pre-tonemap</b> — if the fixture is post-tonemap or in sRGB, the midpoint will not be 0.5 and the ±0.002 tolerance is what makes it a proof rather than an impression.</li>
+<li><b>Selected depth error ≤ 1 mm</b> on the defined case.</li>
+</ul>
+<h2>5. What "isolated" means here</h2>
+<p><b>Production behaviour unchanged.</b> Build the fixture as a <b>separate scene or an env-gated mode</b> that the game never enters by default. <b>Do not modify the game's render pipeline.</b> If the fixture needs a <code>CompositorEffect</code>, it is added <b>to the fixture</b>, not to the shipped scene. <b>At the end, the product must behave byte-identically</b> — state how you proved that (genhash and a render comparison).</p>
+<h2>6. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>docs/satellite-lod-handover-plan.html</td><td><b>p0, pipeline, blend, exceptions — READ FIRST</b>; the prototype architecture is specified there</td><td>READ ONLY.</td></tr>
+<tr><td>a NEW fixture scene / script</td><td>the isolated prototype; <code>CompositorEffect</code>, <code>RenderSceneBuffersRD</code>, SubViewports</td><td>Create.</td></tr>
+<tr><td>godot/scenes/harness.gd</td><td>only if the fixture needs an entry point (an env-gated arm)</td><td>Edit: entry point only, default-off.</td></tr>
+<tr><td>tasks/AC-0513/</td><td>journal, deviations, results, the verdict</td><td>Create.</td></tr>
+</table>
+<p><b>Do not touch:</b> the game's render pipeline, generation, meshing, lighting, residency, the bake assets, the sky/body shaders, the fog/wash (removed), the data JSON files, the aim box. <b>The fixture must be inert unless explicitly invoked.</b></p>
+<h2>7. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td>Each of the nine proved or reported impossible</td><td><b>A verdict per item</b>, with the evidence: the technique works, or it cannot work in 4.7.1 and here is why. <b>"Cannot" is a valid and valuable answer</b> — it is what this ticket exists to discover.</td></tr>
+<tr><td>The midpoint number</td><td><b>Linear 0/1 midpoint = 0.5 ± 0.002</b>, reported alongside <b>what the value would be if the blend were post-tonemap or sRGB</b> — that contrast is what proves the fixture measured the right stage.</td></tr>
+<tr><td>Depth error</td><td><b>≤ 1 mm</b> on the defined case, with the case defined.</td></tr>
+<tr><td>Production is untouched</td><td>genhash 25/25 byte-identical, and a render comparison to a pre-change frame; <b>state how you proved the fixture cannot run by default</b>.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0513 --arms g0,genhash</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25.</td></tr>
+</table>
+<p><b>Engine work must run from a script FILE invoked by name</b> — <code>gate_run</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches any command line containing that word, including your own shell string when it mentions a <code>godot/…</code> path. <b>Blur is OFF by user ruling — do not enable it.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code>, <code>AWECRAFT_SIZE=1280,720</code>, ~1200 s each, SERIAL. <b>ANOTHER SESSION IS WORKING IN THIS REPO</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; wait rather than killing anything you did not start.</p>
+<h2>8. Acceptance</h2><p>A verdict on all nine capabilities with evidence; the linear midpoint at 0.5 ± 0.002 with the post-tonemap contrast reported; the ≤1 mm depth error on a defined case; production provably untouched and the fixture provably unreachable by default.</p>
+<h2>9. Risks</h2><p>(1) <b>Inventing an architecture</b> instead of applying the shared plan's — explicitly forbidden. (2) <b>A post-tonemap or sRGB blend that looks right</b> and passes every qualitative check; the ±0.002 midpoint is the only thing that catches it, so measure it. (3) Quietly skipping a capability that does not work, which defeats the entire purpose of a spike. (4) Touching the shipped pipeline "just to make the fixture run". (5) Treating llvmpipe's behaviour as the product's (label it).</p>
+<h2>10. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no tasks/TASKS.yaml (another session writes it); no new tickets.</li>
+<li>No production pipeline changes. No edits outside §6. No self-designed architecture.</li>
+<li>If the shared plan's prototype cannot be applied as written — ambiguous, missing, or contradictory to the 4.7.1 API — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT with what you established. <b>Do not substitute your own design.</b></li>
+</ul></div>
+<h2>11. Resume point</h2><p>Handover slice H01, depending on AC-0512 (which classified the gaps: 61.4% of the exterior is endpoint COLOUR mismatch, 49,656 px are absent chunks, plus a systematic −1 m chart bias). This ticket de-risks the blending technique before it is adopted; AC-0451's handover rule and AC-0510's fog removal are the context for why a two-source composite is being considered at all.</p>
+</body></html>
