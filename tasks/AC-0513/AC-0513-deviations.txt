@@ -174,3 +174,114 @@ D14. Instruments not measurable on this driver.
     Resize: 100 cycles ran with the export copy status ok at every sampled cycle
     and no engine errors attributable to resize; the two instrument invariants
     failed by construction (D13 midpoint, D11 clamp), not by resize.
+
+ROUND 3 (2026-11-05, resumed spike). Numbers from fixture-rS.log (canonical, all phases,
+1258 frames) with fixture-rH.log (order control, AC513_ORDER=main); isolation re-proved
+this round: g0 rc=0 (log identical to the round-2 reference) and genhash 25/25, every
+GENHASH line byte-identical to genhash-r1.log (GENMS 138 -> 101, machine load only).
+All values development-only: llvmpipe software Vulkan.
+
+D15. Gate 2 midpoint — the wiring repair, and the number the plan asked for.
+    Round 2 read 1.000000 at the blend centre because the satellite sheet did not cover
+    the blend band's satellite-side world footprint (coverage ended at |x| = 76 m, the
+    band reaches 82 m) so the resolve dropped the satellite and emitted the detail
+    endpoint. Repair: satellite sheet widened to +-150 m x 140 m (detail -43..30 m),
+    plus a source-side probe that samples both source textures at the band centre, so a
+    missing half shows up as a sample. Measured AC513 MID-SRC at the blend centre
+    (uv 0.187531, pixel 120,180): satellite (R,G,B,A) = (0, 0, 0.713726, 1) — the 0
+    endpoint, BLUE = pow(60/128) = the satellite's own view depth — detail
+    (1, 1, 0.596078, 1). Pre-tonemap export midpoint = 0.500000, 8 consecutive samples
+    all exactly 0.500000: gate 0.5 +- 0.002 MET at the pre-tonemap stage.
+    Contrast, same band: display stage (8-bit sRGB, Linear tone) 188/255 = 0.737255
+    code = 0.502886 decoded linear; a blend performed in that encoded domain of the
+    endpoints reads 0.214041 where the linear blend reads 0.5; AGX endpoints display as
+    0.0 and 0.796078, their post-tonemap blend 0.398039 vs the pre-tonemap mid 0.674510
+    (delta -0.2765). 4.7.1 measured: RenderingDevice.DataFormat lists 29 sRGB formats of
+    233 (AC513 FBFORMATS) — round 2's "no sRGB framebuffer format" was wrong: sRGB
+    formats exist in the enum; the Forward+ window stage measured here reports
+    Image.Format 4 (source textures 5), and the sRGB round trip is proved by measurement.
+    Instrument limit: the T=0 / T=1 endpoint windows read 0.3333 / 0.8000 in the export
+    because the readback in frame N shows the frame drawn in N-1 (see D20).
+
+D16. Gate 6 sample-point labels — the swap requested by continuity is a NO-OP, and the
+    depth half of the gate is the real defect.
+    Measured with the fixture's own colour evidence: at (-49,+2) the fixture reads the
+    satellite colour (0, 0.0666, 0) and at (-51,+2) it reads the leaf colour
+    (0.491, 0.347, 0.202) — the leaf quadrants are (x-2,y+2) and (x+2,y-2) = (-51,+2)
+    and (-47,-2), the hole quadrants (-49,+2) and (-51,-2). PlaneMesh FACE_Z puts image
+    row 0 at +y, so round 2's labels were CORRECT; round 3's intended swap was the
+    inversion and was reverted. Also measured: the alpha test must be stated as
+    TRANSPARENCY_DISABLED + alpha_scissor_threshold (opaque material, fragments under
+    the threshold discarded) — switching to BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+    discards the LEAF fragments in the source pass (measured: at a leaf quadrant the
+    composite then shows the satellite colour). With the correct form the leaf quadrant
+    shows the foliage colour and the hole quadrants show the composite: the colour side
+    of gate 6 is met. The depth side is not: the transparent reader reports -919 mm at
+    all four points, not -500 mm — an alpha-scissored plane writes no depth, so the
+    composite quad at 39.9 m is not depth-rejected where the leaf is.
+
+D17. Gate 1 same-frame dependency — NOT closed with the 4.7.1 API; evidence, and the
+    round-2 instrument was measuring the wrong channel.
+    Round 2's echo window (uv 0.5405..0.5695) did not contain the sampled pixel
+    (0.5094), so its "parity census" compared the band colour's red channel with the
+    source texel and reported a parity pattern that the instrument itself produced.
+    Repaired instrument: each source paints a 32-frame sawtooth stamp code
+    (0.25 + 0.5 * code), the resolve echoes BOTH stamps at the sampled band, the CPU
+    reads the echo from the pre-tonemap export and compares it with the code the frame
+    was given, and samples the source texture at the same pixel.
+    Measured lag census (AC513 LAG): sources-first (source cameras created before the
+    main camera) sat_mode=7 det_mode=7, lag-0 frames 0/599; main-camera-first control
+    sat_mode=25 det_mode=25, lag-0 frames 0/599; in both orders the lag values spread
+    over the odd codes 1..31 (~37-38 frames each) and the parity census mismatches
+    599/599 on both sources. The echo equals the CPU-read source texel exactly
+    (max_echo_dev 0.0000): the composite reads the source texture faithfully, never in
+    the frame that painted it. API routes tried on this build: CompositorEffect at
+    POST_SKY on the source cameras (measured: POST_SKY fires on a camera whose cull
+    mask includes the source layers, so the source passes are NOT excluded by mask),
+    POST_TRANSPARENT on the main camera; source SubViewport.update = ALWAYS and
+    WHEN_VISIBLE; a shared WorldRoot with sources at render_priority 100; main-camera
+    cull mask excluding layers 17/18; camera RID creation order (the knob that matters:
+    it changes the lag census mode 7 -> 25); render_priority on the composite quad
+    (gate 4 evidence); await / process-frame waits (excluded by the plan). None produced
+    lag 0. The 4.7.1 compositor API gives no handle on "the source texture of this
+    frame": CompositorEffect is a post hook, the SubViewport's texture is published on
+    its own schedule, and the render-thread draw order is observable only through the
+    content, not subscribable. Gate 1 stays NOT PROVEN with this evidence.
+
+D18. Gate 3 depth published through geometry — the prepass publishes, the reader is the
+    transparent one, the measured number is +1.16 m, and a fullscreen pass publishes its
+    geometric depth only.
+    Sub-case A (acceptance case): an opaque main-pass quad at z = -40.000 publishes the
+    terrain depth; the resolve is a generated copy of the resolve shader with
+    depth_draw_opaque -> depth_draw_never and its `DEPTH = depth_sel;` write removed
+    (lod_terrain_resolve_nodepth.gdshader), so the resolve writes no depth. Reader: the
+    transparent variant of the depth reader (ac0513_depth_read_t.gdshader, blend_mix +
+    ALPHA = 1.0), because an OPAQUE material's hint_depth_texture reads the Forward+
+    depth PREPASS (measured: it returned 0.548/0.548, i.e. the clear value — see D19).
+    Measured raw reverse-Z = 0.00242948 in every sub-case -> z = 41.16 m: the published
+    depth is +1.16 m behind the geometry that published it; the +-8 mm millisecond
+    window saturates (8.0 = the encoding clamp), the wide-span (2048 mm) sub-case reads
+    the same. Sub-case B (the resolve's own geometry at 40.000, resolve writes depth):
+    identical raw. Sub-case C (the resolve ASSIGNS DEPTH = 40.000 while its geometry is
+    1.000 m in front): identical raw — the assigned DEPTH is not what reaches the
+    buffer: a fullscreen pass publishes its geometric depth, never its shader-assigned
+    DEPTH. So the plan's "a fullscreen pass cannot publish a chosen depth" is confirmed
+    in the strong form, and the geometry route is confirmed to publish, but the
+    acceptance gate (<= 1 mm) is NOT met on llvmpipe; the +1.16 m offset must be
+    re-measured on hardware (the buffer format is unmeasured here).
+
+D19. Reader form (measured, gates 3/5). A material with
+    render_mode depth_test/depth_write and hint_depth_texture, i.e. an OPAQUE reader,
+    reads the depth PREPASS buffer in Forward+; with this fixture's geometry that reader
+    returned the clear value (AC513 ORDER opaque_reader raw 0.548/0.548). A TRANSPARENT
+    reader (blend_mix, ALPHA = 1.0, depth_test) reads the depth the opaque pass
+    published. Round 2's readers were the opaque form; round 3 measures both and uses
+    the transparent one for the geometry-published depth.
+
+D20. Readback echo (instrument limit, gates 2/3). The CPU readback taken in frame N
+    shows the frame drawn in frame N-1: the display and export samples lag one frame
+    behind the parameters the driver set. Consequences measured: the T=0/T=1 endpoint
+    windows include a transition frame (0.3333/0.8000 instead of 0/1); the raw depth
+    channel decoded through the 8-bit display stage (G = pow(a,1/2.2)) is coarse at
+    a = 0.0025 (one code ~ 1.4 % of the value, ~0.5 m at 40 m), which is why the
+    millisecond encoding (R = 0.5 + mm/range) is the instrument for the mm gates.

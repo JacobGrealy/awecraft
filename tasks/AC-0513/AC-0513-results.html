@@ -163,6 +163,8 @@ AC-0513-deviations.txt, AC-0513-results.html}</code>, <code>.scratch/AC-0513*</c
 format/quantum, and the reverse-Z behaviour of hardware drivers are unproven.</li>
 <li>The 0.5 ± 0.002 midpoint as a <i>passing</i> number: the channel to measure it exists and is precise; the fixture's band
 wiring must be repaired (the satellite half of the blend band reads 0), which is a fixture bug, not an API answer.</li>
+<li class="sm">Round 2 statements above are superseded by <a href="#round3">ROUND 3</a>: the midpoint is now a passing
+number, the depth case is measured through geometry-published depth, and the foliage labels are confirmed.</li>
 <li>A passing ≤1 mm depth gate: needs depth publishing at the terrain's own depth (see gate 3).</li>
 <li>Same-frame source dependency: the measured lag must be closed (scheduling / compositor ordering), and the same question on hardware is open.</li>
 <li>MSAA/TAA/AA interaction (all disabled and stated), the per-face chart atlas, residency bookkeeping, and the full retirement schedule (D8).</li>
@@ -171,5 +173,115 @@ wiring must be repaired (the satellite half of the blend band reads 0), which is
 the leaked set is the viewport/compositor set that only the engine owns at exit. RD allocation counters are unavailable here,
 so leak <i>counts</i> are dev-only and not comparable to a hardware run.</li>
 </ul>
+
+<h2 id="round3">ROUND 3 — the four repairs, re-measured (2026-11-05)</h2>
+<p class="sm">Logs: <code>.scratch/AC-0513-gates/fixture-rS.log</code> (canonical, all phases, 1258 frames,
+phases census 10.0 s / mid 13.2 s / tonemap 15.4 s / depth 18.0 s / actor 18.3 s / foliage 13.9 s /
+water 15.9 s / void 14.3 s / epoch 189.0 s / resize 86.2 s / teardown 1.1 s),
+<code>fixture-rH.log</code> (order control, <code>AC513_ORDER=main</code>),
+<code>fixture-rG.log</code> / <code>fixture-rR.log</code> (intermediate, instrument repair),
+<code>check.log</code> (script/shader parse check: 4 scripts + 4 shaders, 0 errors).
+Isolation re-proved this round: <code>gate_run.py AC-0513 --arms g0,genhash --rev 3</code> →
+<code>g0 rc=0 script=0 shader=0 ok=true</code>; <b>genhash 25/25</b>, every GENHASH line
+byte-identical to <code>genhash-r1.log</code> (only GENMS differs, 138 → 101, machine load).
+Every number below is <b>development-only (llvmpipe software Vulkan)</b>.</p>
+
+<table>
+<tr><th>#</th><th>Round 2 verdict</th><th>Round 3 verdict + measured number</th></tr>
+<tr><td>1</td><td><b class="q">NOT proven — lag 1 frame, 299/599 and 598/599 mismatch</b></td>
+<td><b class="q">still NOT proven — 0 frames at lag 0 in both orders.</b> The round-2 echo instrument
+was broken (its uv window did not contain the sampled pixel), so its parity census measured the band
+colour, not a stamp. Repaired: each source paints a 32-frame stamp code, the resolve echoes both
+stamps in the band the CPU samples, the CPU compares the echo with the stamp the frame was given.
+Measured (<code>AC513 LAG</code>): sources-first <code>sat_mode=7 det_mode=7, lag0 0/599</code>;
+main-camera-first control <code>sat_mode=25 det_mode=25, lag0 0/599</code>; the lags spread over the
+odd codes 1..31 in <i>both</i> orders, and the parity census mismatches <b>599/599</b> in both.
+The echo equals the CPU-read source texel exactly (<code>max_echo_dev 0.0000</code>): the content path
+is faithful, the <i>frame</i> is not. No CompositorEffect phase, render_priority value, camera cull
+mask, camera creation order or await yields lag 0 → see D17.</td></tr>
+<tr><td>2</td><td><b class="q">channel proven; midpoint 1.000000 (band wiring)</b></td>
+<td><b class="p">PASS — midpoint 0.500000</b> in the pre-tonemap <code>R16G16B16A16_SFLOAT</code>
+export, 8 consecutive samples all 0.500000, gate 0.5 ± 0.002. Wiring repaired (D15): satellite
+coverage widened to ±150 m × 140 m; source-side probe reads both source textures at the band centre:
+satellite <code>(R,G,B,A) = (0, 0, 0.7137, 1)</code> — the 0 endpoint with BLUE =
+<code>pow(60/128)</code> — detail <code>(1, 1, 0.5961, 1)</code>.
+Post-tonemap / sRGB contrast on the same band: display stage (8-bit sRGB, Linear tone) =
+<b>188/255 = 0.737255 code = 0.502886 decoded linear</b>; a blend performed in that encoded domain
+of the endpoints reads <b>0.214041</b> where the linear blend reads 0.5; AGX: endpoints display as
+0.0 and 0.796078, their post-tonemap blend = 0.398039 against the pre-tonemap mid's 0.674510
+(<b>delta −0.2765</b>); Linear/Filmic/ACES post-tonemap blend 0.5 against 0.737255/0.850980/0.674510.
+4.7.1 measured: the <code>RenderingDevice.DataFormat</code> enum has 29 sRGB formats of 233
+(<code>AC513 FBFORMATS</code>), so the "sRGB stage" is a real format family; the Forward+ window
+stage here reports <code>Image.Format 4</code> (source textures <code>5</code>) and the sRGB round
+trip is proved by measurement (0.5 linear → 188/255), not by a format name.</td></tr>
+<tr><td>3</td><td><b class="q">reverse-Z ok; ≤1 mm NOT met (avg 8.00 mm = encoding clamp)</b></td>
+<td><b class="q">still NOT met — depth published by geometry measures +1.16 m.</b> Sub-case A: an
+opaque main-pass quad at z = −40.000 publishes the terrain depth and the resolve writes <b>no</b>
+depth (<code>depth_draw_never</code>, <code>DEPTH</code> write removed from a generated shader
+copy). Reader = the <b>transparent</b> variant (measured, D19: an OPAQUE material's
+<code>hint_depth_texture</code> reads the Forward+ depth <i>prepass</i> — it returned 0.548/0.548,
+the clear value — so the transparent reader is the instrument that can read geometry-published
+depth). Measured (<code>AC513 DEPTH prepass subcases</code>): A raw reverse-Z <b>0.00242948</b>
+→ z = <b>41.16 m</b>, i.e. +1.16 m off the 40 m the geometry published; the ±8 mm millisecond
+window saturates (8.0 = the clamp). B (the resolve's own geometry at 40.000): identical raw.
+C (the resolve <i>assigns</i> 40.000 in <code>DEPTH</code> with geometry 1 m in front): identical
+raw → <b>a fullscreen pass publishes its geometric depth, never its shader-assigned DEPTH</b>
+(measured, D18). Quantum for reference: 24-bit 0.0954 mm at 40 m, 16-bit 24.4 mm.</td></tr>
+<tr><td>4</td><td><b class="q">order-dependent; the early order passes</b></td>
+<td><b class="q">partial, same as round 2.</b> <code>AC513 ACTOR near_visible=["actor_c_late_near"]
+far_occluded=["actor_c_early_far","actor_c_late_far"] pass=false</b>: the far actor is occluded by
+the depth-tested composite in both orders, the near actor survives only in the late order —
+<code>render_priority</code> moves one case, the near case is covered by the composite quad.</td></tr>
+<tr><td>5</td><td><b class="p">all three readers agree</b></td>
+<td><b class="p">unchanged, with the reader-form fact added.</b> GL-formula reader reproduces
+(water depth solved), texture-alpha and depth-texture readers read the same buffer. Added: the
+reader must be a <b>transparent</b> material to read the depth the opaque pass published (D19).</td></tr>
+<tr><td>6</td><td><b class="q">labels inverted; reported both ways</b></td>
+<td><b class="q">labels CONFIRMED correct; the colour side works, the depth side does not.</b>
+Sample points: <b>leaf</b> (−51,+2) and (−47,−2); <b>hole</b> (−49,+2) and (−51,−2) — image row 0
+is the texture top and <code>PlaneMesh FACE_Z</code> puts it at +y, so round 2's labels were right
+and the round-3 "swap" was the inversion (measured, D16): at (−49,+2) the fixture read the satellite
+colour 0, at (−51,+2) it read the leaf colour (0.491,0.347,0.202). Measured: the alpha-tested leaf
+plane <b>is visible and paints its colour</b> (leaf colour at a leaf quadrant), the hole quadrants
+show the composite, and the transparent reader reports <b>−919 mm at all four points</b> — the
+alpha-scissored plane publishes <b>no</b> depth at −500 mm, so the composite at 39.9 m is not
+depth-rejected at the leaf. Gate 6's colour acceptance is met; its depth acceptance is not (D16).</td></tr>
+<tr><td>7</td><td><b class="p">resize ok</b></td>
+<td><b class="p">unchanged, re-measured:</b> 100 cycles over
+(640,400)(700,350)(320,180)(1024,576)(480,270)(384,216)(900,500)(512,288); export copy status ok at
+every sampled cycle, midpoint and depth samples in range at every sampled cycle (D11, D13).</td></tr>
+<tr><td>8</td><td><b class="q">the 0.5 reading was the wiring defect</b></td>
+<td><b class="p">RESOLVED.</b> The colour composite is now measured end to end: source probe
+(0,0,depth)/(1,1,depth) → blend 0.500000 → satellite-only band 0.799103 (its own colour 0.6 through
+the display round trip) → endpoints 0.3333/0.8000 in the export's 3-frame windows (the readback
+echoes the previous frame, so the endpoint windows include a transition frame — instrument limit,
+reported).</td></tr>
+<tr><td>9</td><td><b class="p">teardown measured</b></td>
+<td><b class="p">unchanged, re-measured:</b> ObjectDB 1717 → 0, Resources 29 → 0, RD allocations
+3 → 0, export copy status ok. llvmpipe counters report −1/0 (D14).</td></tr>
+</table>
+
+<h3>What round 3 leaves unproven on real hardware</h3>
+<ul>
+<li>Timing: every millisecond figure here is software Vulkan (the epoch phase ran ~0.47 s/frame
+because the census does per-frame CPU readbacks). Compositor callback timing, source render cost and
+the lag mechanism need a GPU.</li>
+<li>Depth-buffer format and quantum: the +1.16 m offset of geometry-published depth (gate 3) is an
+llvmpipe reading; the buffer format, its bit depth and the reverse-Z transfer function are unmeasured
+on hardware (<code>get_driver_allocation_count</code> returns 0, texture counters return −1).</li>
+<li>Leak counts: RD counters unavailable here; only the engine's own exit leak report is comparable.</li>
+<li>Gate 1: with a GPU the source SubViewports may render in the same frame; the census says they do
+not on llvmpipe.</li>
+<li>The 8-bit endpoint windows (gate 2 endpoints, gate 3 wide-span sub-case) — the readback lags one
+frame, so endpoint values are read across a transition; the midpoint gate itself is unaffected.</li>
+</ul>
+<p class="sm">Fixture changes this round (all inside <code>godot/fixtures/ac0513_p0/</code>, which is
+untracked; no product file touched, no git operations): satellite/detail coverage widened;
+<code>AC513_ORDER</code> / <code>AC513_MAIN_MASK</code> / <code>AC513_PHASES</code> env switches;
+a generated <code>depth_draw_never</code> resolve copy (<code>lod_terrain_resolve_nodepth.gdshader</code>)
+and a transparent reader copy (<code>ac0513_depth_read_t.gdshader</code>); a stamp/echo instrument;
+a terrain depth-prepass mesh; corrected foliage sample points; a lag census; an opaque-vs-transparent
+reader census line.</p>
+
 <div class="sm">Generated by the AC-0513 builder from <code>fixture-fullE.log</code> (1250 frames, phases: census 11.4 s, mid 10.4 s, tonemap 9.8 s,
 depth 8.4 s, actor 7.5 s, foliage 5.7 s, water 6.7 s, void 6.2 s, epoch 123.6 s, resize 84.9 s, teardown 1.1 s).</div>

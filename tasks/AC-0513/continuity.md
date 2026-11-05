@@ -59,3 +59,53 @@ quantum (0.0954 mm at 40 m); (d) swap the fixture's leaf/hole sample points (lab
 inverted vs the 4×4 texture layout); (e) every number above needs a hardware-GPU
 re-measure — llvmpipe cannot answer timing, depth-buffer format, or leak-count
 questions (`get_driver_allocation_count` returns 0 here).
+
+## 2026-11-05 — round 3 (resumed spike, four repairs, re-measured)
+
+Canonical log `.scratch/AC-0513-gates/fixture-rS.log` (1258 frames, all phases; runner
+`.scratch/AC-0513/run_round3.sh <rev> <phases> K=V...`, invoked **by name** so the
+gate_run slot test cannot self-match; it waits while any
+`/home/angrygiant/tools/godot/godot` is running, `ulimit -v 8388608`, xvfb, SERIAL,
+1280×720, `AC513_MODE=full`). Order control `fixture-rH.log` (`AC513_ORDER=main`).
+Isolation re-proved: `gate_run.py AC-0513 --arms g0,genhash --rev 3` → g0 rc=0
+(log identical to the round-2 reference), genhash 25/25 byte-identical to
+`genhash-r1.log`. Fixture scripts+shaders parse clean (`run_check.sh` → 0 errors).
+Nine verdicts updated in `AC-0513-results.html#round3`; deviations D15–D20.
+
+(a) **Midpoint gate: MET.** Pre-tonemap `R16G16B16A16_SFLOAT` export = **0.500000**
+(8/8 samples), gate 0.5 ± 0.002. Repair = satellite coverage (±150 m × 140 m) + a
+source-side probe; satellite at the band centre reads (0, 0, pow(60/128), 1), detail
+(1, 1, pow(40/128), 1). Contrast: display stage 188/255 = 0.737255 = 0.502886 decoded;
+sRGB-domain blend of endpoints 0.214041; AGX post-tonemap blend 0.398039 vs pre-tonemap
+0.674510. 4.7.1 has 29 sRGB DataFormats of 233 (round 2's "no sRGB format" was wrong).
+
+(b) **Same-frame dependency: NOT closed — 0 lag-0 frames in both orders** (sources-first
+lag mode 7, main-first 25; parity 599/599 mismatch on both sources; echo == CPU-read
+texel exactly). Round 2's echo window did not contain the sampled pixel, so its census
+measured the instrument. Camera RID creation order moves the number; nothing in the
+4.7.1 compositor API (POST_SKY/POST_TRANSPARENT, SubViewport.update, render_priority,
+cull masks, shared WorldRoot) yields lag 0. Evidence in D17.
+
+(c) **Depth through geometry: publishes; ≤1 mm NOT met.** Opaque prepass quad at
+z = −40.000 + `depth_draw_never` resolve copy; reader must be TRANSPARENT (an opaque
+reader reads the Forward+ depth prepass: returned the clear value). Measured raw
+0.00242948 → 41.16 m = **+1.16 m** in all sub-cases, including the one where the pass
+*assigns* DEPTH = 40.000 → **a fullscreen pass publishes its geometric depth, never its
+assigned DEPTH**. Quantum reference: 24-bit 0.0954 mm at 40 m. Evidence D18/D19.
+
+(d) **Foliage labels: round 2's were right; the requested swap was the inversion**
+(measured colours: leaf at (−51,+2)/(−47,−2), hole at (−49,+2)/(−51,−2); image row 0
+lands at +y on FACE_Z). Alpha test must be `TRANSPARENCY_DISABLED +
+alpha_scissor_threshold` (with `TRANSPARENCY_ALPHA_SCISSOR` the leaf fragments vanish in
+the source pass). Colour side of gate 6 met; depth side not: −919 mm at all four points,
+an alpha-scissored plane writes no depth. Evidence D16.
+
+**Open, in priority order.** (1) Hardware re-measure — timing, the depth-buffer format
+behind the +1.16 m offset, and leak counts are unanswerable here
+(`get_driver_allocation_count` = 0, texture counters −1). (2) Gate 6 depth: an
+alpha-tested plane that must occlude a transparent composite needs the terrain depth
+published at its own pixels (a depth prepass for foliage), which is a design decision,
+not a fixture fix. (3) Gate 1: if a hardware run also shows lag ≥ 1, the same-frame
+promise must be dropped from the plan's gate list and the handover re-specified as
+"latest published source frame". (4) Instrument: endpoint windows need one extra frame
+of settle (D20).
