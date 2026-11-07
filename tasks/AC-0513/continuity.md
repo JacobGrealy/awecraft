@@ -109,3 +109,11 @@ not a fixture fix. (3) Gate 1: if a hardware run also shows lag ≥ 1, the same-
 promise must be dropped from the plan's gate list and the handover re-specified as
 "latest published source frame". (4) Instrument: endpoint windows need one extra frame
 of settle (D20).
+
+## User-approved sequential replan — ticket reopened, metadata only
+
+AC-0513 is OPEN again. Current requirements are the latest **SEQUENTIAL REPLAN — USER-APPROVED CURRENT SCOPE** amendment in the registry and regenerated `spec.html`; the shared roadmap's `#sequential-replan` owns the current schedule. These supersede the previous open-list instructions and closure conclusions as an execution contract. Historical measurements/report/logs remain unchanged.
+
+Queue order is **AC-0524 → AC-0513 → AC-0517**, one ticket at a time. Do not resume this fixture before AC-0524's existing-renderer colour findings are reviewed. Within AC-0513, finish and review the frame-age instrument stage before starting the projection-correct depth stage. The next coordinator must write a fresh bounded execution plan; the old `plan.html` is not authorization to repeat the original architecture experiment wholesale. No engine-impossibility claim or accepted stale-frame policy follows from the current report while those meters remain unvalidated. AC-0517 is conditional same-viewport feasibility, not production dual-source implementation.
+
+This replan changed only ticket metadata, regenerated specs and roadmap/journal documentation. No fixture repairs, new measurements, product code or new tickets were made; no work stream was started in parallel.
