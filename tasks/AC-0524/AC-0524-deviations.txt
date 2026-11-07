@@ -1,0 +1,81 @@
+AC-0524 deviations — builder run, 2026-11-07
+==========================================
+
+D1. MEASURE-ONLY. No production behaviour change was made and none is proposed
+    as applied: the plan and the prompt require a coordinator-resolved cause
+    BEFORE any correction. Cause §4.2 is demonstrated by measurement (results
+    page §4); the correction is PROPOSED, not landed. Nothing in the shipped
+    colour path was retuned: no palette, no bake, no moon gain, no Options
+    switch, no fog/mist/wash/haz_d, no generation/streaming/save change.
+
+D2. TEMPORARY DEVELOPER A/B ISOLATION (plan §2 (3)) — added and REMOVED in the
+    same run: a dev-only `u_geom` uniform in
+    * godot/core/satellite_body.gdshader (paints the body's pixels flat
+      magenta AFTER every colour term; the discard rule, ALPHA and the depth
+      write are untouched, so the frame reads as a geometry-presence map)
+    * godot/world/satellite_body.gd (pushes it from `AWECRAFT_AC0524_GEOM=1`;
+      env-gated, no Settings row, 0.0 = the shipped path bit-identical).
+    Removed before close; the final gate run (g0/genhash/lightstate) is on the
+    tree WITHOUT it.
+
+D3. DISCRIMINATING SIGNAL USED — the plan's rank (2) and (3), NOT (1):
+    * rank (1) RESOLVED DEPTH was not available at this stage: AC-0513 measured
+      that a fullscreen pass publishes its geometric depth and discards the
+      assigned `DEPTH` (AC-0513-REPORT.md §4), and AC-0513 is the ticket that
+      owns instrument correction (queue position 2). Building a depth instrument
+      here would be scope-creep into AC-0513's remit.
+    * satellite tier: rank (3), the dev geometry map (magenta isolation, same
+      pose).
+    * near tier: rank (2), the AC-0512 census occupancy counters per chunk
+      covering the ray (has_data / visible high+low slabs).
+
+D4. RENDER SET SHRUNK, STATED (plan §9 requires saying what was skipped):
+    rendered 7 frames x ~1200 s serial: a300-day, a300-geom, gnd-day, gnd-dusk,
+    a300-night, gnd-night, a941-day. SKIPPED: gnd-geom (the ground geometry
+    truth is carried by the census counters; a300-geom demonstrates the map) and
+    a941-night (the 300 m night cell carries the night endpoint, a941-day
+    carries the 941 m pose class). Matrix cells that no frame can label are
+    reported as NOT MEASURED, never as zero.
+    First attempt used AWECRAFT_SNAP_DRAIN=60 (the AC-0417 R24 note) and was
+    discarded: at drain 60 the R24 band is not settled and the census never
+    fires, so those frames are unusable for a colour measurement. The accepted
+    AC-0512 drain (600) is what this ticket used.
+
+D5. SNOW AT THE NEAR ENDPOINT: seed 44 has NO snow (block 12) column within the
+    census window (±24 chunks) around the spawn (measured on the R24 scout
+    census: grass 24,059 columns, sand 418, water 481, snow 0). The near-tier
+    snow cell is therefore NOT MEASURED at any vantage in this run; the
+    satellite-tier snow cell IS measured (the baked texels carry it) and the
+    snow comparison is reported against that. No pose was invented to force it.
+
+D6. MATERIAL LABELS: near pixels are labelled by the census top-block id —
+    per-column for tier 0-1 (the census publishes all 256 tops), chunk-level
+    where the census publishes only sampled columns (tier 2/3/4); the label kind
+    is reported per cell. Satellite pixels are labelled by the SHIPPED baked
+    texel at that ray (face,u,v) classified to the nearest FCC colour.
+
+D7. ENGINE LIGHT MODEL LEDGER: the satellite endpoint is a LIT spatial shader
+    (no `render_mode unshaded`) while the near endpoint is unshaded — this is
+    the AC-0480 contract, not a discovery of this ticket. The measured numbers
+    quantify it; the ledger of the change (the sun+ambient term, the in-shader
+    day factor, the relief, the haz_a air mix and the companding exponents) is
+    in results page §4.
+
+D8. harness.gd was NOT touched: the accepted AC-0512 census arm
+    (AWECRAFT_AC0512=1, in world.gd) carries the occupancy counters, so no new
+    arm and no harness_data.yaml row was needed. (Plan §8 allows an arm; this
+    run did not need one.)
+
+D9. Prerequisites verified on the current tree (results page §1). All four
+    hold. AC-0512's 61.4 % figure is confirmed to be ONE pose, and its
+    classification of the solid/exterior region as "geometry present / colour
+    absent" was asserted BY CONSTRUCTION (the body is a global chart with op=1
+    past render_edge), not measured — which is exactly what this ticket's
+    geometry map tests.
+
+D10. FINDING about an accepted instrument (not changed here): AC-0512's .scratch/AC-0512/gaps.py
+     feeds the WORLD point to SphereMath's face/home mapping. The chart is SPHERE-LOCAL (the body
+     node sits at the planet centre (0,-R,0) and SphereMath maps directions from that centre), so
+     AC-0512's per-ray census lookups were frame-shifted; its colour classification of the exterior
+     is unaffected, its per-ray chunk attribution is not. This ticket's instrument uses the
+     sphere-local mapping. Flagged for the coordinator; no file outside .scratch/AC-0524 was touched.

@@ -1,0 +1,84 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>AC-0524 endpoint colour parity</title><style>body{font:15px/1.5 system-ui;max-width:64rem;margin:2rem auto;padding:0 1rem}td,th{border:1px solid #aaa;padding:.4rem}table{border-collapse:collapse}code{background:#eee}.stop{border-left:4px solid #b33;padding:1rem}.ok{border-left:4px solid #2a7;padding:1rem}</style></head><body>
+<h1>AC-0524 — endpoint colour parity in the EXISTING production renderer</h1>
+<p>Coordinator contract (written by me). <b>Builder applies it with tasks/templates/implement.md.</b></p>
+<div class="ok"><b>GOVERNING SCOPE — <code>docs/satellite-lod-handover-plan.html#sequential-replan</code> supersedes everything older.</b> It says: investigate endpoint colour/lighting <b>in the existing production renderer</b>; <b>no dependency on AC-0523 or a replacement renderer</b>; use the accepted <b>AC-0510 / AC-0511 / AC-0512 / AC-0480</b> baseline; <b>MEASURE FIRST</b>; any narrow correction needs a <b>coordinator-resolved cause and plan</b>. The essay's two-source design is an <b>unapproved reference candidate — do NOT construct its viewports, exports, atlas or depth resolve</b> merely because it appears there.</div>
+<h2>1. The question, and the two answers it could have</h2>
+<p>As you fly, the satellite landscape should become detailed terrain without a blue veil, brightness flash, or a different atmosphere around loaded chunks.</p>
+<p><b>AC-0512 measured 151,371 px — 61.4% of the exterior — reading as sky "while the body is drawn". The user has explicitly warned that this figure must NOT be assumed to apply universally, and rightly: it was one pose, one frame, one seed.</b> So the ticket's first job is to find out, per case, which of two very different situations is true:</p>
+<ul>
+<li><b>(A) OCCUPIED-BUT-SKY-LIKE</b> — terrain <i>is</i> being drawn at that pixel, in a colour indistinguishable from the sky. Fixable as a colour/lighting problem, in the renderer we already ship.</li>
+<li><b>(B) GENUINELY MISSING GEOMETRY</b> — nothing is drawn there. <b>No colour correction can fix this, and attempting one would be the "restore a blue bridge to conceal missing chunks" that the scope forbids.</b></li>
+</ul>
+<p><b>Reporting an aggregate percentage across cases would repeat the error the user is guarding against.</b> The deliverable is a per-case classification with the evidence that discriminates (A) from (B).</p>
+<h2>2. The discriminating instrument (this is the ticket)</h2>
+<p>A pixel that <i>looks</i> like sky cannot tell you whether geometry was drawn there. You need a signal independent of final colour. Use, in this order of preference, and state which you used:</p>
+<ol>
+<li><b>Resolved depth</b> at the candidate pixel — geometry at a terrain distance establishes (A); sky-depth establishes (B). This is the cleanest signal and does not depend on colour at all.</li>
+<li><b>Occupancy/publication counters</b> for the chunk covering that ray, from the existing instrumentation.</li>
+<li>If neither is available at that stage, <b>a temporary developer A/B isolation</b> (permitted by scope, on the accepted post-removal baseline) that makes drawn terrain unmistakable — <b>dev-only, not a player-facing switch, and removed before close</b>.</li>
+</ol>
+<h2>3. What to measure, at MATCHED materials, across time and altitude</h2>
+<p>The scope names the matrix; do not shrink it silently. <b>Materials: grass, snow, sand, water. Times: day, dusk, night. Vantages: ground and altitude.</b> For each cell of that matrix:</p>
+<ul>
+<li>the <b>near-tier</b> colour of that material (the reference the far tier must match),</li>
+<li>the <b>satellite-tier</b> colour of the same material in the same frame,</li>
+<li>the <b>classification from §2</b> — (A) occupied-but-sky-like or (B) missing,</li>
+<li>and the <b>signed</b> difference, in <b>normalized linear</b> space (not sRGB display values, which is what makes later comparisons meaningful).</li>
+</ul>
+<h2>4. The four suspects the scope names — check each, in linear space</h2>
+<p>Each is a distinct cause with a distinct fix; the evidence must say which one, or that none applies:</p>
+<ol>
+<li><b>Baked satellite RGB decode vs height data.</b> Does the shipped texture's RGB decode to the same colour the height/bake pipeline believes it does? (<b>AC-0478 regenerated those 12 textures this session</b> and verified <code>height_decode 12/12 byte-exact</code> — re-verify, do not assume.)</li>
+<li><b>Lit satellite vs UNSHADED near endpoints.</b> <b>AC-0480 established these are different shading models</b> (near tier <code>unshaded</code> with <code>L = 0.20 + 0.80*m_direct</code>; far tier engine-shaded on top of its own light). A lit surface matched against an unshaded one <b>cannot</b> agree at all times of day — this is the most likely single mechanism and should be quantified per time-of-day.</li>
+<li><b>Source HDR exports</b> — is anything companding twice, or exporting an already-encoded value?</li>
+<li><b>Single final tone mapping</b> — is tone-mapping applied once, to the composite, or has a source been tone-mapped already?</li>
+</ol>
+<p><b>Name the cause with a measurement before proposing anything.</b> If the measurement says the endpoints differ because one is lit and one is unshaded, then the correction is in the shading endpoint, <b>not</b> in the palette.</p>
+<h2>5. Hard prohibitions (from the scope — quote them to yourself before editing)</h2>
+<div class="stop"><ul>
+<li><b>"Fterrain remains 0; never reinstate fog, haz_d or a wash to conceal missing chunks."</b> No depth fog, no mist, no wash, no blue handover bridge. <b>AC-0510 removed these by user ruling.</b></li>
+<li><b>Do NOT retune the palette, moon gain, or the bake recipe. Do NOT add a new Options switch.</b></li>
+<li><b>Keep accepted sky / planet-limb / cloud behaviour unless separately authorized.</b></li>
+<li><b>No terrain generation, grid/radius, save/cache format, collision, simulation, light-settle safety or streaming-queue changes in this ticket.</b></li>
+<li><b>A large geometry/lighting redesign requires another plan</b> — return <code>PLAN-INSUFFICIENT</code> instead of scope-creeping.</li>
+<li>Temporary dev A/B isolation is permitted; <b>it must be removed before close and must not be player-facing.</b></li>
+</ul></div>
+<h2>6. Prerequisites to VERIFY before executing (the scope requires this)</h2>
+<p>Do not take these on trust — open the evidence and confirm the claims apply to the current tree:
+<b>AC-0510</b> (fog + mist removed; at 941 m frames byte-identical, so the blue was never fog) ·
+<b>AC-0511</b> (<code>haz_a</code> made physical, <code>haz_d</code> removed as its justification died with AC-0510) ·
+<b>AC-0512</b> (the 61.4% figure, <b>one pose</b>; also a −1 m chart bias and an 8× chart-seam step) ·
+<b>AC-0480</b> (far tier = 2 m cells + 3-level halo; the tiers use different shading models).
+<b>If one of those no longer holds on the current tree, say so in the journal before measuring</b> — a stale premise would invalidate the matrix.</p>
+<h2>7. Gates</h2>
+<table><tr><th>Gate</th><th>Expected</th></tr>
+<tr><td><b>The (A)/(B) classification per case (primary)</b></td><td>Every measured cell labelled occupied-but-sky-like or genuinely missing, <b>with the discriminating signal named</b> from §2. <b>No aggregate percentage presented as if it were universal.</b></td></tr>
+<tr><td>The matrix</td><td>grass / snow / sand / water × day / dusk / night × ground / altitude, each with near-tier colour, satellite-tier colour and the <b>signed normalized-linear</b> difference.</td></tr>
+<tr><td>The cause is demonstrated</td><td>One of §4's four named, with the measurement that establishes it — <b>before</b> any correction is proposed. If several apply, say which dominates and how you know.</td></tr>
+<tr><td>If a correction is made</td><td><b>Narrow, colour-domain, tied to the demonstrated cause</b>, with before/after values in the same matrix cells and a stated acceptance threshold. <b>No palette/bake/moon-gain/switch changes.</b></td></tr>
+<tr><td>Midpoint and companding</td><td>Normalized linear midpoint correct; <b>no double companding</b>; no forced blue intermediate; no ground degradation. Report the values you used.</td></tr>
+<tr><td>Nothing else moved</td><td><code>python3 tasks/scripts/gate_run.py AC-0524 --arms g0,genhash,lightstate</code> — g0 zero SCRIPT ERROR and zero SHADER ERROR, genhash 25/25 <b>on the SAME accepted generator version</b>, lightstate invariants (leaks 0).</td></tr>
+<tr><td>Windows evidence owed</td><td><b>Forward+ descent/ascent evidence is required by the scope.</b> This box is llvmpipe/Linux, so <b>hand over a protocol and label every figure development-only</b> — do not present proxy numbers as product evidence.</td></tr>
+</table>
+<h2>8. Files and anchors</h2>
+<table><tr><th>File</th><th>Anchor</th><th>Permission</th></tr>
+<tr><td>godot/core/satellite_body.gdshader</td><td>the satellite endpoint's colour/lighting (<b>AC-0511 changed its haze this session — re-read</b>)</td><td>Edit only a demonstrated colour-domain cause.</td></tr>
+<tr><td>godot/core/lod_avg.gdshader / lod_avg_seam.gdshader</td><td>the far tier's shading (<b>AC-0480 added the 3-level halo; <code>lod_avg</code> is haze-free since AC-0404</b>)</td><td>Edit only a demonstrated cause.</td></tr>
+<tr><td>godot/world/chunk.gd</td><td>the near tier's material (<code>unshaded</code>, L = 0.20 + 0.80*m_direct)</td><td>READ ONLY unless the cause is there.</td></tr>
+<tr><td>godot/world/satellite_body.gd, satellite_bake_worker.gd</td><td>texture decode, NPIX/FACE_GRID, the three-phase source</td><td>READ; edit only if §4.1 is the cause.</td></tr>
+<tr><td>godot/scenes/harness.gd + godot/harness_data.yaml</td><td>a NEW measurement arm if you add one — <b>register it and run <code>harness_doc.py --render</code></b></td><td>Edit: add arm + row.</td></tr>
+<tr><td>tasks/AC-0524/</td><td>journal, deviations, results, Windows protocol</td><td>Create.</td></tr>
+</table>
+<h2>9. Method and tooling</h2>
+<p><b>Locate every anchor by symbol — this repo changes under a parallel session and three of my plans carried dead line numbers.</b> Render set planned up front: <b>~1200 s per render, serial</b>, so decide the matrix subset you can afford and <b>say what you skipped</b> rather than silently shrinking it.</p>
+<p>Engine calls need <code>HOME=/tmp/dsh_home</code> in the same bash command, an absolute engine path, from the repo root, one godot at a time. <b>Run engine work from a script FILE invoked by name</b> — <code>gate_run.py</code>'s slot test is <code>pgrep -f "[g]odot"</code>, which matches your own shell string. <b>BLUR IS OFF by user ruling — never enable it; it would destroy the colour measurement.</b> Renders: <code>xvfb-run -a env HOME=/tmp/dsh_home VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json godot --path godot --rendering-driver vulkan</code> with <code>AWECRAFT_SIZE=1280,720</code>, <code>AWECRAFT_SNAP_DRAIN=600</code>. <b>Another session holds this checkout</b> — take the slot only when <code>pgrep -af '[g]odot'</code> is empty; commit nothing; add named paths only.</p>
+<h2>10. Acceptance</h2><p>The (A)/(B) classification per case with a named discriminating signal; the material × time × altitude matrix with signed normalized-linear differences; one of §4's causes demonstrated by measurement <b>before</b> any correction; any correction narrow, colour-domain and tied to that cause with before/after numbers; no fog/mist/wash/palette/bake/switch changes; genhash 25/25 on the same generator; Windows evidence handed over as a protocol with every figure labelled development-only.</p>
+<h2>11. Risks</h2><p>(1) <b>Assuming AC-0512's 61.4% is universal</b> — the user explicitly warned against it, and the whole ticket is built to avoid it. (2) <b>Correcting colour where geometry is simply missing</b>, which is the forbidden "blue bridge" by another name. (3) Comparing sRGB display values instead of normalized linear, making the numbers uninterpretable. (4) Reaching for the palette or a switch because it is easy. (5) Silently shrinking the matrix. (6) Trusting a stale anchor or a stale prerequisite.</p>
+<h2>12. Fences</h2><div class="stop"><ul>
+<li>No git commit/push/add; no <code>tasks/TASKS.yaml</code> (another session writes it); no new tickets.</li>
+<li><b>Do not construct the essay's two-source design.</b> No viewports, exports, atlas or depth resolve.</li>
+<li>No fog/mist/wash/haz_d restoration, no palette/moon-gain/bake/Options changes, no generation/streaming/collision/save changes.</li>
+<li>If the plan cannot be applied — an anchor is gone, a prerequisite no longer holds, the matrix cannot be measured, or a correction would require a lighting redesign — write <code>PLAN-INSUFFICIENT: &lt;what is missing, file:line&gt;</code> and EXIT with what you established. <b>Do not invent a design or scope-creep a fix.</b></li>
+</ul></div>
+<h2>13. Resume point</h2><p>Replanned by user approval: this is now the queue head, ahead of AC-0513 (instrument correction) and AC-0517 (conditional same-viewport feasibility). It exists because AC-0512 measured a large colour mismatch in ONE pose and the question is whether that generalises — and because a colour fix in the existing renderer may address the largest measured share of the handover problem without any new mechanism at all. <b>Completion of this ticket is not architecture approval; after AC-0517 the coordinator decides explicitly.</b></p>
+</body></html>

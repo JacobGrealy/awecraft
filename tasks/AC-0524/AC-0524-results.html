@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>AC-0524 endpoint colour parity</title><style>body{font:14px/1.45 system-ui;max-width:78rem;margin:1.5rem auto;padding:0 1rem;color:#111}table{border-collapse:collapse;margin:.5rem 0}td,th{border:1px solid #bbb;padding:.25rem .45rem;font:12.5px/1.35 ui-monospace,monospace}th{background:#f2f2f2}h2{margin-top:1.6rem}code{background:#eee;padding:0 .2rem}.dev{background:#fff6d9;border-left:4px solid #c90;padding:.6rem .8rem}.stop{background:#fdecec;border-left:4px solid #b33;padding:.6rem .8rem}.ok{background:#eef8ee;border-left:4px solid #2a7;padding:.6rem .8rem}</style></head><body>
+<h1>AC-0524 — endpoint colour parity in the EXISTING production renderer</h1>
+<div class='dev'><b>Every figure on this page is DEVELOPMENT-ONLY.</b> It was measured on Linux + <b>llvmpipe</b> (software Vulkan) on the shipped Forward+ path; the proxy is not the shipped look. Product evidence = <code>tasks/AC-0524/AC-0524-windows-protocol.md</code>. Blur was OFF by user ruling. Seed 44, R24/F83 (fog_far 332 / render_edge 400), clouds off, 1280×720, drain 600. No aggregate percentage is presented as a general property.</div>
+<h2>1. Prerequisites — verified on the current tree (not trusted)</h2><ul><li><b>AC-0510</b> — verified: no terrain-fog/wash term exists in the shipped shaders (no <code>Fterrain</code> in main.gd/world.gd; the body header records the removal) and the accepted result page states the 941 m frames were <b>byte-identical</b> before/after, so the blue at 941 m was never fog. <b>Holds.</b></li><li><b>AC-0511</b> — verified in <code>godot/core/satellite_body.gdshader</code>: <code>haz_a = clamp(d / u_air_cm,0,1)</code> is physical (the sky limb's own air column, pushed per frame in satellite_body.gd) and <b>haz_d is removed</b> (<code>float haz = haz_a;</code>). <b>Holds.</b></li><li><b>AC-0512</b> — verified: its instrument (<code>.scratch/AC-0512/gaps.py</code> + the <code>AWECRAFT_AC0512</code> census in world.gd) is on the tree and is reused here; the 61.4 % figure is confirmed as <b>one pose / one frame / one seed</b>, and its geometry-present claim for the exterior region is asserted <b>by construction</b> (body = global chart, op=1 past render_edge), which is the premise this ticket tests. The −1 m chart bias line is present in its results page. <b>Holds.</b></li><li><b>AC-0480</b> — verified: the far tier is engine-shaded on top of its own light (<code>lod_avg.gdshader</code> has no <code>unshaded</code>) while the near tier is <code>render_mode unshaded</code> with <code>L = 0.20 + 0.80·m_direct</code>; the graded 3-level halo is the AC-0527 rebased halo contract. <b>Holds.</b></li></ul>
+<h2>2. The discriminating signal used (named)</h2><p><b>Rank (1) resolved depth was NOT used</b>: AC-0513 measured that a fullscreen pass publishes its geometric depth and discards the assigned <code>DEPTH</code> (<code>AC-0513-REPORT.md</code> §4) and AC-0513 is the ticket that owns instrument correction. Used instead:</p><ul><li><b>Satellite tier — rank (3), the developer geometry map</b>: a temporary env-gated <code>u_geom</code> paints the body flat magenta after every colour term, with the discard rule, ALPHA and the depth write untouched. Magenta = geometry WAS drawn; sky = nothing was drawn. Dev-only, removed before close.</li><li><b>Near tier — rank (2), census occupancy counters</b> (the accepted AC-0512 census): per chunk covering the ray, <code>has_data</code> + the count of visible high/low slabs.</li></ul><p>Colour is used only to report the magnitude of the mismatch, never to decide (A) vs (B).</p>
+<h2>3. (A)/(B) classification, per case</h2>
+<table><tr><th>case (pose, time)</th><th>region</th><th>px measured</th><th>(A) occupied-but-sky-like</th><th>(B) genuinely missing</th><th>signal used</th></tr>
+<tr><td>a300-day</td><td>near</td><td>940</td><td>940</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>a300-day</td><td>satellite</td><td>246706</td><td>40,224 (sky-like AND drawn)</td><td>79 (sky-like AND absent)</td><td>dev geometry map (u_geom magenta isolation)</td></tr>
+<tr><td>a300-geom</td><td>near</td><td>940</td><td>940</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>a300-geom</td><td>satellite</td><td>246706</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+<tr><td>gnd-day</td><td>near</td><td>341737</td><td>341737</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>gnd-day</td><td>satellite</td><td>79793</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+<tr><td>gnd-dusk</td><td>near</td><td>341737</td><td>341737</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>gnd-dusk</td><td>satellite</td><td>79793</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+<tr><td>a300-night</td><td>near</td><td>940</td><td>940</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>a300-night</td><td>satellite</td><td>246706</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+<tr><td>gnd-night</td><td>near</td><td>341737</td><td>341737</td><td>0</td><td>census occupancy counters (AC-0512 arm)</td></tr>
+<tr><td>gnd-night</td><td>satellite</td><td>79793</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+<tr><td>a941-day</td><td>satellite</td><td>137700</td><td>—</td><td>—</td><td>geometry map NOT RUN for this frame</td></tr>
+</table>
+<p>Read per case. <b>(A) = geometry is drawn and reads as sky</b> — a colour/lighting problem in the shipped renderer. <b>(B) = nothing is drawn</b> — no colour correction can fix it, and attempting one is the forbidden blue bridge.</p>
+<p><b>Reading the satellite rows.</b> (A)/(B) are counted on the pixels that read as sky (the AC-0512 model, T=14), split by the geometry map: drawn = the body painted them = <b>(A) occupied-but-sky-like</b>; absent = nothing painted them = <b>(B) genuinely missing</b>. Raw map totals for the same frame (all materials, sky-like or not): body drew 77,344 px of the 246,706-px exterior region; the remaining 169,362 px are painted by nearer geometry (annulus / near tiers occluding the body) — occlusion is not missing geometry, which is why the counts above are taken on the sky-like pixels only. AC-0512's 61.4 % is a <b>one-pose</b> figure: at this pose the sky-like share is grass 9.6 %, sand 2.7 %, water 16.3 %, snow 59.0 %. Frames without the map show — (the map was run once, on the a300-day pose class; the census counters carry the near rows).</p><h2>4. The matrix: material × time × vantage (normalized LINEAR, signed satellite − near)</h2>
+<table><tr><th>vantage</th><th>time</th><th>material</th><th>near-tier linear (R,G,B)</th><th>satellite-tier linear (R,G,B)</th><th>signed Δ linear (R,G,B)</th><th>Δ luma</th><th>ratio</th><th>haz_a mean</th><th>near px / sat px</th></tr>
+<tr><td>a300</td><td>day</td><td>grass</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>day</td><td>sand</td><td>[0.8884, 0.8125, 0.5401]</td><td>[0.6753, 0.9065, 0.9174]</td><td>[-0.21320, +0.09399, +0.37732]</td><td>+0.04914</td><td>1.061</td><td>0.081</td><td>940 / 15232</td></tr>
+<tr><td>a300</td><td>day</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>day</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>geom</td><td>grass</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>geom</td><td>sand</td><td>[0.8884, 0.8125, 0.5401]</td><td>[0.8217, 0.8457, 0.9949]</td><td>[-0.06676, +0.03318, +0.45488]</td><td>+0.04238</td><td>1.052</td><td>0.081</td><td>940 / 15232</td></tr>
+<tr><td>a300</td><td>geom</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>geom</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>day</td><td>grass</td><td>[0.0000, 0.2797, 0.9961]</td><td>[0.0825, 0.2389, 0.0779]</td><td>[+0.08252, -0.04081, -0.91816]</td><td>-0.07793</td><td>0.713</td><td>0.077</td><td>341737 / 56090</td></tr>
+<tr><td>gnd</td><td>day</td><td>sand</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>day</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>day</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>dusk</td><td>grass</td><td>[0.0028, 0.0048, 0.0056]</td><td>[0.0043, 0.0117, 0.0044]</td><td>[+0.00152, +0.00684, -0.00119]</td><td>+0.00513</td><td>2.152</td><td>0.077</td><td>341737 / 56090</td></tr>
+<tr><td>gnd</td><td>dusk</td><td>sand</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>dusk</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>dusk</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>night</td><td>grass</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>night</td><td>sand</td><td>[0.1277, 0.1027, 0.0357]</td><td>[0.0024, 0.0049, 0.0080]</td><td>[-0.12526, -0.09776, -0.02769]</td><td>-0.09855</td><td>0.045</td><td>0.081</td><td>940 / 15232</td></tr>
+<tr><td>a300</td><td>night</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a300</td><td>night</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>night</td><td>grass</td><td>[0.0001, 0.0001, 0.0001]</td><td>[0.0023, 0.0064, 0.0023]</td><td>[+0.00225, +0.00635, +0.00225]</td><td>+0.00518</td><td>104.646</td><td>0.077</td><td>341737 / 56090</td></tr>
+<tr><td>gnd</td><td>night</td><td>sand</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>night</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>gnd</td><td>night</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a941</td><td>day</td><td>grass</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a941</td><td>day</td><td>sand</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a941</td><td>day</td><td>water</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+<tr><td>a941</td><td>day</td><td>snow</td><td colspan='7'>NOT MEASURED (no labelled pixels of that pair in this frame)</td></tr>
+</table>
+<p>Ground vantage = the player's own camera at the spawn (near tier + the local horizon). a300 / a941 = the AC-0450 airborne vantage at 300 m / 941 m, pitch 30°. Times: day = AWECRAFT_TIME 0.5 (noon), dusk = 0.75 (sun on the horizon), night = 0.0. Values are normalized linear (sRGB display bytes de-companded with the piecewise inverse), NOT display values.</p>
+<h2>5. The cause, demonstrated</h2>
+<table><tr><th>time</th><th>day(t)</th><th>sun_energy</th><th>ambient_energy</th><th>near L (unshaded)</th><th>engine light on the satellite (lit)</th><th>engine/near ratio</th></tr>
+<tr><td>day</td><td>1.000</td><td>1.050</td><td>0.650</td><td>1.000</td><td>1.700</td><td>1.700</td></tr>
+<tr><td>dusk</td><td>0.343</td><td>0.426</td><td>0.387</td><td>0.474</td><td>0.813</td><td>1.714</td></tr>
+<tr><td>night</td><td>0.000</td><td>0.100</td><td>0.250</td><td>0.450</td><td>0.350</td><td>0.778</td></tr>
+</table>
+<p>The near endpoint's <code>L</code> is a scalar applied to the atlas colour inside an
+<b>unshaded</b> shader. The satellite endpoint's decoded colour is multiplied by the <b>engine's</b>
+sun (<code>sun_energy(t)</code>) <b>plus the engine's ambient</b>, whose colour is the day sky
+(<code>ambient_light_color</code>, linear (0.235, 0.60, 0.83) — blue-dominant), on top of its own
+<code>u_day</code> factor, and it is mixed with <code>u_air</code> (the same sky colour) by
+<code>haz_a</code>. Two endpoints, two shading models: one receives no engine light, the other
+receives an engine light with a blue ambient plus an air mix. The ratio is time-of-day dependent,
+so the parity cannot hold at day, dusk and night at once.</p>
+<h2>5b. The demonstrated cause (measured, not assumed)</h2>
+<p><b>Satellite tier, 300 m, day, grass</b> — 185,521 px, mean over the cell: rendered normalized
+linear <b>(0.600, 0.843, 0.819)</b>, luma <b>0.790</b>, against the shipped bake's own intent for
+the same texel set <b>(0.037, 0.135, 0.015)</b>, luma <b>0.107</b> (measured from the shipped PNGs
+by <code>decode.py</code>). The satellite endpoint renders its own terrain <b>+0.68 luma brighter</b>
+with the hue pulled from green-dominant to blue-green-dominant — toward the ambient/air colour — at a
+mean <code>haz_a</code> of only <b>0.087</b>, so the AC-0511 air mix is not the term doing it.
+Same cell at <b>night</b>: (0.0036, 0.0100, 0.0087), luma 0.0085 — a factor ~22 <b>darker</b> than
+the matched near-tier pair (sand, luma 0.103). Opposite sign at two times of day for the same
+material: a multiplicative engine light with a blue additive ambient is the only term in the shipped
+satellite path that behaves that way. That is suspect <b>(2) — lit satellite vs unshaded near
+endpoints</b> (the AC-0480 shading-model split), <b>time-of-day dependent</b>. Suspect (1) measured
+clean, (3) and (4) measured clean (§6).</p>
+<div class='ok'><b>Where the correction belongs:</b> in the shading endpoint, not the palette.
+Narrow form, PROPOSED for the coordinator to resolve — <b>not applied by this ticket</b>: make the
+satellite body's terrain term unshaded the way the near tier is (its own <code>u_day</code> /
+<code>u_moon</code> factor <i>is</i> its light) so the engine's sun and blue ambient stop
+multiplying it, keeping <code>haz_a</code> as the single atmospheric term. No palette, bake,
+moon-gain, air-colour, Options, fog or wash change is implicated, and nothing is landed here.</div>
+<h2>6. Suspects (1), (3), (4) — measured</h2>
+<ul><li><b>(1) baked satellite RGB decode vs the height data — VERIFIED, not the cause.</b> All 12 shipped faces, 12582912 texels: 28700 (0.23 %) decode to a hue that is NOT a scalar multiple of one of the five FCC colours; the ocean rule against the height channel is exact — 761766 sub-SEA texels, 0 of them not water-coloured; 0 land texels read as water. Height channel present on all 12 faces (616 texels at alpha 0, none saturated).</li>
+<li><b>(3)/(4) companding and tone mapping — single-companding, small.</b> The bake encodes with the piecewise sRGB curve, the shader decodes with <code>pow(2.2)</code> (<code>u_srgb_pre=1</code> on Forward+), the pipeline encodes with the piecewise curve and tone maps ONCE with Linear (<code>tones_mapper=0</code>). The round trip measures <code>out_linear ≈ x^1.0303</code> — a ~3.0 % deviation in linear, the same on every channel, so it cannot produce a hue split. <b>No source is pre-tone-mapped; no double companding of the satellite terrain term.</b> (The near tier's AC-0242 <code>pow(2.2)</code> pre-encode is a deliberate round-trip convention, measured here as x^0.917 — a ~6 % lift, an order of magnitude below the light term in §5.)</li></ul>
+<div class='stop'><b>Prohibitions respected.</b> No fog/mist/wash/haz_d, no palette, bake, moon-gain or Options change, no sky/limb/cloud change, no generation, grid, save, collision, simulation, light-settle or streaming-queue change. No git add/commit. The dev isolation was removed before close.</div>
+<h2>7. Gates</h2>
+<pre>gate_run.py AC-0524 --arms g0,genhash,lightstate (clean tree, dev isolation removed) 2026-11-07
+g0  rc=0  script=0 shader=0  ok=true  3s  
+genhash  rc=0  script=0 shader=0  ok=true  3s  
+lightstate  rc=0  script=0 shader=0  ok=true  66s  ab={'afte ... leaks=0 low_on_high_n=0
+gate_run: all arms ok
+genhash parity: 25/25 GENHASH lines identical to .scratch/AC-0513-gates/genhash-r3.log AND .scratch/AC-0512-gates/genhash-r1.log (0 differing lines)
+g0 script/shader error lines: 0
+render arms: 7 frames, all rc=0 script_err=0 shader_err=0, Forward+ line present in every log</pre>
+<h2>8. Files</h2><ul>
+<li><code>tasks/AC-0524/AC-0524-results.html</code></li>
+<li><code>tasks/AC-0524/AC-0524-deviations.txt</code></li>
+<li><code>tasks/AC-0524/AC-0524-windows-protocol.md</code></li>
+<li><code>tasks/AC-0524/continuity.md</code></li>
+<li><code>.scratch/AC-0524/matrix.py</code></li>
+<li><code>.scratch/AC-0524/decode.py</code></li>
+<li><code>.scratch/AC-0524/endpoints.py</code></li>
+<li><code>.scratch/AC-0524/render.sh</code></li>
+<li><code>.scratch/AC-0524/chain2.sh</code></li>
+</ul></body></html>
